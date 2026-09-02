@@ -1164,44 +1164,57 @@ export async function generateReceiptImage(t) {
     const contentWidth = width - 128;
 
     // 1. الترويسة العلوية الفيروزية المماثلة تماماً للصورة (#0f766e)
-    const headerHeight = 220;
+    const headerHeight = 250;
     ctx.fillStyle = '#0f766e';
     ctx.fillRect(0, 0, width, headerHeight);
 
-    // معالجة الشعار والترويسة
-    let textStartX = rightMargin;
+    // الترويسة: بيانات المؤسسة يميناً، الشعار في الوسط، وبيانات السند يساراً.
+    const logoBoxSize = 148;
     if (st.logo) {
       try {
         const image = await loadImage(st.logo);
         if (image) {
-          const boxSize = 148;
-          const boxX = rightMargin - boxSize;
-          const boxY = 36;
+          const boxX = (width - logoBoxSize) / 2;
+          const boxY = 30;
           // صندوق الشعار الأبيض الدائري
-          drawRoundedRect(ctx, boxX, boxY, boxSize, boxSize, 22, '#ffffff', '#14b8a6', 2);
-          const ratio = Math.min((boxSize - 16) / image.width, (boxSize - 16) / image.height);
+          drawRoundedRect(ctx, boxX, boxY, logoBoxSize, logoBoxSize, 22, '#ffffff', '#14b8a6', 2);
+          const ratio = Math.min((logoBoxSize - 16) / image.width, (logoBoxSize - 16) / image.height);
           const w = image.width * ratio;
           const h = image.height * ratio;
-          ctx.drawImage(image, boxX + (boxSize - w) / 2, boxY + (boxSize - h) / 2, w, h);
-          textStartX = boxX - 28;
+          ctx.drawImage(image, boxX + (logoBoxSize - w) / 2, boxY + (logoBoxSize - h) / 2, w, h);
         }
       } catch (_) {}
     }
 
-    // كتابة بيانات المؤسسة بالترويسة
+    // بيانات المؤسسة في أعلى يمين الصورة
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 36px Tahoma, "Segoe UI", Arial, sans-serif';
-    ctx.fillText(fitCanvasText(ctx, st.businessName || 'مركز عثمان الوصابي', textStartX - leftMargin), textStartX, 84);
+    ctx.textAlign = 'right';
+    ctx.fillText(fitCanvasText(ctx, st.businessName || 'مركز عثمان الوصابي', 330), rightMargin, 72);
 
     ctx.fillStyle = '#e6fffa';
     ctx.font = '24px Tahoma, "Segoe UI", Arial, sans-serif';
     const bPhone = st.phone || st.whatsapp || '774190040';
-    ctx.fillText(fitCanvasText(ctx, bPhone, textStartX - leftMargin), textStartX, 130);
+    ctx.fillText(fitCanvasText(ctx, bPhone, 330), rightMargin, 116);
 
     ctx.fillStyle = '#ccfbf1';
     ctx.font = '22px Tahoma, "Segoe UI", Arial, sans-serif';
     const bAddr = st.address || 'ارحب - خط بوسان';
-    ctx.fillText(fitCanvasText(ctx, bAddr, textStartX - leftMargin), textStartX, 172);
+    ctx.fillText(fitCanvasText(ctx, bAddr, 330), rightMargin, 156);
+    if (st.email) ctx.fillText(fitCanvasText(ctx, st.email, 330), rightMargin, 194);
+
+    // بيانات السند في أعلى يسار الصورة
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 26px Tahoma, Arial, sans-serif';
+    ctx.fillText('بيانات السند', leftMargin, 62);
+    ctx.fillStyle = '#e6fffa';
+    ctx.font = '23px Tahoma, Arial, sans-serif';
+    ctx.fillText(`التاريخ: ${t.date || '—'}${t.time ? ` ${t.time}` : ''}`, leftMargin, 106);
+    ctx.fillText(`رقم السند: ${t.ref || '—'}`, leftMargin, 146);
+    const titleText = isPartial ? 'سند فاتورة جزئية' : (isDebit ? 'سند عملية (آجل)' : 'سند عملية');
+    ctx.fillText(`نوع السند: ${titleText}`, leftMargin, 186);
+    ctx.textAlign = 'right';
 
     // 2. شريط السند الرمادي الفاتح (#f3f4f6)
     const subheaderY = headerHeight;
@@ -1211,7 +1224,6 @@ export async function generateReceiptImage(t) {
 
     ctx.fillStyle = '#111827';
     ctx.font = 'bold 26px Tahoma, Arial, sans-serif';
-    const titleText = isPartial ? 'سند فاتورة جزئية' : (isDebit ? 'سند عملية (آجل)' : 'سند عملية');
     ctx.fillText(titleText, rightMargin, subheaderY + 46);
 
     ctx.textAlign = 'left';
