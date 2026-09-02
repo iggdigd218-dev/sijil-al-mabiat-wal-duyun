@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="description" content="نظام محاسبي عربي متكامل لإدارة الحسابات والعملاء والموردين والديون والعمليات المالية والسندات والمخزون" />
+  <title>إدارة البيانات — النظام المحاسبي</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="css/styles.css?v=2.0" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <!-- الشاشة الافتتاحية المتحركة باحترافية (Animated Splash Screen) -->
+  <div id="splash-screen" class="splash-screen" dir="rtl">
+    <div class="splash-container">
+      <div class="splash-logo-wrapper">
+        <div class="splash-glow"></div>
+        <div class="splash-pulse-ring"></div>
+        <div class="splash-ring-outer"></div>
+        <div class="splash-logo-card">
+          <svg class="splash-logo-svg" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="splGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#0284c7" />
+                <stop offset="100%" stop-color="#0f766e" />
+              </linearGradient>
+              <linearGradient id="barGrad1" x1="0%" y1="100%" x2="0%" y2="0%">
+                <stop offset="0%" stop-color="#38bdf8" />
+                <stop offset="100%" stop-color="#0284c7" />
+              </linearGradient>
+              <linearGradient id="barGrad2" x1="0%" y1="100%" x2="0%" y2="0%">
+                <stop offset="0%" stop-color="#2dd4bf" />
+                <stop offset="100%" stop-color="#0d9488" />
+              </linearGradient>
+              <linearGradient id="barGrad3" x1="0%" y1="100%" x2="0%" y2="0%">
+                <stop offset="0%" stop-color="#fbbf24" />
+                <stop offset="100%" stop-color="#f59e0b" />
+              </linearGradient>
+            </defs>
+            <rect x="15" y="15" width="90" height="90" rx="26" fill="url(#splGrad)" />
+            <rect x="22" y="22" width="76" height="76" rx="20" stroke="rgba(255,255,255,0.3)" stroke-width="2" />
+            <rect class="spl-bar spl-bar-1" x="32" y="58" width="12" height="28" rx="6" fill="url(#barGrad1)" />
+            <rect class="spl-bar spl-bar-2" x="48" y="42" width="12" height="44" rx="6" fill="url(#barGrad2)" />
+            <rect class="spl-bar spl-bar-3" x="64" y="32" width="12" height="54" rx="6" fill="url(#barGrad3)" />
+            <path class="spl-trend" d="M30 68 L48 48 L64 54 L88 28" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+            <circle class="spl-spark" cx="88" cy="28" r="5" fill="#ffffff" />
+          </svg>
+        </div>
+      </div>
+      <div class="splash-branding">
+        <h1 class="splash-title">إدارة البيانات</h1>
+        <p class="splash-subtitle">النظام المحاسبي وسجل الديون</p>
+      </div>
+      <div class="splash-loader">
+        <div class="splash-progress"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- شاشة القفل PIN -->
+  <div id="pin-lock" class="pin-lock hidden" dir="rtl">
+    <div class="pin-card">
+      <div class="pin-logo">📊</div>
+      <h1>إدارة البيانات</h1>
+      <p class="pin-sub">أدخل رمز PIN لفتح التطبيق</p>
+      <div class="pin-dots" id="pin-dots"></div>
+      <div class="pin-pad" id="pin-pad"></div>
+      <div class="pin-actions">
+        <button class="btn ghost" id="pin-back">رجوع</button>
+        <button class="btn primary" id="pin-ok" disabled>فتح</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- شاشة البداية / المقدمة -->
+  <div id="boot-screen" class="boot-screen hidden">
+    <div class="boot-card">
+      <div class="boot-logo">📊</div>
+      <h1>مرحباً بك في <span>إدارة البيانات</span></h1>
+      <p>النظام المحاسبي العربي المتكامل لإدارة الحسابات والديون والعملاء والموردين والسندات والتقارير</p>
+      <form id="boot-form" class="boot-form">
+        <div class="field">
+          <label>اسم النشاط أو المؤسسة</label>
+          <input type="text" id="boot-name" placeholder="مثال: مؤسسة النور التجارية" required />
+        </div>
+        <div class="field">
+          <label>العملة الرئيسية</label>
+          <select id="boot-currency">
+            <option value="YER">الريال اليمني (ر.ي)</option>
+            <option value="USD">الدولار الأمريكي ($)</option>
+            <option value="SAR">الريال السعودي (ر.س)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>رمز PIN (اختياري لحماية التطبيق)</label>
+          <input type="password" id="boot-pin" inputmode="numeric" maxlength="6" placeholder="اتركه فارغاً إن لم ترد" />
+        </div>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button type="submit" class="btn primary flex-1 big">ابدأ الآن</button>
+          <button type="button" id="boot-skip" class="btn ghost big" title="دخول مباشر دون انتظار">تخطي ودخول مباشر</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- لوحة التطبيق الرئيسية -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <button class="icon-btn" id="toggle-sidebar" aria-label="القائمة" title="إظهار / إخفاء القائمة الجانبية"><span class="ic">☰</span></button>
+      <div class="brand">
+        <div class="brand-logo">📊</div>
+        <div>
+          <div class="brand-title">إدارة البيانات</div>
+          <div class="brand-sub" id="brand-sub">النظام المحاسبي</div>
+        </div>
+      </div>
+      <div class="topbar-tools">
+        <button class="icon-btn" id="btn-pos-topbar" title="نظام المبيعات ونقاط البيع"><span class="ic">🛒</span></button>
+        <button class="icon-btn" id="btn-search" title="بحث شامل"><span class="ic">🔍</span></button>
+        <button class="icon-btn" id="btn-hide-balance" title="إخفاء الأرصدة"><span class="ic" id="eye-ic">👁️</span></button>
+        <button class="icon-btn theme-btn" id="btn-theme" title="المظهر"><span class="ic" id="theme-ic">🌙</span></button>
+        <button class="icon-btn" id="btn-lock" title="قفل التطبيق"><span class="ic">🔒</span></button>
+      </div>
+    </header>
+
+    <div class="app-body">
+      <!-- خلفية معتمة للقائمة على الشاشات المتوسطة والصغيرة -->
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-head-mobile">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:20px">📊</span>
+            <span class="brand-title">إدارة البيانات</span>
+          </div>
+          <button class="icon-btn sm" id="btn-close-sidebar" title="إغلاق القائمة">✕</button>
+        </div>
+        <nav class="nav">
+          <a href="#/dashboard" class="nav-item" data-route="dashboard"><span class="ic">📊</span><span>لوحة التحكم</span></a>
+          <a href="#/pos" class="nav-item" data-route="pos"><span class="ic">🛒</span><span>المبيعات ونقاط البيع</span></a>
+          <a href="#/accounts" class="nav-item" data-route="accounts"><span class="ic">👥</span><span>الحسابات</span></a>
+          <a href="#/inventory" class="nav-item" data-route="inventory"><span class="ic">📦</span><span>المخزون والأصناف</span></a>
+          <a href="#/transactions" class="nav-item" data-route="transactions"><span class="ic">💸</span><span>العمليات المالية</span></a>
+          <a href="#/vouchers" class="nav-item" data-route="vouchers"><span class="ic">🧾</span><span>السندات</span></a>
+          <a href="#/reports" class="nav-item" data-route="reports"><span class="ic">📈</span><span>التقارير</span></a>
+          <a href="#/currencies" class="nav-item" data-route="currencies"><span class="ic">💱</span><span>العملات</span></a>
+          <a href="#/chat" class="nav-item" data-route="chat"><span class="ic">💬</span><span>المراسلات <span class="badge" id="chat-badge" hidden>0</span></span></a>
+          <a href="#/activity" class="nav-item" data-route="activity"><span class="ic">🕒</span><span>سجل النشاط</span></a>
+          <a href="#/users" class="nav-item" data-route="users"><span class="ic">🛡️</span><span>المستخدمون والصلاحيات</span></a>
+          <a href="#/backup" class="nav-item" data-route="backup"><span class="ic">💾</span><span>النسخ الاحتياطي</span></a>
+          <a href="#/settings" class="nav-item" data-route="settings"><span class="ic">⚙️</span><span>الإعدادات</span></a>
+        </nav>
+        <div class="sidebar-foot">
+          <button class="btn support" id="btn-support"><span class="ic">🛟</span> خدمة العملاء</button>
+        </div>
+      </aside>
+
+      <main class="main" id="view"></main>
+    </div>
+
+    <!-- شريط التنقل السفلي -->
+    <nav class="bottom-nav" id="bottom-nav">
+      <a href="#/dashboard" class="b-nav-item" data-route="dashboard">
+        <span class="b-nav-icon">📊</span>
+        <span class="b-nav-label">الرئيسية</span>
+      </a>
+      <a href="#/accounts" class="b-nav-item" data-route="accounts">
+        <span class="b-nav-icon">👥</span>
+        <span class="b-nav-label">الحسابات</span>
+      </a>
+      <a href="#/pos" class="b-nav-item b-nav-highlight" data-route="pos">
+        <span class="b-nav-icon">🛒</span>
+        <span class="b-nav-label">المبيعات</span>
+      </a>
+      <a href="#/transactions" class="b-nav-item" data-route="transactions">
+        <span class="b-nav-icon">💸</span>
+        <span class="b-nav-label">العمليات</span>
+      </a>
+    </nav>
+
+    <!-- زر إضافة سريع عائم -->
+    <div class="fab-wrap">
+      <button class="fab" id="fab-add" title="إضافة سريعة">＋</button>
+      <div class="fab-menu hidden" id="fab-menu">
+        <button class="fab-item" data-act="pos"><span>🛒</span> نقطة بيع / مبيعات</button>
+        <button class="fab-item" data-act="account"><span>👤</span> حساب</button>
+        <button class="fab-item" data-act="transaction"><span>💸</span> عملية</button>
+        <button class="fab-item" data-act="voucher"><span>🧾</span> سند</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script type="module" src="js/app.js?v=2.0"></script>
+</body>
+</html>
