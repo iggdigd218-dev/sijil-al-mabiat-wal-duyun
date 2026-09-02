@@ -82,11 +82,11 @@ export function render(container, params, state) {
 
   container.innerHTML = `
     <div class="ledger-view-container" dir="rtl">
-      <div class="view-head" style="margin-bottom:10px">
+      <div class="view-head dashboard-summary-head" style="margin-bottom:10px">
         <div><div class="view-title">الرئيسية 📊</div><small>ملخص الحسابات والديون</small></div>
         <button class="btn primary sm" id="ledger-btn-add-acc-title">＋ حساب جديد</button>
       </div>
-      <div class="stats-grid" style="margin-bottom:12px">
+      <div class="stats-grid dashboard-summary-stats" style="margin-bottom:12px">
         <div class="stat-card"><div class="stat-label">الحسابات</div><div class="stat-value">${allAccounts.length}</div></div>
         <div class="stat-card"><div class="stat-label">عليه</div><div class="stat-value">${fmt(totalReceivable)}</div></div>
         <div class="stat-card"><div class="stat-label">له</div><div class="stat-value">${fmt(totalPayable)}</div></div>
@@ -156,6 +156,7 @@ export function render(container, params, state) {
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 14h-3v3h-2v-3H8v-2h3v-3h2v3h3v2zm-3-7V3.5L18.5 9H13z"/>
           </svg>
         </button>
+        <button class="ledger-bottom-add-btn ledger-account-add-btn" id="ledger-bottom-add-account" title="إضافة حساب جديد">＋</button>
       </footer>
     </div>
   `;
@@ -301,6 +302,8 @@ function bindLedgerEvents(container, allAccounts, filtered, txs) {
       openQuickCreateMenu();
     };
   }
+  const btnBottomAccount = $('#ledger-bottom-add-account', container);
+  if (btnBottomAccount) btnBottomAccount.onclick = () => go('accounts', { new: 1 });
 }
 
 function openCategorySelectorModal() {

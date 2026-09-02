@@ -1776,8 +1776,18 @@ html[data-theme="dark"] .ledger-bottom-row-2 {
 body[data-route="dashboard"] .topbar {
   display: none !important;
 }
+body[data-route="dashboard"] .dashboard-summary-head,
+body[data-route="dashboard"] .dashboard-summary-stats {
+  display: none !important;
+}
 body[data-route="dashboard"] .fab-wrap {
   display: none !important;
+}
+.ledger-account-add-btn {
+  background: var(--primary-soft) !important;
+  color: var(--primary) !important;
+  font-size: 28px;
+  font-weight: 900;
 }
 /* تحسينات وتنسيقات كشف الحساب وسجل العمليات */
 .account-detail-grid {
@@ -2006,7 +2016,6 @@ body[data-route="dashboard"] .fab-wrap {
 .stmt-mobile-card:hover {
   border-color: #bae6fd;
 }
-
 
 
 

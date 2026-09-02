@@ -10,6 +10,7 @@ export const APP_FOLDER_NAME = 'إدارة البيانات - النسخ الا�
 // ذاكرة الوصول المؤقتة للرمز التعريفي (In-Memory Access Token Cache)
 let inMemoryAccessToken = null;
 let googleAccountInfo = null; // { name, email, picture, id }
+let googleScriptPromise = null;
 
 // قراءة بيانات التكوين من ملف التطبيق
 let firebaseConfigCache = null;
@@ -72,17 +73,18 @@ export async function authenticateGoogleAccount(interactive = true) {
     // التأكد من تحميل مكتبة Google Identity Services
     if (typeof window.google === 'undefined' || !window.google.accounts || !window.google.accounts.oauth2) {
       // تحميل الاسكريبت ديناميكياً إن لم يكن محملاً
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      script.onload = () => {
-        initGISFlow(clientId, interactive, resolve, reject);
-      };
-      script.onerror = () => {
-        reject(new Error('تعذّر الاتصال بخدمات Google للمصادقة. تحقق من اتصال الإنترنت.'));
-      };
-      document.head.appendChild(script);
+      if (!googleScriptPromise) {
+        googleScriptPromise = new Promise((loadResolve, loadReject) => {
+          const script = document.createElement('script');
+          script.src = 'https://accounts.google.com/gsi/client';
+          script.async = true;
+          script.defer = true;
+          script.onload = loadResolve;
+          script.onerror = () => loadReject(new Error('تعذّر تحميل خدمة Google. تحقق من اتصال الإنترنت أو اسمح بالاتصال الخارجي للتطبيق.'));
+          document.head.appendChild(script);
+        });
+      }
+      googleScriptPromise.then(() => initGISFlow(clientId, interactive, resolve, reject)).catch(reject);
     } else {
       initGISFlow(clientId, interactive, resolve, reject);
     }

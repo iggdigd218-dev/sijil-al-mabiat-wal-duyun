@@ -236,6 +236,19 @@ export function openAccountForm(existing, cb) {
   const contactBtn = $('#btn-pick-contact', m.overlay);
   if (contactBtn) {
     contactBtn.onclick = async () => {
+      const nativeContacts = globalThis.Capacitor?.Plugins?.ContactsPicker;
+      if (nativeContacts && typeof nativeContacts.pick === 'function') {
+        try {
+          const contact = await nativeContacts.pick();
+          if (contact?.name) $('[name="name"]', m.overlay).value = contact.name;
+          if (contact?.phone) $('[name="phone"]', m.overlay).value = contact.phone.replace(/[^0-9+٠-٩]/g, '');
+          toast('تم اختيار جهة الاتصال من هاتفك ✨');
+          return;
+        } catch (err) {
+          if (!String(err?.message || err).includes('إلغاء')) toastErr('تعذر فتح جهات اتصال الهاتف');
+          return;
+        }
+      }
       // محاولة استخدام واجهة جهات اتصال النظام على الموبايل
       if (navigator.contacts && 'ContactsManager' in window) {
         try {
