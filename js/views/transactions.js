@@ -726,8 +726,11 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
     const acc = store.getAccount(d.accountId);
     if (acc) { acc.lastTxAt = new Date().toISOString(); await store.save('accounts', acc, { silent: true, noActivity: true }); }
 
-    // إشعار أو مشاركة السند عبر واتساب (صورة السند والنص معاً بدون نسخ ولصق)
-    const shared = (isSales || type === 'debit' || isPartial) ? await shareTransactionReceipt(primaryTx, { automatic: true }) : true;
+    // إرسال إشعار كل عملية مرتبطة بأي حساب يملك رقماً، سواء كانت إضافة أو تعديلاً.
+    // إعداد autoSendNotification يبقى هو مفتاح التحكم العام بالإرسال التلقائي.
+    const shared = acc && (acc.whatsapp || acc.phone)
+      ? await shareTransactionReceipt(primaryTx, { automatic: true })
+      : true;
 
     toast(isPartial
       ? 'تم اعتماد الفاتورة كدفع جزئي وتحديث الحسابات بنجاح ⚖️✅'

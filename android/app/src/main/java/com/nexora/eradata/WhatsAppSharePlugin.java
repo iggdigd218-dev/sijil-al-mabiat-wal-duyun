@@ -67,6 +67,9 @@ public class WhatsAppSharePlugin extends Plugin {
             intent.setClipData(ClipData.newRawUri("receipt", imageUri));
             if (!phone.isEmpty()) {
                 intent.putExtra("jid", phone + "@s.whatsapp.net");
+                intent.putExtra("address", phone);
+                // يدعم واتساب فتح المحادثة المحددة مع بقاء الصورة والنص ضمن نفس Intent.
+                intent.setData(Uri.parse("https://wa.me/" + phone));
             }
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
 
