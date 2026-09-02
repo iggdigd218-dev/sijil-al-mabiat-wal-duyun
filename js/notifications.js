@@ -9,9 +9,13 @@ let backupTimer = null;
 let retryBackupTimer = null;
 let lastBackupChangeTime = 0;
 
+function nativeNotifications() {
+  return globalThis.Capacitor?.Plugins?.LocalNotifications || null;
+}
+
 // التحقق من دعم المتصفح للإشعارات ونظام الدفع Push
 export function isNotificationSupported() {
-  return typeof window !== 'undefined' && 'Notification' in window;
+  return !!nativeNotifications() || (typeof window !== 'undefined' && 'Notification' in window);
 }
 
 export function isPushSupported() {
@@ -20,12 +24,30 @@ export function isPushSupported() {
 
 // قراءة حالة إذن الإشعارات
 export function getNotificationPermission() {
+  if (nativeNotifications()) return store.settings().systemNotificationsEnabled ? 'granted' : 'default';
   if (!isNotificationSupported()) return 'unsupported';
   return Notification.permission; // 'granted' | 'denied' | 'default'
 }
 
 // طلب إذن الإشعارات وتفعيل وضع الدفع
 export async function requestNotificationPermission() {
+  const native = nativeNotifications();
+  if (native) {
+    try {
+      const result = await native.requestPermissions();
+      const granted = result.display === 'granted' || result.display === 'provisional';
+      await store.setSetting('systemNotificationsEnabled', granted);
+      if (granted) {
+        await sendSystemNotification('🔔 تم تفعيل الإشعارات', { body: 'ستصلك تنبيهات التطبيق على جهاز Android.' });
+        toast('تم تفعيل إشعارات Android الأصلية بنجاح 🔔');
+      } else toast('يرجى السماح بالإشعارات من إعدادات التطبيق', 'warn');
+      return granted;
+    } catch (err) {
+      console.error('Native notification permission error:', err);
+      toastErr('تعذر تفعيل إشعارات Android');
+      return false;
+    }
+  }
   if (!isNotificationSupported()) {
     toastErr('المتصفح أو الجهاز الحالي لا يدعم إشعارات النظام');
     return false;
@@ -59,6 +81,7 @@ export async function requestNotificationPermission() {
 
 // تسجيل المزامنة الدورية في الخلفية عبر Service Worker أثناء سكون الهاتف
 export async function registerBackgroundPeriodicSync() {
+  if (nativeNotifications()) return true;
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false;
 
   try {
@@ -93,6 +116,22 @@ export async function registerBackgroundPeriodicSync() {
  */
 export async function sendSystemNotification(title, options = {}) {
   const st = store.settings();
+
+  const native = nativeNotifications();
+  if (native) {
+    try {
+      await native.schedule({ notifications: [{
+        id: Math.floor(Date.now() % 2147483647),
+        title,
+        body: options.body || '',
+        extra: options.data || {},
+      }] });
+      return true;
+    } catch (err) {
+      console.warn('Native notification failed:', err);
+      return false;
+    }
+  }
   
   // التحقق من صلاحية الإشعارات
   if (!isNotificationSupported() || Notification.permission !== 'granted') {
