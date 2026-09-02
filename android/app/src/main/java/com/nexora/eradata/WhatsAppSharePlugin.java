@@ -32,75 +32,51 @@ public class WhatsAppSharePlugin extends Plugin {
         final String dataUrl = call.getString("dataUrl", "");
         final String text = call.getString("text", "");
         final String phone = normalizePhone(call.getString("phone", ""));
-        if (dataUrl.isEmpty()) {
-            call.reject("Receipt image is empty");
-            return;
-        }
-
         try {
-            final int comma = dataUrl.indexOf(',');
-            if (comma < 0) {
-                call.reject("Invalid receipt image");
-                return;
+            Uri imageUri = null;
+            String mime = "image/png";
+            if (!dataUrl.isEmpty()) {
+                final int comma = dataUrl.indexOf(',');
+                if (comma < 0) { call.reject("Invalid receipt image"); return; }
+                final String metadata = dataUrl.substring(0, comma);
+                final String payload = dataUrl.substring(comma + 1);
+                final byte[] bytes = metadata.contains(";base64")
+                        ? Base64.decode(payload, Base64.DEFAULT)
+                        : Uri.decode(payload).getBytes(StandardCharsets.UTF_8);
+                mime = metadata.startsWith("data:") ? metadata.substring(5).split("[;,]", 2)[0] : mime;
+                final File imageFile = new File(getContext().getCacheDir(), "nexora-receipt-" + System.currentTimeMillis() + ".png");
+                try (FileOutputStream output = new FileOutputStream(imageFile)) { output.write(bytes); }
+                imageUri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", imageFile);
             }
-            final String metadata = dataUrl.substring(0, comma);
-            final String payload = dataUrl.substring(comma + 1);
-            final byte[] bytes = metadata.contains(";base64")
-                    ? Base64.decode(payload, Base64.DEFAULT)
-                    : Uri.decode(payload).getBytes(StandardCharsets.UTF_8);
-            final String mime = metadata.startsWith("data:")
-                    ? metadata.substring(5).split("[;,]", 2)[0]
-                    : "image/png";
 
-            final File imageFile = new File(getContext().getCacheDir(), "nexora-receipt-" + System.currentTimeMillis() + ".png");
-            try (FileOutputStream output = new FileOutputStream(imageFile)) {
-                output.write(bytes);
-            }
-            final Uri imageUri = FileProvider.getUriForFile(
-                    getContext(), getContext().getPackageName() + ".fileprovider", imageFile);
+            final PackageManager packageManager = getContext().getPackageManager();
+            final String waPackage = isPackageInstalled("com.whatsapp", packageManager) ? "com.whatsapp"
+                    : (isPackageInstalled("com.whatsapp.w4b", packageManager) ? "com.whatsapp.w4b" : "");
+            if (waPackage.isEmpty()) { call.reject("واتساب غير مثبت على هذا الجهاز"); return; }
 
             final Intent intent = new Intent(Intent.ACTION_SEND);
-            intent.setType(mime.isEmpty() ? "image/png" : mime);
-            intent.putExtra(Intent.EXTRA_STREAM, imageUri);
+            intent.setType(imageUri == null ? "text/plain" : (mime.isEmpty() ? "image/png" : mime));
+            if (imageUri != null) intent.putExtra(Intent.EXTRA_STREAM, imageUri);
             intent.putExtra(Intent.EXTRA_TEXT, text);
             intent.putExtra(Intent.EXTRA_TITLE, "سند العملية");
-            intent.setClipData(ClipData.newRawUri("receipt", imageUri));
+            if (imageUri != null) intent.setClipData(ClipData.newRawUri("receipt", imageUri));
             if (!phone.isEmpty()) {
                 intent.putExtra("jid", phone + "@s.whatsapp.net");
                 intent.putExtra("address", phone);
-                // يدعم واتساب فتح المحادثة المحددة مع بقاء الصورة والنص ضمن نفس Intent.
-                intent.setData(Uri.parse("https://wa.me/" + phone));
             }
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.setPackage(waPackage);
+            if (imageUri != null) getContext().grantUriPermission(waPackage, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (intent.resolveActivity(packageManager) != null) { startActivityForResult(call, intent, "shareReceiptResult"); return; }
 
-            final PackageManager packageManager = getContext().getPackageManager();
-            boolean hasWa = isPackageInstalled("com.whatsapp", packageManager);
-            boolean hasWab = isPackageInstalled("com.whatsapp.w4b", packageManager);
-
-            if (hasWa) {
-                getContext().grantUriPermission("com.whatsapp", imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                intent.setPackage("com.whatsapp");
-            } else if (hasWab) {
-                getContext().grantUriPermission("com.whatsapp.w4b", imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                intent.setPackage("com.whatsapp.w4b");
-            }
-
-            try {
-                startActivityForResult(call, intent, "shareReceiptResult");
-            } catch (Exception ex) {
-                // If direct package start fails, grant to all matching activities and open chooser
-                intent.setPackage(null);
-                java.util.List<android.content.pm.ResolveInfo> resInfoList = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
-                for (android.content.pm.ResolveInfo resolveInfo : resInfoList) {
-                    if (resolveInfo.activityInfo != null && resolveInfo.activityInfo.packageName != null) {
-                        getContext().grantUriPermission(resolveInfo.activityInfo.packageName, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    }
-                }
-                Intent chooser = Intent.createChooser(intent, "إرسال السند عبر واتساب (صورة + نص معاً)");
-                chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                getContext().startActivity(chooser);
+            // لا نعرض Sharesheet فارغة: افتح المحادثة المحددة مباشرة كحل Android موثوق.
+            if (!phone.isEmpty()) {
+                Intent chat = new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + phone));
+                chat.setPackage(waPackage);
+                chat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(chat);
                 call.resolve();
-            }
+            } else call.reject("تعذر فتح واتساب لهذا الرقم");
         } catch (Exception error) {
             call.reject("Unable to prepare WhatsApp receipt", error);
         }
