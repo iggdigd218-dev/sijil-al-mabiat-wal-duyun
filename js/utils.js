@@ -183,39 +183,51 @@ export function cleanPhoneNumber(phone, defaultCountry = '967') {
   let p = String(phone || '')
     .replace(/[٠-٩]/g, d => arabic.indexOf(d))
     .replace(/[۰-۹]/g, d => persian.indexOf(d))
-    .replace(/\D/g, '');
-  if (p.startsWith('00')) p = p.slice(2);
+    .replace(/[^\d+]/g, '');
   if (p.startsWith('+')) p = p.slice(1);
-  if (p.startsWith('0')) p = p.replace(/^0+/, ''); // إزالة الأصفار البادئة المحلية
+  if (p.startsWith('00')) p = p.slice(2);
+  p = p.replace(/\D/g, '');
+  if (p.startsWith('0') && p.length >= 9) p = p.replace(/^0+/, '');
   if (p.length === 9 && (p.startsWith('7') || p.startsWith('1'))) {
     p = (defaultCountry || '967') + p;
   } else if (p.length === 9 && p.startsWith('5')) {
     p = '966' + p;
+  } else if (p.length === 10 && p.startsWith('05')) {
+    p = '966' + p.slice(1);
+  }
+  if (p.startsWith('9670') && p.length >= 13) {
+    p = '967' + p.slice(4);
   }
   return p;
 }
 
 export function openWhatsApp(phone, text, appType = 'regular') {
   const p = cleanPhoneNumber(phone);
-  if (!p) return;
+  if (!p) {
+    console.warn('openWhatsApp: رقم غير صالح', phone);
+    return false;
+  }
   const encoded = encodeURIComponent(text || '');
-  
-  // الرابط العالمي المباشر لفتح محادثة الرقم المحدد فوراً دون وسيط
-  const directChatUrl = appType === 'web'
-    ? `https://wa.me/${p}?text=${encoded}`
-    : `https://api.whatsapp.com/send?phone=${p}&text=${encoded}`;
-  const appSchemeUrl = `whatsapp://send?phone=${p}&text=${encoded}`;
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+  const isAndroid = /Android/i.test(ua);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isNative = !!(globalThis.Capacitor && typeof globalThis.Capacitor.isNativePlatform === 'function' && globalThis.Capacitor.isNativePlatform());
+  const waMe = `https://wa.me/${p}?text=${encoded}`;
+  const apiSend = `https://api.whatsapp.com/send?phone=${p}&text=${encoded}`;
+  const schemeRegular = `whatsapp://send?phone=${p}&text=${encoded}`;
+  const schemeBusiness = `whatsapp-business://send?phone=${p}&text=${encoded}`;
+  const intentRegular = `intent://send?phone=${p}&text=${encoded}#Intent;scheme=whatsapp;package=com.whatsapp;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end`;
+  const intentBusiness = `intent://send?phone=${p}&text=${encoded}#Intent;scheme=whatsapp;package=com.whatsapp.w4b;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end`;
+  let primary = appType === 'business' && (isAndroid || isNative) ? intentBusiness : (isAndroid || isNative ? intentRegular : (isIOS ? schemeRegular : waMe));
+  const fallbacks = appType === 'business' ? [schemeBusiness, waMe, apiSend, intentRegular] : [schemeRegular, waMe, apiSend];
+  if (appType === 'web') primary = waMe;
   try {
-    // فتح محادثة العميل مباشرة في واتساب
-    const a = document.createElement('a');
-    a.href = directChatUrl;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => a.remove(), 300);
+    if (isNative || isAndroid || isIOS) window.location.href = primary;
+    else { const a = document.createElement('a'); a.href = primary; a.target = '_blank'; a.rel = 'noopener noreferrer'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 400); }
+    return true;
   } catch (_) {
-    window.location.href = appSchemeUrl;
+    for (const url of fallbacks) { try { window.location.href = url; return true; } catch (e) {} }
+    return false;
   }
 }
 

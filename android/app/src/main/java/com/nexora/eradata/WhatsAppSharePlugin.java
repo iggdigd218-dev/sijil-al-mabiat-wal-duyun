@@ -28,6 +28,23 @@ import java.nio.charset.StandardCharsets;
 public class WhatsAppSharePlugin extends Plugin {
 
     @PluginMethod
+    public void openChat(PluginCall call) {
+        String phone = normalizePhone(call.getString("phone", ""));
+        String text = call.getString("text", "");
+        if (phone.isEmpty()) { call.reject("رقم الهاتف فارغ أو غير صالح"); return; }
+        try {
+            String pkg = isPackageInstalled("com.whatsapp", getContext().getPackageManager()) ? "com.whatsapp" :
+                    (isPackageInstalled("com.whatsapp.w4b", getContext().getPackageManager()) ? "com.whatsapp.w4b" : "");
+            if (pkg.isEmpty()) { call.reject("واتساب غير مثبت على هذا الجهاز"); return; }
+            Intent chat = new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + phone + "?text=" + Uri.encode(text)));
+            chat.setPackage(pkg);
+            chat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(chat);
+            call.resolve();
+        } catch (Exception error) { call.reject("تعذر فتح محادثة واتساب", error); }
+    }
+
+    @PluginMethod
     public void shareReceipt(PluginCall call) {
         final String dataUrl = call.getString("dataUrl", "");
         final String text = call.getString("text", "");

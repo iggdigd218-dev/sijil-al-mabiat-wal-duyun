@@ -1526,12 +1526,13 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
     }
   }
 
-  // 4. إرسال مباشر عبر Capacitor Native Plugin في تطبيق أندرويد إن وجد
+  // 4. قناة واتساب: افتح محادثة العميل مباشرة، ولا تستخدم Sharesheet.
   const nativeShare = globalThis.Capacitor && globalThis.Capacitor.Plugins && globalThis.Capacitor.Plugins.WhatsAppShare;
-  if (nativeShare && typeof nativeShare.shareReceipt === 'function') {
+  if (nativeShare && channel === 'whatsapp' && typeof nativeShare.openChat === 'function') {
     try {
-      await nativeShare.shareReceipt({ phone: String(rawPhone), text: message, dataUrl: image });
-      toast(automatic ? 'تم حفظ العملية وتوجيه السند للواتساب فوراً ✅' : 'تم توجيه السند للواتساب فوراً ✅');
+      await nativeShare.openChat({ phone: String(rawPhone), text: message, waType: activeWaType });
+      if (image) { try { await copyReceiptImageToClipboard(image); } catch (_) {} }
+      toast(image ? 'تم فتح محادثة العميل وتجهيز النص؛ أرفق صورة السند من الحافظة 📎' : 'تم فتح محادثة العميل بالنص ✅');
       return true;
     } catch (_) {}
   }
