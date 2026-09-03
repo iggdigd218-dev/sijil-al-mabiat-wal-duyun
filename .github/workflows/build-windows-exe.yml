@@ -38,12 +38,18 @@ jobs:
       - name: Analyze (non-blocking)
         run: flutter analyze || true
 
-      - name: Build Windows Release
-        env:
-          CMAKE_GENERATOR: "Visual Studio 17 2022"
+      - name: Diagnose toolchain
         run: |
-          Remove-Item -Recurse -Force build\windows -ErrorAction SilentlyContinue
-          flutter build windows --release
+          flutter doctor -v
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -property installationPath
+          echo "---"
+          cmake --version
+
+      - name: Build Windows Release
+        run: |
+          flutter clean
+          flutter pub get
+          flutter build windows --release -v
 
       - name: Package ZIP
         shell: pwsh
