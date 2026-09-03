@@ -758,6 +758,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
               quantity: line.quantity,
               kind: StockKind.sale,
               date: now,
+              createdAt: now,
               notes: 'مبيع نقطة بيع #$refNum',
             ));
           } catch (e) {
@@ -830,9 +831,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   showSnack(context, 'لا يوجد رقم هاتف مسجل للعميل', error: true);
                   return;
                 }
-                await TxShare.sendNow(context, ref,
-                  context: context,
-                  ref: ref,
+                await TxShare.sendNow(
+                  context,
+                  ref,
                   tx: tx,
                   account: acc,
                 );
