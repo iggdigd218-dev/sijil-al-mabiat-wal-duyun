@@ -39,7 +39,11 @@ jobs:
         run: flutter analyze || true
 
       - name: Build Windows Release
-        run: flutter build windows --release
+        env:
+          CMAKE_GENERATOR: "Visual Studio 17 2022"
+        run: |
+          Remove-Item -Recurse -Force build\windows -ErrorAction SilentlyContinue
+          flutter build windows --release
 
       - name: Package ZIP
         shell: pwsh
