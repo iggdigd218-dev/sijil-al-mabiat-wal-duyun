@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../core/format.dart';
 import '../core/theme.dart';
+import '../data/cloud_sync.dart';
 import '../data/google_drive_service.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
@@ -31,12 +32,99 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   /// تضمين صور العمليات داخل ملف النسخة (البند ١٣).
   bool _withImages = true;
 
+  // ===== المزامنة السحابية عبر Firebase (رابط + رمز، بلا تسجيل دخول) =====
+  final _cloudUrlCtrl = TextEditingController();
+  final _cloudCodeCtrl = TextEditingController();
+  Map<String, dynamic>? _cloudStatus;
+  bool _cloudBusy = false;
+
   final GoogleDriveService _drive = GoogleDriveService.instance;
 
   @override
   void initState() {
     super.initState();
     _loadCloudState();
+    _loadFirebaseState();
+  }
+
+  @override
+  void dispose() {
+    _cloudUrlCtrl.dispose();
+    _cloudCodeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadFirebaseState() async {
+    final repo = ref.read(repoProvider);
+    final cfg = await CloudSync.config(repo);
+    _cloudUrlCtrl.text = cfg.backendUrl;
+    _cloudCodeCtrl.text = cfg.code;
+    final st = await CloudSync.status(repo);
+    if (mounted) setState(() => _cloudStatus = st);
+  }
+
+  Future<void> _saveCloudConfig() async {
+    final repo = ref.read(repoProvider);
+    await CloudSync.setBackendUrl(repo, _cloudUrlCtrl.text);
+    var code = _cloudCodeCtrl.text.trim();
+    if (code.isEmpty) code = CloudSync.generateCode();
+    final clean = await CloudSync.setCode(repo, code);
+    _cloudCodeCtrl.text = clean;
+    await _loadFirebaseState();
+    if (mounted) showSnack(context, 'تم حفظ إعداد المزامنة السحابية ✅');
+  }
+
+  Future<void> _pushCloud() async {
+    setState(() => _cloudBusy = true);
+    try {
+      final repo = ref.read(repoProvider);
+      final payload = await repo.exportAll(withImages: _withImages);
+      final r = await CloudSync.push(repo, payload);
+      await _loadFirebaseState();
+      if (!mounted) return;
+      if (r['ok'] != true) {
+        showSnack(context, '${r['error'] ?? 'تعذّر الرفع السحابي'}', error: true);
+      } else if (r['skipped'] == true) {
+        showSnack(context, 'النسخة السحابية أحدث من المحلية — لم يُرفع لتفادي الكتابة فوقها.');
+      } else {
+        showSnack(context, 'تم رفع النسخة للسحابة ✅ (الرمز: ${r['code']})');
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر الرفع السحابي: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _cloudBusy = false);
+    }
+  }
+
+  Future<void> _pullCloud() async {
+    final repo = ref.read(repoProvider);
+    final r = await CloudSync.pull(repo);
+    if (r['ok'] != true) {
+      if (mounted) showSnack(context, '${r['error'] ?? 'تعذّر السحب'}', error: true);
+      return;
+    }
+    if (r['exists'] != true) {
+      if (mounted) showSnack(context, 'لا توجد نسخة سحابية لهذا الرمز بعد.');
+      return;
+    }
+    final confirm = await confirmDialog(
+      context,
+      title: '⚠️ استعادة من السحابة',
+      message:
+          'سيتم استبدال كل البيانات الحالية بآخر نسخة سحابية (${r['date'] ?? ''}). هل تريد المتابعة؟',
+      danger: true,
+    );
+    if (!confirm) return;
+    setState(() => _busy = true);
+    try {
+      final payload = r['payload'] as Map<String, Object?>;
+      final count = await repo.importAll(payload);
+      if (mounted) showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّرت الاستعادة: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _loadCloudState() async {
@@ -430,6 +518,109 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                 ),
                 if (_busy) ...[
                   const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        const SectionTitle('المزامنة السحابية (Firebase — رابط ورمز، بلا تسجيل دخول)'),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ضع رابط قاعدة Firebase ورمزًا سحابيًا موحَّدًا على كل أجهزتك، فتتزامن '
+                  'البيانات بدون حساب أو تسجيل دخول. ارفع النسخة من هنا واسحبها على الجهاز الآخر.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.6,
+                    color: AppColors.text2Of(context),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _cloudUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'رابط قاعدة البيانات السحابية',
+                    hintText: 'https://xxxx-default-rtdb.firebaseio.com',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  keyboardType: TextInputType.url,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _cloudCodeCtrl,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(
+                          labelText: 'الرمز السحابي (نفسه على أجهزتك)',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'رمز جديد',
+                      onPressed: () =>
+                          _cloudCodeCtrl.text = CloudSync.generateCode(),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (_cloudStatus != null &&
+                    _cloudStatus!['exists'] == true) ...[
+                  Text(
+                    'آخر نسخة سحابية: ${_cloudStatus!['updatedAt'] ?? ''}  ·  ${_cloudStatus!['sizeKb'] ?? ''}',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.text3Of(context)),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (_cloudStatus != null && _cloudStatus!['error'] != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'تعذّر الاتصال: ${_cloudStatus!['error']}',
+                      style: const TextStyle(fontSize: 12, color: Colors.red),
+                    ),
+                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _cloudBusy ? null : _saveCloudConfig,
+                        icon: const Icon(Icons.save_outlined),
+                        label: const Text('حفظ'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _cloudBusy ? null : _pushCloud,
+                        icon: const Icon(Icons.cloud_upload_outlined),
+                        label: const Text('رفع'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: _cloudBusy ? null : _pullCloud,
+                        icon: const Icon(Icons.cloud_download_outlined),
+                        label: const Text('سحب'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_cloudBusy) ...[
+                  const SizedBox(height: 10),
                   const LinearProgressIndicator(),
                 ],
               ],
