@@ -134,6 +134,10 @@ function renderTabContent(tab, s, me, notifPerm, notifStatusBadge, googleAcc) {
             <label>اسم المدير / المسؤول (يظهر في تذييل السندات المطبوعة للتوقيع)</label>
             <input id="st-manager" value="${esc(s.managerName||'')}" placeholder="اسم المدير العام أو المسؤول">
           </div>
+          <div class="field">
+            <label>رمز الدولة الافتراضي (بدون +)</label>
+            <input id="st-country-code" value="${esc(s.defaultCountryCode||'')}" placeholder="مثال: 967" inputmode="numeric">
+          </div>
         </div>
 
         <div class="settings-group">
@@ -451,6 +455,7 @@ function bindTabEvents(tab, container, params, state, s, me) {
     setIf('st-addr', 'address');
     setIf('st-phone', 'phone');
     setIf('st-manager', 'managerName');
+    setIf('st-country-code', 'defaultCountryCode');
 
     const logoInput = $('#st-logo', container);
     if (logoInput) {

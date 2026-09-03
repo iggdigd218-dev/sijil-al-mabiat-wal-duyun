@@ -156,15 +156,8 @@ export function render(container, params, state) {
           <span>تفعيل النسخ الاحتياطي التلقائي عند تسجيل العمليات</span>
         </label>
         
-        <div class="field">
-          <label>الوجهة الافتراضية للنسخ التلقائي</label>
-          <select id="bk-loc" class="select" style="width:100%">
-            <option value="local" ${settings.autoBackupLoc !== 'drive' ? 'selected' : ''}>💻 محلياً داخل ذاكرة التطبيق</option>
-            <option value="drive" ${settings.autoBackupLoc === 'drive' ? 'selected' : ''}>☁️ سحابياً إلى Google Drive (يوصى به)</option>
-          </select>
-        </div>
         <p class="hint" style="font-size:12px;color:var(--text3);margin-top:6px">
-          💡 عند تفعيل النسخ السحابي، يتم تحديث الملف الموحد في Google Drive دورياً وعند فشل النسخ يتم إرسال إشعار وإعادة المحاولة بعد 15 دقيقة.
+          💡 تُحفظ نسخة محلية دائماً، وعند ربط Google Drive تتم مزامنة النسخة تلقائياً وتُعاد المحاولة عند عودة الاتصال.
         </p>
       </div>
     </div>
@@ -339,14 +332,6 @@ export function render(container, params, state) {
     toast('تم تحديث إعداد النسخ التلقائي');
   });
 
-  $('#bk-loc', container).addEventListener('change', async (e) => {
-    await store.setSetting('autoBackupLoc', e.target.value);
-    if (e.target.value === 'drive' && !getSavedGoogleAccount()) {
-      toast('يرجى ربط حساب Google أولاً لتمكين النسخ السحابي التلقائي', 'warn');
-    } else {
-      toast('تم تحديث الوجهة الافتراضية للنسخ');
-    }
-  });
 
   const fileInput = $('#import-file', container);
   fileInput.addEventListener('change', async () => {

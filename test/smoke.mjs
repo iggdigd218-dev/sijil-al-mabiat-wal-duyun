@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto';
 import { store } from '../js/store.js';
 import { accountBalance, txEffect, OP_TYPES, balanceLabels } from '../js/accounting.js';
-import { numberToWords } from '../js/utils.js';
+import { numberToWords, cleanPhoneNumber } from '../js/utils.js';
 
 let pass = 0, fail = 0;
 function check(name, cond) { if (cond) { pass++; } else { fail++; console.log('FAIL:', name); } }
@@ -80,6 +80,15 @@ check('transactions count = 8', store.col("transactions").length === 8);
 
 // 15) العملة الافتراضية
 check('default currency YER', store.settings().defaultCurrency === 'YER');
+
+// 16) تطبيع أرقام واتساب: دولي، محلي، رموز عربية، ورقم فارغ
+check('phone plus', cleanPhoneNumber('+967 771234567') === '967771234567');
+check('phone 00', cleanPhoneNumber('00967-771234567') === '967771234567');
+check('phone local with saved country', cleanPhoneNumber('0771234567', '967') === '967771234567');
+check('phone punctuation', cleanPhoneNumber('tel:(077) 123-4567', '967') === '967771234567');
+check('phone Arabic digits', cleanPhoneNumber('٠٧٧١٢٣٤٥٦٧', '967') === '967771234567');
+check('phone empty invalid', cleanPhoneNumber('', '967') === '');
+check('phone local without country stays invalid', cleanPhoneNumber('0771234567', '') === '');
 
 console.log(`\nنتيجة: ${pass} نجحت، ${fail} فشلت`);
 process.exit(fail ? 1 : 0);

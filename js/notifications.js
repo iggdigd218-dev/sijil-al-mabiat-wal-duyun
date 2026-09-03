@@ -241,8 +241,8 @@ export function notifyDataChangeForBackup() {
 // تنفيذ النسخ الاحتياطي التلقائي (محلي أو سحابي إلى Google Drive) مع إشعار الفشل وإعادة المحاولة بعد 15 دقيقة
 export async function performAutoBackupWithNotification(manualTrigger = false) {
   const st = store.settings();
-  let isDrive = st.autoBackupLoc === 'drive';
   const savedGoogle = getSavedGoogleAccount();
+  const isDrive = Boolean(savedGoogle) && st.autoBackup !== false;
 
   try {
     const data = await exportAllData();

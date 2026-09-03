@@ -394,6 +394,7 @@ if ('serviceWorker' in navigator) {
 async function main() {
   handleSplashScreen();
   await store.load();
+  globalThis.__NEXORA_DEFAULT_COUNTRY = store.settings().defaultCountryCode || '';
   state.user = store.findBy('users', u => u.me) || null;
   setupBoot();
   setupPin();

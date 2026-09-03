@@ -4,8 +4,8 @@ import { exportAllData, importAllData } from './db.js';
 import { todayISO, uid } from './utils.js';
 
 // معرّف ملف النسخة الاحتياطية الموحد الخاص بالتطبيق
-export const BACKUP_FILE_NAME = 'edara_data_accounting_backup.json';
-export const APP_FOLDER_NAME = 'إدارة البيانات - النسخ الاحتياطي';
+export const BACKUP_FILE_NAME = 'sijil-backup.json';
+export const APP_FOLDER_NAME = 'سجل المبيعات والديون';
 
 // ذاكرة الوصول المؤقتة للرمز التعريفي (In-Memory Access Token Cache)
 let inMemoryAccessToken = null;
@@ -181,9 +181,13 @@ export async function prepareBackupPayload() {
 
   // إضافة معلومات وصفية للنسخة
   raw._meta = {
+    schemaVersion: 1,
     appName: 'إدارة البيانات — النظام المحاسبي',
     version: '2.0.0',
+    appVersion: '3.4.2',
     timestamp: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    platform: globalThis.Capacitor?.getPlatform?.() || 'web',
     exportedAtFormatted: new Date().toLocaleString('ar-EG-u-ca-gregory-nu-latn'),
     appletId: 'c4ce6e45-1797-431b-9b83-bb1f1eae4744',
   };
@@ -195,8 +199,9 @@ export async function prepareBackupPayload() {
  * البحث عن ملف النسخة الاحتياطية الموحد في Google Drive
  */
 async function findUnifiedBackupFile(token) {
-  const query = encodeURIComponent(`name = '${BACKUP_FILE_NAME}' and trashed = false`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime,size,webViewLink)&spaces=drive`;
+  const folderId = await getOrCreateBackupFolder(token);
+  const query = encodeURIComponent(`name = '${BACKUP_FILE_NAME}' and '${folderId}' in parents and trashed = false`);
+  const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime,size,webViewLink,appProperties)&spaces=drive`;
   
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` }
@@ -216,6 +221,21 @@ async function findUnifiedBackupFile(token) {
     return result.files[0];
   }
   return null;
+}
+
+async function getOrCreateBackupFolder(token) {
+  const query = encodeURIComponent(`name = '${APP_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
+  const base = 'https://www.googleapis.com/drive/v3/files';
+  const found = await fetch(`${base}?q=${query}&fields=files(id)&spaces=drive`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!found.ok) throw new Error('تعذر الوصول إلى مجلد النسخ الاحتياطي في Google Drive.');
+  const data = await found.json();
+  if (data.files?.[0]?.id) return data.files[0].id;
+  const created = await fetch(base, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: APP_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', appProperties: { nexoraBackup: 'true' } }),
+  });
+  if (!created.ok) throw new Error('تعذر إنشاء مجلد النسخ الاحتياطي في Google Drive.');
+  return (await created.json()).id;
 }
 
 /**
@@ -264,6 +284,8 @@ export async function uploadOrUpdateDriveBackup() {
       name: BACKUP_FILE_NAME,
       mimeType: 'application/json',
       description: 'ملف النسخة الاحتياطية الموحد لتطبيق إدارة البيانات المحاسبي',
+      parents: [await getOrCreateBackupFolder(token)],
+      appProperties: { nexoraBackup: 'true', schemaVersion: '1' },
     };
 
     const boundary = '-------314159265358979323846';

@@ -1481,8 +1481,9 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
 
   const acc = t.type === 'transfer' ? store.getAccount(t.fromId) : store.getAccount(t.accountId);
   const rawPhone = acc && (acc.whatsapp || acc.phone);
+  const phone = rawPhone ? cleanPhoneNumber(rawPhone, store.settings().defaultCountryCode || '') : '';
 
-  if (!rawPhone) {
+  if (!phone) {
     if (!automatic) toastErr('يرجى إضافة رقم هاتف أو واتساب للعميل لإرسال الإشعار');
     return false;
   }
@@ -1490,7 +1491,7 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
   // 1. إذا كانت القناة المحددة هي الرسائل النصية SMS
   if (channel === 'sms') {
     const smsMessage = transactionSmsText(t);
-    openSMS(rawPhone, smsMessage);
+    openSMS(phone, smsMessage);
     toast('تم فتح تطبيق الرسائل القصيرة SMS بنص الإشعار الواضح 💬');
     return true;
   }
@@ -1530,7 +1531,7 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
   const nativeShare = globalThis.Capacitor && globalThis.Capacitor.Plugins && globalThis.Capacitor.Plugins.WhatsAppShare;
   if (nativeShare && channel === 'whatsapp' && typeof nativeShare.openChat === 'function') {
     try {
-      await nativeShare.openChat({ phone: String(rawPhone), text: message, waType: activeWaType });
+      await nativeShare.openChat({ phone, text: message, waType: activeWaType });
       if (image) { try { await copyReceiptImageToClipboard(image); } catch (_) {} }
       toast(image ? 'تم فتح محادثة العميل وتجهيز النص؛ أرفق صورة السند من الحافظة 📎' : 'تم فتح محادثة العميل بالنص ✅');
       return true;
@@ -1553,7 +1554,7 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
     }
   }
   // 6. لا يمكن إرفاق ملف عبر رابط واتساب في المتصفح؛ نفتح النص فقط مع توضيح ذلك.
-  openWhatsApp(rawPhone, message, activeWaType);
+  openWhatsApp(phone, message, activeWaType);
   toast('تم فتح واتساب بالنص؛ أرفق صورة السند من زر المشاركة في جهازك');
   return true;
 }

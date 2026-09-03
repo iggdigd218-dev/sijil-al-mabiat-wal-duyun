@@ -177,7 +177,7 @@ export function beep() {
   } catch (e) {}
 }
 
-export function cleanPhoneNumber(phone, defaultCountry = '967') {
+export function cleanPhoneNumber(phone, defaultCountry = '') {
   const arabic = '٠١٢٣٤٥٦٧٨٩';
   const persian = '۰۱۲۳۴۵۶۷۸۹';
   let p = String(phone || '')
@@ -189,7 +189,9 @@ export function cleanPhoneNumber(phone, defaultCountry = '967') {
   p = p.replace(/\D/g, '');
   if (p.startsWith('0') && p.length >= 9) p = p.replace(/^0+/, '');
   if (p.length === 9 && (p.startsWith('7') || p.startsWith('1'))) {
-    p = (defaultCountry || '967') + p;
+    const country = defaultCountry || globalThis.__NEXORA_DEFAULT_COUNTRY || '';
+    if (!country) return '';
+    p = country + p;
   } else if (p.length === 9 && p.startsWith('5')) {
     p = '966' + p;
   } else if (p.length === 10 && p.startsWith('05')) {
@@ -202,7 +204,7 @@ export function cleanPhoneNumber(phone, defaultCountry = '967') {
 }
 
 export function openWhatsApp(phone, text, appType = 'regular') {
-  const p = cleanPhoneNumber(phone);
+  const p = cleanPhoneNumber(phone, globalThis.__NEXORA_DEFAULT_COUNTRY || '');
   if (!p) {
     console.warn('openWhatsApp: رقم غير صالح', phone);
     return false;
