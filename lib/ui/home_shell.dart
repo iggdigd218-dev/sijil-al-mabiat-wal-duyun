@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/accounting.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_form.dart';
@@ -79,6 +80,48 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   void _go(AppScreen s) => setState(() => _screen = s);
 
+  /// قائمة زر الإضافة الكبير: فاتورة مبيعات (قَبض/إيراد) أو عملية أخرى.
+  Future<void> _showAddTxMenu(BuildContext context, WidgetRef ref) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('إضافة عملية جديدة',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            ListTile(
+              leading: const Icon(Icons.point_of_sale, color: AppColors.primary),
+              title: const Text('فاتورة مبيعات (قبض)',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: const Text('بيع نقداً أو قبض دفعة من عميل'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openTxForm(context, ref, presetType: OpType.inflow);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: const Text('عملية أخرى',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: const Text(
+                  'صرف، دين عليه (آجل)، تسوية، تحويل، مصروف… مع كل الأنواع'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openTxForm(context, ref);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _body() => switch (_screen) {
         AppScreen.pos => const PosScreen(),
         AppScreen.dashboard => DashboardScreen(
@@ -105,9 +148,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             label: const Text('حساب جديد'),
           ),
         AppScreen.transactions => FloatingActionButton.extended(
-            onPressed: () => openTxForm(context, ref),
+            onPressed: () => _showAddTxMenu(context, ref),
             icon: const Icon(Icons.add),
-            label: const Text('عملية جديدة'),
+            label: const Text('تسجيل عملية'),
           ),
         AppScreen.vouchers => FloatingActionButton.extended(
             onPressed: () => openVoucherForm(context, ref),

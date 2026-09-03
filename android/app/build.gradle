@@ -31,6 +31,27 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+        ndk {
+            // أجهزة الهاتف الحقيقية فقط: arm64 حديثة + armeabi قديمة؛ نستبعد x86_64 (محاكيات).
+            abiFilters = ["arm64-v8a", "armeabi-v7a"]
+        }
+    }
+
+    // تقسيم حسب المعمارية: ملف صغير لكل نوع بدل دمجها كلها في APK واحد ضخم.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include "arm64-v8a", "armeabi-v7a"
+            isUniversalApk = false
+        }
+    }
+
+    // ضغط المكتبات الأصلية (.so) داخل APK لتقليل حجم التنزيل كثيراً.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     signingConfigs {
