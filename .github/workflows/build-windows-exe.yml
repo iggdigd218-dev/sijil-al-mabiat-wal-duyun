@@ -45,10 +45,14 @@ jobs:
           cmake --version
 
       - name: Build Windows Release
+        env:
+          # إضافة local_auth_windows تُترجم بـ /await القديم (STL1011 خطأ في VS 2026).
+          # لا نستخدم البصمة على ويندوز؛ نكتم التحذير القاتل حتى تُترجم الإضافة.
+          CL: "/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
         run: |
           flutter clean
           flutter pub get
-          flutter build windows --release -v
+          flutter build windows --release
 
       - name: Package ZIP
         shell: pwsh
