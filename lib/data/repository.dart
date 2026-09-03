@@ -122,7 +122,13 @@ class Repo {
     late final int id;
     await db.transaction((txn) async {
       if (t.id == null) {
-        id = await txn.insert('transactions', t.toMap());
+        // رقم تسلسلي رقمي بحت لكل عملية إن لم يُدخل المستخدم مرجعاً
+        var ref = t.reference.trim();
+        if (ref.isEmpty) {
+          ref = await nextSeq('counter_tx', table: 'transactions');
+        }
+        final toSave = ref == t.reference ? t : t.copyWith(reference: ref);
+        id = await txn.insert('transactions', toSave.toMap());
       } else {
         id = t.id!;
         await txn.update('transactions', t.toMap(),
@@ -325,17 +331,30 @@ class Repo {
     return r.isEmpty ? null : Voucher.fromMap(r.first);
   }
 
-  /// الترقيم التلقائي — نقل حرفي لـ `nextSequence`:
-  /// البادئة + عدّاد مكوّن من ٤ خانات، والعدّادات محفوظة في الإعدادات.
-  Future<String> nextVoucherNumber(VoucherKind kind) async {
+  /// ترقيم رقمي تسلسلي بحت (بدون أحرف/بادئات).
+  /// عدّاد موحّد في الإعدادات، يُبدأ من أكبر id موجود لتفادي التكرار.
+  Future<String> nextSeq(String counterKey, {String? table}) async {
     final st = await settings();
-    final prefix = st['prefix_${kind.code}']?.trim().isNotEmpty == true
-        ? st['prefix_${kind.code}']!
-        : kind.prefix;
-    final counter = (int.tryParse(st['counter_${kind.code}'] ?? '0') ?? 0) + 1;
-    await setSetting('counter_${kind.code}', '$counter');
-    return '$prefix${counter.toString().padLeft(4, '0')}';
+    var counter = int.tryParse(st[counterKey] ?? '0') ?? 0;
+    if (table != null) {
+      try {
+        final db = await _db;
+        final r = await db.rawQuery('SELECT MAX(id) AS m FROM $table');
+        final maxId = (r.first['m'] as int?) ?? 0;
+        if (maxId > counter) counter = maxId;
+      } catch (_) {}
+    }
+    counter += 1;
+    await setSetting(counterKey, '$counter');
+    return '$counter';
   }
+
+  /// الرقم التسلسلي التالي لأي عملية مالية (رقمي بحت).
+  Future<String> nextTxNumber() => nextSeq('counter_tx', table: 'transactions');
+
+  /// الرقم التسلسلي التالي للسند (رقمي بحت، بدون بادئة حرفية).
+  Future<String> nextVoucherNumber([Object? _]) =>
+      nextSeq('counter_voucher', table: 'vouchers');
 
   Future<int> saveVoucher(Voucher v) async {
     final db = await _db;

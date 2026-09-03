@@ -100,9 +100,8 @@ class _TxFormState extends ConsumerState<TxForm> {
       _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
       _rate.text = '${t.rate}';
       _desc.text = t.description;
-      _ref.text = widget.isCopy && t.reference.isNotEmpty
-          ? '${t.reference} (نسخة)'
-          : t.reference;
+      // عند النسخ نُفرغ المرجع ليأخذ رقماً تسلسلياً جديداً تلقائياً
+      _ref.text = widget.isCopy ? '' : t.reference;
       _notes.text = t.notes;
     } else {
       _accountId = widget.presetAccountId ??

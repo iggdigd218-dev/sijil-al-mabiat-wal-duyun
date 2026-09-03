@@ -62,10 +62,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     for (final f in _orgFields) {
       _ctrls[f.$1] = TextEditingController(text: st[f.$1] ?? '');
     }
-    for (final k in VoucherKind.values) {
-      _ctrls['prefix_${k.code}'] =
-          TextEditingController(text: st['prefix_${k.code}'] ?? k.prefix);
-    }
     _ctrls['labelOweUs'] =
         TextEditingController(text: st['labelOweUs'] ?? 'عليه');
     _ctrls['labelOweThem'] =
@@ -211,7 +207,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(width: 12),
                         const Expanded(
                           child: Text(
-                            'جميع إعدادات Nexora في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر، الأمان وترقيم السندات.',
+                            'جميع إعدادات النظام في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر والأمان. الترقيم التلقائي رقمي بحت لكل العمليات والسندات.',
                             style: TextStyle(
                               fontSize: 13,
                               height: 1.6,
@@ -438,19 +434,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ]),
                 ),
                 const SizedBox(height: 18),
-                const SectionTitle('ترقيم السندات'),
+                SectionTitle('الترقيم التلقائي'),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(14),
-                    child: Column(children: [
-                      for (final k in VoucherKind.values)
-                        _Field(
-                          controller: _ctrls['prefix_${k.code}']!,
-                          label: 'بادئة ${k.label}',
-                          icon: Icons.tag,
-                          hint:
-                              'العدّاد الحالي: ${st['counter_${k.code}'] ?? '0'}',
+                    child: Row(children: [
+                      const Icon(Icons.numbers, color: AppColors.primary),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'ترقيم تلقائي رقمي بحت لكل العمليات والسندات (١، ٢، ٣…) بدون أحرف أو بادئات، تتم زيادته آلياً ويتوافق مع ترحيل الطباعة والإرسال.',
+                          style: TextStyle(
+                              fontSize: 13, height: 1.6, fontWeight: FontWeight.w600),
                         ),
+                      ),
                     ]),
                   ),
                 ),
