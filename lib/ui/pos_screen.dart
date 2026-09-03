@@ -667,7 +667,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     try {
       final currencies = await repo.currencies();
       final cur = currencies.first;
-      final refNum = 'POS-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+      // رقم فاتورة تسلسلي رقمي بحت (بدون أحرف)
+      final refNum = await repo.nextTxNumber();
 
       // 1. تجهيز أسطر الفاتورة
       final lines = _cart.values.map((e) {
@@ -741,7 +742,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
             type: OpType.inflow,
             date: now,
             description: 'دفعة مقدمة من فاتورة #$refNum',
-            reference: '$refNum-PAY',
+            reference: '',
             createdAt: now,
             updatedAt: now,
           );
@@ -951,11 +952,11 @@ class _PosHistoryTab extends ConsumerWidget {
         message: '$e',
       ),
       data: (page) {
-        // تصفية فواتير المبيعات فقط (تحتوي على مرجع POS أو وصف فاتورة)
+        // تصفية فواتير المبيعات فقط (وصفها فاتورة، نستثني الدفعات المقدمة)
         final posTxs = page.items
             .where((t) =>
-                t.reference.startsWith('POS') ||
-                t.description.contains('فاتورة') ||
+                (t.description.contains('فاتورة') &&
+                    !t.description.startsWith('دفعة مقدمة')) ||
                 t.type == OpType.revenue)
             .toList();
 

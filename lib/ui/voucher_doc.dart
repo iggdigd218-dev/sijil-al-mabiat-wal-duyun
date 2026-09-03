@@ -92,6 +92,15 @@ Future<Uint8List> buildVoucherPdf({
   const border = PdfColor.fromInt(0xFFE2E8F2);
   const soft = PdfColor.fromInt(0xFFE6F6F3);
   const muted = PdfColor.fromInt(0xFF5B6B83);
+  // لون المبلغ حسب نوع السند: أحمر لمدين/صرف (عليه)، أخضر لقبض/دائن (له).
+  final isRed = v.kind == VoucherKind.debit || v.kind == VoucherKind.payment;
+  final isGreen = v.kind == VoucherKind.receipt || v.kind == VoucherKind.credit;
+  final amtColor = isRed
+      ? PdfColor.fromInt(0xFFC0392B)
+      : (isGreen ? PdfColor.fromInt(0xFF16A34A) : teal);
+  final amtBg = isRed
+      ? PdfColor.fromInt(0xFFFDECEA)
+      : (isGreen ? PdfColor.fromInt(0xFFEAF7EF) : soft);
 
   final words = '${numberToWords(v.amount)} ${currency.name}';
 
@@ -293,13 +302,13 @@ Future<Uint8List> buildVoucherPdf({
             width: double.infinity,
             padding: const pw.EdgeInsets.symmetric(vertical: 16),
             decoration: pw.BoxDecoration(
-              color: soft,
+              color: amtBg,
               borderRadius: pw.BorderRadius.circular(10),
             ),
             child: pw.Column(children: [
               pw.Text(
                 '${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}',
-                style: pw.TextStyle(fontSize: 26, font: bold, color: teal),
+                style: pw.TextStyle(fontSize: 26, font: bold, color: amtColor),
               ),
               pw.SizedBox(height: 6),
               pw.Text('فقط: $words لا غير',

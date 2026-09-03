@@ -22,6 +22,7 @@ Future<bool?> openTxForm(
   Tx? existing,
   int? presetAccountId,
   bool isCopy = false,
+  OpType? presetType,
 }) =>
     showModalBottomSheet<bool>(
       context: context,
@@ -31,6 +32,7 @@ Future<bool?> openTxForm(
         existing: existing,
         presetAccountId: presetAccountId,
         isCopy: isCopy,
+        presetType: presetType,
       ),
     );
 
@@ -38,7 +40,8 @@ class TxForm extends ConsumerStatefulWidget {
   final Tx? existing;
   final int? presetAccountId;
   final bool isCopy;
-  const TxForm({super.key, this.existing, this.presetAccountId, this.isCopy = false});
+  final OpType? presetType;
+  const TxForm({super.key, this.existing, this.presetAccountId, this.isCopy = false, this.presetType});
 
   @override
   ConsumerState<TxForm> createState() => _TxFormState();
@@ -100,11 +103,11 @@ class _TxFormState extends ConsumerState<TxForm> {
       _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
       _rate.text = '${t.rate}';
       _desc.text = t.description;
-      _ref.text = widget.isCopy && t.reference.isNotEmpty
-          ? '${t.reference} (نسخة)'
-          : t.reference;
+      // عند النسخ نفرغ المرجع ليأخذ رقماً تسلسلياً جديداً تلقائياً.
+      _ref.text = widget.isCopy ? '' : t.reference;
       _notes.text = t.notes;
     } else {
+      if (widget.presetType != null) _type = widget.presetType!;
       _accountId = widget.presetAccountId ??
           (accs.isNotEmpty ? accs.first.id : null);
     }
@@ -240,7 +243,10 @@ class _TxFormState extends ConsumerState<TxForm> {
     // هذا مهم خصوصًا للبيع الآجل أو الجزئي الذي يُرسل إشعاره تلقائيًا.
     if (!_isTransfer && _accountId != null) {
       final acc = _account;
-      if (_autoSend) {
+      // الإرسال التلقائي إعداد رسمي يُقرأ من الإعدادات (افتراضياً مفعّل).
+      final st = await repo.settings();
+      final autoSend = (st['autoSendWhatsapp'] ?? '1') != '0';
+      if (autoSend) {
         try {
           await TxShare.sendNow(context, ref,
               tx: saved, account: acc, silentIfNoPhone: false);
@@ -388,10 +394,8 @@ class _TxFormState extends ConsumerState<TxForm> {
                     ),
                     maxLines: 2,
                   ),
-                  const SizedBox(height: 14),
-                  _statusPicker(),
-                  const SizedBox(height: 16),
-                  _imageAndSend(),
+                  const SizedBox(height: 10),
+                  _smallImagePicker(),
                   const SizedBox(height: 24),
                   Row(
                     children: [
@@ -429,98 +433,47 @@ class _TxFormState extends ConsumerState<TxForm> {
     );
   }
 
-  /// صورة العملية + خيار الإرسال التلقائي عبر واتساب.
-  Widget _imageAndSend() {
-    if (_isTransfer) return const SizedBox.shrink();
-    final acc = _account;
-    final phone = acc == null
-        ? ''
-        : (acc.whatsapp.trim().isNotEmpty ? acc.whatsapp.trim() : acc.phone.trim());
+  /// إرفاق صورة اختياري — أيقونة صغيرة بجانب بيانات العملية (تُولَّد صورة
+  /// الإيصال تلقائياً عند الحفظ، وهذا لإرفاق صورة خارجية فقط).
+  Widget _smallImagePicker() {
     final hasImage = _image.isNotEmpty && File(_image).existsSync();
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface2Of(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderOf(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(Icons.image_outlined,
-                size: 18, color: AppColors.primaryOf(context)),
-            const SizedBox(width: 8),
-            Text('صورة الإيصال',
-                style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13.5,
-                    color: AppColors.textOf(context))),
-          ]),
-          const SizedBox(height: 6),
-          Text(
-            hasImage
-                ? 'صورة محفوظة لهذه العملية — يمكنك استبدالها أو حذفها.'
-                : 'تُولَّد صورة الإيصال تلقائيًا عند الحفظ، ويمكنك رفع صورة بديلة.',
-            style: TextStyle(fontSize: 12, color: AppColors.text2Of(context)),
+    return Row(
+      children: [
+        Icon(Icons.attach_file,
+            size: 16, color: AppColors.text3Of(context)),
+        const SizedBox(width: 6),
+        Text('إرفاق صورة (اختياري):',
+            style: TextStyle(
+                fontSize: 12.5, color: AppColors.text2Of(context))),
+        const SizedBox(width: 6),
+        IconButton(
+          tooltip: 'من المعرض',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.photo_library_outlined,
+              size: 20, color: AppColors.primaryOf(context)),
+          onPressed: _pickImage,
+        ),
+        IconButton(
+          tooltip: 'التقاط من الكاميرا',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.photo_camera_outlined,
+              size: 20, color: AppColors.primaryOf(context)),
+          onPressed: _captureImage,
+        ),
+        if (hasImage) ...[
+          const SizedBox(width: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Image.file(File(_image), width: 34, height: 34, fit: BoxFit.cover),
           ),
-          if (hasImage) ...[
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(File(_image),
-                  height: 150, width: double.infinity, fit: BoxFit.cover),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _pickImage,
-                icon: const Icon(Icons.photo_library_outlined, size: 18),
-                label: Text(hasImage ? 'استبدال' : 'رفع صورة'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _captureImage,
-                icon: const Icon(Icons.photo_camera_outlined, size: 18),
-                label: const Text('كاميرا'),
-              ),
-            ),
-            if (hasImage)
-              IconButton(
-                tooltip: 'حذف الصورة',
-                onPressed: () => setState(() => _image = ''),
-                icon: Icon(Icons.delete_outline,
-                    color: AppColors.dangerOf(context)),
-              ),
-          ]),
-          const Divider(height: 22),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            secondary: Icon(Icons.send,
-                color: phone.isEmpty
-                    ? AppColors.text3Of(context)
-                    : AppColors.primaryOf(context)),
-            title: const Text('إرسال واتساب تلقائيًا بعد الحفظ',
-                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
-            subtitle: Text(
-              phone.isEmpty
-                  ? 'لا يوجد رقم لهذا الحساب — أضِف رقمًا لتفعيل الإرسال'
-                  : 'تُفتح محادثة $phone مباشرة ومعها الصورة والنص',
-              style: const TextStyle(fontSize: 11.5),
-            ),
-            value: _autoSend && phone.isNotEmpty,
-            onChanged: phone.isEmpty
-                ? null
-                : (v) => setState(() => _autoSend = v),
+          IconButton(
+            tooltip: 'إزالة الصورة',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(Icons.close, size: 18, color: AppColors.dangerOf(context)),
+            onPressed: () => setState(() => _image = ''),
           ),
         ],
-      ),
+      ],
     );
   }
 

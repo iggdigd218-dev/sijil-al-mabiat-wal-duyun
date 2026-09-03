@@ -43,7 +43,11 @@ class ReceiptData {
     this.logoPath = '',
     this.footer = '',
     this.items = const [],
+    this.isDebit = true,
   });
+
+  /// اتجاه المبلغ: true = عليه (مدين/صرف) يظهر بالأحمر؛ false = له (قبض/دائن) بالأخضر.
+  final bool isDebit;
 
   factory ReceiptData.fromTx({
     required Tx tx,
@@ -70,6 +74,10 @@ class ReceiptData {
         logoPath: settings['logo'] ?? '',
         footer: settings['voucherFooter'] ?? '',
         items: items,
+        // المبلغ عليه (مدين/صرف/مصروف) = أحمر؛ له (قبض/دائن/إيراد) = أخضر.
+        isDebit: tx.type == OpType.debit ||
+            tx.type == OpType.outflow ||
+            tx.type == OpType.expense,
       );
 }
 
@@ -152,19 +160,23 @@ Future<String> buildReceiptImage(ReceiptData d) async {
 
   y = pad / 2 + 170;
 
-  // صندوق المبلغ
+  // صندوق المبلغ: أحمر للمبالغ عليه (مدين/صرف) وأخضر للمبالغ له (قبض/دائن).
+  const amountColor = Color(0xFF16A34A); // أخضر (له/قبض)
+  const amountColorDebit = Color(0xFFC0392B); // أحمر (عليه/صرف)
+  final amtColor = d.isDebit ? amountColorDebit : amountColor;
+  final amtBg = d.isDebit ? const Color(0xFFFDECEA) : const Color(0xFFEAF7EF);
   final amountBox = RRect.fromRectAndRadius(
     Rect.fromLTWH(pad, y, w - pad * 2, 150),
     const Radius.circular(20),
   );
-  canvas.drawRRect(amountBox, Paint()..color = const Color(0xFFE6F6F3));
+  canvas.drawRRect(amountBox, Paint()..color = amtBg);
   _text(
     canvas,
     '${Fmt.money(d.amount, d.currency.decimal)} ${d.currency.symbol}',
     w / 2,
     y + 30,
     52,
-    AppColors.primary,
+    amtColor,
     bold: true,
     center: true,
   );

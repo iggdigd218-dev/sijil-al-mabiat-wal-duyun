@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
@@ -15,6 +17,11 @@ class PickedContact {
 ///
 /// يطلب الإذن أولًا؛ إن رُفض يعرض رسالة واضحة بدل الانهيار.
 Future<PickedContact?> pickContact(BuildContext context) async {
+  // جهات اتصال الهاتف غير متاحة على سطح المكتب.
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    showSnack(context, 'اختيار جهات الاتصال متاح على الهاتف فقط');
+    return null;
+  }
   final granted = await FlutterContacts.requestPermission(readonly: true);
   if (!context.mounted) return null;
   if (!granted) {
