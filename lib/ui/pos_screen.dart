@@ -9,6 +9,7 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'barcode_scanner.dart';
 import 'tx_share.dart';
 import 'widgets.dart';
 
@@ -176,15 +177,30 @@ class _PosScreenState extends ConsumerState<PosScreen>
               hintText: 'ابحث باسم الصنف أو الباركود...',
               prefixIcon: const Icon(Icons.search),
               isDense: true,
-              suffixIcon: _searchQuery.isEmpty
-                  ? null
-                  : IconButton(
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'مسح الباركود',
+                    icon: const Icon(Icons.barcode_reader),
+                    onPressed: () async {
+                      final code = await scanBarcode(context);
+                      if (code != null && code.isNotEmpty) {
+                        _searchCtrl.text = code;
+                        setState(() => _searchQuery = code.trim());
+                      }
+                    },
+                  ),
+                  if (_searchQuery.isNotEmpty)
+                    IconButton(
                       icon: const Icon(Icons.clear),
                       onPressed: () {
                         _searchCtrl.clear();
                         setState(() => _searchQuery = '');
                       },
                     ),
+                ],
+              ),
             ),
             onChanged: (v) => setState(() => _searchQuery = v.trim()),
           ),
@@ -770,6 +786,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
       // تحديث البيانات
       bump(ref);
+      if (mounted && (await repo.settings())['warnLowStock'] != '0') {
+        final low = <String>[];
+        for (final line in lines) {
+          if (line.itemId == null) continue;
+          final it = await repo.item(line.itemId!);
+          if (it != null && it.minQuantity > 0 && it.quantity <= it.minQuantity) {
+            low.add('${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})');
+          }
+        }
+        if (low.isNotEmpty && mounted) {
+          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب: ${low.join('، ')}', error: true);
+        }
+      }
 
       if (mounted && (await repo.settings())['warnLowStock'] != '0') {
         final low = <String>[];
@@ -789,7 +818,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
       }
 
       if (mounted) {
-        Navigator.pop(sheetCtx); // إغلاق النموذج
+        Navigator.pop(sheetCtx);
         _showSuccessDialog(txId, refNum, lines);
         _clearCart();
       }

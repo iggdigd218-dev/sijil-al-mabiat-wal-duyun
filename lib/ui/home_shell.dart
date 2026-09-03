@@ -141,34 +141,41 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         AppScreen.settings => const SettingsScreen(),
       };
 
-  Widget? _fab() => switch (_screen) {
+  Widget? _fab() {
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    bool can(String p) => me == null || me.can(p);
+    final add = can('add_tx');
+    final manageUsers = can('manage_users');
+    final manageBackup = can('manage_backup');
+    return switch (_screen) {
         AppScreen.accounts => FloatingActionButton.extended(
-            onPressed: () => openAccountForm(context, ref),
+            onPressed: add ? () => openAccountForm(context, ref) : null,
             icon: const Icon(Icons.add),
             label: const Text('حساب جديد'),
           ),
         AppScreen.transactions => FloatingActionButton.extended(
-            onPressed: () => _showAddTxMenu(context, ref),
+            onPressed: add ? () => _showAddTxMenu(context, ref) : null,
             icon: const Icon(Icons.add),
             label: const Text('تسجيل عملية'),
           ),
         AppScreen.vouchers => FloatingActionButton.extended(
-            onPressed: () => openVoucherForm(context, ref),
+            onPressed: add ? () => openVoucherForm(context, ref) : null,
             icon: const Icon(Icons.add),
             label: const Text('سند جديد'),
           ),
         AppScreen.inventory => FloatingActionButton.extended(
-            onPressed: () => openItemCategoryForm(context, ref),
+            onPressed: add ? () => openItemCategoryForm(context, ref) : null,
             icon: const Icon(Icons.create_new_folder_outlined),
             label: const Text('فئة جديدة'),
           ),
         AppScreen.users => FloatingActionButton.extended(
-            onPressed: () => openUserForm(context, ref),
+            onPressed: manageUsers ? () => openUserForm(context, ref) : null,
             icon: const Icon(Icons.person_add_alt),
             label: const Text('مستخدم'),
           ),
         _ => null,
-      };
+    };
+  }
 
   @override
   Widget build(BuildContext context) {

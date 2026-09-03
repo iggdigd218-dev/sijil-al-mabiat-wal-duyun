@@ -5,6 +5,7 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'barcode_scanner.dart';
 import 'calculator.dart';
 import 'widgets.dart';
 
@@ -902,8 +903,20 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 Expanded(
                   child: TextField(
                     controller: _sku,
-                    decoration: const InputDecoration(
-                        labelText: 'الرمز', prefixIcon: Icon(Icons.qr_code)),
+                    decoration: InputDecoration(
+                      labelText: 'الرمز / الباركود',
+                      prefixIcon: const Icon(Icons.qr_code),
+                      suffixIcon: IconButton(
+                        tooltip: 'مسح الباركود بالكاميرا',
+                        icon: const Icon(Icons.barcode_reader),
+                        onPressed: () async {
+                          final code = await scanBarcode(context);
+                          if (code != null && code.isNotEmpty) {
+                            setState(() => _sku.text = code);
+                          }
+                        },
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -916,6 +929,22 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                   ),
                 ),
               ]),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () {
+                    // توليد رمز باركود فريد (EAN-13 مبسّط) إن لم يكن هناك رمز.
+                    if (_sku.text.trim().isEmpty) {
+                      final now = DateTime.now();
+                      final base =
+                          '62${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.millisecondsSinceEpoch.toString().substring(7)}';
+                      setState(() => _sku.text = base.substring(0, 12));
+                    }
+                  },
+                  icon: const Icon(Icons.qr_code_2, size: 18),
+                  label: const Text('توليد رمز باركود تلقائي'),
+                ),
+              ),
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(

@@ -154,7 +154,8 @@ class _State extends ConsumerState<AccountFormScreen> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+          padding: EdgeInsets.fromLTRB(
+              16, 12, 16, 100 + MediaQuery.of(context).viewInsets.bottom),
           children: [
             TextFormField(
               controller: _name,
