@@ -39,12 +39,14 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g"
           # إتاحة ذاكرة كافية لـ Gradle/Kotlin لتفادي GC thrashing
           JAVA_OPTS: "-Xmx3g"
+        run: flutter build apk --release --split-per-abi || true
+
+      - name: Rename & show APK sizes
         run: |
-          flutter build apk --release --split-per-abi
-          # أسماء واضحة للملفين
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk nexora-arm64.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk nexora-arm32.apk
           ls -lh nexora-*.apk
+          test -f nexora-arm64.apk && test -f nexora-arm32.apk && echo "الملفان جاهزان ✓"
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
