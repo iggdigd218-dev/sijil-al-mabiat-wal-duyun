@@ -242,6 +242,7 @@ class _UserFormState extends ConsumerState<_UserForm> {
   late Map<String, bool> _perms;
   late bool _active;
   bool _saving = false;
+  bool _isFirstUser = false;
 
   @override
   void initState() {
@@ -253,6 +254,15 @@ class _UserFormState extends ConsumerState<_UserForm> {
     _role = u?.role ?? UserRole.dataentry;
     _perms = Map.of(u?.permissions ?? defaultPerms(_role));
     _active = u?.active ?? true;
+    // أول مستخدم على الإطلاق = مدير النظام (بذرة) حتى لا يُقفل النظام.
+    if (u == null) {
+      final list = ref.read(usersProvider).valueOrNull ?? const [];
+      if (list.isEmpty || list.every((x) => x.role != UserRole.admin)) {
+        _isFirstUser = true;
+        _role = UserRole.admin;
+        _perms = Map.of(defaultPerms(UserRole.admin));
+      }
+    }
   }
 
   @override
@@ -299,11 +309,32 @@ class _UserFormState extends ConsumerState<_UserForm> {
                           value: r, child: Text('${r.icon}  ${r.label}')))
                       .toList(),
                   // تغيير الدور يعيد ضبط الصلاحيات لافتراضياته.
-                  onChanged: (v) => setState(() {
-                    _role = v ?? _role;
-                    _perms = Map.of(defaultPerms(_role));
-                  }),
+                  // أول مستخدم يبقى مديراً (البذرة) ولا يمكن خفض دوره هنا.
+                  onChanged: _isFirstUser
+                      ? null
+                      : (v) => setState(() {
+                            _role = v ?? _role;
+                            _perms = Map.of(defaultPerms(_role));
+                          }),
                 ),
+                if (_isFirstUser)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(children: [
+                      Icon(Icons.verified_user_outlined,
+                          size: 16, color: AppColors.accentOf(context)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'لا يوجد مدير بعد — سيكون هذا المستخدم مدير النظام بكامل الصلاحيات.',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.accentOf(context)),
+                        ),
+                      ),
+                    ]),
+                  ),
                 const SizedBox(height: 14),
                 TextField(
                   controller: _pin,

@@ -1,7 +1,7 @@
 name: nexora_app
 description: إدارة البيانات — النظام المحاسبي
 publish_to: 'none'
-version: 3.11.0+16
+version: 3.12.0+17
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

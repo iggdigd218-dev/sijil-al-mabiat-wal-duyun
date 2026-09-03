@@ -205,6 +205,7 @@ class _TxFormState extends ConsumerState<TxForm> {
     }
 
     setState(() => _saving = true);
+    try {
     final repo = ref.read(repoProvider);
     final now = DateTime.now();
     final old = widget.existing;
@@ -308,6 +309,15 @@ class _TxFormState extends ConsumerState<TxForm> {
     Navigator.pop(context, true);
     showSnack(context,
         keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
+    } catch (e) {
+      if (mounted) {
+        showSnack(context,
+            e is StateError ? e.message : 'تعذّر حفظ العملية: $e',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override

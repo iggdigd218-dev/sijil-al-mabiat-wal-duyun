@@ -424,7 +424,7 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
       return;
     }
     setState(() => _saving = true);
-
+    try {
     final repo = ref.read(repoProvider);
     final number = await repo.nextVoucherNumber(_kind);
     final now = DateTime.now();
@@ -447,6 +447,15 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
     Navigator.pop(context);
     showSnack(context, 'تم إنشاء السند $number ✅');
     await openVoucherPreview(context, ref, v.copyWith(id: id));
+    } catch (e) {
+      if (mounted) {
+        showSnack(context,
+            e is StateError ? e.message : 'تعذّر حفظ السند: $e',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override

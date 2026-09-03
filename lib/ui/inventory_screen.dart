@@ -856,9 +856,17 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       category: category.name,
       notes: _notes.text.trim(),
     );
-    await repo.saveItem(it);
-    bump(ref);
-    if (mounted) Navigator.pop(context);
+    try {
+      await repo.saveItem(it);
+      bump(ref);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        showSnack(context,
+            e is StateError ? e.message : 'تعذّر حفظ الصنف: $e',
+            error: true);
+      }
+    }
   }
 
   @override

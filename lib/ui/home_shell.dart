@@ -143,9 +143,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   Widget? _fab() {
     final me = ref.watch(currentUserProvider).valueOrNull;
+    final users = ref.watch(usersProvider).valueOrNull ?? const [];
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
-    final manageUsers = can('manage_users');
+    // إدارة المستخدمين للمدير فقط، إلا إذا لا يوجد أي مدير/لا مستخدمين بعد
+    // (باب استرداد/بذرة) فيبقى الزر متاحاً لإنشاء مدير وإنقاذ النظام.
+    final hasAdmin = users.any((u) => u.role == UserRole.admin);
+    final manageUsers =
+        can('manage_users') || !hasAdmin || users.isEmpty;
     final manageBackup = can('manage_backup');
     return switch (_screen) {
         AppScreen.accounts => FloatingActionButton.extended(

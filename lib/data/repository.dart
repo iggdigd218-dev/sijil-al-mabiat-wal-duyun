@@ -430,22 +430,45 @@ class Repo {
   }
 
   Future<int> saveUser(AppUser u) async {
-    await _ensureCan('manage_users');
     final db = await _db;
     AppUser? existing;
     if (u.id != null) {
       final r = await db.query('users', where: 'id = ?', whereArgs: [u.id]);
       if (r.isNotEmpty) existing = AppUser.fromMap(r.first);
     }
-    await _guardSingleAdmin(existing, u);
-    if (u.id == null) {
-      final id = await db.insert('users', u.toMap());
-      await logActivity('إضافة مستخدم: ${u.name}', 'user', '$id');
+
+    final allUsers = await users();
+    final admins = allUsers.where((x) => x.role == UserRole.admin).toList();
+
+    // 🛟 وضع الاسترداد/البذرة: لا يُسمح أبداً بأن لا يوجد مدير في النظام.
+    // - لا مستخدمين بعد → أول مستخدم يصبح مديراً والمستخدم الحالي.
+    // - لا مديرين (حذف/استيراد/ترقية) → يُرقّى هذا المستخدم تلقائياً.
+    var effective = u;
+    final needsSeed = allUsers.isEmpty || admins.isEmpty;
+    if (needsSeed && u.role != UserRole.admin) {
+      effective = u.copyWith(
+        role: UserRole.admin,
+        permissions: defaultPerms(UserRole.admin),
+      );
+    }
+    await _guardSingleAdmin(existing, effective);
+
+    // فحص الصلاحية بعد تحديد المستخدم الفعلي؛ المدير يمر دائماً، ووضع
+    // الاسترداد (لا مدير) يُسمح له بإنقاذ النظام قبل قفله نهائياً.
+    if (!needsSeed) await _ensureCan('manage_users');
+
+    if (effective.id == null) {
+      final map = effective.toMap();
+      if (allUsers.isEmpty) map['is_me'] = 1; // أول مستخدم = المستخدم الحالي
+      final id = await db.insert('users', map);
+      await logActivity('إضافة مستخدم: ${effective.name}', 'user', '$id');
       return id;
     }
-    await db.update('users', u.toMap(), where: 'id = ?', whereArgs: [u.id]);
-    await logActivity('تعديل مستخدم: ${u.name}', 'user', '${u.id}');
-    return u.id!;
+    await db.update('users', effective.toMap(),
+        where: 'id = ?', whereArgs: [effective.id]);
+    await logActivity(
+        'تعديل مستخدم: ${effective.name}', 'user', '${effective.id}');
+    return effective.id!;
   }
 
   Future<void> deleteUser(int id) async {
