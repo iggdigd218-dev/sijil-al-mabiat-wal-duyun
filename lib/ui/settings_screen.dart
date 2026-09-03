@@ -207,7 +207,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(width: 12),
                         const Expanded(
                           child: Text(
-                            'جميع إعدادات Nexora في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر، الأمان وترقيم السندات.',
+                            'جميع إعدادات النظام في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر والأمان. الترقيم التلقائي رقمي بحت لكل العمليات والسندات.',
                             style: TextStyle(
                               fontSize: 13,
                               height: 1.6,
