@@ -110,7 +110,6 @@ class _State extends ConsumerState<AccountFormScreen> {
         address: _address.text.trim(),
         notes: _notes.text.trim(),
         category: widget.existing?.category ?? '',
-        archived: widget.existing?.archived ?? false,
         creditLimit: limit,
         tags: _tags.text
             .split(RegExp('[,،]'))

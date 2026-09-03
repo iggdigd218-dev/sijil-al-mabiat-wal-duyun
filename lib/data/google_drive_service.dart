@@ -84,6 +84,8 @@ class GoogleDriveService {
   static const String _driveBasePath = '/drive/v3';
   static const String _uploadBasePath = '/upload/drive/v3';
   static const String _mimeType = 'application/json';
+  static const String _fileFields =
+      'id,name,mimeType,modifiedTime,size,appProperties';
 
   static const String _driveScope =
       'https://www.googleapis.com/auth/drive.file';

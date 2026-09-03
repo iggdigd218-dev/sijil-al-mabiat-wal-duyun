@@ -159,7 +159,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
       if (_searchQuery.isNotEmpty) {
         final q = _searchQuery.toLowerCase();
         final matchName = item.name.toLowerCase().contains(q);
-        final matchCode = (item.barcode ?? '').toLowerCase().contains(q);
+        final matchCode = item.sku.toLowerCase().contains(q);
         return matchName || matchCode;
       }
       return true;
@@ -241,7 +241,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     final item = filteredItems[i];
                     final inCart = _cart[item.id]?.quantity ?? 0.0;
                     final price = item.sellPrice > 0 ? item.sellPrice : item.buyPrice;
-                    final isLow = item.minAlert != null && item.quantity <= item.minAlert!;
+                    final isLow = item.minQuantity > 0 && item.quantity <= item.minQuantity;
                     final isOut = item.quantity <= 0;
 
                     return Card(
@@ -691,10 +691,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
           accountId: _selectedCustomerId ?? 0,
           amount: _netTotal,
           currency: cur.code,
-          type: OpType.income,
+          type: OpType.revenue,
           date: now,
           description: 'فاتورة مبيعات نقدية رقم #$refNum',
           reference: refNum,
+          createdAt: now,
+          updatedAt: now,
         );
         txId = await repo.saveTx(tx, items: lines);
       } else if (_payment == _PosPayment.credit) {
@@ -707,6 +709,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات آجلة رقم #$refNum',
           reference: refNum,
+          createdAt: now,
+          updatedAt: now,
         );
         txId = await repo.saveTx(tx, items: lines);
       } else {
@@ -723,6 +727,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات جزئية رقم #$refNum (إجمالي الفاتورة)',
           reference: refNum,
+          createdAt: now,
+          updatedAt: now,
         );
         txId = await repo.saveTx(debitTx, items: lines);
 
@@ -732,10 +738,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
             accountId: _selectedCustomerId!,
             amount: paid,
             currency: cur.code,
-            type: OpType.receipt,
+            type: OpType.inflow,
             date: now,
             description: 'دفعة مقدمة من فاتورة #$refNum',
             reference: '$refNum-PAY',
+            createdAt: now,
+            updatedAt: now,
           );
           await repo.saveTx(payTx);
         }
@@ -748,7 +756,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
             await repo.addStockMove(StockMove(
               itemId: line.itemId!,
               quantity: line.quantity,
-              kind: StockKind.out,
+              kind: StockKind.sale,
               date: now,
               notes: 'مبيع نقطة بيع #$refNum',
             ));
@@ -822,7 +830,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   showSnack(context, 'لا يوجد رقم هاتف مسجل للعميل', error: true);
                   return;
                 }
-                await TxShare.sendWhatsApp(
+                await TxShare.sendNow(context, ref,
                   context: context,
                   ref: ref,
                   tx: tx,
@@ -947,7 +955,7 @@ class _PosHistoryTab extends ConsumerWidget {
             .where((t) =>
                 t.reference.startsWith('POS') ||
                 t.description.contains('فاتورة') ||
-                t.type == OpType.income)
+                t.type == OpType.revenue)
             .toList();
 
         if (posTxs.isEmpty) {

@@ -281,7 +281,8 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
       context: context,
       showDragHandle: true,
       builder: (sheetCtx) {
-        Tile tile(IconData icon, String title, String value, VoidCallback onTap,
+        Widget tile(IconData icon, String title, String value,
+            VoidCallback onTap,
             {bool active = false}) {
           return ListTile(
             leading: Icon(icon,
