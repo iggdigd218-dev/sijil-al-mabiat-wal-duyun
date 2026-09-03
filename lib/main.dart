@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
+import 'core/db_init.dart';
 import 'core/theme.dart';
 import 'data/repository.dart';
 import 'data/providers.dart';
@@ -11,6 +12,8 @@ import 'ui/lock_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // تهيئة قاعدة البيانات حسب المنصة (FFI على ويندوز/لينكس/ماك، افتراضي على الهاتف).
+  initDbForPlatform();
   // بدون تهيئة بيانات التواريخ تنهار كل تنسيقات intl عند الإقلاع.
   await initializeDateFormatting('ar');
   await initializeDateFormatting('en');

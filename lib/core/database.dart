@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'db_init.dart';
+
 /// قاعدة البيانات المحلية — تقابل مخازن IndexedDB في نسخة الويب،
 /// لكن بجداول SQL حقيقية مع فهارس ومفاتيح أجنبية.
 class AppDatabase {
@@ -19,7 +21,7 @@ class AppDatabase {
 
   Future<Database> get database async {
     if (_db != null) return _db!;
-    final dir = await getDatabasesPath();
+    final dir = await databaseDirectory();
     _db = await openDatabase(
       p.join(dir, 'nexora.db'),
       version: _version,

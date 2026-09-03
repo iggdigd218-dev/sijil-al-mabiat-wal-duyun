@@ -95,22 +95,33 @@ class GoogleDriveService {
   static const String _serverClientId =
       '872578554938-tf394quhikb2j0s6tsh767qbmlsj27of.apps.googleusercontent.com';
 
-  final GoogleSignIn _signIn = GoogleSignIn(
-    serverClientId: _serverClientId,
-    scopes: [
-      _driveScope,
-      _driveAppDataScope,
-      'email',
-      'profile',
-    ],
-  );
+  // Google Sign-In غير مدعوم على سطح المكتب؛ ننشئه بأمان ونعيد null على ويندوز.
+  GoogleSignIn? _signInCached;
+  GoogleSignIn? get _signIn {
+    if (_signInCached != null) return _signInCached;
+    try {
+      _signInCached = GoogleSignIn(
+        serverClientId: _serverClientId,
+        scopes: [
+          _driveScope,
+          _driveAppDataScope,
+          'email',
+          'profile',
+        ],
+      );
+    } catch (_) {
+      _signInCached = null;
+    }
+    return _signInCached;
+  }
 
   /// يستعيد جلسة Google السابقة بصمت إن كانت موجودة.
   Future<GoogleAccountInfo?> restoreSession() async {
     try {
-      final account =
-          _signIn.currentUser ??
-          await _signIn.signInSilently(suppressErrors: true);
+      final signIn = _signIn;
+      if (signIn == null) return null;
+      final account = signIn.currentUser ??
+          await signIn.signInSilently(suppressErrors: true);
       return account == null ? null : _toAccountInfo(account);
     } catch (e) {
       return null;
@@ -120,7 +131,12 @@ class GoogleDriveService {
   /// يفتح OAuth للمستخدم عند الحاجة، ثم يعيد بيانات الحساب التعريفية فقط.
   Future<GoogleAccountInfo?> signIn() async {
     try {
-      final account = _signIn.currentUser ?? await _signIn.signIn();
+      final signIn = _signIn;
+      if (signIn == null) {
+        throw const GoogleDriveException(
+            'تسجيل الدخول إلى Google غير متاح على هذا الجهاز (سطح المكتب). استخدم خيار الرفع عبر تطبيق Drive.');
+      }
+      final account = signIn.currentUser ?? await signIn.signIn();
       return account == null ? null : _toAccountInfo(account);
     } catch (e) {
       final str = e.toString();
@@ -136,7 +152,7 @@ class GoogleDriveService {
   /// تسجيل خروج محلي من جلسة Google.
   Future<void> signOut() async {
     try {
-      await _signIn.signOut();
+      await _signIn?.signOut();
     } catch (e) {
       throw GoogleDriveException('تعذّر تسجيل الخروج من Google: $e');
     }
@@ -145,7 +161,7 @@ class GoogleDriveService {
   /// فصل الحساب وإلغاء المنح السابقة.
   Future<void> disconnect() async {
     try {
-      await _signIn.disconnect();
+      await _signIn?.disconnect();
     } catch (e) {
       throw GoogleDriveException('تعذّر فصل حساب Google: $e');
     }
@@ -337,8 +353,12 @@ class GoogleDriveService {
     Future<T> Function(http.Client client, Map<String, String> headers)
     operation,
   ) async {
-    GoogleSignInAccount? account = _signIn.currentUser;
-    account ??= await _signIn.signInSilently(suppressErrors: true);
+    final signIn = _signIn;
+    GoogleSignInAccount? account = signIn?.currentUser;
+    account ??= await signIn?.signInSilently(suppressErrors: true);
+    if (account == null) {
+      throw const GoogleDriveException('تسجيل الدخول إلى Google غير متاح على هذا الجهاز.');
+    }
     final signedIn = account;
     if (signedIn == null) {
       throw const GoogleDriveException(
