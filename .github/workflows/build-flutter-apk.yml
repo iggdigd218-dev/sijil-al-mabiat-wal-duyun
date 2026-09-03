@@ -56,7 +56,7 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g"
           JAVA_OPTS: "-Xmx3g"
         run: |
-          flutter build apk --release
+          flutter build apk --release --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk nexora-arm64.apk
           ls -lh nexora-arm64.apk
 
