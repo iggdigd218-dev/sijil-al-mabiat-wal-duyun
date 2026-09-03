@@ -1,0 +1,67 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ flutter-native ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows Desktop
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.35.x'
+          cache: true
+
+      - name: Enable Windows desktop & prepare platform
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          if (!(Test-Path "windows")) { flutter create --platforms=windows . }
+
+      - name: Analyze (non-blocking)
+        run: flutter analyze || true
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          $src = "build\windows\x64\runner\Release"
+          $zip = "nexora-windows-v${{ github.run_number }}.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $zip
+          echo "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexora-windows
+          path: build/windows/x64/runner/Release/*
+          retention-days: 30
+
+      - name: Create Windows Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/flutter-native'
+        with:
+          tag_name: windows-v1.0.${{ github.run_number }}
+          name: إصدار ويندوز (Nexora Windows v1.0.${{ github.run_number }})
+          body: |
+            ## 🖥️ نسخة ويندوز الأصلية
+            برنامج سطح مكتب ويندوز (نسخة مطبوعة جاهزة).
+            **طريقة التشغيل:** حمّل ملف ZIP، استخرج محتواه في مجلد، ثم شغّل `nexora_app.exe`.
+            تاريخ البناء: ${{ github.event.head_commit.timestamp }}
+          files: ${{ env.ZIP }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
