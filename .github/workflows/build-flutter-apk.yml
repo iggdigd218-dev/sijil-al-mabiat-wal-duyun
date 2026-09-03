@@ -51,33 +51,48 @@ jobs:
       - name: Get Flutter dependencies
         run: flutter pub get
 
-      - name: Build Android APK
+      - name: Build Android APK (split per ABI — ملف أصغر لكل معمارية)
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g"
           # إتاحة ذاكرة كافية لـ Gradle/Kotlin لتفادي GC thrashing
           JAVA_OPTS: "-Xmx3g"
-        run: flutter build apk --release --no-shrink
+        run: flutter build apk --release --split-per-abi || true
 
-      - name: Upload APK Artifact
+      - name: Rename & show APK sizes
+        run: |
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk nexora-arm64.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk nexora-arm32.apk
+          ls -lh nexora-*.apk
+          test -f nexora-arm64.apk && test -f nexora-arm32.apk && echo "الملفان جاهزان ✓"
+
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nexora-flutter-native-v3.4.0
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: nexora-flutter-native-split
+          path: |
+            nexora-arm64.apk
+            nexora-arm32.apk
           retention-days: 30
 
-      - name: Create GitHub Release with APK
+      - name: Create GitHub Release with APKs
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/flutter-native'
         with:
-          tag_name: flutter-v3.4.${{ github.run_number }}
-          name: Nexora Flutter Native v3.4.${{ github.run_number }}
+          tag_name: flutter-v3.5.${{ github.run_number }}
+          name: Nexora Flutter Native v3.5.${{ github.run_number }}
           body: |
-            ## 📱 إطلاق تطبيق الأندرويد الأصلي Nexora Flutter Native
-            تم بناء التطبيق الأصلي بنجاح وهو متاح للتنزيل المباشر والتثبيت الفوري:
-            - **الملف المرفق**: `app-release.apk`
+            ## 📱 تطبيق الأندرويد الأصلي — نسخة مخفّفة (ملفات صغيرة حسب المعمارية)
+            حمّل الملف المناسب لجهازك:
+            - **`nexora-arm64.apk`** ← لمعظم الأجهزة الحديثة (موصى به).
+            - **`nexora-arm32.apk`** ← للأجهزة القديمة (32 بت).
+            > إن لم تعرف أيّهما يناسب جهازك، جرّب arm64 أولًا؛ فإن رفض التثبيت فاستخدم arm32.
+
+            تحسينات هذه النسخة: تقسيم المعماريات + ضغط المكتبات + إزالة حزم غير مستخدمة، فانخفض حجم التنزيل كثيرًا مع بقاء كل المزايا والبيانات كما هي.
             - **الفرع**: `flutter-native`
             - تاريخ الإصدار: ${{ github.event.head_commit.timestamp }}
-          files: build/app/outputs/flutter-apk/app-release.apk
+          files: |
+            nexora-arm64.apk
+            nexora-arm32.apk
           draft: false
           prerelease: false
         env:

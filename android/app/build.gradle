@@ -33,6 +33,23 @@ android {
         multiDexEnabled = true
     }
 
+    // تقسيم حسب المعمارية: ملف صغير لكل نوع بدل دمجها كلها في APK واحد ضخم.
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a"
+            universalApk false
+        }
+    }
+
+    // ضغط المكتبات الأصلية (.so) داخل APK لتقليل حجم التنزيل كثيراً.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     signingConfigs {
         release {
             if (keystorePropertiesFile.exists()) {
