@@ -154,8 +154,16 @@ class _UserCard extends ConsumerWidget {
                       showSnack(context, 'المستخدم الحالي: ${user.name}');
                     }
                   } else if (v == 'toggle') {
-                    await repo.saveUser(user.copyWith(active: !user.active));
-                    bump(ref);
+                    try {
+                      await repo.saveUser(user.copyWith(active: !user.active));
+                      bump(ref);
+                    } catch (e) {
+                      if (context.mounted) {
+                        showSnack(context,
+                            e is StateError ? e.message : 'تعذّر التنفيذ: $e',
+                            error: true);
+                      }
+                    }
                   } else if (v == 'delete' && user.id != null) {
                     final ok = await confirmDialog(
                       context,
@@ -164,8 +172,16 @@ class _UserCard extends ConsumerWidget {
                       danger: true,
                     );
                     if (ok) {
-                      await repo.deleteUser(user.id!);
-                      bump(ref);
+                      try {
+                        await repo.deleteUser(user.id!);
+                        bump(ref);
+                      } catch (e) {
+                        if (context.mounted) {
+                          showSnack(context,
+                              e is StateError ? e.message : 'تعذّر الحذف: $e',
+                              error: true);
+                        }
+                      }
                     }
                   }
                 },
@@ -225,6 +241,7 @@ class _UserFormState extends ConsumerState<_UserForm> {
   late UserRole _role;
   late Map<String, bool> _perms;
   late bool _active;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -371,9 +388,15 @@ class _UserFormState extends ConsumerState<_UserForm> {
                     ),
                 const SizedBox(height: 20),
                 FilledButton.icon(
-                  onPressed: _save,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('حفظ'),
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.save_outlined),
+                  label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ'),
                 ),
               ],
             ),
@@ -388,6 +411,8 @@ class _UserFormState extends ConsumerState<_UserForm> {
       showSnack(context, 'أدخل اسم المستخدم', error: true);
       return;
     }
+    setState(() => _saving = true);
+    try {
     final now = DateTime.now();
     // كلمة جديدة ← تُجزَّأ؛ فارغة ← تبقى القديمة إلا إذا طُلبت الإزالة.
     final typed = _password.text.trim();
@@ -420,6 +445,16 @@ class _UserFormState extends ConsumerState<_UserForm> {
     if (!mounted) return;
     Navigator.pop(context);
     showSnack(context, 'تم حفظ المستخدم ✅');
+    } catch (e) {
+      if (!mounted) return;
+      showSnack(
+        context,
+        e is StateError ? e.message : 'تعذّر حفظ المستخدم: $e',
+        error: true,
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 }
 
