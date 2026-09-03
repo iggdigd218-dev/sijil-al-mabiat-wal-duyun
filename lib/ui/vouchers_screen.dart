@@ -400,6 +400,10 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
       _currencies = curs;
       _accountId = accs.isNotEmpty ? accs.first.id : null;
       _currency = st['defaultCurrency'] ?? 'YER';
+      final defNotes = st['defaultVoucherNotes']?.trim();
+      if (defNotes != null && defNotes.isNotEmpty && _notes.text.isEmpty) {
+        _notes.text = defNotes;
+      }
       _loading = false;
     });
   }

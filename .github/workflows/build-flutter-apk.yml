@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Flutter Release APK
+    name: Build Flutter Release APK (arm64)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -28,39 +28,59 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.x'
-          channel: 'stable'
+          channel: stable
           cache: true
+
+      - name: Decode release keystore & create signing config
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeType=PKCS12
+          EOF
+          echo "تم تجهيز مفتاح التوقيع الثابت"
 
       - name: Get Flutter dependencies
         run: flutter pub get
 
-      - name: Build Android APK
+      - name: Build Android APK (arm64 — ملف واحد)
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g"
-          # إتاحة ذاكرة كافية لـ Gradle/Kotlin لتفادي GC thrashing
           JAVA_OPTS: "-Xmx3g"
-        run: flutter build apk --release --no-shrink
+        run: |
+          flutter build apk --release --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk nexora-arm64.apk
+          ls -lh nexora-arm64.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nexora-flutter-native-v3.4.0
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: nexora-flutter-arm64
+          path: nexora-arm64.apk
           retention-days: 30
 
       - name: Create GitHub Release with APK
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/flutter-native'
         with:
-          tag_name: flutter-v3.4.${{ github.run_number }}
-          name: Nexora Flutter Native v3.4.${{ github.run_number }}
+          tag_name: flutter-v3.7.${{ github.run_number }}
+          name: Nexora Flutter Native v3.7 (arm64)
           body: |
-            ## 📱 إطلاق تطبيق الأندرويد الأصلي Nexora Flutter Native
-            تم بناء التطبيق الأصلي بنجاح وهو متاح للتنزيل المباشر والتثبيت الفوري:
-            - **الملف المرفق**: `app-release.apk`
-            - **الفرع**: `flutter-native`
+            ## 📱 تطبيق الأندرويد الأصلي — نسخة 64 بت (arm64)
+            - **الملف**: `nexora-arm64.apk` — ملف واحد يعمل على أغلب الأجهزة الحديثة.
+            - موقّع بمفتاح release ثابت؛ التحديثات القادمة تُثبَّت فوقه مباشرةً بدون حذف.
+            - حجم صغير (~16MB) بعد حصر المعمارية وضغط المكتبات وإزالة الحزم غير المستخدمة.
+            - يتضمن كامل إعدادات النسخة الخفيفة (نوع الواتساب، العملية الافتراضية، ملاحظات السند، تنبيه المخزون).
             - تاريخ الإصدار: ${{ github.event.head_commit.timestamp }}
-          files: build/app/outputs/flutter-apk/app-release.apk
+          files: nexora-arm64.apk
           draft: false
           prerelease: false
         env:

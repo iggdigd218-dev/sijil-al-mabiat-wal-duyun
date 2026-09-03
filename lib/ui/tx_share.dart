@@ -240,10 +240,13 @@ class TxShare {
     late final WaResult res;
     try {
       text = await caption(repo: repo, tx: tx, account: acc);
+      final waType = (await repo.settings())['whatsappType'] ?? 'regular';
+      final pkg = waType == 'business' ? 'com.whatsapp.w4b' : null;
       res = await WhatsApp.send(
         phone: phone,
         text: text,
         imagePath: path,
+        package: pkg,
       );
     } catch (e) {
       if (context.mounted) {

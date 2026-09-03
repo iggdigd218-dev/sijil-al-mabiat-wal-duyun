@@ -31,6 +31,17 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+        // نسخة واحدة لمعمارية 64 بت فقط — ملف APK واحد صغير.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    // ضغط المكتبات الأصلية داخل APK لتقليل الحجم.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     signingConfigs {
@@ -40,6 +51,7 @@ android {
                 keyPassword = keystoreProperties['keyPassword']
                 storeFile = file(keystoreProperties['storeFile'])
                 storePassword = keystoreProperties['storePassword']
+                storeType = keystoreProperties.getProperty('storeType', 'PKCS12')
             }
         }
     }
@@ -47,8 +59,6 @@ android {
     buildTypes {
         release {
             signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
-            // Keep the release build reliable on low-memory devices and preserve all
-            // Flutter reflection/serialization entry points used by the app.
             minifyEnabled = false
             shrinkResources = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),

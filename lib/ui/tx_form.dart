@@ -107,7 +107,25 @@ class _TxFormState extends ConsumerState<TxForm> {
       _ref.text = widget.isCopy ? '' : t.reference;
       _notes.text = t.notes;
     } else {
-      if (widget.presetType != null) _type = widget.presetType!;
+      if (widget.presetType != null) {
+        _type = widget.presetType!;
+      } else {
+        final s = await repo.settings();
+        final mapped = {
+          'inflow': OpType.inflow,
+          'outflow': OpType.outflow,
+          'debit': OpType.debit,
+          'credit': OpType.credit,
+          'revenue': OpType.revenue,
+          'expense': OpType.expense,
+        };
+        final def = s['defaultOp'];
+        if (def != null && mapped.containsKey(def)) _type = mapped[def]!;
+        final defNotes = s['defaultVoucherNotes']?.trim();
+        if (defNotes != null && defNotes.isNotEmpty) {
+          _notes.text = defNotes;
+        }
+      }
       _accountId = widget.presetAccountId ??
           (accs.isNotEmpty ? accs.first.id : null);
     }
