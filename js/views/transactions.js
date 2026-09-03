@@ -24,13 +24,16 @@ function renderList(container, params, state) {
         <button class="btn primary" data-act="new">＋ عملية جديدة</button>
       </div>
     </div>
-    <div class="toolbar">
-      <div class="search-input"><input id="tx-q" placeholder="بحث بالبيان، المرجع، الحساب، الصنف..."><span class="s-ic">🔍</span></div>
+    <div class="mini-toolbar">
+      <div class="mini-search"><span class="s-ic">🔍</span><input id="tx-q" placeholder="بحث بالبيان، المرجع، الحساب، الصنف..."></div>
+      <button class="mini-icon-btn" id="tx-filter-toggle" title="خيارات التصفية">⚙️</button>
+    </div>
+    <div id="tx-filters" class="mini-filters hidden">
       <select class="select" id="tx-type"><option value="">كل الأنواع</option>${Object.entries(OP_TYPES).map(([k,v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}</select>
       <select class="select" id="tx-acc"><option value="">كل الحسابات</option>${store.accounts(true).map(a => `<option value="${a.id}">${ACCOUNT_KINDS[a.kind].icon} ${esc(a.name)}</option>`).join('')}</select>
       <select class="select" id="tx-cur"><option value="">كل العملات</option>${store.getCurrencies().map(c => `<option value="${c.code}">${esc(c.name)}</option>`).join('')}</select>
-      <input type="date" class="select" id="tx-from">
-      <input type="date" class="select" id="tx-to">
+      <input type="date" class="select" id="tx-from" title="من تاريخ">
+      <input type="date" class="select" id="tx-to" title="إلى تاريخ">
       <select class="select" id="tx-sort"><option value="date">الأحدث أولاً</option><option value="amount">الأكبر مبلغاً</option><option value="account">بالحساب</option></select>
     </div>
     <div id="tx-list"></div>
@@ -75,17 +78,28 @@ function renderList(container, params, state) {
   function txRow(t) {
     const op = OP_TYPES[t.type] || OP_TYPES.in;
     const acc = store.getAccount(t.accountId);
-    let accName = '', accKind = '';
-    if (t.type === 'transfer') { accName = 'تحويل بين حسابات'; }
-    else { accName = acc ? acc.name : '—'; accKind = acc ? (ACCOUNT_KINDS[acc.kind] || {}).label : ''; }
+    let accName = '', accKind = '', isDebit = false, isCredit = false;
+    if (t.type === 'transfer') {
+      accName = 'تحويل بين حسابات';
+      const fa = store.getAccount(t.fromId), ta = store.getAccount(t.toId);
+      if (fa && ta) accName = `تحويل: ${fa.name} ← ${ta.name}`;
+    } else {
+      accName = acc ? acc.name : '—';
+      accKind = acc ? (ACCOUNT_KINDS[acc.kind] || {}).label : '';
+      const eff = opEffect(t.type, t.accountKind);
+      isDebit = eff > 0 || t.type === 'out' || t.type === 'expense';
+      isCredit = eff < 0 || t.type === 'in' || t.type === 'credit';
+    }
     const lines = invoiceItems(t);
+    const amtCls = t.type === 'transfer' ? 'khalis' : (isCredit ? 'credit' : 'debit');
     return `<tr class="row-click" data-open-tx="${esc(t.id)}">
-      <td style="white-space:nowrap">${esc(t.date)} <span class="muted" style="font-size:11px">${esc(t.time||'')}</span></td>
+      <td style="white-space:nowrap">${esc((t.date||'').replace(/-/g,'/'))} <span class="muted" style="font-size:11px">${esc(t.time||'')}</span></td>
       <td><span class="pill ${op.cls}">${op.icon} ${op.label}</span></td>
       <td><b>${esc(accName)}</b>${accKind ? `<div class="muted" style="font-size:11px">${esc(accKind)}</div>` : ''}</td>
-      <td>${esc(t.desc || '—')}${lines.length ? `<div class="muted" style="font-size:11px">🛒 ${lines.length} صنف</div>` : ''}${t.tags && t.tags.length ? `<div>${t.tags.map(x=>`<span class="tag">${esc(x)}</span>`).join('')}</div>`:''}</td>
-      <td class="amount ${t.type==='expense'||t.type==='out'?'down':'up'}">${fmt(t.amount)} ${esc(store.currency(t.currency).symbol)}</td>
-      <td class="muted">${esc(t.ref || '—')}</td>
+      <td>${esc(t.desc || '—')}${lines.length ? `<div class="muted" style="font-size:11px">🛒 ${lines.length} صنف: ${esc(lines.map(x=>x.name).slice(0,3).join('، '))}${lines.length>3?'…':''}</div>` : ''}${t.tags && t.tags.length ? `<div>${t.tags.map(x=>`<span class="tag">${esc(x)}</span>`).join('')}</div>`:''}</td>
+      <td style="text-align:center"><span class="stmt-amt ${amtCls}">${fmt(t.amount)}</span></td>
+      <td class="muted" style="text-align:center">${esc(store.currency(t.currency).symbol)}</td>
+      <td class="muted" style="text-align:center">${esc(t.ref || '—')}</td>
       <td style="white-space:nowrap">
         <button class="icon-btn" style="width:30px;height:30px" data-dup-tx="${esc(t.id)}" title="تكرار العملية">🔁</button>
         <button class="icon-btn" style="width:30px;height:30px;color:var(--danger)" data-del-tx="${esc(t.id)}" title="حذف">🗑️</button>
@@ -96,6 +110,12 @@ function renderList(container, params, state) {
     const el = $('#' + id, container);
     el.addEventListener(id === 'tx-q' ? 'input' : 'change', apply);
   });
+  const txFToggle = $('#tx-filter-toggle', container);
+  const txFBox = $('#tx-filters', container);
+  if (txFToggle && txFBox) txFToggle.onclick = () => {
+    txFBox.classList.toggle('hidden');
+    txFToggle.classList.toggle('active', !txFBox.classList.contains('hidden'));
+  };
   container.addEventListener('click', (e) => {
     const act = e.target.closest('[data-act]');
     if (act && act.dataset.act === 'new') openTxForm(null, params.accountId || null);
@@ -685,7 +705,6 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
       })) : [],
       paidAmount: isPartial ? paidAmount : undefined,
       remainingDebt: isPartial ? remainingDebt : undefined,
-      receiptImage: t.receiptImage || '',
       accountKind: (store.getAccount(d.accountId) || {}).kind || 'general',
       sign: type === 'settle' ? (d.sign || '+') : undefined,
       createdBy: (store.findBy('users', u => u.me) || {}).name || 'المدير',
@@ -721,6 +740,27 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
         createdAt: new Date().toISOString(),
       };
       await store.saveTransaction(paymentTx);
+    }
+
+    // خصم الكميات المباعة من رصيد المخزون (لوضع المبيعات في شاشة العملية كما في نقطة البيع)
+    if (isSales) {
+      const lowStockAlerts = [];
+      for (const line of lines) {
+        if (!line.itemId) continue;
+        const invItem = store.get('items', line.itemId);
+        if (!invItem) continue;
+        // عند التعديل: لا تُخصم كميات عملية محفوظة سلفاً مرتين (تُحتسب الكمية الجديدة فقط)
+        const already = t.id ? invoiceItems(t).filter(x => x.itemId === line.itemId)
+          .reduce((s, x) => s + (Number(x.quantity) || 0), 0) : 0;
+        const delta = Math.max(0, (Number(line.quantity) || 0) - already);
+        if (delta <= 0) continue;
+        const newQty = Math.max(0, Number(invItem.quantity || 0) - delta);
+        invItem.quantity = newQty;
+        await store.save('items', invItem, { silent: true, noActivity: true });
+        const limit = Number(invItem.alertQty ?? invItem.minQuantity ?? 0);
+        if (newQty <= limit) lowStockAlerts.push(`${invItem.name} (المتبقي: ${newQty} ${invItem.unit || 'حبة'})`);
+      }
+      if (lowStockAlerts.length) toast(`⚠️ تنبيه مخزون: قارب على النفاد: ${lowStockAlerts.join('، ')}`, 'warn');
     }
 
     const acc = store.getAccount(d.accountId);
@@ -1076,9 +1116,9 @@ export async function openReceiptPreview(t) {
   const stateBox = $('#receipt-image-state', m.overlay);
   const image = await generateReceiptImage(t);
   if (!document.body.contains(m.overlay)) return;
-  
+
   if (image) {
-    try { await store.save('transactions', { ...t, receiptImage: image }, { silent: true, noActivity: true }); } catch (_) {}
+    // لا نخزّن الصورة داخل قاعدة البيانات (تُولّد عند الحاجة) لمنع تضخم التخزين
     stateBox.innerHTML = `<img src="${esc(image)}" alt="صورة سند العملية" style="max-width:100%;border:1.5px solid var(--border);border-radius:14px;box-shadow:0 4px 12px rgba(0,0,0,0.06);margin-top:8px">`;
     const download = $('[data-receipt-download]', m.overlay);
     download.disabled = false;
@@ -1471,7 +1511,12 @@ export async function copyReceiptImageToClipboard(dataUrl) {
 
 export async function dispatchTransactionNotification(t, { forceChannel = null, waType = null, automatic = false } = {}) {
   const st = store.settings();
-  const channel = forceChannel || st.notificationChannel || 'whatsapp';
+  // تطبيع القناة: 'whatsapp_share' (صورة + نص) و 'whatsapp-business' تُعامل كقناة مشاركة ملف/أعمال
+  let channel = forceChannel || st.notificationChannel || 'whatsapp';
+  // القناة «يدوي» تعني عدم الإرسال التلقائي إطلاقاً (مع السماح بالإرسال اليدوي الصريح)
+  if (channel === 'manual' && !forceChannel) return true;
+  const wantsImageShare = channel === 'whatsapp_share' || channel === 'share';
+  if (channel === 'whatsapp_share') channel = 'whatsapp';
   const activeWaType = waType || (channel === 'whatsapp-business' ? 'business' : (st.whatsappType || 'regular'));
   const autoSend = st.autoSendNotification !== false;
 
@@ -1499,63 +1544,148 @@ export async function dispatchTransactionNotification(t, { forceChannel = null, 
   const image = await generateReceiptImage(t);
   const message = transactionText(t);
 
-  if (image) {
-    try { await store.save('transactions', { ...t, receiptImage: image }, { silent: true, noActivity: true }); } catch (_) {}
-  }
+  // ملاحظة: لا نخزّن صورة السند داخل العملية (تُولّد عند الحاجة) حتى لا تتضخم قاعدة البيانات.
 
-  // 3. إذا طُلب صراحة خيار المشاركة العامة في النظام (Share Sheet)
-  if (channel === 'share') {
-    const file = image ? dataUrlToFile(image, `receipt-${t.id || 'transaction'}.png`) : null;
-    const nav = typeof navigator !== 'undefined' ? navigator : {};
-    if (file && typeof nav.share === 'function' && (typeof nav.canShare !== 'function' || nav.canShare({ files: [file] }))) {
+  const nav = typeof navigator !== 'undefined' ? navigator : {};
+
+  // مشاركة صورة السند + النص عبر المكوّن الأصلي (Capacitor على أندرويد):
+  // يكتب الصورة في ملف مؤقت ويستدعي قائمة المشاركة الموجّهة لواتساب مع إرفاق الصورة والنص معاً.
+  async function nativeCapacitorShareFile() {
+    try {
+      const Cap = globalThis.Capacitor;
+      const isNative = Cap && typeof Cap.isNativePlatform === 'function' && Cap.isNativePlatform();
+      if (!isNative || !image) return false;
+      const { Share } = await import('@capacitor/share');
+      if (!Share || typeof Share.share !== 'function') return false;
+      // كتابة الصورة إلى ملف مؤقت ليتعرّف عليها واتساب
+      let fileUri = null;
       try {
-        await nav.share({ title: 'سند العملية', text: message, files: [file] });
-        toast('تم فتح خيارات المشاركة بنجاح ✅');
-        return true;
-      } catch (err) {
-        if (err && err.name === 'AbortError') return false;
-      }
-    } else if (typeof nav.share === 'function') {
-      try {
-        await nav.share({ title: 'سند العملية', text: message });
-        toast('تم فتح خيارات المشاركة بنجاح ✅');
-        return true;
-      } catch (err) {
-        if (err && err.name === 'AbortError') return false;
-      }
+        const { Filesystem, Directory } = await import('@capacitor/filesystem');
+        const base64 = image.split(',')[1] || '';
+        const fileName = `receipt-${t.id || 'tx'}.png`;
+        const w = await Filesystem.writeFile({
+          path: fileName,
+          data: base64,
+          directory: Directory.Cache,
+          recursive: true,
+        });
+        fileUri = w.uri;
+      } catch (_) { fileUri = null; }
+      await Share.share({
+        title: 'سند العملية',
+        text: message,
+        url: fileUri || undefined,
+        dialogTitle: 'إرسال السند عبر واتساب',
+      });
+      return true;
+    } catch (err) {
+      if (err && err.message === 'AbortError') return null;
+      return false;
     }
   }
 
-  // 4. قناة واتساب: افتح محادثة العميل مباشرة، ولا تستخدم Sharesheet.
+  // مشاركة الملف عبر الويب (Web Share API) — ترفق الصورة + النص ويختار المستخدم واتساب.
+  async function tryShareWithFile() {
+    if (!image) return false;
+    // أولاً المكوّن الأصلي على تطبيق الأندرويد
+    const native = await nativeCapacitorShareFile();
+    if (native === true || native === null) return native;
+    const file = dataUrlToFile(image, `receipt-${t.id || 'transaction'}.png`);
+    if (file && typeof nav.share === 'function' && (typeof nav.canShare !== 'function' || nav.canShare({ files: [file] }))) {
+      try {
+        await nav.share({ title: 'سند العملية', text: message, files: [file] });
+        return true;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return null; // ألغى المستخدم
+      }
+    }
+    return false;
+  }
+
+  // 3. قناة المشاركة العامة أو «واتساب صورة + نص»: نستخدم قائمة مشاركة النظام المرفق فيها الملف
+  if (wantsImageShare || channel === 'share') {
+    const shared = await tryShareWithFile();
+    if (shared === true) { toast('تم فتح المشاركة مع صورة السند والنص ✅'); return true; }
+    if (shared === null) return false;
+    // لا يدعم مشاركة الملفات: ننتقل لمشاركة النص
+    if (typeof nav.share === 'function') {
+      try { await nav.share({ title: 'سند العملية', text: message }); return true; }
+      catch (err) { if (err && err.name === 'AbortError') return false; }
+    }
+  }
+
+  // 4. قناة واتساب مباشرة: المكوّن الأصلي للأندرويد (إن وُجد) يفتح المحادثة مع النص
   const nativeShare = globalThis.Capacitor && globalThis.Capacitor.Plugins && globalThis.Capacitor.Plugins.WhatsAppShare;
-  if (nativeShare && channel === 'whatsapp' && typeof nativeShare.openChat === 'function') {
+  if (nativeShare && typeof nativeShare.openChat === 'function') {
     try {
       await nativeShare.openChat({ phone: String(rawPhone), text: message, waType: activeWaType });
-      if (image) { try { await copyReceiptImageToClipboard(image); } catch (_) {} }
-      toast(image ? 'تم فتح محادثة العميل وتجهيز النص؛ أرفق صورة السند من الحافظة 📎' : 'تم فتح محادثة العميل بالنص ✅');
+      // حاول إرفاق الصورة عبر قائمة المشاركة أولاً (الأضمن)، وإلا نسخها للحافظة
+      const shared = await tryShareWithFile();
+      if (shared === true) return true;
+      if (image) { const ok = await copyReceiptImageToClipboard(image); toast(ok ? 'فُتحت المحادثة؛ الصورة في الحافظة — الصقها في واتساب 📎' : 'تم فتح المحادثة بالنص ✅'); }
+      else toast('تم فتح محادثة العميل بالنص ✅');
       return true;
-    } catch (_) {}
+    } catch (_) { /* ننتقل للحلول التالية */ }
   }
 
-  // 5. في المتصفح استخدم مشاركة الملفات إن كانت متاحة حتى يبقى السند مرفقاً.
-  // روابط wa.me لا تسمح بإضافة ملف تلقائياً، لذلك لا ننسخ الصورة للحافظة ولا نوهم المستخدم أنها أُرسلت.
-  if (image) {
-    const file = dataUrlToFile(image, `receipt-${t.id || 'transaction'}.png`);
-    const nav = typeof navigator !== 'undefined' ? navigator : {};
-    if (file && typeof nav.share === 'function' && (typeof nav.canShare !== 'function' || nav.canShare({ files: [file] }))) {
-      try {
-        await nav.share({ title: 'سند العملية', text: message, files: [file] });
-        toast('تم فتح مشاركة السند المرفق مع النص ✅');
-        return true;
-      } catch (err) {
-        if (err && err.name === 'AbortError') return false;
-      }
-    }
+  // 5. في المتصفح/الجوال: إن أمكنت مشاركة الملف نرفق الصورة (هذا يُرسلها لواتساب فعلياً)
+  const shared = await tryShareWithFile();
+  if (shared === true) { toast('تم فتح واتساب/المشاركة مع صورة السند مرفقة ✅'); return true; }
+  if (shared === null) return false;
+
+  // 6. الحل الأخير: فتح محادثة واتساب بالنص (روابط wa.me لا تدعم إرفاق ملف تلقائياً).
+  //    ننسخ الصورة للحافظة إن أمكن ونُنبّه المستخدم بوضوح حتى يلصقها.
+  if (image) { await copyReceiptImageToClipboard(image); }
+  const opened = openWhatsApp(rawPhone, message, activeWaType);
+
+  // في بيئة معزولة (معاينة داخل إطار، أو متصفح يحجب النوافذ المنبثقة/المشاركة)
+  // نظهر نافذة جاهزة فيها النص للنسخ ورابط واتساب بدل أن يبدو وكأن شيئاً لم يحدث.
+  const inFrame = (typeof window !== 'undefined' && window.self !== window.top);
+  const shareUnavailable = (typeof navigator === 'undefined' || typeof navigator.share !== 'function');
+  if (!opened || inFrame || shareUnavailable) {
+    showWhatsAppFallback(rawPhone, message, image, activeWaType);
+  } else {
+    toast(image
+      ? 'فُتح واتساب بالنص؛ الصورة جاهزة — الصقها في المحادثة (📎 أو لصق) لإرفاق السند'
+      : 'تم فتح واتساب بالنص ✅');
   }
-  // 6. لا يمكن إرفاق ملف عبر رابط واتساب في المتصفح؛ نفتح النص فقط مع توضيح ذلك.
-  openWhatsApp(rawPhone, message, activeWaType);
-  toast('تم فتح واتساب بالنص؛ أرفق صورة السند من زر المشاركة في جهازك');
   return true;
+}
+
+// نافذة بديلة عند تعذّر فتح واتساب تلقائياً (المعاينة/المتصفح المحجوب)
+function showWhatsAppFallback(phone, message, image, waType) {
+  const clean = cleanPhoneNumber(phone);
+  const waLink = `https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`;
+  const m = openModal({
+    title: '🟢 إرسال السند عبر واتساب',
+    cls: 'md',
+    body: `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px;font-size:13px;color:var(--text2);line-height:1.7">
+        ${ (typeof window !== 'undefined' && window.self !== window.top)
+          ? '⚠️ أنت داخل <b>معاينة معزولة</b> لا تسمح بفتح التطبيقات الخارجية. على هاتفك الحقيقي أو متصفح عادي سيُفتح واتساب مباشرة. يمكنك الآن نسخ النص والصورة ثم فتح واتساب يدويًا:'
+          : 'تعذّر فتح واتساب تلقائيًا في هذه البيئة. استخدم الأزرار أدناه:' }
+      </div>
+      ${image ? `<div style="text-align:center;margin-bottom:12px"><img src="${esc(image)}" alt="صورة السند" style="max-width:100%;max-height:260px;border:1.5px solid var(--border);border-radius:12px"></div>` : ''}
+      <textarea id="wa-msg" readonly style="width:100%;min-height:150px;padding:10px;border-radius:10px;border:1.5px solid var(--border);background:var(--surface);font-size:13px;font-family:inherit;direction:rtl">${esc(message || '')}</textarea>
+    `,
+    foot: `
+      <button class="btn ghost" data-close>إغلاق</button>
+      ${image ? '<button class="btn soft" id="wa-copy-img">📋 نسخ صورة السند</button>' : ''}
+      <button class="btn soft" id="wa-copy-text">📋 نسخ النص</button>
+      <a class="btn primary" href="${esc(waLink)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px">🟢 فتح واتساب</a>
+    `,
+  });
+  const copyTxt = async () => {
+    try { await navigator.clipboard.writeText(message); toast('تم نسخ نص الرسالة ✅ الصقه في واتساب'); }
+    catch (_) { const ta = $('#wa-msg', m.overlay); if (ta) { ta.select(); document.execCommand && document.execCommand('copy'); toast('تم نسخ النص ✅'); } }
+  };
+  const btnCopyText = $('#wa-copy-text', m.overlay);
+  if (btnCopyText) btnCopyText.onclick = copyTxt;
+  const btnCopyImg = $('#wa-copy-img', m.overlay);
+  if (btnCopyImg) btnCopyImg.onclick = async () => {
+    const ok = await copyReceiptImageToClipboard(image);
+    toast(ok ? 'تم نسخ صورة السند ✅ الصقها في واتساب (📎/لصق)' : 'تعذّر نسخ الصورة في هذه البيئة؛ يمكنك حفظها من المعاينة أعلاه', ok ? 'success' : 'warn');
+  };
 }
 
 export async function shareTransactionReceipt(t, options = {}) {

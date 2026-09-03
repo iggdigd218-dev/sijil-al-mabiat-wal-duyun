@@ -2,6 +2,7 @@
 import * as db from './db.js';
 import { accountBalance, DEFAULT_CURRENCIES, opEffect } from './accounting.js';
 import { uid, nowStamp } from './utils.js';
+import { requestPersistentStorage } from './db.js';
 
 const STORES = ['settings','currencies','categories','accounts','transactions','transactionItems','vouchers','items',
   'conversations','messages','users','activity','templates','reminders','notifications','contacts','trash'];
@@ -17,23 +18,19 @@ class Store {
   emit(payload) { this.listeners.forEach(fn => { try { fn(payload); } catch (e) { console.error(e); } }); }
 
   async load() {
+    // طلب تخزين دائم لمنع المتصفح من مسح بيانات التطبيق عند ضغط المساحة
+    await requestPersistentStorage();
     for (const s of STORES) {
       try { this.state[s] = await db.dbGetAll(s); } catch (e) { this.state[s] = []; }
     }
     this.ready = true;
     // إزالة الحسابات التي أنشأتها النسخ التجريبية السابقة فقط؛ الحسابات الجديدة لا تحمل sampleOps.
     await this.removeLegacyDemoAccounts();
-    // التحقق التلقائي من تسلسل أرقام العمليات السابقة حسب الوقت وتعديلها لأرقام متسلسلة نقية
+    // سدّ الثغرات في أرقام العمليات فقط (لا نُعيد ترقيم القيم الصحيحة حتى لا تتغير أرقام السندات المطبوعة/المُرسلة)
     try {
-      const txs = this.col('transactions');
-      if (txs.length > 0) {
-        const needsResequence = txs.some((t, i) => !t.ref || !/^\d+$/.test(String(t.ref).trim()));
-        if (needsResequence) {
-          await this.resequenceAllTransactions();
-        }
-      }
+      await this.fillMissingRefs();
     } catch (err) {
-      console.warn('Resequence check error:', err);
+      console.warn('fillMissingRefs error:', err);
     }
     this.emit({ type: 'loaded' });
   }
@@ -175,31 +172,44 @@ class Store {
     return String(max + 1);
   }
 
-  // إعادة ترقيم كافة العمليات السابقة بأرقام تسلسلية منتظمة حسب الترتيب الزمني للوقت والتاريخ
-  async resequenceAllTransactions() {
+  // سدّ الثغرات فقط: منح رقم تسلسلي نقي للعمليات التي بلا رقم صالح،
+  // دون تغيير أي رقم صحيح موجود (حفاظاً على تطابق السندات المطبوعة/المُرسلة).
+  async fillMissingRefs() {
     const txs = this.col('transactions');
     if (!txs || !txs.length) return 0;
-
-    // فرز العمليات زمنياً: الأقدم أولاً حسب التاريخ ثم الوقت ثم تاريخ الإنشاء
-    txs.sort((a, b) => {
-      const da = (a.date || '0000-00-00') + ' ' + (a.time || '00:00') + ' ' + (a.createdAt || '');
-      const db = (b.date || '0000-00-00') + ' ' + (b.time || '00:00') + ' ' + (b.createdAt || '');
-      return da.localeCompare(db);
-    });
-
+    const used = new Set();
+    for (const t of txs) {
+      const r = String(t.ref || '').trim();
+      if (/^\d+$/.test(r)) used.add(r);
+    }
     let changed = false;
-    for (let i = 0; i < txs.length; i++) {
-      const targetRef = String(i + 1);
-      if (String(txs[i].ref || '').trim() !== targetRef) {
-        txs[i].ref = targetRef;
-        await db.dbPut('transactions', txs[i]);
+    for (const t of txs) {
+      const r = String(t.ref || '').trim();
+      if (!r || !/^\d+$/.test(r)) {
+        let next = this.getNextSequentialRef();
+        while (used.has(next)) next = String(parseInt(next, 10) + 1);
+        t.ref = next;
+        used.add(next);
+        await db.dbPut('transactions', t);
         changed = true;
       }
     }
-    if (changed) {
-      this.emit({ type: 'save', store: 'transactions' });
+    if (changed) this.emit({ type: 'save', store: 'transactions' });
+    return changed;
+  }
+
+  // تقليم النسخ الاحتياطية المخزنة محلياً عند الحاجة (لمنع امتلاء قاعدة البيانات)
+  async pruneBackups(keep = 15) {
+    const all = this.col('backups').slice()
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+    const toRemove = all.slice(0, Math.max(0, all.length - keep));
+    for (const b of toRemove) {
+      await db.dbDelete('backups', b.id);
     }
-    return txs.length;
+    if (toRemove.length) {
+      this.state.backups = this.col('backups').filter(b => !toRemove.includes(b));
+    }
+    return toRemove.length;
   }
 
   async saveTransaction(t) {

@@ -161,26 +161,38 @@ a{color:var(--primary);text-decoration:none}
   width:100%;
 }
 .topbar{
-  position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;padding:12px 18px;
-  background:color-mix(in srgb,var(--surface) 86%,transparent);backdrop-filter:blur(12px);
-  border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:10px;padding:9px 14px;
+  background:linear-gradient(135deg,#0f766e 0%,#0e7490 55%,#1691c7 100%);
+  box-shadow:0 2px 10px rgba(15,118,110,.28);
+  border-bottom:none;
 }
+.topbar .icon-btn{
+  background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.18);
+  width:40px;height:40px;border-radius:11px;transition:.15s;
+}
+.topbar .icon-btn:hover{background:rgba(255,255,255,.25)}
+.topbar .brand{margin-left:auto;gap:10px}
 .brand{display:flex;align-items:center;gap:11px;margin-left:auto}
 .brand-logo{
-  width:42px;height:42px;border-radius:12px;font-size:22px;background:linear-gradient(135deg,var(--primary),var(--primary2));
-  display:flex;align-items:center;justify-content:center;box-shadow:0 5px 14px rgba(15,118,110,.35);
+  width:40px;height:40px;border-radius:11px;font-size:21px;background:rgba(255,255,255,.18);
+  display:flex;align-items:center;justify-content:center;box-shadow:none;border:1px solid rgba(255,255,255,.25);
 }
-.brand-title{font-weight:800;font-size:17px}
-.brand-sub{font-size:11.5px;color:var(--text3)}
-.topbar-tools{display:flex;gap:8px}
+.brand-title{font-weight:800;font-size:16px;color:#fff}
+.brand-sub{font-size:11px;color:rgba(255,255,255,.85)}
+.topbar-tools{display:flex;gap:7px;align-items:center}
+.topbar .badge{background:#f43f5e;color:#fff;border:2px solid #0f766e}
 @media(min-width:1000px){
   .brand{margin-left:0}
-  .brand-title{font-size:19px}
+  .brand-title{font-size:18px}
 }
 @media(max-width:640px){
+  .topbar{padding:8px 10px;gap:7px}
   .brand-sub{display:none}
-  .topbar-tools .icon-btn{width:38px;height:38px}
-  .brand-logo{width:38px;height:38px}
+  .topbar-tools .icon-btn{width:38px;height:38px;border-radius:10px}
+  .topbar .icon-btn{width:38px;height:38px}
+  .brand-logo{width:36px;height:36px;border-radius:10px}
+  .brand-title{font-size:15px}
+  .topbar .icon-btn.hide-mobile{display:none}
 }
 
 /* ============ القائمة الجانبية والخلفية ============ */
@@ -1965,6 +1977,87 @@ body[data-route="dashboard"] .fab-wrap {
   color: #64748b;
   background: var(--surface2);
 }
+
+/* ===== نمط كشف الحساب المرتّب (مربّعات ملوّنة مثل الكشف المصرفي) ===== */
+.stmt-table{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:15px}
+.stmt-table thead th{
+  background:#1691c7;color:#fff;font-weight:800;font-size:16px;
+  padding:12px 10px;border:none;text-align:center;
+}
+.stmt-table thead th:first-child{border-radius:0 10px 10px 0}
+.stmt-table thead th:last-child{border-radius:10px 0 0 10px}
+.stmt-table td{padding:7px 8px;vertical-align:middle;background:transparent;border:none}
+/* مربّع المبلغ (أحمر عليه / أخضر له) */
+.stmt-amt{
+  display:flex;align-items:center;justify-content:center;
+  min-width:105px;border-radius:8px;padding:11px 10px;
+  font-weight:800;font-size:17px;color:#fff;white-space:nowrap;text-align:center;
+}
+.stmt-amt.debit{background:#e57373}
+.stmt-amt.credit{background:#66bb6a}
+/* مربّع الرصيد الجاري */
+.stmt-bal{
+  display:flex;align-items:center;justify-content:center;
+  min-width:95px;border-radius:8px;padding:11px 10px;
+  font-weight:800;font-size:16px;color:#fff;white-space:nowrap;text-align:center;
+}
+.stmt-bal.alayh{background:#ef8a8a}
+.stmt-bal.lahu{background:#7cc980}
+.stmt-bal.khalis{background:#cbd5e1;color:#475569}
+.stmt-date{font-weight:700;font-size:14px;text-align:center;white-space:nowrap;color:var(--text)}
+.stmt-desc{font-weight:600;font-size:15px;color:var(--text);text-align:center;line-height:1.4}
+.stmt-desc .muted-line{display:block;font-weight:400;font-size:12px;color:var(--text3);margin-top:2px}
+/* شريط الملخّص السفلي (له / عليه / الرصيد عليه) */
+.stmt-footer{
+  margin-top:14px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:12px;padding:12px 16px;display:flex;align-items:center;
+  justify-content:space-between;gap:10px;flex-wrap:wrap;font-weight:800;font-size:15px;
+}
+.stmt-footer .sf-tot{display:flex;gap:18px;flex-wrap:wrap}
+.stmt-footer .lahu{color:var(--green)}
+.stmt-footer .alayh{color:var(--danger)}
+.stmt-footer .sf-net{font-size:17px;font-weight:900;color:var(--text)}
+@media (max-width:560px){
+  .stmt-table{font-size:13px}
+  .stmt-table thead th{font-size:13px;padding:9px 4px}
+  .stmt-amt{min-width:74px;font-size:14px;padding:9px 5px}
+  .stmt-bal{min-width:66px;font-size:13px;padding:9px 5px}
+  .stmt-date{font-size:12px}
+  .stmt-desc{font-size:13px}
+}
+
+/* ===== شريط أدوات مدمج (بحث صغير + تصفية مطوية) لكل الصفحات ===== */
+.mini-toolbar{
+  display:flex;align-items:center;gap:8px;margin-bottom:10px;
+}
+.mini-search{
+  flex:1;display:flex;align-items:center;gap:8px;
+  background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;
+  padding:0 12px;height:42px;transition:border-color .15s,box-shadow .15s;
+}
+.mini-search:focus-within{border-color:var(--primary);box-shadow:0 0 0 3px rgba(15,118,110,.12)}
+.mini-search .s-ic{font-size:15px;opacity:.6;margin:0}
+.mini-search input{
+  flex:1;border:none;background:transparent;outline:none;height:100%;
+  font-size:14px;color:var(--text);font-family:inherit;
+}
+.mini-icon-btn{
+  flex-shrink:0;width:42px;height:42px;border-radius:12px;cursor:pointer;
+  border:1.5px solid var(--border);background:var(--surface2);
+  font-size:17px;display:flex;align-items:center;justify-content:center;transition:.15s;
+}
+.mini-icon-btn:hover{background:var(--surface);border-color:var(--primary)}
+.mini-icon-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.mini-filters{
+  display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px;
+  background:var(--surface2);border:1px solid var(--border);border-radius:12px;
+}
+.mini-filters.hidden{display:none}
+.mini-filters .select{flex:1;min-width:130px;height:40px;font-size:13.5px}
+
+/* ترويسات الصفحات: أصغر وأهدأ */
+.view-head .view-title{font-size:19px}
+.view-head small{font-size:12.5px}
 
 .tx-quick-actions {
   display: flex;

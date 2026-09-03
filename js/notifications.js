@@ -3,7 +3,9 @@ import { store } from './store.js';
 import { exportAllData } from './db.js';
 import { uid, todayISO, fmt } from './utils.js';
 import { toast, toastErr } from './components.js';
-import { uploadOrUpdateDriveBackup, getSavedGoogleAccount, getCachedToken } from './drive.js';
+// المزامنة السحابية التلقائية الصامتة عبر Firebase (بدون تسجيل دخول).
+import { getCloudConfig, pushCloudBackup } from './cloud.js';
+import { prepareBackupPayload } from './drive.js';
 
 let backupTimer = null;
 let retryBackupTimer = null;
@@ -223,6 +225,34 @@ export async function testSleepModePushNotification(delaySeconds = 4) {
   });
 }
 
+// حفظ نسخة احتياطية محلية مع حماية من امتلاء قاعدة البيانات (QuotaExceeded):
+// نحذف أقدم النسخ تدريجياً ونعيد المحاولة، حتى لا يتعطّل حفظ البيانات الأساسية.
+export async function safeCreateBackup(rec, keepFloor = 3) {
+  let attempt = 0;
+  while (true) {
+    try {
+      await store.create('backups', rec, { noActivity: true });
+      return true;
+    } catch (err) {
+      const isQuota = err && (
+        err.name === 'QuotaExceededError' ||
+        err.code === 22 ||
+        (err.message && /quota|storage|space|bytes/i.test(err.message))
+      );
+      if (!isQuota || attempt >= 4) {
+        // ليست مشكلة سعة، أو استنفدنا المحاولات: لا نخزّن محلياً (السحابة لا تزال تحمي البيانات)
+        console.warn('safeCreateBackup: تعذّر حفظ النسخة المحلية', err && err.message);
+        return false;
+      }
+      // قلّص عدد النسخ المحفوظة ثم أعد المحاولة
+      const keep = Math.max(keepFloor, 10 - attempt * 3);
+      const removed = await store.pruneBackups(keep);
+      attempt++;
+      if (removed === 0 && attempt > 1) return false; // لا يوجد ما يُحذف
+    }
+  }
+}
+
 // جدولة النسخ الاحتياطي التلقائي بعد دقيقة واحدة من آخر تغيير (Debounced Backup Queue)
 export function notifyDataChangeForBackup() {
   const st = store.settings();
@@ -240,10 +270,6 @@ export function notifyDataChangeForBackup() {
 
 // تنفيذ النسخ الاحتياطي التلقائي (محلي أو سحابي إلى Google Drive) مع إشعار الفشل وإعادة المحاولة بعد 15 دقيقة
 export async function performAutoBackupWithNotification(manualTrigger = false) {
-  const st = store.settings();
-  let isDrive = st.autoBackupLoc === 'drive';
-  const savedGoogle = getSavedGoogleAccount();
-
   try {
     const data = await exportAllData();
     const now = new Date();
@@ -263,28 +289,23 @@ export async function performAutoBackupWithNotification(manualTrigger = false) {
       createdAt: now.toISOString(),
     };
 
-    // 1. حفظ في قاعدة البيانات المحلية دائماً كأمان
-    await store.create('backups', rec, { noActivity: true });
+    // حفظ النسخة محلياً بأمان (نقلّم النسخ القديمة عند امتلاء السعة حتى لا نفقد البيانات).
+    await safeCreateBackup(rec);
 
-    // 2. إذا كان النسخ السحابي لـ Google Drive مفعلاً ويوجد حساب
-    let driveSummary = null;
-    if (isDrive && savedGoogle) {
-      try {
-        driveSummary = await uploadOrUpdateDriveBackup();
-      } catch (driveErr) {
-        console.error('Cloud auto-backup to Drive failed:', driveErr);
-        throw driveErr; // إطلاق الخطأ للتعامل مع الفشل وإعادة المحاولة
-      }
-    }
+    // تنظيف النسخ التلقائية القديمة جداً محلياً (الاحتفاظ بآخر 10 نسخ)
+    await store.pruneBackups(10);
 
-    // تنظيف النسخ التلقائية القديمة جداً محلياً (الاحتفاظ بآخر 15 نسخة)
-    const allAuto = store.filter('backups', b => b.type === 'تلقائي');
-    if (allAuto.length > 15) {
-      allAuto.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-      const toRemove = allAuto.slice(0, allAuto.length - 15);
-      for (const item of toRemove) {
-        await store.remove('backups', item.id, { noActivity: true });
+    // مزامنة سحابية صامتة في الخلفية (إن كانت مُعدّة ومفعّلة) — لا تُفشل العملية إن تعذّرت.
+    let cloudNote = '';
+    try {
+      const cfg = getCloudConfig();
+      if (cfg.ready && cfg.autoSync && cfg.code) {
+        const payload = await prepareBackupPayload();
+        const cr = await pushCloudBackup(payload);
+        if (cr && cr.ok && !cr.skipped) cloudNote = ` وتمت المزامنة السحابية (${cr.sizeKb})`;
       }
+    } catch (cloudErr) {
+      console.warn('silent cloud sync skipped:', cloudErr && cloudErr.message);
     }
 
     // إلغاء أي مؤقت إعادة محاولة سابق عند النجاح
@@ -294,7 +315,6 @@ export async function performAutoBackupWithNotification(manualTrigger = false) {
     }
 
     // إشعار بالنجاح
-    const cloudNote = driveSummary ? ` وتمت مزامنة الملف الموحد على Google Drive (${savedGoogle.email || ''})` : '';
     await sendSystemNotification('💾 تم حفظ نسخة احتياطية بنجاح', {
       body: `تم أرشفة وحفظ كل الحركات والعمليات الأخيرة بأمان (${sizeKb} KB)${cloudNote}.`,
       tag: 'auto-backup-success',
@@ -352,10 +372,11 @@ export async function runInventoryAndSalesAudit(forceNotify = false) {
   // خريطة بآخر تاريخ بيع لكل صنف
   const lastSoldMap = {};
   txItems.forEach(line => {
-    const tx = store.get('transactions', line.transactionId);
+    // البنود تربط بالعملية عبر الحقل txId (وليس transactionId)
+    const tx = store.get('transactions', line.txId) || store.get('transactions', line.transactionId);
     if (tx && tx.date) {
       const txTime = new Date(tx.date).getTime();
-      if (!lastSoldMap[line.itemId] || txTime > lastSoldMap[line.itemId]) {
+      if (line.itemId && (!lastSoldMap[line.itemId] || txTime > lastSoldMap[line.itemId])) {
         lastSoldMap[line.itemId] = txTime;
       }
     }
@@ -363,7 +384,8 @@ export async function runInventoryAndSalesAudit(forceNotify = false) {
 
   items.forEach(item => {
     const q = Number(item.quantity || 0);
-    const minQ = Number(item.minQuantity || 5);
+    // حد التنبيه المخزّن هو alertQty (مع دعم minQuantity القديم إن وُجد)
+    const minQ = Number(item.alertQty ?? item.minQuantity ?? 5);
 
     if (q <= 0) {
       outOfStock.push(item);

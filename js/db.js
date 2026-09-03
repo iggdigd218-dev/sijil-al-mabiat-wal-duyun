@@ -83,17 +83,27 @@ export async function dbClearWithCount(store) {
   });
 }
 
-// إعادة تعيين كاملة
+// إعادة تعيين كاملة (تشمل الإعدادات وسلة المحذوفات والنسخ المخزنة)
 export async function resetAllData() {
   const db = await getDB();
   return new Promise((res, rej) => {
-    const names = ['accounts','transactions','transactionItems','vouchers','categories','currencies','items',
+    const names = ['settings','accounts','transactions','transactionItems','vouchers','categories','currencies','items',
       'conversations','messages','backups','activity','trash','users','notifications',
       'audit','templates','reminders','contacts'];
     const t = db.transaction(names, 'readwrite');
-    names.forEach(n => t.objectStore(n).clear());
+    names.forEach(n => { try { t.objectStore(n).clear(); } catch (_) {} });
     t.oncomplete = res; t.onerror = () => rej(t.error);
   });
+}
+
+// طلب تخزين دائم من المتصفح لمنع الحذف التلقائي للبيانات عند ضغط المساحة
+export async function requestPersistentStorage() {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+      const already = await navigator.storage.persisted();
+      if (!already) await navigator.storage.persist();
+    }
+  } catch (_) { /* وضع الاختبار أو المتصفحات القديمة */ }
 }
 
 export async function dbSize() {
@@ -105,22 +115,65 @@ export async function dbSize() {
   });
 }
 
-// تصدير كل البيانات ككائن
+// إزالة الصور المولّدة ديناميكياً (receiptImage) لتقليص حجم النسخة ومنع تضخمها أُسّياً
+function slimRecord(rec) {
+  if (!rec || typeof rec !== 'object') return rec;
+  const copy = { ...rec };
+  // صور السندات تُعاد توليدها عند الحاجة، فلا داعي لتخزينها داخل النسخة
+  if ('receiptImage' in copy) delete copy.receiptImage;
+  if ('generatedImageData' in copy) delete copy.generatedImageData;
+  if ('tempReceiptImage' in copy) delete copy.tempReceiptImage;
+  return copy;
+}
+
+// تصدير كل البيانات ككائن (يستبعد سجل النسخ الاحتياطية نفسه لمنع التضخم الأُسّي)
 export async function exportAllData() {
+  // ملاحظة: 'backups' متعمَّد استبعادها لأن كل نسخة كانت تتضمن سابقاتها فينفجر الحجم
   const stores = ['settings','currencies','categories','accounts','transactions','transactionItems','vouchers','items',
-    'conversations','messages','users','activity','templates','reminders','notifications','contacts'];
+    'conversations','messages','users','activity','templates','reminders','notifications','contacts','trash'];
   const out = { _version: DB_VERSION, _exportedAt: new Date().toISOString(), data: {} };
-  for (const s of stores) out.data[s] = await dbGetAll(s);
+  for (const s of stores) {
+    try {
+      const rows = await dbGetAll(s);
+      out.data[s] = Array.isArray(rows) ? rows.map(slimRecord) : [];
+    } catch (e) { out.data[s] = []; }
+  }
   return out;
 }
 
-// استيراد كل البيانات (مع تحذير)
+// التحقق من سلامة حمولة النسخة قبل أي مسح للبيانات (حماية من فقدان البيانات)
+function validateBackupPayload(payload) {
+  if (!payload || typeof payload !== 'object') throw new Error('الملف ليس نسخة احتياطية صالحة (البنية غير صحيحة).');
+  const data = payload.data;
+  if (!data || typeof data !== 'object') throw new Error('الملف تالف: لا يحتوي على بيانات (data).');
+  // يجب أن يحتوي على جدول أساسي واحد على الأقل بصيغة مصفوفة
+  const keyTables = ['accounts', 'transactions'];
+  const hasAnyTable = Object.keys(data).some(k => Array.isArray(data[k]));
+  if (!hasAnyTable && !Array.isArray(data.transactions)) {
+    throw new Error('الملف تالف أو فارغ: لا توجد بيانات قابلة للاستعادة.');
+  }
+  for (const k of keyTables) {
+    if (data[k] !== undefined && !Array.isArray(data[k])) {
+      throw new Error(`الملف تالف: الجدول ${k} ليس بالصيغة المتوقعة.`);
+    }
+  }
+  return true;
+}
+
+// استيراد كل البيانات — يتحقق أولاً ثم يمسح، حتى لا تُفقد البيانات عند ملف تالف
 export async function importAllData(payload) {
+  validateBackupPayload(payload);
   const stores = ['settings','currencies','categories','accounts','transactions','transactionItems','vouchers','items',
-    'conversations','messages','users','activity','templates','reminders','notifications','contacts'];
+    'conversations','messages','users','activity','templates','reminders','notifications','contacts','trash'];
   await resetAllData();
   for (const s of stores) {
-    const arr = (payload.data && payload.data[s]) || [];
-    if (arr.length) await dbBulk(s, arr);
+    const arr = (payload.data && Array.isArray(payload.data[s])) ? payload.data[s] : [];
+    if (arr.length) {
+      try { await dbBulk(s, arr); }
+      catch (e) {
+        // في حال فشل متجر واحد (سعة/حجم) لا نُسقط البقية
+        console.warn('import: تخطي متجر بسبب خطأ', s, e && e.message);
+      }
+    }
   }
 }

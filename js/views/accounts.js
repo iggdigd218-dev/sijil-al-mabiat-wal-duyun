@@ -541,27 +541,39 @@ function renderDetail(container, params, state) {
         </div>
       </div>
 
-      <!-- شريط البحث والتصفية -->
-      <div class="toolbar" style="margin-bottom:12px;border:none;padding:0;gap:8px">
-        <div class="search-input" style="flex:1.5">
-          <input id="st-q" placeholder="بحث برقم السند، البيان، أو تفاصيل الأصناف...">
+      <!-- شريط بحث مدمج + زر تصفية (الاختصارات في ثلاث نقاط) -->
+      <div class="mini-toolbar">
+        <div class="mini-search">
           <span class="s-ic">🔍</span>
+          <input id="st-q" placeholder="بحث في الحركات...">
         </div>
-        <input type="date" class="select" id="st-from" title="من تاريخ" value="${txs.length ? txs[txs.length-1].date : ''}" style="width:135px">
-        <input type="date" class="select" id="st-to" title="إلى تاريخ" value="${todayISO()}" style="width:135px">
-        <select class="select" id="st-type" style="width:145px">
-          <option value="">كل أنواع العمليات</option>
+        <button class="mini-icon-btn" id="st-filter-toggle" title="خيارات التصفية">⚙️</button>
+      </div>
+      <div id="st-filters" class="mini-filters hidden">
+        <input type="date" class="select" id="st-from" title="من تاريخ" value="${txs.length ? txs[txs.length-1].date : ''}">
+        <input type="date" class="select" id="st-to" title="إلى تاريخ" value="${todayISO()}">
+        <select class="select" id="st-type">
+          <option value="">كل الأنواع</option>
           <option value="debit">🔴 مبيعات وديون (عليه)</option>
-          <option value="in">🟢 سندات قبض وسداد (له)</option>
-          <option value="out">🔴 سندات صرف</option>
+          <option value="in">🟢 قبض وسداد (له)</option>
+          <option value="out">🔴 صرف</option>
           <option value="credit">🟢 دائن</option>
           <option value="settle">⚪ تسوية</option>
         </select>
       </div>
 
-      <!-- جدول الحركات المالي المفصل المنظم -->
+      <!-- جدول الحركات بنمط الكشف المرتّب (مربّعات ملوّنة) -->
       <div class="table-wrap">
-        <table class="tbl" id="st-table" style="font-size:13px"></table>
+        <table class="stmt-table" id="st-table" style="min-width:0;font-size:14px"></table>
+      </div>
+
+      <!-- شريط الملخّص السفلي (له / عليه / الرصيد عليه) -->
+      <div class="stmt-footer" id="st-footer" hidden>
+        <div class="sf-tot">
+          <span>له: <span class="lahu amount-display ${state.hideBalance ? 'hide' : ''}" id="sf-for">0</span></span>
+          <span>عليه: <span class="alayh amount-display ${state.hideBalance ? 'hide' : ''}" id="sf-against">0</span></span>
+        </div>
+        <div class="sf-net amount-display ${state.hideBalance ? 'hide' : ''}" id="sf-net">الرصيد عليه: 0</div>
       </div>
 
       <div class="empty" id="st-empty" hidden>
@@ -605,7 +617,7 @@ function renderDetail(container, params, state) {
       return true;
     });
 
-    // تحديث شريط الإحصائيات المختصر
+    // مجاميع القائمة المفلترة (المعروضة)
     let filteredDebit = 0, filteredCredit = 0;
     for (const t of list) {
       const e = txEffect(t, acc.id);
@@ -614,7 +626,24 @@ function renderDetail(container, params, state) {
     }
     const statsBadge = $('#st-stats-badge', container);
     if (statsBadge) {
-      statsBadge.innerHTML = `معروض: <b>${list.length}</b> حركة | إجمالي عليه: <b style="color:var(--danger)">${fmt(filteredDebit)}</b> | إجمالي له: <b style="color:var(--green)">${fmt(filteredCredit)}</b>`;
+      statsBadge.innerHTML = `معروض: <b>${list.length}</b> حركة | عليه: <b style="color:var(--danger)">${fmt(filteredDebit)}</b> | له: <b style="color:var(--green)">${fmt(filteredCredit)}</b>`;
+    }
+
+    // شريط الملخّص السفلي (كما في الكشف: له / عليه / الرصيد عليه)
+    const footer = $('#st-footer', container);
+    const hideCls = state.hideBalance ? 'hide' : '';
+    if (footer && list.length) {
+      footer.hidden = false;
+      $('#sf-for', footer).textContent = fmt(filteredCredit) + ' ' + curSymbol;
+      $('#sf-against', footer).textContent = fmt(filteredDebit) + ' ' + curSymbol;
+      const net = filteredDebit - filteredCredit;
+      const netEl = $('#sf-net', footer);
+      netEl.textContent = net > 0
+        ? `الرصيد عليه: ${fmt(net)} ${curSymbol}`
+        : net < 0 ? `الرصيد له: ${fmt(Math.abs(net))} ${curSymbol}`
+        : `الرصيد خالص (صفر) ${curSymbol}`;
+    } else if (footer) {
+      footer.hidden = true;
     }
 
     const tbl = $('#st-table', container);
@@ -629,84 +658,55 @@ function renderDetail(container, params, state) {
     tbl.innerHTML = `
       <thead>
         <tr>
-          <th style="width:70px;text-align:center"># الرقم</th>
-          <th style="width:115px">التاريخ والوقت</th>
-          <th style="width:125px">نوع العملية</th>
-          <th>البيان والتفاصيل</th>
-          <th style="width:110px;text-align:center">مدين (عليه) 🔴</th>
-          <th style="width:110px;text-align:center">دائن (له) 🟢</th>
-          <th style="width:125px;text-align:center">الرصيد بعد الحركة</th>
-          <th style="width:120px;text-align:center">إجراءات</th>
+          <th style="width:150px">التاريخ</th>
+          <th style="width:130px">المبلغ</th>
+          <th>التفاصيل</th>
+          <th style="width:120px">الرصيد</th>
         </tr>
       </thead>
       <tbody>
         ${list.map((t, idx) => {
-          const op = OP_TYPES[t.type] || { icon: '📄', label: t.type, cls: 'gray' };
           const e = txEffect(t, acc.id);
           const runningAfter = runningMap.get(t.id) ?? 0;
-          const items = Array.isArray(t.invoiceItems) ? t.invoiceItems : [];
-          const hasDiscount = Number(t.discount) > 0;
+          const invItems = Array.isArray(t.invoiceItems) ? t.invoiceItems : [];
           const isPartial = t.paidAmount !== undefined && t.remainingDebt !== undefined;
+          const isDebit = e > 0;
 
-          // تنسيق رقم الفاتورة أو السند التسلسلي النقي
-          const refDisplay = t.ref ? String(t.ref).trim() : String(list.length - idx);
+          const dateTxt = esc((t.date || '').replace(/-/g, '/'));
+          const timeTxt = t.time ? esc(t.time) : '';
+
+          const detailParts = [];
+          if (t.desc) detailParts.push(esc(t.desc));
+          if (invItems.length) detailParts.push(`🛍️ ${invItems.length} أصناف: ${esc(invItems.map(x => `${x.name} (${x.quantity})`).join('، '))}`);
+          if (Number(t.discount) > 0) detailParts.push(`🏷️ خصم -${fmt(t.discount)}`);
+          if (isPartial) detailParts.push(`💵 مسدد ${fmt(t.paidAmount)} | متبقي ${fmt(t.remainingDebt)}`);
 
           return `
             <tr class="row-click" data-open-tx="${t.id}">
-              <td style="text-align:center">
-                <span class="seq-badge">${esc(refDisplay)}</span>
-              </td>
-              <td>
-                <div style="font-weight:700">${esc(t.date || '')}</div>
-                <small class="muted" style="font-size:11px">${esc(t.time || '')}</small>
-              </td>
-              <td>
-                <span class="pill ${op.cls}" style="font-size:11.5px;white-space:nowrap">${op.icon} ${op.label}</span>
-              </td>
-              <td>
-                <div style="font-weight:600;color:var(--text)">${esc(t.desc || '—')}</div>
-                ${items.length > 0 ? `
-                  <div style="margin-top:3px;font-size:11.5px;color:var(--text2);display:flex;align-items:center;gap:4px;flex-wrap:wrap">
-                    <span>🛍️ ${items.length} أصناف:</span>
-                    <span class="muted">${esc(items.map(x => `${x.name} (${x.quantity})`).join('، '))}</span>
-                  </div>
-                ` : ''}
-                <div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap">
-                  ${hasDiscount ? `<span class="tag" style="background:#fef2f2;color:#dc2626;font-size:10.5px">🏷️ خصم: -${fmt(t.discount)}</span>` : ''}
-                  ${isPartial ? `<span class="tag" style="background:#f0fdf4;color:#16a34a;font-size:10.5px">💵 مسدد: ${fmt(t.paidAmount)} | متبقي: ${fmt(t.remainingDebt)}</span>` : ''}
-                </div>
+              <td class="stmt-date">
+                <div>${dateTxt}</div>
+                ${timeTxt ? `<small class="muted" style="font-size:11px;font-weight:400">${timeTxt}</small>` : ''}
               </td>
               <td style="text-align:center">
-                ${e > 0 
-                  ? `<span class="stmt-debit-val amount-display ${state.hideBalance ? 'hide' : ''}">${fmt(Math.abs(t.amount))}</span>` 
-                  : '<span class="muted">—</span>'
-                }
-              </td>
-              <td style="text-align:center">
-                ${e < 0 
-                  ? `<span class="stmt-credit-val amount-display ${state.hideBalance ? 'hide' : ''}">${fmt(Math.abs(t.amount))}</span>` 
-                  : '<span class="muted">—</span>'
-                }
-              </td>
-              <td style="text-align:center">
-                <span class="stmt-running-pill ${runningAfter > 0 ? 'alayh' : runningAfter < 0 ? 'lahu' : 'khalis'} amount-display ${state.hideBalance ? 'hide' : ''}">
-                  ${fmt(Math.abs(runningAfter))}
-                  <small style="font-size:10px">${runningAfter > 0 ? '(عليه)' : runningAfter < 0 ? '(له)' : '(خالص)'}</small>
+                <span class="stmt-amt ${isDebit ? 'debit' : 'credit'} amount-display ${hideCls}">
+                  ${isDebit ? fmt(Math.abs(e)) : fmt(Math.abs(e))}
                 </span>
               </td>
-              <td style="text-align:center" onclick="event.stopPropagation()">
-                <div class="tx-quick-actions" style="justify-content:center">
-                  <button class="tx-quick-btn" data-act-receipt="${t.id}" title="عرض وطباعة السند الفوري">🧾</button>
-                  <button class="tx-quick-btn wa" data-act-wa="${t.id}" title="إرسال إشعار السند للواتساب">🟢</button>
-                  <button class="tx-quick-btn" data-act-edit="${t.id}" title="تعديل العملية">✏️</button>
-                  <button class="tx-quick-btn del" data-act-del="${t.id}" title="حذف العملية">🗑️</button>
-                </div>
+              <td class="stmt-desc">
+                ${detailParts[0] || '—'}
+                ${detailParts.length > 1 ? `<span class="muted-line">${detailParts.slice(1).join(' · ')}</span>` : ''}
+              </td>
+              <td style="text-align:center">
+                <span class="stmt-bal ${runningAfter > 0 ? 'alayh' : runningAfter < 0 ? 'lahu' : 'khalis'} amount-display ${hideCls}">
+                  ${runningAfter < 0 ? '−' : ''}${fmt(Math.abs(runningAfter))}
+                </span>
               </td>
             </tr>
           `;
         }).join('')}
       </tbody>
     `;
+    // ملاحظة: النقر على الصف يُعالج على مستوى الحاوية (فتح معاينة السند) عبر data-open-tx
   }
 
   ['st-q', 'st-from', 'st-to', 'st-type'].forEach(id => {
@@ -716,6 +716,15 @@ function renderDetail(container, params, state) {
       el.addEventListener(ev, renderStatement);
     }
   });
+  // طي/توسيع خيارات التصفية
+  const fToggle = $('#st-filter-toggle', container);
+  const fBox = $('#st-filters', container);
+  if (fToggle && fBox) {
+    fToggle.onclick = () => {
+      fBox.classList.toggle('hidden');
+      fToggle.classList.toggle('active', !fBox.classList.contains('hidden'));
+    };
+  }
   renderStatement();
 
   // معالجة كافة النقرات والأزرار في صفحة تفاصيل الحساب

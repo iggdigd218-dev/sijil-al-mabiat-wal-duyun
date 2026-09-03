@@ -16,13 +16,11 @@ import {
   testSleepModePushNotification,
   registerBackgroundPeriodicSync
 } from '../notifications.js';
-import { getSavedGoogleAccount } from '../drive.js';
 
 export function render(container, params, state) {
   const s = store.settings();
   const me = currentUser();
   const notifPerm = getNotificationPermission();
-  const googleAcc = getSavedGoogleAccount();
 
   // علامة التبويب النشطة
   const activeTab = params?.tab || state?.settingsTab || 'biz';
@@ -90,7 +88,7 @@ export function render(container, params, state) {
 
     <!-- محتوى الفئة النشطة -->
     <div id="settings-tab-content">
-      ${renderTabContent(activeTab, s, me, notifPerm, notifStatusBadge, googleAcc)}
+      ${renderTabContent(activeTab, s, me, notifPerm, notifStatusBadge)}
     </div>
   `;
 
@@ -110,7 +108,7 @@ export function render(container, params, state) {
   bindTabEvents(activeTab, container, params, state, s, me);
 }
 
-function renderTabContent(tab, s, me, notifPerm, notifStatusBadge, googleAcc) {
+function renderTabContent(tab, s, me, notifPerm, notifStatusBadge) {
   if (tab === 'biz') {
     return `
       <div class="grid grid-2">
@@ -317,20 +315,19 @@ function renderTabContent(tab, s, me, notifPerm, notifStatusBadge, googleAcc) {
         </div>
 
         <div class="settings-group">
-          <h4>☁️ النسخ الاحتياطي السحابي</h4>
+          <h4>☁️ المزامنة السحابية التلقائية</h4>
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0">
             <div>
-              <b>حساب Google Drive:</b>
-              <div class="muted">${googleAcc ? esc(googleAcc.email || googleAcc.name) : 'غير متصل'}</div>
+              <b>نسخة سحابية تلقائية بين الأجهزة:</b>
+              <div class="muted">بدون تسجيل دخول — تُرفع في الخلفية وتُسحب آخر نسخة بضغطة واحدة</div>
             </div>
-            <button class="btn ${googleAcc?'soft':'primary'} sm" onclick="location.hash='#/backup'">
-              ${googleAcc ? '⚙️ إدارة النسخ' : '➕ ربط حساب Google'}
+            <button class="btn primary sm" onclick="location.hash='#/backup'">
+              ⚙️ إعداد المزامنة
             </button>
           </div>
           <div class="divider"></div>
           <div class="muted" style="font-size:13px;line-height:1.6">
-            💡 <b>آلية عمل تنبيهات وضع السكون:</b><br>
-            يتم تشغيل محرك المزامنة الخلفي (Service Worker + Periodic Sync) لفحص المخزون والنسخ الاحتياطي، وإرسال تنبيهات شريط النظام وشاشة القفل تلقائياً عند نفاد صنف، أو عند ركود صنف، أو عند فشل المزامنة السحابية.
+            💡 <b>كيف تعمل؟</b> تضع رابط قاعدة بيانات Firebase (مجانية، خطواتها داخل شاشة النسخ الاحتياطي) ورمزاً سحابياً موحّداً على كل أجهزتك، فتتزامن البيانات تلقائياً بدون أي حساب أو تسجيل دخول.
           </div>
         </div>
       </div>

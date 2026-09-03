@@ -30,8 +30,11 @@ function renderList(container, params, state) {
         <button class="btn primary" data-act="new">＋ سند جديد</button>
       </div>
     </div>
-    <div class="toolbar">
-      <div class="search-input"><input id="v-q" placeholder="ابحث برقم السند أو الحساب أو البيان..."><span class="s-ic">🔍</span></div>
+    <div class="mini-toolbar">
+      <div class="mini-search"><span class="s-ic">🔍</span><input id="v-q" placeholder="ابحث برقم السند أو الحساب أو البيان..."></div>
+      <button class="mini-icon-btn" id="v-filter-toggle" title="خيارات التصفية">⚙️</button>
+    </div>
+    <div id="v-filters" class="mini-filters hidden">
       <select class="select" id="v-type"><option value="">كل الأنواع</option>${Object.entries(VOUCHER_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
       <select class="select" id="v-status"><option value="">الكل</option><option value="approved">معتمد</option><option value="draft">مسودة</option><option value="cancelled">ملغى</option></select>
     </div>
@@ -72,6 +75,12 @@ function renderList(container, params, state) {
 
   $('#v-q', container).addEventListener('input', apply);
   ['v-type','v-status'].forEach(id => $('#'+id, container).addEventListener('change', apply));
+  const vFToggle = $('#v-filter-toggle', container);
+  const vFBox = $('#v-filters', container);
+  if (vFToggle && vFBox) vFToggle.onclick = () => {
+    vFBox.classList.toggle('hidden');
+    vFToggle.classList.toggle('active', !vFBox.classList.contains('hidden'));
+  };
   container.addEventListener('click', (e) => {
     const act = e.target.closest('[data-act]');
     if (act && act.dataset.act === 'new') openVoucherForm();

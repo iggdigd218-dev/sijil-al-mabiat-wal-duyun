@@ -40,24 +40,24 @@ export function render(container, params, state) {
     <div class="pos-filter-tags" id="inv-categories-bar" style="margin-bottom:12px"></div>
 
     <!-- شريط الأدوات والبحث والتبديل -->
-    <div class="toolbar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <div class="search-input" style="flex:1;min-width:220px">
+    <div class="mini-toolbar">
+      <div class="mini-search"><span class="s-ic">🔍</span>
         <input id="inventory-q" placeholder="بحث باسم الصنف، الفئة، أو الوحدة...">
-        <span class="s-ic">🔍</span>
       </div>
-      <select class="select" id="inventory-cat-select" style="max-width:180px"><option value="">كل الفئات</option></select>
-      <select class="select" id="inventory-stock" style="max-width:180px">
+      <button class="mini-icon-btn" id="inventory-filter-toggle" title="خيارات التصفية والعرض">⚙️</button>
+    </div>
+    <div id="inventory-filters" class="mini-filters hidden">
+      <select class="select" id="inventory-cat-select"><option value="">كل الفئات</option></select>
+      <select class="select" id="inventory-stock">
         <option value="">كل حالات المخزون</option>
         <option value="low">تحت حد التنبيه ⚠️</option>
         <option value="ok">الكمية كافية ✅</option>
         <option value="out">نفد من المخزون ❌</option>
       </select>
-      
-      <div class="inv-view-switch" title="نمط العرض">
-        <button type="button" class="inv-view-btn active" id="btn-view-hierarchy">📑 هرمي (حسب الفئة)</button>
-        <button type="button" class="inv-view-btn" id="btn-view-table">📊 جدول شامل</button>
+      <div class="inv-view-switch" title="نمط العرض" style="display:flex">
+        <button type="button" class="inv-view-btn active" id="btn-view-hierarchy">📑 هرمي</button>
+        <button type="button" class="inv-view-btn" id="btn-view-table">📊 جدول</button>
       </div>
-
       <button type="button" class="btn ghost sm" id="inv-toggle-all-collapse" title="طي وتوسيع كل الأقسام" style="white-space:nowrap">⯆ طي/توسيع الكل</button>
     </div>
 
@@ -498,6 +498,12 @@ export function render(container, params, state) {
 
   // أحداث البحث والتصفية
   $('#inventory-q', container).addEventListener('input', apply);
+  const invFToggle = $('#inventory-filter-toggle', container);
+  const invFBox = $('#inventory-filters', container);
+  if (invFToggle && invFBox) invFToggle.onclick = () => {
+    invFBox.classList.toggle('hidden');
+    invFToggle.classList.toggle('active', !invFBox.classList.contains('hidden'));
+  };
   $('#inventory-stock', container).addEventListener('change', apply);
   $('#inventory-cat-select', container).addEventListener('change', (e) => {
     activeCategory = e.target.value || 'all';

@@ -25,9 +25,15 @@ export function render(container, params, state) {
     <div class="view-head">
       <div><div class="view-title">التقارير 📈</div><small>تقارير احترافية قابلة للتصدير PDF وExcel والمشاركة</small></div>
     </div>
-    <div class="toolbar" style="flex-wrap:wrap">
-      <input type="date" class="select" id="r-from" value="${daysAgo(90)}">
-      <input type="date" class="select" id="r-to" value="${todayISO()}">
+    <div class="mini-toolbar">
+      <div class="mini-search"><span class="s-ic">📅</span>
+        <input type="date" class="select" id="r-from" value="${daysAgo(90)}" style="border:none;background:transparent;color:inherit;height:100%">
+        <span class="muted" style="font-size:12px">إلى</span>
+        <input type="date" class="select" id="r-to" value="${todayISO()}" style="border:none;background:transparent;color:inherit;height:100%">
+      </div>
+      <button class="mini-icon-btn" id="r-filter-toggle" title="فلاتر التقارير">⚙️</button>
+    </div>
+    <div id="r-filters" class="mini-filters hidden">
       <select class="select" id="r-currency"><option value="">كل العملات</option>${store.getCurrencies().map(c=>`<option value="${c.code}">${esc(c.name)}</option>`).join('')}</select>
       <select class="select" id="r-account"><option value="">كل الحسابات</option>${store.accounts(true).map(a=>`<option value="${a.id}">${ACCOUNT_KINDS[a.kind].icon} ${esc(a.name)}</option>`).join('')}</select>
       <button class="btn soft" id="r-run">توليد التقرير</button>
@@ -45,6 +51,12 @@ export function render(container, params, state) {
   });
   $('#r-run', container).addEventListener('click', run);
   ['r-from','r-to','r-currency','r-account'].forEach(id => $('#'+id, container).addEventListener('change', run));
+  const rFToggle = $('#r-filter-toggle', container);
+  const rFBox = $('#r-filters', container);
+  if (rFToggle && rFBox) rFToggle.onclick = () => {
+    rFBox.classList.toggle('hidden');
+    rFToggle.classList.toggle('active', !rFBox.classList.contains('hidden'));
+  };
 
   function run() {
     const from = $('#r-from', container).value;
