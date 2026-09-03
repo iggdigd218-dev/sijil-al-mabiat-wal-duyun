@@ -35,7 +35,11 @@ jobs:
         run: flutter pub get
 
       - name: Build Android APK
-        run: flutter build apk --release
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g"
+          # إتاحة ذاكرة كافية لـ Gradle/Kotlin لتفادي GC thrashing
+          JAVA_OPTS: "-Xmx3g"
+        run: flutter build apk --release --no-shrink
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
