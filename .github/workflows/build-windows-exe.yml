@@ -24,11 +24,16 @@ jobs:
           flutter-version: '3.35.x'
           cache: true
 
-      - name: Enable Windows desktop & prepare platform
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate fresh Windows platform (match installed Visual Studio)
         run: |
-          flutter config --enable-windows-desktop
-          flutter pub get
-          if (!(Test-Path "windows")) { flutter create --platforms=windows . }
+          Remove-Item -Recurse -Force windows -ErrorAction SilentlyContinue
+          flutter create --platforms=windows --project-name nexora_app .
 
       - name: Analyze (non-blocking)
         run: flutter analyze || true
