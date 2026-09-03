@@ -31,6 +31,8 @@ const _orgFields = <(String, String, IconData, TextInputType?, int)>[
   ('managerName', 'اسم المسؤول (يظهر على السندات)', Icons.badge_outlined, null,
       1),
   ('voucherFooter', 'تذييل السند', Icons.notes_outlined, null, 2),
+  ('defaultVoucherNotes', 'ملاحظات وشروط افتراضية في السند', Icons.rule_outlined,
+      null, 2),
 ];
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
@@ -448,6 +450,71 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         await ref
                             .read(repoProvider)
                             .setSetting('autoSendWhatsapp', v ? '1' : '0');
+                        bump(ref);
+                      },
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.business_center_outlined),
+                      title: const Text('تطبيق الواتساب المستخدم'),
+                      subtitle: const Text('لفتح المحادثة تلقائياً بالطريقة الصحيحة'),
+                      trailing: DropdownButton<String>(
+                        value: st['whatsappType'] ?? 'regular',
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(value: 'regular', child: Text('واتساب ماسنجر')),
+                          DropdownMenuItem(value: 'business', child: Text('واتساب للأعمال')),
+                          DropdownMenuItem(value: 'web', child: Text('رابط مباشر wa.me')),
+                        ],
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          await ref.read(repoProvider).setSetting('whatsappType', v);
+                          bump(ref);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                _Collapsible(
+                  title: 'المبيعات والسندات',
+                  icon: Icons.receipt_long_outlined,
+                  initiallyExpanded: true,
+                  children: [
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.swap_horiz),
+                      title: const Text('نوع العملية الافتراضي'),
+                      subtitle: const Text('يُختار تلقائياً عند فتح شاشة إضافة عملية'),
+                      trailing: DropdownButton<String>(
+                        value: st['defaultOp'] ?? 'inflow',
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(value: 'inflow', child: Text('قبض (مبيعة/دفعة)')),
+                          DropdownMenuItem(value: 'debit', child: Text('عليه (دين آجل)')),
+                          DropdownMenuItem(value: 'outflow', child: Text('صرف')),
+                          DropdownMenuItem(value: 'credit', child: Text('له (دائن)')),
+                          DropdownMenuItem(value: 'revenue', child: Text('إيراد')),
+                          DropdownMenuItem(value: 'expense', child: Text('مصروف')),
+                        ],
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          await ref.read(repoProvider).setSetting('defaultOp', v);
+                          bump(ref);
+                        },
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(Icons.inventory_2_outlined),
+                      title: const Text('تنبيه انخفاض المخزون'),
+                      subtitle: const Text('تحذير عند بيع صنف وصل لحد إعادة الطلب'),
+                      value: (st['warnLowStock'] ?? '1') == '1',
+                      onChanged: (v) async {
+                        await ref
+                            .read(repoProvider)
+                            .setSetting('warnLowStock', v ? '1' : '0');
                         bump(ref);
                       },
                     ),

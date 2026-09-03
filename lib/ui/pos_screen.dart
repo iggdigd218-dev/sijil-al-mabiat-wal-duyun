@@ -771,6 +771,23 @@ class _PosScreenState extends ConsumerState<PosScreen>
       // تحديث البيانات
       bump(ref);
 
+      if (mounted && (await repo.settings())['warnLowStock'] != '0') {
+        final low = <String>[];
+        for (final line in lines) {
+          if (line.itemId == null) continue;
+          final it = await repo.item(line.itemId!);
+          if (it != null &&
+              it.minQuantity > 0 &&
+              it.quantity <= it.minQuantity) {
+            low.add('${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})');
+          }
+        }
+        if (low.isNotEmpty && mounted) {
+          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب:\n${low.join('، ')}',
+              error: true);
+        }
+      }
+
       if (mounted) {
         Navigator.pop(sheetCtx); // إغلاق النموذج
         _showSuccessDialog(txId, refNum, lines);
