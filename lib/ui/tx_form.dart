@@ -159,9 +159,9 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   bool get _isTransfer => _type == OpType.transfer;
 
-  /// البيع الآجل يظهر كعملية مدين؛ تفاصيل الأصناف تبقى اختيارية حتى لا
-  /// تتعطل العمليات القديمة التي سُجلت بمبلغ ووصف فقط.
-  bool get _hasInvoiceDetails => _type == OpType.debit;
+  /// تفاصيل فاتورة المبيعات (الأصناف) تظهر للبيع النقدي (قبض) والآجل (عليه).
+  bool get _hasInvoiceDetails =>
+      _type == OpType.debit || _type == OpType.inflow;
 
   double get _invoiceTotal =>
       _invoiceLines.fold<double>(0, (sum, line) => sum + line.total);
@@ -249,10 +249,25 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     }
 
-    final savedId = await repo.saveTx(
-      tx,
-      items: _hasInvoiceDetails ? _invoiceLines : const [],
-    );
+    final saleLines = _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
+    final savedId = await repo.saveTx(tx, items: saleLines);
+    // خصم الكميات من المخزون عند البيع (نقدي أو آجل).
+    if (_type == OpType.inflow || _type == OpType.debit) {
+      final now = DateTime.now();
+      for (final line in saleLines) {
+        if (line.itemId == null) continue;
+        try {
+          await repo.addStockMove(StockMove(
+            itemId: line.itemId!,
+            quantity: line.quantity,
+            kind: StockKind.sale,
+            date: now,
+            createdAt: now,
+            notes: 'مبيع عملية #$savedId',
+          ));
+        } catch (_) {/* لا نفشل الحفظ بسبب حركة مخزون */}
+      }
+    }
     final saved = tx.copyWith(id: savedId);
     if (!mounted) return;
 
@@ -366,7 +381,8 @@ class _TxFormState extends ConsumerState<TxForm> {
               key: _formKey,
               child: ListView(
                 controller: scroll,
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
+                padding: EdgeInsets.fromLTRB(
+                    18, 16, 18, 24 + MediaQuery.of(context).viewInsets.bottom),
                 children: [
                   _typeGrid(),
                   const SizedBox(height: 18),

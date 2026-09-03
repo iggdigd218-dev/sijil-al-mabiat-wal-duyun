@@ -9,6 +9,7 @@ import 'data/repository.dart';
 import 'data/providers.dart';
 import 'ui/home_shell.dart';
 import 'ui/lock_gate.dart';
+import 'ui/splash.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,7 +65,7 @@ class NexoraApp extends ConsumerWidget {
         textDirection: TextDirection.rtl,
         child: child ?? const SizedBox.shrink(),
       ),
-      home: const LockGate(child: HomeShell()),
+      home: const SplashScreen(),
     );
   }
 }

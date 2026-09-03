@@ -162,7 +162,11 @@ class CloudSync {
       'sizeKb': '$kb KB',
       'payload': payload,
     };
-    await _requestJson(target, method: 'PUT', body: rec);
+    try {
+      await _requestJson(target, method: 'PUT', body: rec);
+    } catch (e) {
+      return {'ok': false, 'error': 'فشل الرفع إلى السحابة: $e'};
+    }
     await repo.setSetting('lastCloudSync', now.toLocal().toString());
     return {
       'ok': true,
@@ -178,13 +182,28 @@ class CloudSync {
       return {'ok': false, 'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.'};
     }
     if (c.code.isEmpty) return {'ok': false, 'error': 'لا يوجد رمز سحابي.'};
-    final rec = await _requestJson(targetFor(c.backendUrl, c.code));
-    final payload = rec?['payload'] as Map<String, dynamic>?;
+    Map<String, dynamic>? rec;
+    try {
+      rec = await _requestJson(targetFor(c.backendUrl, c.code));
+    } catch (e) {
+      return {'ok': false, 'error': 'تعذّر الاتصال بالسحابة: $e'};
+    }
+    final payload = rec?['payload'];
     if (payload == null) return {'ok': true, 'exists': false};
+    // تحقق صارم: يجب أن تكون الحمولة خريطة فيها بيانات مفهومة.
+    if (payload is! Map) {
+      return {'ok': false, 'error': 'محتوى النسخة السحابية غير صالح.'};
+    }
+    final map = Map<String, Object?>.from(payload as Map);
+    final data = map['data'];
+    final hasTables = data is Map && data.isNotEmpty;
+    if (!hasTables) {
+      return {'ok': false, 'error': 'النسخة السحابية فارغة أو تالفة، لم يُمسّ شيء.'};
+    }
     return {
       'ok': true,
       'exists': true,
-      'payload': payload,
+      'payload': map,
       'date': rec?['updatedAtLocal'] ?? '',
       'sizeKb': rec?['sizeKb'] ?? '',
     };

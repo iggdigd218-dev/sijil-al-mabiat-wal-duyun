@@ -119,6 +119,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     try {
       final payload = r['payload'] as Map<String, Object?>;
       final count = await repo.importAll(payload);
+      bump(ref);
       if (mounted) showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
     } catch (e) {
       if (mounted) showSnack(context, 'تعذّرت الاستعادة: $e', error: true);

@@ -42,6 +42,7 @@ class Repo {
   }
 
   Future<int> saveAccount(Account a) async {
+    await _ensureCan(a.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
     if (a.id == null) {
       final id = await db.insert('accounts', a.toMap());
@@ -64,6 +65,7 @@ class Repo {
 
   /// حذف نهائي مع نسخة في سلة المحذوفات للاستعادة.
   Future<void> deleteAccount(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     final a = await account(id);
     if (a != null) {
@@ -118,6 +120,7 @@ class Repo {
   /// يحفظ العملية وسطور الفاتورة معًا. تمرير [items] (حتى لو كانت فارغة)
   /// يستبدل السطور القديمة، أما null فيُبقيها كما هي عند تحديث الصورة.
   Future<int> saveTx(Tx t, {List<InvoiceLine>? items}) async {
+    await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
     late final int id;
     await db.transaction((txn) async {
@@ -165,6 +168,7 @@ class Repo {
   }
 
   Future<void> deleteTx(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     await db.transaction((txn) async {
       final rows =
@@ -403,8 +407,37 @@ class Repo {
     );
   }
 
+  /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.
+  Future<void> _ensureCan(String perm) async {
+    final me = await currentUser();
+    if (me == null) return; // قبل وجود مستخدمين (أول تشغيل)
+    if (!me.can(perm)) {
+      throw StateError('ليس لديك صلاحية لهذا الإجراء.');
+    }
+  }
+
+  /// حماية المدير الوحيد.
+  Future<void> _guardSingleAdmin(AppUser? existing, AppUser updated) async {
+    if (existing != null &&
+        existing.role == UserRole.admin &&
+        updated.role != UserRole.admin) {
+      final all = await users();
+      final admins = all.where((u) => u.role == UserRole.admin).toList();
+      if (admins.length <= 1) {
+        throw StateError('لا يمكن إزالة صلاحية المدير الوحيد.');
+      }
+    }
+  }
+
   Future<int> saveUser(AppUser u) async {
+    await _ensureCan('manage_users');
     final db = await _db;
+    AppUser? existing;
+    if (u.id != null) {
+      final r = await db.query('users', where: 'id = ?', whereArgs: [u.id]);
+      if (r.isNotEmpty) existing = AppUser.fromMap(r.first);
+    }
+    await _guardSingleAdmin(existing, u);
     if (u.id == null) {
       final id = await db.insert('users', u.toMap());
       await logActivity('إضافة مستخدم: ${u.name}', 'user', '$id');
@@ -416,7 +449,22 @@ class Repo {
   }
 
   Future<void> deleteUser(int id) async {
+    await _ensureCan('manage_users');
     final db = await _db;
+    final r = await db.query('users', where: 'id = ?', whereArgs: [id]);
+    if (r.isNotEmpty) {
+      final victim = AppUser.fromMap(r.first);
+      if (victim.role == UserRole.admin) {
+        final all = await users();
+        if (all.where((u) => u.role == UserRole.admin).length <= 1) {
+          throw StateError('لا يمكن حذف المدير الوحيد.');
+        }
+      }
+      final me = await currentUser();
+      if (me?.id == id) {
+        throw StateError('لا يمكن حذف الحساب المستخدم حاليًا.');
+      }
+    }
     await db.delete('users', where: 'id = ?', whereArgs: [id]);
     await logActivity('حذف مستخدم', 'user', '$id');
   }
@@ -644,6 +692,7 @@ class Repo {
   /// [withImages] يضمّن صور العمليات والحسابات والأصناف مرمّزة base64 داخل
   /// الملف، فلا تضيع عند النقل إلى هاتف آخر.
   Future<Map<String, Object?>> exportAll({bool withImages = true}) async {
+    await _ensureCan('export');
     final db = await _db;
     final data = <String, Object?>{};
     for (final t in backupTables) {
@@ -726,6 +775,7 @@ class Repo {
   /// اختلاف ترتيب الجداول لا يؤثر؛ أما الصف غير الصالح أو المرجع المفقود
   /// فيفشل العملية كلها ويعيد SQLite الحالة السابقة بدل استعادة جزئية صامتة.
   Future<int> importAll(Map<String, Object?> backup) async {
+    await _ensureCan('manage_backup');
     final db = await _db;
     final data = _normalize(backup);
     if (data.isEmpty) {
@@ -1180,6 +1230,7 @@ class Repo {
   }
 
   Future<int> saveItem(Item it) async {
+    await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
     if (it.id == null) {
       final id = await db.insert('items', it.toMap());
@@ -1193,6 +1244,7 @@ class Repo {
 
   /// حذف صنف إلى سلة المهملات مع حركاته.
   Future<void> deleteItem(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     final r = await db.query('items', where: 'id = ?', whereArgs: [id]);
     if (r.isNotEmpty) {

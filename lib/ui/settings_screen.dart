@@ -222,11 +222,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 18),
-                const SectionTitle('بيانات المؤسسة'),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(children: [
+                _Collapsible(
+                  title: 'بيانات المؤسسة',
+                  icon: Icons.business_outlined,
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(children: [
                       for (final f in _orgFields)
                         _Field(
                           controller: _ctrls[f.$1]!,
@@ -319,8 +322,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ البيانات'),
                         ),
                       ),
-                    ]),
-                  ),
+                        ]),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 18),
                 const SectionTitle('المظهر'),

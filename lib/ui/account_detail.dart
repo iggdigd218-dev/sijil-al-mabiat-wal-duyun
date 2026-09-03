@@ -8,6 +8,7 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_form.dart';
+import 'tx_form.dart';
 import 'widgets.dart';
 
 /// كشف حساب: الرصيد والسجل الزمني وأدوات التواصل.
@@ -229,6 +230,14 @@ class AccountDetailScreen extends ConsumerWidget {
                   ),
                 ),
             ],
+          ),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () async {
+              await openTxForm(context, ref, presetAccountId: accountId);
+              bump(ref);
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('عملية جديدة'),
           ),
         );
       },
