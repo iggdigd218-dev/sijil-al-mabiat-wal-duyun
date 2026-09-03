@@ -62,10 +62,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     for (final f in _orgFields) {
       _ctrls[f.$1] = TextEditingController(text: st[f.$1] ?? '');
     }
-    for (final k in VoucherKind.values) {
-      _ctrls['prefix_${k.code}'] =
-          TextEditingController(text: st['prefix_${k.code}'] ?? k.prefix);
-    }
     _ctrls['labelOweUs'] =
         TextEditingController(text: st['labelOweUs'] ?? 'عليه');
     _ctrls['labelOweThem'] =
@@ -211,7 +207,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(width: 12),
                         const Expanded(
                           child: Text(
-                            'جميع إعدادات Nexora في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر، الأمان وترقيم السندات.',
+                            'جميع إعدادات النظام في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر والأمان. الترقيم التلقائي رقمي بحت لكل العمليات والسندات.',
                             style: TextStyle(
                               fontSize: 13,
                               height: 1.6,
@@ -388,10 +384,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ]),
                 ),
                 const SizedBox(height: 18),
-                const SectionTitle('المحاسبة'),
-                Card(
-                  child: Column(children: [
+                _Collapsible(
+                  title: 'العملة والترقيم',
+                  icon: Icons.currency_exchange,
+                  children: [
                     ListTile(
+                      contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.currency_exchange),
                       title: const Text('العملة الافتراضية'),
                       subtitle: Text(st['defaultCurrency'] ?? 'YER'),
@@ -419,46 +417,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     const Divider(height: 1),
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
-                      child: Column(children: [
-                        _Field(
-                          controller: _ctrls['labelOweUs']!,
-                          label: 'تسمية الرصيد الموجب',
-                          icon: Icons.trending_up,
-                          hint: 'الافتراضي: عليه (مستحق لنا)',
-                        ),
-                        _Field(
-                          controller: _ctrls['labelOweThem']!,
-                          label: 'تسمية الرصيد السالب',
-                          icon: Icons.trending_down,
-                          hint: 'الافتراضي: له (مستحق منا)',
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(children: [
+                        const Icon(Icons.numbers, color: AppColors.primary),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'ترقيم تلقائي رقمي بحت لكل العمليات والسندات (١، ٢، ٣…) بدون أحرف، يُزاد آلياً.',
+                            style: TextStyle(
+                                fontSize: 13, height: 1.6, fontWeight: FontWeight.w600),
+                          ),
                         ),
                       ]),
                     ),
-                  ]),
+                  ],
                 ),
-                const SizedBox(height: 18),
-                const SectionTitle('ترقيم السندات'),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(children: [
-                      for (final k in VoucherKind.values)
-                        _Field(
-                          controller: _ctrls['prefix_${k.code}']!,
-                          label: 'بادئة ${k.label}',
-                          icon: Icons.tag,
-                          hint:
-                              'العدّاد الحالي: ${st['counter_${k.code}'] ?? '0'}',
-                        ),
-                    ]),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                const SectionTitle('الأمان'),
-                Card(
-                  child: Column(children: [
+                _Collapsible(
+                  title: 'المشاركة والواتساب',
+                  icon: Icons.send,
+                  initiallyExpanded: true,
+                  children: [
                     SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(Icons.send),
+                      title: const Text('إرسال السند عبر واتساب تلقائياً بعد الحفظ'),
+                      subtitle: const Text(
+                          'عند تسجيل عملية يُفتح واتساب العميل مع صورة السند وتفاصيله. ويمكن إرساله يدوياً من أي عملية.'),
+                      value: (st['autoSendWhatsapp'] ?? '1') != '0',
+                      onChanged: (v) async {
+                        await ref
+                            .read(repoProvider)
+                            .setSetting('autoSendWhatsapp', v ? '1' : '0');
+                        bump(ref);
+                      },
+                    ),
+                  ],
+                ),
+                _Collapsible(
+                  title: 'الأمان والخصوصية',
+                  icon: Icons.lock_outline,
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
                       secondary: const Icon(Icons.fingerprint),
                       title: const Text('فتح التطبيق بالبصمة'),
                       subtitle: Text(_bioSupported
@@ -469,7 +469,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           ? null
                           : (v) async {
                               if (v) {
-                                // نتحقق فورًا حتى لا يُقفل المستخدم خارج تطبيقه.
                                 final ok = await Security.authenticate(
                                     reason: 'أكّد بصمتك لتفعيل القفل');
                                 if (!ok) {
@@ -487,6 +486,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     const Divider(height: 1),
                     SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
                       secondary: const Icon(Icons.lock_clock_outlined),
                       title: const Text('القفل عند العودة للتطبيق'),
                       subtitle: const Text('يُطلب التحقق بعد كل تصغير'),
@@ -500,21 +500,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               bump(ref);
                             },
                     ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      secondary: const Icon(Icons.lock_outline),
-                      title: const Text('كلمة مرور لتبديل المستخدم'),
-                      subtitle: const Text(
-                          'تُضبط لكل مستخدم من شاشة المستخدمين والصلاحيات'),
-                      value: (st['userPassword'] ?? '0') == '1',
-                      onChanged: (v) async {
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('userPassword', v ? '1' : '0');
-                        bump(ref);
-                      },
-                    ),
-                  ]),
+                  ],
                 ),
                 const SizedBox(height: 18),
                 Card(
@@ -617,4 +603,43 @@ class _Field extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// قسم إعدادات قابل للطيّ برمز يميّزه — يقابل «الطي في أيقونات حسب النوع».
+class _Collapsible extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+  const _Collapsible({
+    required this.title,
+    required this.icon,
+    required this.children,
+    this.initiallyExpanded = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borderOf(context)),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: initiallyExpanded,
+          shape: const RoundedRectangleBorder(),
+          collapsedShape: const RoundedRectangleBorder(),
+          leading: Icon(icon, color: AppColors.primaryOf(context)),
+          title: Text(title,
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          children: children,
+        ),
+      ),
+    );
+  }
 }
