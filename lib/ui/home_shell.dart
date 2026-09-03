@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
+import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_form.dart';
