@@ -28,11 +28,14 @@ class TxShare {
     required Tx tx,
     required Account? account,
   }) async {
-    final settings = await repo.settings();
-    final currencies = await repo.currencies();
-    final items = tx.id == null
-        ? const <InvoiceLine>[]
-        : await repo.transactionItems(tx.id!);
+    final settingsFuture = repo.settings();
+    final currenciesFuture = repo.currencies();
+    final itemsFuture = tx.id == null
+        ? Future<List<InvoiceLine>>.value(const <InvoiceLine>[])
+        : repo.transactionItems(tx.id!);
+    final settings = await settingsFuture;
+    final currencies = await currenciesFuture;
+    final items = await itemsFuture;
     final cur = currencies.firstWhere(
       (c) => c.code == tx.currency,
       orElse: () => kDefaultCurrencies.first,
@@ -53,10 +56,11 @@ class TxShare {
       balanceAfter: after,
       settings: settings,
       items: items,
-    ));
+    )).timeout(const Duration(seconds: 20));
 
     if (tx.id != null) {
-      await repo.saveTx(tx.copyWith(image: path));
+      await repo.saveTx(tx.copyWith(image: path))
+          .timeout(const Duration(seconds: 10));
     }
     return path;
   }

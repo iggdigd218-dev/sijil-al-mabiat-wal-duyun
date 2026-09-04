@@ -199,13 +199,20 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   final picture = recorder.endRecording();
   final img = await picture.toImage(w.toInt(), height.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-  final data = bytes!.buffer.asUint8List();
+  if (bytes == null || bytes.lengthInBytes == 0) {
+    throw StateError('تعذّر تحويل السند إلى صورة PNG');
+  }
+  final data = bytes.buffer.asUint8List();
 
   final dir = await getTemporaryDirectory();
-  final shared = Directory('${dir.path}/receipts')..createSync(recursive: true);
+  final shared = Directory('${dir.path}/receipts');
+  await shared.create(recursive: true);
   final stamp = DateTime.now().millisecondsSinceEpoch;
   final file = File('${shared.path}/receipt-$stamp.png');
   await file.writeAsBytes(data, flush: true);
+  if (!await file.exists() || await file.length() == 0) {
+    throw StateError('تعذّر حفظ ملف السند');
+  }
   return file.path;
 }
 
