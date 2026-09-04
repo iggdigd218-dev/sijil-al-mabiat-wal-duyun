@@ -1,21 +1,34 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ============ Flutter ============
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.embedding.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-dontwarn io.flutter.embedding.**
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ============ الإضافات المستدعاة عبر الانعكاس ============
+# هذه الأصناف تُسجَّل ديناميكيًا، وحذفها يسبب انهيارًا وقت التشغيل
+-keep class co.quis.flutter_contacts.** { *; }
+-keep class dev.flutter.plugins.** { *; }
+-keep class com.crazecoder.openfile.** { *; }
+-keep class io.flutter.plugins.imagepicker.** { *; }
+-keep class dev.fluttercommunity.plus.share.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ============ البصمة / local_auth ============
+-keep class androidx.biometric.** { *; }
+-keep class androidx.fragment.app.** { *; }
+-keep class io.flutter.plugins.localauth.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ============ جسور الكود الأصلي ============
+-keep class com.tadween.tadween_app.** { *; }
+-keep class android.accounts.** { *; }
+
+# ============ sqflite ============
+-keep class com.tekartik.sqflite.** { *; }
+
+# ============ تحذيرات غير مؤثرة ============
+-dontwarn javax.annotation.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn com.google.android.play.core.**
+
+# الحفاظ على أسماء الأسطر لتتبّع الأعطال
+-keepattributes SourceFile,LineNumberTable,*Annotation*,Signature

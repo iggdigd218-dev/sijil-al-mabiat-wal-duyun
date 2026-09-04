@@ -1,18 +1,13 @@
-# التبعيات
-node_modules/
-
-# مخرجات البناء
-www/
-android/app/build/
-android/build/
-android/.gradle/
-android/capacitor-cordova-android-plugins/build/
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
 android/local.properties
-*.keystore
+android/key.properties
+android/.gradle/
+android/app/src/main/java/io/flutter/plugins/
 *.jks
-
-# متفرقات
-package-lock.json
-.DS_Store
-*.log
-flutter-app/
+*.keystore
+*.apk
