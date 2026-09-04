@@ -627,7 +627,11 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
     preview.innerHTML += `<span style="display:inline-block;margin:4px;position:relative"><img src="${esc(data)}" alt="مرفق" style="width:52px;height:52px;object-fit:cover;border-radius:8px"></span>`;
   }
 
-  $('#tx-save', m.overlay).onclick = async () => {
+  const txSaveButton = $('#tx-save', m.overlay);
+  txSaveButton.onclick = async () => {
+    if (txSaveButton.disabled) return;
+    txSaveButton.disabled = true;
+    try {
     const d = readForm('#tx-form', m.overlay);
     const isSales = isSalesModeActive();
     const { cur, subtotal, discountAmount, discountType, discountRate, netTotal } = getSalesTotals();
@@ -768,9 +772,15 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
 
     // إرسال إشعار كل عملية مرتبطة بأي حساب يملك رقماً، سواء كانت إضافة أو تعديلاً.
     // إعداد autoSendNotification يبقى هو مفتاح التحكم العام بالإرسال التلقائي.
-    const shared = acc && (acc.whatsapp || acc.phone)
-      ? await shareTransactionReceipt(primaryTx, { automatic: true })
-      : true;
+    // لا نؤخر إغلاق نموذج الحفظ بانتظار إنشاء/مشاركة صورة السند؛
+    // المشاركة إجراء جانبي قد ينتظر اختيار المستخدم من منتقي النظام.
+    const notificationPromise = acc && (acc.whatsapp || acc.phone)
+      ? shareTransactionReceipt(primaryTx, { automatic: true }).catch((err) => {
+        console.warn('تعذّر إرسال إشعار العملية تلقائياً:', err);
+        return false;
+      })
+      : Promise.resolve(true);
+    const shared = true;
 
     toast(isPartial
       ? 'تم اعتماد الفاتورة كدفع جزئي وتحديث الحسابات بنجاح ⚖️✅'
@@ -779,6 +789,13 @@ export function openTxForm(existing, presetAccountId, isCopy, presetMode = null)
         : (t.id ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅')));
     m.close();
     go('transactions', {});
+    void notificationPromise;
+    } catch (err) {
+      console.error('تعذّر حفظ العملية:', err);
+      toastErr('تعذّر حفظ العملية. تحقق من البيانات وحاول مرة أخرى');
+    } finally {
+      txSaveButton.disabled = false;
+    }
   };
 
   async function editInvoiceLine(index = null) {

@@ -786,7 +786,9 @@ function renderPOSSale(container, cur, items, customers) {
       openInvoicePrintModal(primaryTx, customer, grandTotal, paidAmount, remainingDebt);
     } else if (afterAction === 'whatsapp') {
       if (customer && (customer.whatsapp || customer.phone)) {
-        await dispatchTransactionNotification(primaryTx, { forceChannel: 'whatsapp', automatic: false });
+        void dispatchTransactionNotification(primaryTx, { forceChannel: 'whatsapp', automatic: false }).catch((err) => {
+          console.warn('تعذّر إرسال الفاتورة عبر واتساب:', err);
+        });
       } else {
         openInvoicePrintModal(primaryTx, customer, grandTotal, paidAmount, remainingDebt);
         toast('لم يتم العثور على رقم هاتف للعميل، فُتحت المعاينة والطباعة', 'warn');
@@ -794,7 +796,9 @@ function renderPOSSale(container, cur, items, customers) {
     } else {
       // حفظ عادي: إذا تم تفعيل الإرسال التلقائي في الإعدادات ولديه رقم
       if (customer && (customer.whatsapp || customer.phone)) {
-        await dispatchTransactionNotification(primaryTx, { automatic: true });
+        void dispatchTransactionNotification(primaryTx, { automatic: true }).catch((err) => {
+          console.warn('تعذّر إرسال الفاتورة تلقائياً:', err);
+        });
       }
     }
 
@@ -812,9 +816,24 @@ function renderPOSSale(container, cur, items, customers) {
     updateCustomerStatus();
   }
 
-  $('#pos-submit-btn', container).onclick = () => submitSale('none');
-  $('#pos-save-print-btn', container).onclick = () => submitSale('print');
-  $('#pos-save-wa-btn', container).onclick = () => submitSale('whatsapp');
+  const bindSubmit = (selector, action) => {
+    const button = $(selector, container);
+    button.onclick = async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        await submitSale(action);
+      } catch (err) {
+        console.error('تعذّر حفظ فاتورة المبيعات:', err);
+        toastErr('تعذّر حفظ الفاتورة. تحقق من البيانات وحاول مرة أخرى');
+      } finally {
+        button.disabled = false;
+      }
+    };
+  };
+  bindSubmit('#pos-submit-btn', 'none');
+  bindSubmit('#pos-save-print-btn', 'print');
+  bindSubmit('#pos-save-wa-btn', 'whatsapp');
 
   renderProducts();
   renderCart();
