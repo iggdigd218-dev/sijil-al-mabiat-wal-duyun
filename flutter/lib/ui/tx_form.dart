@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -234,33 +235,26 @@ class _TxFormState extends ConsumerState<TxForm> {
       final saved = tx.copyWith(id: savedId);
       if (!mounted) return;
 
-    // نُنشئ صورة الإيصال ونرسلها قبل إغلاق النموذج حتى لا نستخدم
-    // WidgetRef أو BuildContext بعد إزالة نافذة العملية من الشجرة.
-    // هذا مهم خصوصًا للبيع الآجل أو الجزئي الذي يُرسل إشعاره تلقائيًا.
+      // لا نؤخر إغلاق نموذج الحفظ بانتظار توليد/إرسال صورة السند.
+      // الحفظ الأساسي اكتمل، أما الإرسال فهو إجراء جانبي يعمل في الخلفية.
       if (!_isTransfer && _accountId != null) {
         final acc = _account;
         if (_autoSend) {
-          try {
-            await TxShare.sendNow(context, ref,
-                tx: saved, account: acc, silentIfNoPhone: false)
-                .timeout(const Duration(seconds: 15));
-          } catch (e) {
-            if (mounted) {
-              showSnack(context, 'تم حفظ العملية لكن تعذّر إرسال السند: $e',
-                  error: true);
-            }
-          }
+          unawaited(TxShare.sendNow(
+            context,
+            ref,
+            tx: saved,
+            account: acc,
+            silentIfNoPhone: false,
+          ).timeout(const Duration(seconds: 15)).catchError((e) {
+            debugPrint('تعذّر إرسال سند العملية بعد الحفظ: $e');
+          }));
         } else {
-          try {
-            await TxShare.generate(repo: repo, tx: saved, account: acc);
-            bump(ref);
-          } catch (e) {
-            // فشل توليد الصورة لا يبطل العملية المحفوظة، لكنه لا يُخفى.
-            if (mounted) {
-              showSnack(context, 'تم حفظ العملية لكن تعذّر توليد صورة السند: $e',
-                  error: true);
-            }
-          }
+          unawaited(TxShare.generate(repo: repo, tx: saved, account: acc)
+              .then((_) => bump(ref))
+              .catchError((e) {
+            debugPrint('تعذّر توليد صورة سند العملية بعد الحفظ: $e');
+          }));
         }
       }
 
