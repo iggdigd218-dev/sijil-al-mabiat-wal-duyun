@@ -8,7 +8,7 @@ import 'sync_queue.dart';
 import 'workspace_service.dart';
 
 class SyncRecorder {
-  final Database db;
+  final DatabaseExecutor db;
   final String deviceId;
   final int? userId;
   String workspaceId;
@@ -20,10 +20,10 @@ class SyncRecorder {
     this.userId,
   });
 
-  static Future<SyncRecorder> forTransaction(Database db,
+  static Future<SyncRecorder> forTransaction(Transaction txn,
       {required String deviceId, int? userId, String workspaceId = defaultWorkspaceId}) async {
     return SyncRecorder(
-        db: db, deviceId: deviceId, userId: userId, workspaceId: workspaceId);
+        db: txn, deviceId: deviceId, userId: userId, workspaceId: workspaceId);
   }
 
   /// آخر version معروف للكيان (للبدء من 1 إن لم يوجد).
