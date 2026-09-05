@@ -164,11 +164,26 @@ class SyncEngine {
       try {
         await _ensureCloudTransport();
         if (_cloudTransport != null) {
-          await _cloudTransport!.pull(resolver: ConflictResolver());
+          try { await _cloudTransport!.pull(resolver: ConflictResolver()); } catch (_) {}
         }
       } catch (_) {}
+      await _checkExpulsionAndAutoPurge();
       await processQueue();
     });
+    // تفقد دوري كل 6 ساعات: هل طرأ طرد لنا، أو هناك أجهزة خاملة لنطرَدها تلقائياً.
+    Timer.periodic(const Duration(hours: 6), (_) => _checkExpulsionAndAutoPurge());
+  }
+
+  Future<void> _checkExpulsionAndAutoPurge() async {
+    try {
+      if (await repo.isWorkspaceOwner()) {
+        await repo.autoExpireStaleDevices();
+        return;
+      }
+      if (await repo.amIExpelled()) {
+        await repo.resetToStandaloneAfterExpulsion();
+      }
+    } catch (_) {}
   }
 
   void stop() {

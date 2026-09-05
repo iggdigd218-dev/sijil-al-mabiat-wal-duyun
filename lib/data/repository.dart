@@ -193,22 +193,10 @@ class Repo {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  /// الخروج من المجموعة (للعضو): يعيد الجهاز إلى الوضع المستقل ويمسح بيانات المجموعة.
-  /// لا يستطيع المالك الخروج إلا بعد أن يحذف جميع الأجهزة الأخرى (أو يبقى الجهاز وحيداً).
-  Future<bool> leaveGroup() async {
+  /// العودة إلى الوضع المستقل (يُستخدم فقط بعد طرد المدير لنا أو كخطة استرداد).
+  /// ملاحظة: لا يستطيع العضو طلب الخروج بنفسه — الطرد بيد المدير فقط.
+  Future<void> _resetToStandalone() async {
     final db = await _db;
-    final mode = await workspaceMode();
-    if (mode != 'member') {
-      if (mode == 'host') {
-        final peers = await db.query('devices',
-            where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
-            whereArgs: [_deviceId]);
-        if (peers.isNotEmpty) return false;
-        // لا يوجد أجهزة أخرى — ارجع للوضع المستقل.
-      } else {
-        return true; // standalone، لا داعي لشيء.
-      }
-    }
     final devName = await deviceName(this);
     final adminPerms = defaultPerms(UserRole.admin);
     final permStr = adminPerms.entries
@@ -262,7 +250,6 @@ class Repo {
     _currentUserId = null;
     final me = await currentUser();
     _currentUserId = me?.id;
-    return true;
   }
 
   /// مسح كل البيانات المحلية على العضو الجديد ليستبدلها بنسخة المضيف.
@@ -1092,6 +1079,68 @@ class Repo {
       'qr': info.qrContent,
       'expires': info.expiresAt.toIso8601String(),
     };
+  }
+
+  /// يُنفَّذ دوريًا على المضيف: أي جهاز لم يظهر لمدة 30 يومًا يُطرَد تلقائيًا.
+  /// يعيد قائمة الأجهزة المطرودة حديثًا (للعرض في الإشعارات).
+  Future<List<String>> autoExpireStaleDevices() async {
+    final db = await _db;
+    if (!(await isWorkspaceOwner())) return const [];
+    final cutoff = DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
+    final now = DateTime.now().toIso8601String();
+    // طرد الأجهزة التي لم تُرَ منذ 30 يوم ولم تُطرَد/تُلغَ سابقاً.
+    final stale = await db.query(
+      'devices',
+      where: "is_paired = 1 AND COALESCE(expelled_at,'') = '' "
+          "AND COALESCE(revoked_at,'') = '' "
+          "AND COALESCE(last_seen_at,'') <> '' AND last_seen_at < ? "
+          "AND is_owner = 0",
+      whereArgs: [cutoff],
+    );
+    final ids = stale.map((r) => r['id'] as String).toList();
+    for (final id in ids) {
+      await db.update('devices', {
+        'revoked_at': now,
+        'expelled_at': now,
+        'is_paired': 0,
+        'auth_secret': '',
+        'pair_token': '',
+        'pair_token_exp': '',
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [id]);
+    }
+    return ids;
+  }
+
+  /// المدير يطرد جهازًا من المجموعة يدويًا.
+  Future<void> expelDevice(String deviceId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    await db.update('devices', {
+      'revoked_at': now,
+      'expelled_at': now,
+      'is_paired': 0,
+      'auth_secret': '',
+      'pair_token': '',
+      'pair_token_exp': '',
+      'updated_at': now,
+    }, where: 'id = ?', whereArgs: [deviceId]);
+  }
+
+  /// يُعيد الجهاز إلى الوضع المستقل بعد الطرد من قِبل المدير.
+  /// يستدعيها العضو عندما يكتشف أنه مطرود (من استجابة 410 في /ops).
+  Future<void> resetToStandaloneAfterExpulsion() => _resetToStandalone();
+
+  /// يتحقق العضو مما إذا كان قد طُرِد (بناءً على سجلنا المحلي للأجهزة).
+  Future<bool> amIExpelled() async {
+    if (_deviceId == null) return false;
+    final db = await _db;
+    final me = await ownDeviceRow();
+    if (me == null) return false;
+    final expelled = (me['expelled_at'] ?? '') as String;
+    final revoked = (me['revoked_at'] ?? '') as String;
+    return expelled.isNotEmpty || revoked.isNotEmpty;
   }
 
   // ==================== الدردشة ====================

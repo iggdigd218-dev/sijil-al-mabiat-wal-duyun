@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 13;
+  static const int _version = 14;
 
   static int get schemaVersion => _version;
 
@@ -296,6 +296,7 @@ class AppDatabase {
         pair_token_exp TEXT DEFAULT '',
         auth_secret    TEXT DEFAULT '',
         revoked_at     TEXT DEFAULT '',
+        expelled_at    TEXT DEFAULT '',
         user_id        INTEGER,
         paired_by      INTEGER,
         is_paired      INTEGER NOT NULL DEFAULT 1,
@@ -444,7 +445,8 @@ class AppDatabase {
           port INTEGER DEFAULT 0, last_seen_at TEXT DEFAULT '',
           last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
           pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
-          revoked_at TEXT DEFAULT '', user_id INTEGER, paired_by INTEGER,
+          revoked_at TEXT DEFAULT '', expelled_at TEXT DEFAULT '',
+          user_id INTEGER, paired_by INTEGER,
           is_paired INTEGER NOT NULL DEFAULT 1, is_owner INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )''');
@@ -624,6 +626,13 @@ class AppDatabase {
         }
       }
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '13'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v14: الطرد التلقائي + عدم قدرة العضو على الخروج بنفسه ======
+    if (from < 14) {
+      await _addColumn(db, 'devices', 'expelled_at',
+          "TEXT DEFAULT ''");
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '14'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

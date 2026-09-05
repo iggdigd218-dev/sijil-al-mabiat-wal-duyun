@@ -895,21 +895,32 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   }),
                 ],
                 const Divider(height: 12),
-                // زر الخروج من المجموعة (يظهر للأعضاء فقط).
+                // ملاحظة للأعضاء: لا يمكن الخروج من المجموعة إلا بطرد المدير.
                 Consumer(builder: (ctx, rref, _) {
                   final modeAsync = rref.watch(workspaceModeProvider);
                   final mode = modeAsync.valueOrNull ?? 'standalone';
                   if (mode != 'member') return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: OutlinedButton.icon(
-                      onPressed: _busy ? null : _leaveGroup,
-                      icon: const Icon(Icons.logout, size: 18, color: Colors.red),
-                      label: const Text('الخروج من المجموعة',
-                          style: TextStyle(color: Colors.red)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.red),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withOpacity(.12),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.amber.withOpacity(.3)),
                       ),
+                      child: const Row(children: [
+                        Icon(Icons.info_outline, size: 18, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'أنت عضو في هذه المجموعة. لا يمكن الخروج إلا بطرد المدير، '
+                            'أو بحذف التطبيق وإعادة تثبيته.',
+                            style: TextStyle(fontSize: 11, height: 1.4),
+                          ),
+                        ),
+                      ]),
                     ),
                   );
                 }),

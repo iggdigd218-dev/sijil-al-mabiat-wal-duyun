@@ -319,8 +319,18 @@ class LanSyncService implements SyncTransport {
 
       // 2) تحقق من صلاحيات الجهاز المرسل.
       final db = await dbProvider();
+      // تحقق هل الجهاز مطرود (حتى وإن عرف السر الصحيح).
+      final expelledRows = await db.query('devices',
+          where: 'id = ? AND (COALESCE(revoked_at,"") <> "" OR COALESCE(expelled_at,"") <> "")',
+          whereArgs: [op.deviceId], limit: 1);
+      if (expelledRows.isNotEmpty) {
+        // 410 Gone يُخبر العضو أنه مطرود ويجب أن يمسح بياناته ويعود مستقلاً.
+        statusCode = HttpStatus.gone;
+        error = 'device-expelled';
+        return;
+      }
       final senderRows = await db.query('devices',
-          where: 'id = ? AND is_paired = 1 AND COALESCE(revoked_at, "") = "" AND auth_secret = ?',
+          where: 'id = ? AND is_paired = 1 AND COALESCE(revoked_at, "") = "" AND COALESCE(expelled_at,"") = "" AND auth_secret = ?',
           whereArgs: [op.deviceId, secret], limit: 1);
       if (senderRows.isEmpty) {
         statusCode = HttpStatus.forbidden;
@@ -408,6 +418,12 @@ class LanSyncService implements SyncTransport {
         req.write(op.toJson());
         final resp = await req.close().timeout(const Duration(seconds: 5));
         final body = await resp.timeout(const Duration(seconds: 3)).transform(utf8.decoder).join();
+        if (resp.statusCode == HttpStatus.gone) {
+          // المضيف أبلغنا أننا مطرودون → نمسح البيانات محلياً ونعود مستقلين.
+          try { await repo.resetToStandaloneAfterExpulsion(); } catch (_) {}
+          errors.add('$devId: expelled');
+          continue;
+        }
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
           String errMsg = 'HTTP ${resp.statusCode}';
           try {
@@ -415,9 +431,6 @@ class LanSyncService implements SyncTransport {
             errMsg = '${m['error'] ?? errMsg}';
           } catch (_) {}
           errors.add('$devId: $errMsg');
-          if (resp.statusCode == HttpStatus.forbidden || resp.statusCode == HttpStatus.unauthorized) {
-            // الجهاز لم يتعرف علينا — نعلمه كـ revoked? لا، نكتفي بالتسجيل.
-          }
         }
         await db.update('devices', {
           'last_seen_at': DateTime.now().toIso8601String(),

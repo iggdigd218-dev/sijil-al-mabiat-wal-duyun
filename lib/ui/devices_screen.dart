@@ -154,39 +154,68 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 message: 'اضغط "ربط جهاز جديد" لإضافة أول جهاز.',
               );
             }
-            return Column(
-              children: [
-                for (final d in list)
-                  _DeviceCard(
-                    data: d,
-                    users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
-                    onAssign: (uid) => _assign(uid, d['id'] as String),
-                    onRename: () => _rename(d['id'] as String, (d['name'] ?? '') as String),
-                    onRevoke: () async {
-                      final ok = await confirmDialog(context,
-                          title: 'إلغاء اقتران الجهاز',
-                          message:
-                              'سيتم منع "${d['name']}" من المزامنة حتى تُعيد اقترانه. متأكد؟',
-                          confirmText: 'إلغاء الاقتران',
-                          danger: true);
-                      if (ok == true) {
-                        await ref
-                            .read(repoProvider)
-                            .revokeDevice(d['id'] as String);
-                        bump(ref);
-                      }
-                    },
-                    onRestore: () async {
-                      await ref
-                          .read(repoProvider)
-                          .restoreDevice(d['id'] as String);
-                      bump(ref);
-                    },
-                  ),
-              ],
+            return FutureBuilder<Map<String, Object?>?>(
+              future: ref.read(repoProvider).ownDeviceRow(),
+              builder: (ctx, snap) {
+                final own = snap.data;
+                final ownId = own?['id'] as String?;
+                final hostRow = list.where((r) => ((r['is_owner'] ?? 0) as int) == 1).toList();
+                final hostId = hostRow.isNotEmpty ? hostRow.first['id'] as String : null;
+                return Column(
+                  children: [
+                    for (final d in list)
+                      _DeviceCard(
+                        data: d,
+                        users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
+                        isSelf: d['id'] == ownId,
+                        isOwnerDevice: d['id'] == hostId,
+                        onAssign: (uid) => _assign(uid, d['id'] as String),
+                        onRename: () => _rename(d['id'] as String, (d['name'] ?? '') as String),
+                        onRevoke: () async {
+                          final ok = await confirmDialog(context,
+                              title: 'حظر الجهاز مؤقتاً',
+                              message:
+                                  'سيتم منع "${d['name']}" من المزامنة حتى تُعيد السماح له. البيانات لن تُمسح ويمكن إعادة السماح في أي وقت.',
+                              confirmText: 'حظر',
+                              danger: true);
+                          if (ok == true) {
+                            await ref
+                                .read(repoProvider)
+                                .revokeDevice(d['id'] as String);
+                            bump(ref);
+                          }
+                        },
+                        onRestore: () async {
+                          await ref
+                              .read(repoProvider)
+                              .restoreDevice(d['id'] as String);
+                          bump(ref);
+                        },
+                        onExpel: () async {
+                          final ok = await confirmDialog(context,
+                              title: 'طرد الجهاز من المجموعة',
+                              message:
+                                  'سيتم طرد "${d['name']}" من المجموعة. عند أول اتصال للجهاز، ستُحذف جميع بيانات المجموعة منه ويعود إلى الوضع المستقل بحساب مدير جديد.\n\nلا يمكن التراجع عن ذلك إلا بإعادة ربط الجهاز من جديد.',
+                              confirmText: 'تأكيد الطرد',
+                              danger: true);
+                          if (ok == true) {
+                            await ref
+                                .read(repoProvider)
+                                .expelDevice(d['id'] as String);
+                            bump(ref);
+                            if (mounted) {
+                              showSnack(context,
+                                  '✅ تم طرد الجهاز من المجموعة. سيمسح بياناته عند أول اتصال.');
+                            }
+                          }
+                        },
+                      ),
+                  ],
+                );
+              },
             );
           },
-        ),
+        );
       ],
     );
   }
@@ -320,6 +349,9 @@ class _DeviceCard extends StatelessWidget {
   final VoidCallback onRename;
   final VoidCallback onRevoke;
   final VoidCallback onRestore;
+  final VoidCallback onExpel;
+  final bool isSelf;
+  final bool isOwnerDevice;
   const _DeviceCard({
     required this.data,
     required this.users,
@@ -327,18 +359,28 @@ class _DeviceCard extends StatelessWidget {
     required this.onRename,
     required this.onRevoke,
     required this.onRestore,
+    required this.onExpel,
+    required this.isSelf,
+    required this.isOwnerDevice,
   });
 
   @override
   Widget build(BuildContext context) {
     final name = (data['name'] ?? 'جهاز') as String;
     final platform = (data['platform'] ?? '') as String;
-    final revoked = ((data['revoked_at'] ?? '') as String).isNotEmpty;
+    final expelled = ((data['expelled_at'] ?? '') as String).isNotEmpty;
+    final revoked = ((data['revoked_at'] ?? '') as String).isNotEmpty && !expelled;
+    final inactive = expelled || revoked;
     final lastSeen = (data['last_seen_at'] ?? '') as String;
     final userName = data['user_name'] as String?;
     final userRole = data['user_role'] as String?;
     final currentUserId = data['user_id'] as int?;
     final ip = (data['ip_address'] ?? '') as String;
+
+    // تحديد الأجهزة الخاملة لأكثر من شهر (للتنبيه البصري).
+    final lastSeenDt = DateTime.tryParse(lastSeen);
+    final staleForMonth = lastSeenDt != null &&
+        DateTime.now().difference(lastSeenDt) > const Duration(days: 30);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -356,18 +398,46 @@ class _DeviceCard extends StatelessWidget {
                       style: const TextStyle(
                           fontWeight: FontWeight.w700, fontSize: 14)),
                 ),
-                if (revoked)
+                if (expelled)
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(.12),
+                      color: Colors.red.shade900.withOpacity(.15),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text('مطرود',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.red,
+                            fontWeight: FontWeight.w700)),
+                  )
+                else if (revoked)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(.12),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: const Text('محظور',
                         style: TextStyle(
                             fontSize: 10,
-                            color: Colors.red,
+                            color: Colors.deepOrange,
+                            fontWeight: FontWeight.w700)),
+                  )
+                else if (staleForMonth)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(.08),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text('خامل ⚠️',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.redAccent,
                             fontWeight: FontWeight.w700)),
                   )
                 else
@@ -432,27 +502,37 @@ class _DeviceCard extends StatelessWidget {
                             child: Text('${u.name} (${u.role.label})'),
                           )),
                     ],
-                    onChanged: revoked ? null : onAssign,
+                    onChanged: inactive ? null : onAssign,
                   ),
                 ),
                 const SizedBox(width: 6),
                 IconButton(
                   tooltip: 'إعادة التسمية',
-                  onPressed: onRename,
+                  onPressed: isSelf || inactive ? null : onRename,
                   icon: const Icon(Icons.edit_outlined, size: 20),
                 ),
-                if (revoked)
+                if (expelled)
+                  const SizedBox.shrink() // أجهزة مطرودة لا إجراء عليها.
+                else if (revoked)
                   IconButton(
-                    tooltip: 'إعادة السماح',
-                    onPressed: onRestore,
+                    tooltip: 'إعادة السماح (إلغاء الحظر)',
+                    onPressed: isSelf ? null : onRestore,
                     icon: const Icon(Icons.verified_user_outlined,
                         size: 20, color: Colors.green),
                   )
                 else
                   IconButton(
-                    tooltip: 'إلغاء الاقتران',
-                    onPressed: onRevoke,
-                    icon: const Icon(Icons.link_off, size: 20, color: Colors.red),
+                    tooltip: 'حظر مؤقت',
+                    onPressed: isSelf ? null : onRevoke,
+                    icon: const Icon(Icons.block,
+                        size: 20, color: Colors.orange),
+                  ),
+                if (!expelled && !isSelf && !isOwnerDevice)
+                  IconButton(
+                    tooltip: 'طرد من المجموعة',
+                    onPressed: onExpel,
+                    icon: const Icon(Icons.person_remove,
+                        size: 20, color: Colors.red),
                   ),
               ]),
             ],
