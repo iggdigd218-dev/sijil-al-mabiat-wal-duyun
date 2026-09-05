@@ -1,4 +1,4 @@
-name: Build Nexora Release (APK)
+name: Build Nexora Release (APK arm64)
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: Build APK arm64 + Linux bundle
+    name: Build APK arm64
     runs-on: ubuntu-latest
 
     steps:
@@ -29,32 +29,21 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Install deps + enable Linux desktop
-        run: |
-          flutter config --enable-linux-desktop
-          flutter pub get
+      - name: Get dependencies
+        run: flutter pub get
 
-      - name: Build Release APK (arm64)
+      - name: Build Release APK (arm64-v8a)
         run: |
           flutter build apk --release --target-platform android-arm64 --android-skip-build-dependency-validation
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/nexora-arm64.apk
-
-      - name: Build Linux bundle (runnable on Linux / Steam Deck / WSL)
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
-          flutter build linux --release
-          cd build/linux/x64/release
-          tar -czf /home/runner/work/sijil-al-mabiat-wal-duyun/sijil-al-mabiat-wal-duyun/dist/nexora-linux.tar.gz .
-
-      - name: Show outputs
-        run: ls -lh dist/
+          ls -lh dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nexora-release
-          path: dist/*
+          name: nexora-arm64
+          path: dist/nexora-arm64.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -65,20 +54,15 @@ jobs:
           tag_name: flutter-v3.8.${{ github.run_number }}
           name: Nexora Flutter Native v3.8 (nexora-arm64.apk)
           body: |
-            ## ✅ تم بناء التطبيق بنجاح
+            ## ✅ تم بناء التطبيق بنجاح على GitHub Actions
 
             - **Commit**: `${{ github.sha }}`
-            - **نوع البناء**: Release (R8 مضغوط، arm64-v8a)
+            - **نوع البناء**: Release (R8 مضغوط، arm64-v8a فقط)
 
-            ### 📱 للأندرويد (جميع الهواتف الحديثة):
-            - **`nexora-arm64.apk`** — الملف المطلوب (حوالي 23-24 ميجا)
+            ### 📱 التحميل:
+            - **`nexora-arm64.apk`** — يعمل على جميع هواتف أندرويد الحديثة (64 بت)
 
-            ### 💻 نسخة لنظام لينكس (تشغيل مباشر):
-            - `nexora-linux.tar.gz` — فك الضغط وشغّل `nexora_app`
-
-            ⚠️ قم بحذف النسخة القديمة أولاً قبل تثبيت هذه المرة.
-          files: |
-            dist/nexora-arm64.apk
-            dist/nexora-linux.tar.gz
+            ⚠️ قم بحذف النسخة القديمة أولاً قبل تثبيت هذه المرة (مفتاح التوقيع سيتغير).
+          files: dist/nexora-arm64.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
