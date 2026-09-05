@@ -231,7 +231,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             final (label, color, icon) = switch (role?.role) {
               UserRole.admin => ('مدير', Colors.amber.shade700, Icons.security),
               UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
-              UserRole.dataEntry => ('إدخال', Colors.teal, Icons.edit_note),
+              UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
               UserRole.viewer => ('عرض فقط', Colors.grey, Icons.visibility_outlined),
               _ => ('بلا صلاحية', Colors.red, Icons.block),
             };
