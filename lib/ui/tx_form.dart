@@ -630,7 +630,7 @@ class _TxFormState extends ConsumerState<TxForm> {
     return Card(
       child: ListTile(
         leading: CircleAvatar(child: Text('${i + 1}')),
-        title: Text(l.itemName ?? 'صنف ${i + 1}'),
+        title: Text(l.name.isNotEmpty ? l.name : 'صنف ${i + 1}'),
         subtitle: Text(
             '${_number(l.quantity)} × ${Fmt.money(l.unitPrice)} = ${Fmt.money(l.total)}'),
         trailing: Row(

@@ -414,13 +414,6 @@ class Voucher {
   /// draft / approved / cancelled
   final String status;
 
-  /// حالة المزامنة المستقلة عن حالة العملية:
-  ///  - 'synced': تمت المزامنة بنجاح.
-  ///  - 'pending': بانتظار المزامنة.
-  ///  - 'syncing': جاري المزامنة.
-  ///  - 'failed': فشلت المزامنة.
-  ///  - 'local': محلي فقط (جهاز مستقل / غير مُرسل بعد).
-  final String syncState;
   final DateTime date;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -472,7 +465,6 @@ class Voucher {
         statement: statement ?? this.statement,
         notes: notes ?? this.notes,
         status: status ?? this.status,
-        syncState: syncState ?? this.syncState,
         date: date ?? this.date,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
@@ -489,7 +481,6 @@ class Voucher {
         'statement': statement,
         'notes': notes,
         'status': status,
-        'sync_state': syncState,
         'date': date.toIso8601String(),
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
