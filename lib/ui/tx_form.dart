@@ -10,7 +10,6 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../data/repository.dart';
-import 'chat_screen.dart';
 import '../core/receipt_image.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -274,59 +273,29 @@ class _TxFormState extends ConsumerState<TxForm> {
     }
     final saved = tx.copyWith(id: savedId);
 
-    // بعد نجاح الحفظ: نُولّد السند ونُرسله داخل محادثة العميل،
-    // ثم ننتقل إلى شاشة المحادثة. أي خطأ هنا لا يُبطل الحفظ.
-    String? receiptPath;
-    String captionText = '';
-    bool receiptOk = false;
+    // التدفق المطلوب: يحفظ العملية → يولد السند → يفتح واتساب على محادثة العميل
+    // ويرسل الصورة + النص، ثم يغلق نافذة الحفظ. كل خطوة بمهلة حتى لا يعلق.
     if (!_isTransfer && _accountId != null && _account != null) {
-      setState(() => _saving = true); // يبقى الزر يعرض "جارٍ الحفظ..." حتى ينتهي الإرسال.
       final acc = _account!;
       try {
-        // 1) توليد صورة السند مع timeout حتى لا يعلق.
-        receiptPath = await TxShare.generate(repo: repo, tx: saved, account: acc)
-            .timeout(const Duration(seconds: 8));
-        // 2) تجهيز نص الإشعار.
-        captionText = await TxShare.caption(repo: repo, tx: saved, account: acc)
-            .timeout(const Duration(seconds: 3));
-        // 3) إيجاد/إنشاء محادثة العميل.
-        final convId = await repo.conversationFor(acc)
-            .timeout(const Duration(seconds: 2));
-        final now = DateTime.now();
-        // 4) إرسال نص الإشعار في المحادثة.
-        await repo.sendMessage(ChatMessage(
-          conversationId: convId,
-          sender: 'me',
-          body: captionText.trim(),
-          kind: 'voucher',
-          createdAt: now,
-        ));
-        // 5) إرسال صورة السند في المحادثة.
-        await repo.sendMessage(ChatMessage(
-          conversationId: convId,
-          sender: 'me',
-          body: '',
-          kind: 'voucher',
-          payload: receiptPath,
-          createdAt: now.add(const Duration(milliseconds: 500)),
-        ));
-        receiptOk = true;
+        // توليد السند ثم فتح واتساب مباشرة على محادثة العميل.
+        await TxShare.sendNow(context, ref,
+            tx: saved,
+            account: acc,
+            silentIfNoPhone: false,
+        ).timeout(const Duration(seconds: 15));
         if (mounted) {
           bump(ref);
           Navigator.pop(context, true);
-          // الانتقال مباشرة إلى محادثة العميل.
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => ChatThreadScreen(account: acc)),
-          );
           showSnack(context,
-              'تمت إضافة العملية وإرسال السند إلى محادثة العميل ✅');
+              keepId != null ? 'تم تعديل العملية وفتح واتساب ✅' : 'تمت إضافة العملية وفتح واتساب لإرسال السند ✅');
         }
       } catch (e) {
         if (mounted) {
+          bump(ref);
           Navigator.pop(context, true);
           showSnack(context,
-              'تم حفظ العملية ✅ لكن تعذّر توليد/إرسال السند: $e', error: true);
+              'تم حفظ العملية ✅ لكن تعذّر فتح واتساب: $e', error: true);
         }
       }
     } else {
