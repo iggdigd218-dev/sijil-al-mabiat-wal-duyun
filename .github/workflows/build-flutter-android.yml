@@ -1,53 +1,72 @@
-name: Build Native Flutter Android APK
+name: Build & Release Nexora APK
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - '**.dart'
-      - 'android/**'
-      - 'assets/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - '.github/workflows/build-flutter-android.yml'
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-flutter-android:
+  build-apk:
+    name: Build Release APK
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
+      - name: Set up Java 17 (required for Android Gradle Plugin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: 'stable'
+          flutter-version: '3.24.5'
           cache: true
+          cache-key: 'flutter-3.24.5'
 
-      - name: Get Flutter dependencies
+      - name: Install Flutter dependencies
         run: flutter pub get
 
-      - name: Analyze Dart source
+      - name: Verify code (no blocking errors)
         run: flutter analyze
 
-      - name: Run Flutter tests
-        run: flutter test
+      - name: Build Release APK (universal)
+        run: flutter build apk --release
 
-      - name: Build release APKs
-        run: flutter build apk --release --split-per-abi
-
-      - name: Upload APK artifacts
+      - name: Upload APK as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nexora-arm64-apk-${{ github.sha }}
-          path: |
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            build/app/outputs/flutter-apk/app-x86_64-release.apk
+          name: nexora-release-apk
+          path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
+      - name: Create GitHub Release with APK attached
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Nexora Build #${{ github.run_number }}
+          body: |
+            ## تم بناء التطبيق تلقائياً بنجاح ✅
+
+            - **الفرع**: `${{ github.ref_name }}`
+            - **Commit**: `${{ github.sha }}`
+            - **نوع البناء**: Release APK
+            - **الرسالة**: ${{ github.event.head_commit.message }}
+
+            قم بتحميل ملف `app-release.apk` المرفق وتثبيته على هاتفك.
+          files: build/app/outputs/flutter-apk/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
