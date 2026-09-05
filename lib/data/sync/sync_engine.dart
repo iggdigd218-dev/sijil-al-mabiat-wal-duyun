@@ -97,21 +97,21 @@ class SyncEngine {
   }
 
   Future<void> reconfigureAll() async {
-    await reconfigureCloud();
-    await _ensureLanTransport();
+    try { await reconfigureCloud(); } catch (_) {}
+    try { await _ensureLanTransport(); } catch (_) {}
   }
 
   /// يُعاد تهيئة الـ Cloud transport بعد تغيير الإعدادات.
   Future<void> reconfigureCloud() async {
-    _cloudUrl = null;
-    _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
-    _cloudTransport = null;
-    await _ensureCloudTransport();
-    if (_cloudTransport != null) {
-      try {
-        await _cloudTransport!.pull(resolver: ConflictResolver());
-      } catch (_) {}
-    }
+    try {
+      _cloudUrl = null;
+      _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      _cloudTransport = null;
+      await _ensureCloudTransport();
+      if (_cloudTransport != null) {
+        try { await _cloudTransport!.pull(resolver: ConflictResolver()); } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   Future<void> _ensureCloudTransport() async {
@@ -155,11 +155,12 @@ class SyncEngine {
     _started = true;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
     SyncRecorder.onOperationRecorded = notifyNewOperation;
-    await _ensureCloudTransport();
-    await _ensureLanTransport();
+    // أي فشل في تهيئة المزامنة (سواء سحابة أو شبكة محلية) لا يجب أن يمنع
+    // التطبيق من الإقلاع أو تعطيل الحفظ المحلي — محلي أولًا دائماً.
+    try { await _ensureCloudTransport(); } catch (_) {}
+    try { await _ensureLanTransport(); } catch (_) {}
     _timer ??= Timer.periodic(const Duration(seconds: 15), (_) => processQueue());
     Future(() async {
-      // محاولة سحب العمليات من السحابة عند الإقلاع (لا تنهي التطبيق إذا فشل).
       try {
         await _ensureCloudTransport();
         if (_cloudTransport != null) {
