@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
+import '../core/sfx.dart';
 import '../data/repository.dart';
 import '../core/receipt_image.dart';
 import '../core/theme.dart';
@@ -289,6 +290,7 @@ class _TxFormState extends ConsumerState<TxForm> {
           Navigator.pop(context, true);
           showSnack(context,
               keepId != null ? 'تم تعديل العملية وفتح واتساب ✅' : 'تمت إضافة العملية وفتح واتساب لإرسال السند ✅');
+          Sfx.success();
         }
       } catch (e) {
         if (mounted) {
@@ -296,6 +298,7 @@ class _TxFormState extends ConsumerState<TxForm> {
           Navigator.pop(context, true);
           showSnack(context,
               'تم حفظ العملية ✅ لكن تعذّر فتح واتساب: $e', error: true);
+          Sfx.success(); // الحفظ نجح حتى لو فشل فتح واتساب.
         }
       }
     } else {
@@ -305,10 +308,12 @@ class _TxFormState extends ConsumerState<TxForm> {
         Navigator.pop(context, true);
         showSnack(context,
             keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
+        Sfx.success();
       }
     }
     } catch (e) {
       if (mounted) {
+        Sfx.error();
         showSnack(context,
             e is StateError ? e.message : 'تعذّر حفظ العملية: $e',
             error: true);

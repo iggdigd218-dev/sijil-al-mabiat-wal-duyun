@@ -159,6 +159,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               builder: (ctx, snap) {
                 final own = snap.data;
                 final ownId = own?['id'] as String?;
+                final amITheOwner = own != null && ((own['is_owner'] ?? 0) as int) == 1;
                 final hostRow = list.where((r) => ((r['is_owner'] ?? 0) as int) == 1).toList();
                 final hostId = hostRow.isNotEmpty ? hostRow.first['id'] as String : null;
                 return Column(
@@ -169,6 +170,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                         users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
                         isSelf: d['id'] == ownId,
                         isOwnerDevice: d['id'] == hostId,
+                        amITheOwner: amITheOwner,
                         onAssign: (uid) => _assign(uid, d['id'] as String),
                         onRename: () => _rename(d['id'] as String, (d['name'] ?? '') as String),
                         onRevoke: () async {
@@ -209,13 +211,45 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                             }
                           }
                         },
+                        onTransferOwner: () async {
+                          final targetName = d['name'] as String? ?? 'الجهاز';
+                          final ok = await confirmDialog(context,
+                              title: 'تسليم الإدارة لهذا الجهاز',
+                              message:
+                                  'سيتم نقل ملكية المجموعة إلى "$targetName".\n'
+                                  'سيصبح هو المدير الوحيد، وستصبح أنت عضوًا عاديًا بدور "عرض فقط" (يمكنك اختيار دور مختلف من القائمة لاحقاً).\n\n'
+                                  'لا يمكن التراجع عن هذا إلا إذا قام المالك الجديد بتسليمك الإدارة مرة أخرى.\n\n'
+                                  'هل تريد المتابعة؟',
+                              confirmText: 'تأكيد تسليم الإدارة',
+                              danger: true);
+                          if (ok == true) {
+                            try {
+                              await ref
+                                  .read(repoProvider)
+                                  .transferOwnership(d['id'] as String,
+                                      newUserRoleForMe: 'viewer');
+                              bump(ref);
+                              if (mounted) {
+                                showSnack(context,
+                                    '✅ تم تسليم الإدارة. أنت الآن عضو بدور "عرض فقط".');
+                                Navigator.of(context).popUntil((r) => r.isFirst);
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                showSnack(context,
+                                    'تعذّر تسليم الإدارة: $e',
+                                    error: true);
+                              }
+                            }
+                          }
+                        },
                       ),
                   ],
                 );
               },
             );
-          },
-        );
+          }
+        ),
       ],
     );
   }
@@ -350,8 +384,10 @@ class _DeviceCard extends StatelessWidget {
   final VoidCallback onRevoke;
   final VoidCallback onRestore;
   final VoidCallback onExpel;
+  final VoidCallback onTransferOwner;
   final bool isSelf;
   final bool isOwnerDevice;
+  final bool amITheOwner;
   const _DeviceCard({
     required this.data,
     required this.users,
@@ -360,8 +396,10 @@ class _DeviceCard extends StatelessWidget {
     required this.onRevoke,
     required this.onRestore,
     required this.onExpel,
+    required this.onTransferOwner,
     required this.isSelf,
     required this.isOwnerDevice,
+    required this.amITheOwner,
   });
 
   @override
@@ -526,6 +564,13 @@ class _DeviceCard extends StatelessWidget {
                     onPressed: isSelf ? null : onRevoke,
                     icon: const Icon(Icons.block,
                         size: 20, color: Colors.orange),
+                  ),
+                if (!expelled && !isSelf && !isOwnerDevice && amITheOwner)
+                  IconButton(
+                    tooltip: 'تسليم الإدارة (نقل الملكية) لهذا الجهاز',
+                    onPressed: onTransferOwner,
+                    icon: const Icon(Icons.swap_horiz,
+                        size: 20, color: Colors.purple),
                   ),
                 if (!expelled && !isSelf && !isOwnerDevice)
                   IconButton(

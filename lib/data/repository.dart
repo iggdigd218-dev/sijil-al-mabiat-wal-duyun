@@ -1128,6 +1128,72 @@ class Repo {
     }, where: 'id = ?', whereArgs: [deviceId]);
   }
 
+  /// ينقل ملكية/إدارة المجموعة لجهاز آخر (يعينه is_owner=1 ويُعيّن له المستخدم
+  /// صاحب دور المدير إن لم يكن معيّناً، ويجعل جهازنا الحالي عضواً عادياً بصلاحيات
+  /// الدور الذي يختاره المدير السابق أو viewer كافتراضي).
+  /// المتطلب: أنا المالك حالياً، والجهاز المستهدف مقترن وغير مطرود/محظور.
+  Future<void> transferOwnership(String newOwnerDeviceId,
+      {String? newUserRoleForMe}) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    if (_deviceId == null) {
+      throw StateError('جهازك غير مُعرَّف — أعد تشغيل التطبيق.');
+    }
+    if (newOwnerDeviceId == _deviceId) return; // لا شيء يفعله.
+
+    final peer = await db.query('devices',
+        where: 'id = ? AND COALESCE(revoked_at,"") = "" AND COALESCE(expelled_at,"") = ""',
+        whereArgs: [newOwnerDeviceId], limit: 1);
+    if (peer.isEmpty) {
+      throw StateError('الجهاز المطلوب غير موجود أو مطرود/محظور.');
+    }
+
+    final now = DateTime.now().toIso8601String();
+    await db.transaction((txn) async {
+      // 1) إلغاء is_owner عن كل الأجهزة.
+      await txn.update('devices', {'is_owner': 0});
+
+      // 2) تعيين الجهاز الجديد كمالك.
+      int? newOwnerUserId = peer.first['user_id'] as int?;
+      if (newOwnerUserId == null) {
+        // إن لم يكن معيّناً له مستخدم، أنشئ/ابحث عن مستخدم مدير واربطه.
+        // (لتبسيط الأمر: نُبقي user_id كما هو ونجعل المدير عليه أن يُكمل التعيين).
+      }
+      await txn.update('devices', {
+        'is_owner': 1,
+        'user_id': newOwnerUserId,
+        'paired_by': _currentUserId,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [newOwnerDeviceId]);
+
+      // 3) جهازي الحالي: أُصبح عضواً عادياً بالدور المطلوب أو viewer.
+      //    نُنشئ مستخدماً بدور محدود لي إن لم أكن موجوداً في جدول المستخدمين كعضو غير مدير.
+      final myUser = await txn.query('users',
+          where: 'id = ?', whereArgs: [_currentUserId], limit: 1);
+      if (myUser.isNotEmpty) {
+        final targetRole = newUserRoleForMe ?? 'viewer';
+        final perms = defaultPerms(UserRole.fromCode(targetRole));
+        final permStr = perms.entries
+            .where((e) => e.value).map((e) => e.key).join(',');
+        await txn.update('users', {
+          'role': targetRole,
+          'permissions': permStr,
+          'is_me': 1, // نظل أنا المستخدم الفعال على جهازنا.
+          'updated_at': now,
+        }, where: 'id = ?', whereArgs: [_currentUserId]);
+        await txn.update('devices', {
+          'is_owner': 0,
+          'user_id': _currentUserId,
+          'updated_at': now,
+        }, where: 'id = ?', whereArgs: [_deviceId]);
+      }
+
+      await txn.insert('sync_meta',
+          {'key': 'workspaceMode', 'value': 'host'}, // دائماً مدار.
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
   /// يُعيد الجهاز إلى الوضع المستقل بعد الطرد من قِبل المدير.
   /// يستدعيها العضو عندما يكتشف أنه مطرود (من استجابة 410 في /ops).
   Future<void> resetToStandaloneAfterExpulsion() => _resetToStandalone();

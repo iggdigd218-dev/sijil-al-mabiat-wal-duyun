@@ -481,63 +481,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     }
   }
 
-  Future<void> _leaveGroup() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('الخروج من المجموعة'),
-        content: const Text(
-          'سيتم حذف جميع بيانات المجموعة من هذا الجهاز والعودة إلى الوضع المستقل. '
-          'سيُنشأ حساب مدير محلي جديد.\n\n'
-          'لن يتأثر المضيف أو باقي الأجهزة.\n\n'
-          'هل تريد المتابعة؟',
-          style: TextStyle(height: 1.6),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('الخروج ومسح البيانات'),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    setState(() => _busy = true);
-    try {
-      final repo = ref.read(repoProvider);
-      final ok = await repo.leaveGroup();
-      if (!mounted) return;
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'لا يمكن الخروج من المجموعة — لا تزال هناك أجهزة مقترنة. ألغِ اقترانها أولاً من شاشة الأجهزة.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      bump(ref);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ تم الخروج من المجموعة والعودة للوضع المستقل')),
-      );
-      if (mounted) {
-        Navigator.of(context).popUntil((r) => r.isFirst);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذّر الخروج: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  // ملاحظة: لم يعد الأعضاء قادرين على الخروج من المجموعة من تلقاء أنفسهم (زر الخروج استُبدل برسالة إرشادية).
+  // الخروج ممكن فقط بطرد المدير للجهاز، أو بحذف التطبيق.
+
 
   Future<void> _restoreBackup() async {
     final confirm = await showDialog<bool>(
