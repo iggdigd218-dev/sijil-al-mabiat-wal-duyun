@@ -33,6 +33,25 @@ android {
         multiDexEnabled = true
     }
 
+    // ===== تقليل حجم APK: تقسيم حسب معمارية المعالج =====
+    // سينتج ملف مستقل لكل معمارية بدل ملف واحد ضخم يحتوي كل المعماريات.
+    // الهواتف الحديثة غالباً arm64-v8a، لذا سيكون ملفها الأصغر (~22-28 ميجا)
+    splits {
+        abi {
+            enable true
+            reset()
+            include "armeabi-v7a", "arm64-v8a", "x86_64"
+            universalApk true   // يُبقي أيضاً على نسخة موحّدة لمن يحتاجها
+        }
+    }
+
+    // خريطة إصدارات ABI لزيادة versionCode لكل معمارية (مطلوب عند split)
+    def abiVersionCodes = [
+        "armeabi-v7a": 1,
+        "arm64-v8a": 2,
+        "x86_64": 4,
+    ]
+
     signingConfigs {
         release {
             if (keystorePropertiesFile.exists()) {
@@ -47,12 +66,46 @@ android {
     buildTypes {
         release {
             signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
-            // Keep the release build reliable on low-memory devices and preserve all
-            // Flutter reflection/serialization entry points used by the app.
-            minifyEnabled = false
-            shrinkResources = false
+            // ===== تفعيل تصغير/تشويش الشيفرة والموارد =====
+            // هذا يحذف الشيفرة غير المستخدمة ويضغط الموارد فيقلل الحجم بنسبة 30-50%
+            minifyEnabled true
+            shrinkResources true
+            zipAlignEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                           'proguard-rules.pro'
+        }
+    }
+
+    // ===== استبعاد ملفات META-INF والملفات غير الضرورية =====
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+        resources {
+            excludes += [
+                "META-INF/*.kotlin_module",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/*.version",
+                "META-INF/LICENSE*",
+                "META-INF/DEPENDENCIES*",
+                "META-INF/NOTICE*",
+                "/okhttp3/internal/publicsuffix/*",
+                "/kotlin/**",
+                "DebugProbesKt.bin",
+                "*.pro",
+            ]
+        }
+    }
+
+    // تطبيق versionCode مختلف لكل ABI
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            if (abi != null) {
+                output.versionCodeOverride =
+                    (abiVersionCodes.get(abi, 0) * 1000000) + android.defaultConfig.versionCode
+            }
         }
     }
 }
