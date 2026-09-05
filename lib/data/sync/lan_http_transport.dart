@@ -520,10 +520,15 @@ class LanSyncService implements SyncTransport {
 
       // 2) نسخ الجداول من اللقطة.
       Future<void> insertAll(String table) async {
-        final rows = (snap[table] as List?)?.cast<Map>() ?? const <Map>[];
-        for (final r in rows) {
+        final raw = snap[table];
+        if (raw is! List) return;
+        for (final r in raw) {
+          if (r is! Map) continue;
           try {
-            final map = r.map((k, v) => MapEntry(k.toString(), v));
+            final map = <String, Object?>{};
+            r.forEach((k, v) {
+              if (k is String) map[k] = v as Object?;
+            });
             if (table == 'devices' && map['id'] == ourDeviceId) {
               // سجلنا يأتي من المضيف؛ نحفظه مع تعديل is_owner=0.
               map['is_owner'] = 0;

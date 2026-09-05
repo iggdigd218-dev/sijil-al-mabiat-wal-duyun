@@ -449,6 +449,64 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     }
   }
 
+  Future<void> _leaveGroup() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الخروج من المجموعة'),
+        content: const Text(
+          'سيتم حذف جميع بيانات المجموعة من هذا الجهاز والعودة إلى الوضع المستقل. '
+          'سيُنشأ حساب مدير محلي جديد.\n\n'
+          'لن يتأثر المضيف أو باقي الأجهزة.\n\n'
+          'هل تريد المتابعة؟',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('الخروج ومسح البيانات'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(repoProvider);
+      final ok = await repo.leaveGroup();
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'لا يمكن الخروج من المجموعة — لا تزال هناك أجهزة مقترنة. ألغِ اقترانها أولاً من شاشة الأجهزة.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      bump(ref);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ تم الخروج من المجموعة والعودة للوضع المستقل')),
+      );
+      if (mounted) {
+        Navigator.of(context).popUntil((r) => r.isFirst);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذّر الخروج: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _restoreBackup() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -790,6 +848,24 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   }),
                 ],
                 const Divider(height: 12),
+                // زر الخروج من المجموعة (يظهر للأعضاء فقط).
+                Consumer(builder: (ctx, rref, _) {
+                  final modeAsync = rref.watch(workspaceModeProvider);
+                  final mode = modeAsync.valueOrNull ?? 'standalone';
+                  if (mode != 'member') return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: OutlinedButton.icon(
+                      onPressed: _busy ? null : _leaveGroup,
+                      icon: const Icon(Icons.logout, size: 18, color: Colors.red),
+                      label: const Text('الخروج من المجموعة',
+                          style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                    ),
+                  );
+                }),
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
                     onPressed: _busy ? null : _syncNow,

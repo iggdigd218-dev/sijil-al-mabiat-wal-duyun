@@ -845,16 +845,8 @@ class Repo {
     final mode = await workspaceMode();
     if (mode == 'member') {
       // في وضع العضو: المستخدم الفعّال هو المُعيّن لهذا الجهاز من قِبل المدير.
-      final assigned = await deviceAssignedUser();
-      if (assigned != null) return assigned;
-      // إن لم يُعيَّن بعد: المستخدم ذو الصلاحيات الأقل (viewer) إن وُجد،
-      // أو null ليمنع كل الإجراءات.
-      final all = await users();
-      if (all.isEmpty) return null;
-      return all.firstWhere(
-        (u) => u.role == UserRole.viewer,
-        orElse: () => all.first,
-      );
+      // إن لم يُعيَّن بعد = لا صلاحيات على الإطلاق.
+      return deviceAssignedUser();
     }
     // وضع مستقل / مُضيف (مالك): المستخدم "أنا" (is_me=1) أو المدير.
     final all = await users();
