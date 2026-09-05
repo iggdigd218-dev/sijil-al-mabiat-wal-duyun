@@ -165,7 +165,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 return Column(
                   children: [
                     for (final d in list)
-                      _DeviceCard(
+                      DeviceCard(
                         data: d,
                         users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
                         isSelf: d['id'] == ownId,
@@ -417,7 +417,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       );
 }
 
-class _DeviceCard extends StatelessWidget {
+class DeviceCard extends StatelessWidget {
   final Map<String, Object?> data;
   final List<AppUser> users;
   final Future<void> Function(int? userId) onAssign;
@@ -430,7 +430,7 @@ class _DeviceCard extends StatelessWidget {
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
-  const _DeviceCard({
+  const DeviceCard({
     required this.data,
     required this.users,
     required this.onAssign,

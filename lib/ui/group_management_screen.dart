@@ -14,10 +14,10 @@ import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'backup_screen.dart';
-import 'devices_screen.dart' show SectionTitle, _DeviceCard;
-import 'qr_pair_scanner.dart';
-import 'sync_settings_section.dart' show _PairingQrDialog;
-import 'users_screen.dart' show _UserCard, openUserForm;
+import 'devices_screen.dart' show SectionTitle, DeviceCard;
+import 'qr_pair_scanner.dart' show scanQrPair;
+import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
+import 'users_screen.dart' show UserCard, openUserForm;
 import 'widgets.dart';
 
 class GroupManagementScreen extends ConsumerStatefulWidget {
@@ -66,46 +66,35 @@ class _State extends ConsumerState<GroupManagementScreen>
             ),
           );
         }
-        return _GroupAdminScaffold(addPairHub: _showPairHub, tab: _tab);
-      },
-    );
-  }
-}
-
-class _GroupAdminScaffold extends StatelessWidget {
-  final TabController tab;
-  final void Function(BuildContext) addPairHub;
-  const _GroupAdminScaffold({required this.tab, required this.addPairHub});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('إدارة المجموعة'),
-        bottom: TabBar(
-          controller: _tab,
-          tabs: const [
-            Tab(icon: Icon(Icons.devices), text: 'الأجهزة'),
-            Tab(icon: Icon(Icons.manage_accounts), text: 'المستخدمون'),
-            Tab(icon: Icon(Icons.cloud_sync_outlined), text: 'نسخ احتياطي'),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'ربط جهاز/حساب جديد',
-            icon: const Icon(Icons.add_link),
-            onPressed: () => _showPairHub(context),
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('إدارة المجموعة'),
+            bottom: TabBar(
+              controller: _tab,
+              tabs: const [
+                Tab(icon: Icon(Icons.devices), text: 'الأجهزة'),
+                Tab(icon: Icon(Icons.manage_accounts), text: 'المستخدمون'),
+                Tab(icon: Icon(Icons.cloud_sync_outlined), text: 'نسخ احتياطي'),
+              ],
+            ),
+            actions: [
+              IconButton(
+                tooltip: 'ربط جهاز/حساب جديد',
+                icon: const Icon(Icons.add_link),
+                onPressed: () => _showPairHub(context),
+              ),
+            ],
           ),
-        ],
-      ),
-      body: TabBarView(
-        controller: _tab,
-        children: const [
-          _DevicesTab(),
-          _UsersTab(),
-          BackupScreen(embedded: true),
-        ],
-      ),
+          body: TabBarView(
+            controller: _tab,
+            children: const [
+              _DevicesTab(),
+              _UsersTab(),
+              BackupScreen(embedded: true),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -115,7 +104,7 @@ class _GroupAdminScaffold extends StatelessWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const _PairHubSheet(),
+      builder: (_) => _PairHubSheet(),
     );
   }
 }
@@ -165,7 +154,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 children: [
                   for (final d in list)
-                    _DeviceCard(
+                    DeviceCard(
                       data: d,
                       users: (usersAsync.valueOrNull ?? const <AppUser>[])
                           .cast<AppUser>(),
@@ -338,7 +327,7 @@ class _UsersTab extends ConsumerWidget {
           for (final u in list)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _UserCard(user: u),
+              child: UserCard(user: u),
             ),
           const SizedBox(height: 12),
           FilledButton.icon(
@@ -354,7 +343,7 @@ class _UsersTab extends ConsumerWidget {
 
 // ═══════════════════════════ نافذة الربط الموحدة ════════════════════════════
 class _PairHubSheet extends ConsumerStatefulWidget {
-  const _PairHubSheet();
+  _PairHubSheet();
   @override
   ConsumerState<_PairHubSheet> createState() => _PairHubSheetState();
 }
@@ -404,8 +393,8 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => _PairingQrDialog(
-          info: _PairingInfoWrap(
+        builder: (_) => PairingQrDialog(
+          info: PairingQrInfo(
             token: info['token']!,
             qrContent: info['qr']!,
             expiresAt: DateTime.tryParse(info['expires'] ?? '') ??
@@ -413,7 +402,7 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
           ),
           port: port,
           ip: null,
-          primaryColor: AppColors.primaryOf(context),
+          primaryColor: Theme.of(context).colorScheme.primary,
         ),
       );
     } catch (e) {
@@ -426,7 +415,7 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
   Future<void> _scanQr() async {
     Navigator.pop(context);
     Sfx.click();
-    await openQrPairScanner(context, ref);
+    await scanQrPair(context);
   }
 
   @override
@@ -562,14 +551,6 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
           ],
         ),
       );
-}
-
-class _PairingInfoWrap {
-  final String token;
-  final String qrContent;
-  final DateTime expiresAt;
-  _PairingInfoWrap(
-      {required this.token, required this.qrContent, required this.expiresAt});
 }
 
 class _HubTile extends StatelessWidget {

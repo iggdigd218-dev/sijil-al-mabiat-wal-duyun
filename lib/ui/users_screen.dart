@@ -62,7 +62,7 @@ class UsersScreen extends ConsumerWidget {
             for (final u in list)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: _UserCard(user: u),
+                child: UserCard(user: u),
               ),
           const SizedBox(height: 12),
           FilledButton.icon(
@@ -76,9 +76,9 @@ class UsersScreen extends ConsumerWidget {
   }
 }
 
-class _UserCard extends ConsumerWidget {
+class UserCard extends ConsumerWidget {
   final AppUser user;
-  const _UserCard({required this.user});
+  const UserCard({required this.user});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

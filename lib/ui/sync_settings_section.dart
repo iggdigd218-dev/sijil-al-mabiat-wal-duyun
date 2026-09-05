@@ -353,8 +353,12 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => _PairingQrDialog(
-          info: info,
+        builder: (ctx) => PairingQrDialog(
+          info: PairingQrInfo(
+            token: info.token,
+            qrContent: info.qrContent,
+            expiresAt: info.expiresAt,
+          ),
           port: port,
           ip: ip,
           primaryColor: AppColors.primaryOf(context),
@@ -903,12 +907,23 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
 // ════════════════════════════════════════════════════════════════════
 // نافذة الباركود الفعلية التي تُعرض للمستخدم عند إنشاء رمز الاقتران.
 // ════════════════════════════════════════════════════════════════════
-class _PairingQrDialog extends StatefulWidget {
-  final PairingInfo info;
+/// غلاف معلومات الاقتران (مطابق لـ PairingInfo لكن مفتوح للاستدعاء من
+/// شاشات أخرى كشاشة إدارة المجموعة).
+class PairingQrInfo {
+  final String token;
+  final String qrContent;
+  final DateTime expiresAt;
+  const PairingQrInfo(
+      {required this.token, required this.qrContent, required this.expiresAt});
+}
+
+class PairingQrDialog extends StatefulWidget {
+  final PairingQrInfo info;
   final int port;
   final String? ip;
   final Color primaryColor;
-  const _PairingQrDialog({
+  const PairingQrDialog({
+    super.key,
     required this.info,
     required this.port,
     required this.ip,
@@ -916,10 +931,10 @@ class _PairingQrDialog extends StatefulWidget {
   });
 
   @override
-  State<_PairingQrDialog> createState() => _PairingQrDialogState();
+  State<PairingQrDialog> createState() => PairingQrDialogState();
 }
 
-class _PairingQrDialogState extends State<_PairingQrDialog> {
+class PairingQrDialogState extends State<PairingQrDialog> {
   Duration? _remaining;
   DateTime? _expiresAt;
 
