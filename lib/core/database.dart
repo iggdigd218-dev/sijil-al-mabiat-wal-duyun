@@ -12,7 +12,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 5;
+  static const int _version = 9;
 
   static int get schemaVersion => _version;
 
@@ -286,6 +286,8 @@ class AppDatabase {
         last_sync_at   TEXT DEFAULT '',
         pair_token     TEXT DEFAULT '',
         pair_token_exp TEXT DEFAULT '',
+        auth_secret    TEXT DEFAULT '',
+        revoked_at     TEXT DEFAULT '',
         is_paired      INTEGER NOT NULL DEFAULT 1,
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL,
@@ -449,6 +451,27 @@ class AppDatabase {
     // ====== Migration v4 -> v5: بنية Local-First Sync ======
     if (from < 5) {
       await _migrate4to5(db);
+    }
+    // ====== v6: إضافة auth_secret للأجهزة (للتحقق من هوية الجهاز المرسل في LAN) ======
+    if (from < 6) {
+      await _addColumn(db, 'devices', 'auth_secret', "TEXT DEFAULT ''");
+    }
+    // ====== v7: إضافة أعمدة لمنع الأجهزة الملغاة + معرفات مرجعية ======
+    if (from < 7) {
+      await _addColumn(db, 'devices', 'revoked_at', "TEXT DEFAULT ''");
+    }
+    // ====== v8: فهارس إضافية لتحسين أداء sync_queue + operations ======
+    if (from < 8) {
+      await _tryCreateIndex(db, 'idx_queue_target_status',
+          'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)');
+      await _tryCreateIndex(db, 'idx_ops_ws_time',
+          'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)');
+    }
+    // ====== v9: حقل last_synced_op في sync_meta للمزامنة التزايدية ======
+    if (from < 9) {
+      // لا شيء — sync_meta موجود بالفعل، ونستخدمه كـ key-value عادي.
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '9'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 

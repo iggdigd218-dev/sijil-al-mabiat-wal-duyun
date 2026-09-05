@@ -7,7 +7,12 @@ import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 
+typedef SyncNotifyFn = void Function();
+
 class SyncRecorder {
+  /// Callback static يُستدعى بعد تسجيل عملية جديدة — لتحفيز push فوري.
+  static SyncNotifyFn? onOperationRecorded;
+
   final DatabaseExecutor db;
   final String deviceId;
   final int? userId;
@@ -80,6 +85,10 @@ class SyncRecorder {
         'updated_at': qnow,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
+    // إشعار بمحاولة push فورية بعد الانتهاء من المعاملة (جدولة خارج الـ txn).
+    try {
+      onOperationRecorded?.call();
+    } catch (_) {}
     return id;
   }
 }

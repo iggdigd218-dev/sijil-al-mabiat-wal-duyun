@@ -24,18 +24,29 @@ extension ApplyRemoteOp on Repo {
         where: 'id = ?', whereArgs: [op.entityId], limit: 1);
     final exists = existing.isNotEmpty;
 
-    // 2) أعلى version محلي للكيان.
+    // 2) أعلى version محلي للكيان + آخر عملية مسجلة.
     final vRow = await txn.rawQuery(
         'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
         [op.entityType.name, op.entityId]);
     final localVersion = (vRow.first['v'] as int?) ?? 0;
+    final latestRows = await txn.query('operations',
+        where: 'entity_type = ? AND entity_id = ?',
+        whereArgs: [op.entityType.name, op.entityId],
+        orderBy: 'version DESC, timestamp DESC',
+        limit: 1);
+    SyncOperation? localLatest;
+    if (latestRows.isNotEmpty) {
+      try {
+        localLatest = SyncOperation.fromMap(latestRows.first);
+      } catch (_) {}
+    }
 
     // 3) القرار.
     final decision = resolver.decide(
       incoming: op,
       exists: exists,
       localVersion: localVersion,
-      localLatest: null,
+      localLatest: localLatest,
     );
 
     if (decision.conflict) {

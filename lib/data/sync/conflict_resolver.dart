@@ -43,8 +43,28 @@ class ConflictResolver {
       return ConflictDecision.apply();
     }
     if (incoming.version == localVersion) {
-      // نفس الإصدار من جهاز مختلف -> تعارض.
-      return ConflictDecision.conflict(reason: 'same-version-different-device');
+      // نفس الإصدار:
+      // - إذا كانت نفس العملية (نفس id) فتم التعامل معها أعلاه.
+      // - إذا كان localLatest موجود وبنفس deviceId -> نفس المصدر نطبق (تكرار آمن).
+      if (localLatest != null && localLatest.deviceId == incoming.deviceId) {
+        return ConflictDecision.apply();
+      }
+      // كسر التعادل بشكل deterministic بناءً على:
+      //   1) timestamp الأحدث يفوز.
+      //   2) إذا التساوي، deviceId lexicographically الأصغر يفوز (ثابت عبر الأجهزة).
+      // النتيجة ستكون نفسها على جميع الأجهزة.
+      if (localLatest != null) {
+        final tIn = DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ?? 0;
+        final tLocal = DateTime.tryParse(localLatest.timestamp)?.millisecondsSinceEpoch ?? 0;
+        if (tIn > tLocal) return ConflictDecision.apply();
+        if (tIn < tLocal) return ConflictDecision.ignore(reason: 'older-timestamp-tie');
+        // نفس اللحظة: deviceId الأصغر يفوز.
+        if (incoming.deviceId.compareTo(localLatest.deviceId) < 0) {
+          return ConflictDecision.apply();
+        }
+        return ConflictDecision.ignore(reason: 'tiebreak-local-wins');
+      }
+      return ConflictDecision.conflict(reason: 'same-version-no-local-latest');
     }
     // incoming.version < localVersion -> قديم، نحتفظ بنسختنا.
     return ConflictDecision.ignore(reason: 'older-version');

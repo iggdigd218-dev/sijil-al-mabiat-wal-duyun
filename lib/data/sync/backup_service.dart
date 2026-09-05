@@ -45,6 +45,9 @@ class BackupService {
     'operations',
   ];
 
+  /// الحقول الحساسة التي لا تُصدَّر في النسخة الاحتياطية.
+  static const _scrubColumns = ['auth_secret', 'pair_token', 'pair_token_exp'];
+
   Future<File> exportToFile(File dest) async {
     final out = <String, Object?>{};
     out['format'] = 'nexora/backup';
@@ -52,7 +55,16 @@ class BackupService {
     out['created_at'] = DateTime.now().toIso8601String();
     final data = <String, Object?>{};
     for (final t in dataTables) {
-      data[t] = await db.query(t);
+      final rows = await db.query(t);
+      // إزالة الأعمدة الحساسة من النسخة الاحتياطية (لا تُخزَّن في .nexora).
+      final scrubbed = rows.map((r) {
+        final copy = Map<String, Object?>.from(r);
+        for (final c in _scrubColumns) {
+          copy.remove(c);
+        }
+        return copy;
+      }).toList();
+      data[t] = scrubbed;
     }
     out['data'] = data;
     await dest.parent.create(recursive: true);

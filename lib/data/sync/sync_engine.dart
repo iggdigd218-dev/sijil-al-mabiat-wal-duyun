@@ -4,6 +4,7 @@
 //   - إعادة المحاولة مع backoff.
 //   - سحب العمليات من الـ Cloud تلقائيًا عند التهيئة.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
@@ -11,8 +12,10 @@ import '../../core/database.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'conflict_resolver.dart';
+import 'device_id.dart';
 import 'lan_http_transport.dart';
 import 'operation.dart';
+import 'recorder.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 
@@ -47,7 +50,7 @@ class SyncEngine {
 
   Future<void> _ensureLanTransport() async {
     final st = await repo.settings();
-    final enabled = (st['lanSyncEnabled'] ?? '1') != '0';
+    final enabled = (st['lanSyncEnabled'] ?? '0') == '1';
     final port = int.tryParse(st['lanSyncPort'] ?? '') ?? kDefaultLanPort;
     final db = await _db;
     if (!enabled) {
@@ -58,19 +61,29 @@ class SyncEngine {
       return;
     }
     if (_lanEnabled && _lanTransport?.port == port) return;
-    if (_lanTransport != null && _lanTransport!.port != port) {
+    if (_lanTransport != null) {
       await _lanTransport!.stopServer();
       _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
     }
-    // deviceId
-    final devRows = await db.query('devices', where: 'is_paired = 1', orderBy: 'id ASC');
-    String ourId = 'DEVICE-UNKNOWN';
-    for (final d in devRows) {
-      if (d['pair_token'] == null || (d['pair_token'] as String).isEmpty) {
-        // الجهاز الأول بدون pair_token هو الجهاز المحلي.
-        ourId = d['id'] as String;
-        break;
-      }
+    final ourId = await ensureDeviceId(repo);
+    // تأكد من وجود سجل هذا الجهاز في devices table مع اسم المنصة.
+    final ourName = await deviceName(repo);
+    final now = DateTime.now().toIso8601String();
+    final existing = await db.query('devices', where: 'id = ?', whereArgs: [ourId], limit: 1);
+    if (existing.isEmpty) {
+      await db.insert('devices', {
+        'id': ourId,
+        'workspace_id': defaultWorkspaceId,
+        'name': ourName,
+        'platform': Platform.operatingSystem,
+        'port': port,
+        'is_paired': 1,
+        'auth_secret': generateLanSecret(),
+        'revoked_at': '',
+        'ip_address': '',
+        'created_at': now,
+        'updated_at': now,
+      });
     }
     _lanTransport = LanSyncService(
       repo: repo,
@@ -117,11 +130,21 @@ class SyncEngine {
     final wsRow = await db.query('workspaces', limit: 1);
     final wsId = wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
     _workspaceId = wsId;
-    _cloudTransport = CloudFirebaseTransport(
+    _cloudTransport = CloudFirebaseTransport.validated(
       repo: repo,
       dbProvider: dbProvider,
       backendUrl: url,
       workspaceId: wsId,
+      idTokenProvider: () async {
+        try {
+          final d = await _db;
+          final r = await d.query('google_auth', where: 'id = 1', limit: 1);
+          if (r.isEmpty) return null;
+          return r.first['id_token'] as String?;
+        } catch (_) {
+          return null;
+        }
+      },
     );
     registerTransport(_cloudTransport!);
     _cloudUrl = url;
@@ -130,6 +153,8 @@ class SyncEngine {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
+    SyncRecorder.onOperationRecorded = notifyNewOperation;
     await _ensureCloudTransport();
     await _ensureLanTransport();
     _timer ??= Timer.periodic(const Duration(seconds: 15), (_) => processQueue());
@@ -153,6 +178,17 @@ class SyncEngine {
 
   /// يُستدعى من UI عند طلب "مزامنة الآن".
   Future<void> forceSyncNow() => processQueue();
+
+  /// جدولة push فورية (لا تنتظر دورة الـ Timer) — لتسريع Near-Real-Time.
+  Timer? _immediate;
+  void notifyNewOperation() {
+    if (!_started) return;
+    _immediate?.cancel();
+    // Debounce بسيط: 200ms لتجميع العمليات السريعة.
+    _immediate = Timer(const Duration(milliseconds: 200), () {
+      processQueue();
+    });
+  }
 
   Future<SyncSummary> summary() async {
     final q = _queue ?? SyncQueueOps(await _db);

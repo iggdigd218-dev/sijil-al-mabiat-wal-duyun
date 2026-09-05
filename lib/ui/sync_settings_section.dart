@@ -68,7 +68,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     final st = await repo.settings();
     _cloudUrlCtrl.text = st['cloudBackendUrl'] ?? '';
     _autoSync = (st['cloudAutoSync'] ?? '1') != '0';
-    _lanEnabled = (st['lanSyncEnabled'] ?? '1') != '0';
+    _lanEnabled = (st['lanSyncEnabled'] ?? '0') == '1';
     _lanPortCtrl.text = st['lanSyncPort'] ?? '43053';
     final engine = ref.read(syncEngineProvider);
     final svc = SyncService(repo: repo, engine: engine);
@@ -99,14 +99,34 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   Future<void> _saveCloudConfig() async {
     setState(() => _busy = true);
     try {
+      final url = _cloudUrlCtrl.text.trim();
+      if (url.isNotEmpty) {
+        final u = Uri.tryParse(url);
+        if (u == null || !u.hasScheme || !u.isScheme('https')) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ رابط Firebase غير صالح — يجب أن يبدأ بـ https://'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+      }
       final repo = ref.read(repoProvider);
-      await repo.setSetting('cloudBackendUrl', _cloudUrlCtrl.text.trim());
+      await repo.setSetting('cloudBackendUrl', url);
       await repo.setSetting('cloudAutoSync', _autoSync ? '1' : '0');
       final engine = ref.read(syncEngineProvider);
       if (engine.hasStarted) {
-        // أعد تهيئة الـ transport مع الإعدادات الجديدة.
-        await engine.reconfigureAll();
-        await engine.forceSyncNow();
+        try {
+          await engine.reconfigureAll();
+          await engine.forceSyncNow();
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('⚠️ تعذر الاتصال بالسحابة: $e'), backgroundColor: Colors.orange),
+          );
+        }
       }
       bump(ref);
       await _refresh();
@@ -206,15 +226,37 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   }
 
   Future<void> _removeDevice(String devId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إلغاء الجهاز'),
+        content: const Text('سيتم رفض أي مزامنة قادمة من هذا الجهاز حتى تتم إعادة اقترانه. هل تريد المتابعة؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('إلغاء الجهاز'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
     setState(() => _busy = true);
     try {
       final db = await ref.read(repoProvider).database;
-      await db.delete('devices', where: 'id = ?', whereArgs: [devId]);
+      // نستخدم soft-revoke (set revoked_at) بدلاً من الحذف النهائي لتبقى الأثر ويُرفض الجهاز.
+      await db.update('devices', {
+        'revoked_at': DateTime.now().toIso8601String(),
+        'is_paired': 0,
+        'auth_secret': '',
+        'updated_at': DateTime.now().toIso8601String(),
+      }, where: 'id = ?', whereArgs: [devId]);
       bump(ref);
       await _refresh();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم حذف الجهاز من القائمة')),
+        const SnackBar(content: Text('✅ تم إلغاء الجهاز؛ لن تتم مزامنته بعد الآن')),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -252,9 +294,25 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final wsId = (await repo.settings())['sync.workspaceId'] ?? 'default';
       final port = int.tryParse(_lanPortCtrl.text.trim()) ?? 43053;
       final ip = await _localIp();
-      // device id
-      final devs = await db.query('devices', orderBy: 'id ASC');
-      final ourId = devs.isNotEmpty ? (devs.first['id'] as String) : 'DEVICE-UNKNOWN';
+      final ourId = await ensureDeviceId(repo);
+      // تأكد من وجود سجل الجهاز في devices (لضمان وجود port/auth_secret).
+      final devRows = await db.query('devices', where: 'id = ?', whereArgs: [ourId], limit: 1);
+      if (devRows.isEmpty) {
+        final now = DateTime.now().toIso8601String();
+        await db.insert('devices', {
+          'id': ourId,
+          'workspace_id': wsId,
+          'name': 'جهاز نكسورا',
+          'platform': Platform.operatingSystem,
+          'port': port,
+          'is_paired': 1,
+          'auth_secret': '',
+          'revoked_at': '',
+          'ip_address': ip ?? '',
+          'created_at': now,
+          'updated_at': now,
+        });
+      }
       final svc = QrPairingService(db: db, ourDeviceId: ourId);
       final info = await svc.createPairingToken(
         workspaceId: wsId,
@@ -305,19 +363,22 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         );
         return;
       }
-      final db = await ref.read(repoProvider).database;
-      final devs = await db.query('devices', orderBy: 'id ASC');
-      final ourId = devs.isNotEmpty ? (devs.first['id'] as String) : 'DEVICE-UNKNOWN';
+      final repo = ref.read(repoProvider);
+      final db = await repo.database;
+      final ourId = await ensureDeviceId(repo);
       final lan = LanSyncService(
-        repo: ref.read(repoProvider),
+        repo: repo,
         dbProvider: () async => db,
         ourDeviceId: ourId,
         port: port,
       );
-      final ok = await lan.pairWith(ip, port, tok);
+      final result = await lan.pairWith(ip, port, tok);
       if (!mounted) return;
+      final ok = result.ok;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ok ? '✅ تم الربط بنجاح' : '❌ فشل الربط، تأكد من الرمز والشبكة'),
+        SnackBar(content: Text(ok
+            ? '✅ تم الربط بنجاح'
+            : '❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}'),
           backgroundColor: ok ? null : Colors.red),
       );
       if (ok) bump(ref);

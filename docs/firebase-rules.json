@@ -1,0 +1,19 @@
+{
+  "rules": {
+    "workspaces": {
+      "$wsId": {
+        ".read": "auth != null && (auth.token.email != null || auth.uid != null)",
+        ".write": "auth != null && (auth.token.email != null || auth.uid != null)",
+        "operations": {
+          ".indexOn": ["timestamp", "$key"],
+          "$opId": {
+            ".validate": "newData.hasChildren(['id','deviceId','workspaceId','entityType','entityId','opType','version','payload','timestamp']) && newData.child('workspaceId').val() == $wsId"
+          }
+        },
+        "meta": { ".write": "auth != null" },
+        "$other": { ".validate": false }
+      }
+    },
+    "$other": { ".validate": false }
+  }
+}

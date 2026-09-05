@@ -1,6 +1,7 @@
 // إدارة صف المزامنة (sync_queue).
 // لا تقوم هذه الطبقة بأي اتصال شبكة فعلي — فقط تدير حالات الصفوف
 // وجدولة إعادة المحاولة مع backoff متزايد.
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
@@ -164,4 +165,13 @@ String uuid() {
   String hex(int b) => b.toRadixString(16).padLeft(2, '0');
   final chars = bytes.map(hex).join();
   return '${chars.substring(0, 8)}-${chars.substring(8, 12)}-${chars.substring(12, 16)}-${chars.substring(16, 20)}-${chars.substring(20)}';
+}
+
+/// يولّد سرًا عشوائيًا قصيرًا لمصادقة أجهزة LAN (يُشارك أثناء الاقتران).
+String generateLanSecret() {
+  final r = Random.secure();
+  final bytes = List<int>.generate(24, (_) => r.nextInt(256));
+  // Base64url بدون padding لتبسيط الإرسال.
+  final b64 = base64Url.encode(bytes).replaceAll('=', '');
+  return b64;
 }
