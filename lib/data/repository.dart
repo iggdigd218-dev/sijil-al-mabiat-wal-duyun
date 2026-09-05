@@ -66,16 +66,16 @@ class Repo {
     );
 
     // 🛟 بذرة مستخدم مدير افتراضي في أول تشغيل (إذا كان جدول المستخدمين فارغًا).
-    // هذا يمنع قفل التطبيق بدون أي مستخدم — المدير الافتراضي يمكن للمستخدم
-    // تغيير اسمه أو إضافة مستخدمين آخرين من شاشة المستخدمين.
     final existingUsers = await db.query('users', limit: 1);
     if (existingUsers.isEmpty) {
+      final adminPerms = defaultPerms(UserRole.admin);
+      final permStr = adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
       await db.insert('users', {
         'name': 'المدير',
         'role': 'admin',
         'pin': '',
         'password': '',
-        'permissions': jsonEncode(defaultPerms(UserRole.admin)),
+        'permissions': permStr,
         'is_me': 1,
         'active': 1,
         'workspace_id': _workspaceId,
@@ -107,7 +107,9 @@ class Repo {
 
   String get requireDeviceId {
     if (_deviceId == null) {
-      throw StateError('Sync infra not initialized: call initSyncInfra() first');
+      // لا نرمي خطأ قاتل؛ في أسوأ الحالات نستخدم معرفًا مؤقتًا.
+      // هذا يمنع انهيار التطبيق في شاشات لا تمر عبر initSyncInfra مباشرة.
+      return 'DEVICE-UNKNOWN';
     }
     return _deviceId!;
   }

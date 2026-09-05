@@ -4,27 +4,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/db_init.dart';
+import 'core/database.dart';
 import 'core/theme.dart';
-import 'data/repository.dart';
 import 'data/providers.dart';
+import 'data/repository.dart';
+import 'data/sync/sync_engine.dart';
 import 'ui/home_shell.dart';
 import 'ui/lock_gate.dart';
 import 'ui/splash.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // تهيئة قاعدة البيانات حسب المنصة (FFI على ويندوز/لينكس/ماك، افتراضي على الهاتف).
   initDbForPlatform();
-  // بدون تهيئة بيانات التواريخ تنهار كل تنسيقات intl عند الإقلاع.
   await initializeDateFormatting('ar');
   await initializeDateFormatting('en');
-  // نقرأ الإعدادات المحفوظة قبل الإقلاع حتى تظهر السمة الصحيحة فورًا.
+
+  // Repo واحد ومُهيّأ تُستخدمه كل شاشات التطبيق عبر Riverpod.
+  final repo = Repo();
+  await repo.initSyncInfra();
+  final engine = SyncEngine(
+    repo: repo,
+    dbProvider: () => AppDatabase.instance.database,
+  );
+  await engine.start();
+
   var themeMode = ThemeMode.system;
   var hideBalances = false;
   try {
-    final repo = Repo();
-    // تهيئة Workspace + deviceId + تسجيل هذا الجهاز قبل أول استخدام.
-    await repo.initSyncInfra();
     final st = await repo.settings();
     themeMode = switch (st['theme']) {
       'light' => ThemeMode.light,
@@ -32,12 +38,12 @@ Future<void> main() async {
       _ => ThemeMode.system,
     };
     hideBalances = st['hideBalances'] == '1';
-  } catch (_) {
-    // قاعدة جديدة أو تعذّر الفتح: نُكمل بالقيم الافتراضية.
-  }
+  } catch (_) {}
 
   runApp(ProviderScope(
     overrides: [
+      repoProvider.overrideWithValue(repo),
+      syncEngineProvider.overrideWithValue(engine),
       themeModeProvider.overrideWith((ref) => themeMode),
       hideBalancesProvider.overrideWith((ref) => hideBalances),
     ],
@@ -63,7 +69,6 @@ class NexoraApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      // التطبيق عربي بالكامل: نفرض RTL على كل الشجرة.
       builder: (context, child) => Directionality(
         textDirection: TextDirection.rtl,
         child: child ?? const SizedBox.shrink(),

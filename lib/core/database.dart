@@ -5,6 +5,9 @@ import 'package:sqflite/sqflite.dart';
 
 import 'db_init.dart';
 
+/// معرف Workspace الافتراضي (ثابت محلي لتجنب circular imports).
+const defaultWorkspaceIdConst = 'default';
+
 /// قاعدة البيانات المحلية — تقابل مخازن IndexedDB في نسخة الويب،
 /// لكن بجداول SQL حقيقية مع فهارس ومفاتيح أجنبية.
 class AppDatabase {
@@ -463,11 +466,11 @@ class AppDatabase {
           id_token TEXT DEFAULT '', signed_in_at TEXT DEFAULT '', updated_at TEXT DEFAULT ''
         )''');
     // تأكد من وجود Workspace افتراضي.
-    final wsExists = await db.rawQuery('SELECT id FROM workspaces WHERE id = ?', [defaultWorkspaceId]);
+    final wsExists = await db.rawQuery('SELECT id FROM workspaces WHERE id = ?', [defaultWorkspaceIdConst]);
     if (wsExists.isEmpty) {
       final now = DateTime.now().toIso8601String();
       await db.insert('workspaces', {
-        'id': defaultWorkspaceId,
+        'id': defaultWorkspaceIdConst,
         'name': 'متجري',
         'owner_google_id': '', 'owner_email': '', 'owner_name': '',
         'created_at': now, 'updated_at': now,

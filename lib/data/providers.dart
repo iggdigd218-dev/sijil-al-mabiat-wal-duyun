@@ -8,17 +8,13 @@ import 'repository.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/sync_engine.dart';
 
-final repoProvider = Provider<Repo>((ref) => Repo());
+/// Repo واحدة ومُهيّأة مسبقًا تُحقن عبر ProviderScope.override في main.
+/// لا ننشئ نسخة جديدة هنا لضمان أن initSyncInfra() استُدعيت مرة واحدة.
+final repoProvider = Provider<Repo>((ref) => throw StateError(
+    'repoProvider must be overridden in ProviderScope'));
 
-final syncEngineProvider = Provider<SyncEngine>((ref) {
-  final repo = ref.read(repoProvider);
-  final engine = SyncEngine(
-    repo: repo,
-    dbProvider: () => AppDatabase.instance.database,
-  );
-  ref.onDispose(() => engine.stop());
-  return engine;
-});
+final syncEngineProvider = Provider<SyncEngine>((ref) => throw StateError(
+    'syncEngineProvider must be overridden in ProviderScope'));
 
 final googleAuthProvider = FutureProvider<GoogleUser?>((ref) async {
   ref.watch(refreshProvider);
