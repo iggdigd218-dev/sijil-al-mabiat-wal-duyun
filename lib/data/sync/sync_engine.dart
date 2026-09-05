@@ -225,6 +225,8 @@ class SyncEngine {
           final qid = r['id'] as int;
           final opId = r['operation_id'] as String;
           await q.markSyncing(qid);
+          String? entityTable;
+          String? entityId;
           try {
             final opRows = await db.query('operations',
                 where: 'id = ?', whereArgs: [opId], limit: 1);
@@ -233,10 +235,34 @@ class SyncEngine {
               continue;
             }
             final op = SyncOperation.fromMap(opRows.first);
+            entityTable = switch (op.entityType) {
+              EntityKind.tx => 'transactions',
+              EntityKind.account => 'accounts',
+              EntityKind.item => 'inventory_items',
+              EntityKind.itemCategory => 'item_categories',
+              EntityKind.stockMove => 'stock_moves',
+              EntityKind.voucher => 'vouchers',
+              EntityKind.user => 'users',
+              EntityKind.currency => 'currencies',
+              EntityKind.setting => 'settings',
+            };
+            entityId = op.entityId;
+            if (entityTable == 'transactions') {
+              await db.update('transactions', {'sync_state': 'syncing'},
+                  where: 'id = ?', whereArgs: [entityId]);
+            }
             await t.push(op);
             await q.markSynced(qid);
+            if (entityTable == 'transactions' && entityId != null) {
+              await db.update('transactions', {'sync_state': 'synced'},
+                  where: 'id = ?', whereArgs: [entityId]);
+            }
           } catch (e) {
             await q.markFailed(qid, e);
+            if (entityTable == 'transactions' && entityId != null) {
+              await db.update('transactions', {'sync_state': 'failed'},
+                  where: 'id = ?', whereArgs: [entityId]);
+            }
           }
         }
       }

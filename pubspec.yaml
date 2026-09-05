@@ -25,7 +25,6 @@ dependencies:
   printing: ^5.13.2
   local_auth: ^2.3.0
   local_auth_android: ^1.0.43
-  flutter_contacts: ^1.1.9
   math_expressions: ^2.6.0
   crypto: ^3.0.5
   google_sign_in: ^6.2.2

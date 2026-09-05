@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 14;
+  static const int _version = 15;
 
   static int get schemaVersion => _version;
 
@@ -100,6 +100,7 @@ class AppDatabase {
         attachment   TEXT DEFAULT '',
         image        TEXT DEFAULT '',
         status       TEXT NOT NULL DEFAULT 'done',
+        sync_state   TEXT NOT NULL DEFAULT 'synced',
         date         TEXT NOT NULL,
         deleted_at   TEXT DEFAULT '',
         deleted_by   INTEGER,
@@ -633,6 +634,13 @@ class AppDatabase {
       await _addColumn(db, 'devices', 'expelled_at',
           "TEXT DEFAULT ''");
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '14'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v15: حالة مزامنة مستقلة لكل عملية (بجانب status الأصلية). ======
+    if (from < 15) {
+      await _addColumn(db, 'transactions', 'sync_state',
+          "TEXT NOT NULL DEFAULT 'local'");
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '15'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

@@ -190,39 +190,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ListView(
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 120),
               children: [
-                const SectionTitle('إعدادات التطبيق والنظام'),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppColors.primarySoftOf(context),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            Icons.tune_outlined,
-                            color: AppColors.primaryOf(context),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'جميع إعدادات النظام في صفحة واحدة: بيانات المؤسسة، المحاسبة، المظهر والأمان. الترقيم التلقائي رقمي بحت لكل العمليات والسندات.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.6,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
+                const SectionTitle('الإعدادات'),
+                const SizedBox(height: 6),
                 _Collapsible(
                   title: 'بيانات المؤسسة',
                   icon: Icons.business_outlined,
@@ -243,16 +212,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          'شعار المؤسسة في السندات',
+                          'شعار المؤسسة',
                           style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'أضف شعارك ليظهر تلقائيًا في صورة الإيصال وملف PDF.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.text2Of(context),
                         ),
                       ),
                       if (_hasLogo) ...[

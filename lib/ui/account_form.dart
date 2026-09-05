@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
-import 'contact_picker.dart';
 import 'widgets.dart';
 
 /// فتح نموذج إضافة/تعديل حساب.
@@ -32,7 +32,6 @@ class _State extends ConsumerState<AccountFormScreen> {
   late final TextEditingController _name;
   late final TextEditingController _opening;
   late final TextEditingController _phone;
-  late final TextEditingController _whatsapp;
   late final TextEditingController _address;
   late final TextEditingController _notes;
   late final TextEditingController _category;
@@ -62,8 +61,7 @@ class _State extends ConsumerState<AccountFormScreen> {
         text: a == null || a.openingBalance == 0
             ? ''
             : Fmt.money(a.openingBalance.abs(), 2));
-    _phone = TextEditingController(text: a?.phone ?? '');
-    _whatsapp = TextEditingController(text: a?.whatsapp ?? '');
+    _phone = TextEditingController(text: a?.whatsapp?.isNotEmpty == true ? a!.whatsapp : (a?.phone ?? ''));
     _address = TextEditingController(text: a?.address ?? '');
     _notes = TextEditingController(text: a?.notes ?? '');
     _category = TextEditingController(text: a?.category ?? '');
@@ -83,7 +81,6 @@ class _State extends ConsumerState<AccountFormScreen> {
       _name,
       _opening,
       _phone,
-      _whatsapp,
       _address,
       _notes,
       _category,
@@ -112,7 +109,7 @@ class _State extends ConsumerState<AccountFormScreen> {
         openingBalance: finalOpening,
         currency: _currency,
         phone: Fmt.phoneDigits(_phone.text),
-        whatsapp: Fmt.phoneDigits(_whatsapp.text),
+        whatsapp: Fmt.phoneDigits(_phone.text),
         address: _address.text.trim(),
         notes: _notes.text.trim(),
         category: widget.existing?.category ?? '',
@@ -140,52 +137,25 @@ class _State extends ConsumerState<AccountFormScreen> {
     }
   }
 
-  /// يملأ الاسم والهاتف والواتساب من جهة اتصال مختارة.
-  Future<void> _fromContacts() async {
-    // قائمة خيارات: إمّا اختيار جهة داخل التطبيق، أو فتح تطبيق جهات الاتصال.
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 10),
-            Container(width: 40, height: 4, decoration: BoxDecoration(
-              color: Colors.black26, borderRadius: BorderRadius.circular(3))),
-            ListTile(
-              leading: const Icon(Icons.person_search_rounded, color: Color(0xFF4CAF50)),
-              title: const Text('اختيار من جهات الاتصال (تعبئة تلقائية)'),
-              subtitle: const Text('سيتم ملء الاسم والرقم تلقائياً'),
-              onTap: () => Navigator.pop(ctx, 'pick'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new_rounded, color: Color(0xFF2196F3)),
-              title: const Text('فتح تطبيق جهات الاتصال'),
-              subtitle: const Text('يفتح التطبيق الخاص بالهاتف لإضافة/تعديل جهة اتصال'),
-              onTap: () => Navigator.pop(ctx, 'open'),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (!mounted || choice == null) return;
-    if (choice == 'open') {
-      openSystemContactsApp(context);
+  String? get _phoneDigits {
+    final d = Fmt.phoneDigits(_phone.text);
+    return d.isEmpty ? null : d;
+  }
+
+  Future<void> _launch(String scheme) async {
+    final num = _phoneDigits;
+    if (num == null) {
+      Sfx.reject();
+      showSnack(context, 'أدخل رقم الهاتف أولاً', error: true);
       return;
     }
-    final c = await pickContact(context);
-    if (c == null || !mounted) return;
-    setState(() {
-      _name.text = c.name;
-      final digits = Fmt.phoneDigits(c.phone);
-      if (_phone.text.trim().isEmpty) _phone.text = digits;
-      if (_whatsapp.text.trim().isEmpty) _whatsapp.text = digits;
-    });
-    Sfx.pop();
+    final uri = Uri.parse('$scheme$num');
+    try {
+      Sfx.pop();
+      await launchUrl(uri);
+    } catch (_) {
+      if (mounted) showSnack(context, 'تعذّر فتح التطبيق', error: true);
+    }
   }
 
   @override
@@ -202,14 +172,8 @@ class _State extends ConsumerState<AccountFormScreen> {
           children: [
             TextFormField(
               controller: _name,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'اسم الحساب *',
-                // البند ١١: اختيار الاسم والرقم من جهات اتصال الهاتف.
-                suffixIcon: IconButton(
-                  tooltip: 'اختيار من جهات الاتصال',
-                  icon: const Icon(Icons.contacts_outlined),
-                  onPressed: _fromContacts,
-                ),
               ),
               textInputAction: TextInputAction.next,
               validator: (v) =>
@@ -274,59 +238,35 @@ class _State extends ConsumerState<AccountFormScreen> {
             const SizedBox(height: 13),
             TextFormField(
               controller: _phone,
-              decoration: const InputDecoration(
-                labelText: 'رقم الهاتف (للرسائل النصية)',
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: 'رقم الجوال',
                 hintText: '7xxxxxxxx',
-              ),
-              keyboardType: TextInputType.phone,
-            ),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _whatsapp,
-              decoration: const InputDecoration(
-                labelText: 'رقم الواتساب (إن اختلف عن الهاتف)',
-                hintText: 'اتركه فارغاً لاستخدام رقم الهاتف',
-              ),
-              keyboardType: TextInputType.phone,
-            ),
-            const SizedBox(height: 13),
-            // قناة إرسال الإشعار لهذا الحساب.
-            DropdownButtonFormField<String>(
-              value: _notifyChannel,
-              decoration: const InputDecoration(
-                labelText: 'طريقة إرسال إشعار السند',
-                helperText: 'عند حفظ عملية، يُفتح التطبيق المختار لمراسلة العميل بالسند.',
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'whatsapp',
-                  child: Row(children: [
-                    Icon(Icons.chat_bubble_outline, size: 18),
-                    SizedBox(width: 8),
-                    Text('واتساب')
-                  ]),
+                prefixIcon: const Icon(Icons.phone_android),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'اتصال',
+                      icon: const Icon(Icons.call, color: Colors.green),
+                      onPressed: () => _launch('tel:'),
+                    ),
+                    IconButton(
+                      tooltip: 'رسالة نصية (SMS)',
+                      icon: const Icon(Icons.sms, color: Colors.blue),
+                      onPressed: () => _launch('sms:'),
+                    ),
+                    IconButton(
+                      tooltip: 'واتساب',
+                      icon: const Icon(Icons.chat, color: Color(0xFF25D366)),
+                      onPressed: () => _launch('https://wa.me/'),
+                    ),
+                  ],
                 ),
-                DropdownMenuItem(
-                  value: 'sms',
-                  child: Row(children: [
-                    Icon(Icons.sms_outlined, size: 18),
-                    SizedBox(width: 8),
-                    Text('رسالة نصية (SMS)')
-                  ]),
-                ),
-                DropdownMenuItem(
-                  value: 'none',
-                  child: Row(children: [
-                    Icon(Icons.block, size: 18),
-                    SizedBox(width: 8),
-                    Text('بدون إشعار')
-                  ]),
-                ),
-              ],
-              onChanged: (v) {
-                if (v != null) setState(() => _notifyChannel = v);
-              },
+              ),
             ),
+
+
             const SizedBox(height: 13),
             TextFormField(
               controller: _address,

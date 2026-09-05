@@ -163,7 +163,7 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   bool get _isTransfer => _type == OpType.transfer;
 
-  /// تفاصيل فاتورة المبيعات (الأصناف) تظهر للبيع النقدي (قبض) والآجل (عليه).
+  /// تفاصيل فاتورة المبيعات (الأصناف) تظهر فقط لعمليات البيع (قبض أو عليه).
   bool get _hasInvoiceDetails =>
       _type == OpType.debit || _type == OpType.inflow;
 
@@ -356,169 +356,121 @@ class _TxFormState extends ConsumerState<TxForm> {
     }
   }
 
+  bool _advancedOpen = false;
+
+  Widget _typeChips() => _typeGrid();
+
+  Widget _invoiceShortcut() {
+    return Card(
+      color: AppColors.primarySoftOf(context),
+      child: ListTile(
+        leading: const Icon(Icons.point_of_sale, size: 22),
+        title: Text(_invoiceLines.isEmpty ? 'إضافة أصناف للفاتورة' : 'الأصناف (${_invoiceLines.length}) — ${Fmt.money(_invoiceTotal)}',
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(_invoiceLines.isEmpty ? 'لإدخال تفاصيل مبيعات (منتجات، خصم، ضريبة)' : 'اضغط لتعديل الأصناف'),
+        trailing: const Icon(Icons.chevron_left),
+        onTap: () => _openInvoiceEditor(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const SizedBox(
-        height: 260,
-        child: Center(child: CircularProgressIndicator()),
-      );
+      return const SizedBox(height: 260, child: Center(child: CircularProgressIndicator()));
     }
-
     if (_accounts.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const EmptyState(
-              icon: Icons.person_off_outlined,
-              title: 'لا توجد حسابات',
-              message: 'أضف حسابًا أولًا قبل تسجيل أي عملية مالية.',
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('حسنًا'),
-            ),
-          ],
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const EmptyState(icon: Icons.person_off_outlined, title: 'لا توجد حسابات',
+              message: 'أضف حسابًا أولًا قبل تسجيل أي عملية.'),
+          const SizedBox(height: 12),
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('حسنًا')),
+        ]),
       );
     }
-
     final title = widget.isCopy
         ? '🔁 تكرار عملية'
-        : (widget.existing != null ? '✏️ تعديل عملية' : '＋ عملية مالية جديدة');
-
+        : (widget.existing != null ? '✏️ تعديل عملية' : '＋ عملية جديدة');
     return DraggableScrollableSheet(
-      initialChildSize: .92,
-      minChildSize: .5,
-      maxChildSize: .96,
-      expand: false,
-      builder: (context, scroll) => Column(
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 42,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColors.borderOf(context),
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(title,
-                      style: Theme.of(context).textTheme.titleLarge),
+      initialChildSize: .92, minChildSize: .5, maxChildSize: .96, expand: false,
+      builder: (context, scroll) => Column(children: [
+        const SizedBox(height: 8),
+        Container(width: 42, height: 4,
+            decoration: BoxDecoration(color: AppColors.borderOf(context),
+                borderRadius: BorderRadius.circular(4))),
+        Padding(padding: const EdgeInsets.fromLTRB(18, 14, 8, 6), child: Row(children: [
+          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+          IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+        ])),
+        const Divider(height: 1),
+        Expanded(child: Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: ListView(
+            controller: scroll,
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            children: [
+              _typeChips(),
+              const SizedBox(height: 14),
+              _accountPickers(),
+              const SizedBox(height: 14),
+              _amountRow(),
+              if (_hasInvoiceDetails) ...[const SizedBox(height: 8), _invoiceShortcut()],
+              if (_type == OpType.settle) ...[const SizedBox(height: 14), _signPicker()],
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _desc,
+                decoration: const InputDecoration(
+                  labelText: 'البيان / الوصف',
+                  prefixIcon: Icon(Icons.notes_outlined),
+                  hintText: 'وصف مختصر (اختياري)',
                 ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: Form(
-              key: _formKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              child: ListView(
-                controller: scroll,
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                children: [
-                  _typeGrid(),
-                  const SizedBox(height: 18),
-                  _accountPickers(),
-                  const SizedBox(height: 14),
-                  _amountRow(),
-                  if (_hasInvoiceDetails) ...[
-                    const SizedBox(height: 14),
-                    _invoiceItemsSection(),
-                  ],
-                  if (_type == OpType.settle) ...[
-                    const SizedBox(height: 14),
-                    _signPicker(),
-                  ],
-                  const SizedBox(height: 12),
-                  _hintBox(),
-                  const SizedBox(height: 16),
-                  _datePicker(),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _desc,
-                    decoration: const InputDecoration(
-                      labelText: 'البيان / الوصف',
-                      prefixIcon: Icon(Icons.notes_outlined),
-                    ),
-                    maxLines: 2,
-                    textInputAction: TextInputAction.next,
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _ref,
-                    decoration: const InputDecoration(
-                      labelText: 'رقم مرجعي',
-                      prefixIcon: Icon(Icons.tag),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _notes,
-                    decoration: const InputDecoration(
-                      labelText: 'ملاحظات',
-                      prefixIcon: Icon(Icons.sticky_note_2_outlined),
-                    ),
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 10),
-                  _smallImagePicker(),
-                  const SizedBox(height: 24),
-                  SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                          bottom: MediaQuery.of(context).viewInsets.bottom),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed:
-                                  _saving ? null : () => Navigator.pop(context),
-                              child: const Text('إلغاء'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            flex: 2,
-                            child: FilledButton.icon(
-                              onPressed: _saving ? null : _save,
-                              icon: _saving
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white),
-                                    )
-                                  : const Icon(Icons.save_outlined),
-                              label: Text(
-                                  _saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                textInputAction: TextInputAction.done,
               ),
-            ),
+              Theme(data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero, childrenPadding: EdgeInsets.zero,
+                  title: Text(_advancedOpen ? 'إخفاء التفاصيل الإضافية' : 'التفاصيل الإضافية'),
+                  leading: const Icon(Icons.tune),
+                  onExpansionChanged: (v) => setState(() => _advancedOpen = v),
+                  children: [
+                    const SizedBox(height: 6),
+                    _datePicker(),
+                    const SizedBox(height: 14),
+                    TextFormField(controller: _ref, decoration: const InputDecoration(
+                        labelText: 'رقم مرجعي', prefixIcon: Icon(Icons.tag))),
+                    const SizedBox(height: 14),
+                    TextFormField(controller: _notes,
+                        decoration: const InputDecoration(labelText: 'ملاحظات',
+                            prefixIcon: Icon(Icons.sticky_note_2_outlined)),
+                        maxLines: 2),
+                    const SizedBox(height: 10),
+                    _smallImagePicker(),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(children: [
+                Expanded(child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    child: const Text('إلغاء'))),
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.save_outlined),
+                  label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
+                )),
+              ]),
+            ],
           ),
-        ],
-      ),
+        )),
+      ]),
     );
   }
 
@@ -594,6 +546,116 @@ class _TxFormState extends ConsumerState<TxForm> {
   String _number(double value) => value == value.roundToDouble()
       ? Fmt.money(value)
       : Fmt.money(value, 2);
+
+  Future<void> _openInvoiceEditor() async {
+    Sfx.click();
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+          child: StatefulBuilder(
+            builder: (ctx, setSheet) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.receipt_long_outlined),
+                  const SizedBox(width: 8),
+                  Text('تفاصيل فاتورة المبيعات',
+                      style: Theme.of(ctx).textTheme.titleMedium),
+                  const Spacer(),
+                  Text('الإجمالي: ${Fmt.money(_invoiceTotal)}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, color: Colors.green)),
+                ]),
+                const SizedBox(height: 10),
+                _invoiceItemsListBody(setSheet: setSheet),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      await _addInvoiceLine();
+                      setSheet(() {});
+                      setState(() {});
+                    },
+                    icon: const Icon(Icons.add),
+                    label: const Text('إضافة صنف'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('تم'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Widget _invoiceItemsListBody({required void Function(void Function()) setSheet}) {
+    if (_invoiceLines.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+            child: Text('لم تُضف أي أصناف بعد.',
+                style: TextStyle(color: Colors.black54))),
+      );
+    }
+    return Column(
+      children: [
+        for (int i = 0; i < _invoiceLines.length; i++)
+          _invoiceLineTile(i, setSheet),
+      ],
+    );
+  }
+
+  Widget _invoiceLineTile(
+      int i, void Function(void Function()) setSheet) {
+    final l = _invoiceLines[i];
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(child: Text('${i + 1}')),
+        title: Text(l.itemName ?? 'صنف ${i + 1}'),
+        subtitle: Text(
+            '${_number(l.quantity)} × ${Fmt.money(l.unitPrice)} = ${Fmt.money(l.total)}'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.edit, size: 20),
+              onPressed: () async {
+                await _editInvoiceLine(i);
+                setSheet(() {});
+                setState(() {});
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+              onPressed: () {
+                setSheet(() => _invoiceLines.removeAt(i));
+                setState(() {});
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _invoiceItemsSection() {
     final c = _selectedCurrency;

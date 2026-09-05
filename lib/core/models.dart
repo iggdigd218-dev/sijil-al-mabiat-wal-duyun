@@ -167,6 +167,14 @@ class Tx {
   /// مسار صورة الإيصال المولّدة أو المختارة لهذه العملية (واحدة لكل عملية).
   final String image;
   final String status;
+
+  /// حالة المزامنة المستقلة عن حالة العملية:
+  ///  - 'synced': تمت المزامنة بنجاح.
+  ///  - 'pending': بانتظار المزامنة.
+  ///  - 'syncing': جاري المزامنة.
+  ///  - 'failed': فشلت المزامنة.
+  ///  - 'local': محلي فقط (جهاز مستقل / غير مُرسل بعد).
+  final String syncState;
   final DateTime date;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -189,6 +197,7 @@ class Tx {
     this.attachment = '',
     this.image = '',
     this.status = 'done',
+    this.syncState = 'synced',
     required this.date,
     required this.createdAt,
     required this.updatedAt,
@@ -229,6 +238,7 @@ class Tx {
     String? attachment,
     String? image,
     String? status,
+    String? syncState,
     DateTime? date,
   }) =>
       Tx(
@@ -249,6 +259,7 @@ class Tx {
         attachment: attachment ?? this.attachment,
         image: image ?? this.image,
         status: status ?? this.status,
+        syncState: syncState ?? this.syncState,
         date: date ?? this.date,
         createdAt: createdAt,
         updatedAt: DateTime.now(),
@@ -272,6 +283,7 @@ class Tx {
         'attachment': attachment,
         'image': image,
         'status': status,
+        'sync_state': syncState,
         'date': date.toIso8601String(),
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
@@ -296,6 +308,7 @@ class Tx {
         attachment: (m['attachment'] ?? '') as String,
         image: (m['image'] ?? '') as String,
         status: (m['status'] ?? 'done') as String,
+        syncState: (m['sync_state'] ?? 'synced') as String,
         date: DateTime.parse(m['date'] as String),
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt: DateTime.parse(m['updated_at'] as String),
@@ -400,6 +413,14 @@ class Voucher {
 
   /// draft / approved / cancelled
   final String status;
+
+  /// حالة المزامنة المستقلة عن حالة العملية:
+  ///  - 'synced': تمت المزامنة بنجاح.
+  ///  - 'pending': بانتظار المزامنة.
+  ///  - 'syncing': جاري المزامنة.
+  ///  - 'failed': فشلت المزامنة.
+  ///  - 'local': محلي فقط (جهاز مستقل / غير مُرسل بعد).
+  final String syncState;
   final DateTime date;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -451,6 +472,7 @@ class Voucher {
         statement: statement ?? this.statement,
         notes: notes ?? this.notes,
         status: status ?? this.status,
+        syncState: syncState ?? this.syncState,
         date: date ?? this.date,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
@@ -467,6 +489,7 @@ class Voucher {
         'statement': statement,
         'notes': notes,
         'status': status,
+        'sync_state': syncState,
         'date': date.toIso8601String(),
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),

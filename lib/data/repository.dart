@@ -493,6 +493,8 @@ class Repo {
   Future<int> saveTx(Tx t, {List<InvoiceLine>? items}) async {
     await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
+    final mode = await workspaceMode();
+    final newSync = mode == 'standalone' ? 'synced' : 'pending';
     late final int id;
     await db.transaction((txn) async {
       final rec = await SyncRecorder(
@@ -507,7 +509,9 @@ class Repo {
         if (ref.isEmpty) {
           ref = await nextSeq('counter_tx', table: 'transactions');
         }
-        final toSave = ref == t.reference ? t : t.copyWith(reference: ref);
+        final toSave = ref == t.reference
+            ? t.copyWith(syncState: newSync)
+            : t.copyWith(reference: ref, syncState: newSync);
         final map = toSave.toMap();
         map['workspace_id'] = requireWorkspaceId;
         map.remove('id');
@@ -530,7 +534,8 @@ class Repo {
         );
       } else {
         id = t.id!;
-        final map = t.toMap();
+        final toSave = t.copyWith(syncState: newSync);
+        final map = toSave.toMap();
         map['workspace_id'] = requireWorkspaceId;
         map.remove('id');
         map['updated_at'] = now;
