@@ -2,7 +2,7 @@ name: Build Windows EXE
 
 on:
   push:
-    branches: [ flutter-native ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -71,7 +71,7 @@ jobs:
 
       - name: Create Windows Release
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/flutter-native'
+        if: github.ref == 'refs/heads/main'
         with:
           tag_name: windows-v1.0.${{ github.run_number }}
           name: إصدار ويندوز (Nexora Windows v1.0.${{ github.run_number }})

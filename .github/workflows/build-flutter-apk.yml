@@ -2,9 +2,9 @@ name: Build Flutter Android APK
 
 on:
   push:
-    branches: [ flutter-native ]
+    branches: [ main ]
   pull_request:
-    branches: [ flutter-native ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -69,7 +69,7 @@ jobs:
 
       - name: Create GitHub Release with APK
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/flutter-native'
+        if: github.ref == 'refs/heads/main'
         with:
           tag_name: flutter-v3.7.${{ github.run_number }}
           name: Nexora Flutter Native v3.7 (arm64)
