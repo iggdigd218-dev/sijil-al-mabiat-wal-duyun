@@ -34,6 +34,7 @@ class Fmt {
     const ar = '٠١٢٣٤٥٦٧٨٩';
     const fa = '۰۱۲۳۴۵۶۷۸۹';
     final b = StringBuffer();
+    bool seenDot = false;
     for (final ch in s.trim().split('')) {
       final ai = ar.indexOf(ch);
       final fi = fa.indexOf(ch);
@@ -41,9 +42,14 @@ class Fmt {
         b.write(ai);
       } else if (fi >= 0) {
         b.write(fi);
-      } else if (ch == '٫' || ch == ',') {
-        // الفاصلة العشرية العربية أو فاصل الآلاف
-        b.write(ch == '٫' ? '.' : '');
+      } else if (ch == '٫') {
+        // الفاصلة العربية (فاصل عشري) → نقطة.
+        if (!seenDot) { b.write('.'); seenDot = true; }
+      } else if (ch == ',') {
+        // فاصل الآلاف الأوروبي: يُحذف.
+        continue;
+      } else if (ch == '.') {
+        if (!seenDot) { b.write('.'); seenDot = true; }
       } else {
         b.write(ch);
       }

@@ -85,65 +85,66 @@ class _TxFormState extends ConsumerState<TxForm> {
   }
 
   Future<void> _load() async {
-    final repo = ref.read(repoProvider);
-    final accs = await repo.accounts(includeArchived: true);
-    final curs = await repo.currencies();
-    final stockItems = await repo.items(includeArchived: true);
-    final t = widget.existing;
-    final invoiceLines = t?.id == null
-        ? const <InvoiceLine>[]
-        : await repo.transactionItems(t!.id!);
+    try {
+      final repo = ref.read(repoProvider);
+      final accs = await repo.accounts(includeArchived: true);
+      final curs = await repo.currencies();
+      final stockItems = await repo.items(includeArchived: true);
+      final t = widget.existing;
+      final invoiceLines = t?.id == null
+          ? const <InvoiceLine>[]
+          : await repo.transactionItems(t!.id!);
 
-    if (t != null) {
-      _type = t.type;
-      _accountId = t.type == OpType.transfer ? t.fromId : t.accountId;
-      _toId = t.toId;
-      _currency = t.currency;
-      _sign = t.sign.isEmpty ? '+' : t.sign;
-      _status = t.status;
-      _image = t.image;
-      _date = t.date;
-      _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
-      _rate.text = '${t.rate}';
-      _desc.text = t.description;
-      // عند النسخ نفرغ المرجع ليأخذ رقماً تسلسلياً جديداً تلقائياً.
-      _ref.text = widget.isCopy ? '' : t.reference;
-      _notes.text = t.notes;
-    } else {
-      if (widget.presetType != null) {
-        _type = widget.presetType!;
+      if (t != null) {
+        _type = t.type;
+        _accountId = t.type == OpType.transfer ? t.fromId : t.accountId;
+        _toId = t.toId;
+        _currency = t.currency;
+        _sign = t.sign.isEmpty ? '+' : t.sign;
+        _status = t.status;
+        _image = t.image;
+        _date = t.date;
+        _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
+        _rate.text = '${t.rate}';
+        _desc.text = t.description;
+        // عند النسخ نفرغ المرجع ليأخذ رقماً تسلسلياً جديداً تلقائياً.
+        _ref.text = widget.isCopy ? '' : t.reference;
+        _notes.text = t.notes;
       } else {
-        final s = await repo.settings();
-        final mapped = {
-          'inflow': OpType.inflow,
-          'outflow': OpType.outflow,
-          'debit': OpType.debit,
-          'credit': OpType.credit,
-          'revenue': OpType.revenue,
-          'expense': OpType.expense,
-        };
-        final def = s['defaultOp'];
-        if (def != null && mapped.containsKey(def)) _type = mapped[def]!;
-        final defNotes = s['defaultVoucherNotes']?.trim();
-        if (defNotes != null && defNotes.isNotEmpty) {
-          _notes.text = defNotes;
+        if (widget.presetType != null) {
+          _type = widget.presetType!;
+        } else {
+          final s = await repo.settings();
+          final mapped = {
+            'inflow': OpType.inflow,
+            'outflow': OpType.outflow,
+            'debit': OpType.debit,
+            'credit': OpType.credit,
+            'revenue': OpType.revenue,
+            'expense': OpType.expense,
+          };
+          final def = s['defaultOp'];
+          if (def != null && mapped.containsKey(def)) _type = mapped[def]!;
+          final defNotes = s['defaultVoucherNotes']?.trim();
+          if (defNotes != null && defNotes.isNotEmpty) {
+            _notes.text = defNotes;
+          }
         }
+        _accountId = widget.presetAccountId ??
+            (accs.isNotEmpty ? accs.first.id : null);
       }
-      _accountId = widget.presetAccountId ??
-          (accs.isNotEmpty ? accs.first.id : null);
-    }
 
-    final acc = accs.where((a) => a.id == _accountId).firstOrNull;
-    if (t == null && acc != null) _currency = acc.currency;
-
-    if (mounted) {
-      setState(() {
-        _accounts = accs;
-        _currencies = curs;
-        _inventoryItems = stockItems;
-        _invoiceLines = invoiceLines;
-        _loading = false;
-      });
+      final acc = accs.where((a) => a.id == _accountId).firstOrNull;
+      if (t == null && acc != null) _currency = acc.currency;
+    } catch (e) {
+      if (mounted) {
+        Sfx.error();
+        showSnack(context, 'تعذّر تحميل البيانات: $e', error: true, silent: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -191,19 +192,49 @@ class _TxFormState extends ConsumerState<TxForm> {
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+    // إيقاف أي عملية حفظ جارية بالفعل لمنع الضغطات المتكررة.
+    if (_saving) return;
+
+    // إزالة التركيز من الحقول لإخفاء لوحة المفاتيح ولضمان حفظ آخر قيمة مدخلة.
+    FocusScope.of(context).unfocus();
+    await Future.delayed(const Duration(milliseconds: 50));
+
+    final formState = _formKey.currentState;
+    if (formState == null) return;
+
+    // التحقق من الصحة مع إعطاء رد فعل مرئي/صوتي واضح.
+    final valid = formState.validate();
+    if (!valid) {
+      Sfx.reject();
+      // محاولة التمرير إلى أول حقل فاشل.
+      await Future.delayed(const Duration(milliseconds: 100));
+      if (mounted) {
+        Scrollable.ensureVisible(
+          context,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+          alignment: .2,
+        );
+      }
+      return;
+    }
+    formState.save();
+
     if (_accountId == null) {
-      showSnack(context, 'اختر الحساب', error: true);
+      Sfx.reject();
+      showSnack(context, 'اختر الحساب', error: true, silent: true);
       return;
     }
     if (_isTransfer && (_toId == null || _toId == _accountId)) {
-      showSnack(context, 'اختر حساب الوجهة (مختلفًا عن المصدر)', error: true);
+      Sfx.reject();
+      showSnack(context, 'اختر حساب الوجهة (مختلفًا عن المصدر)', error: true, silent: true);
       return;
     }
 
     final amount = Fmt.parseAmount(_amount.text);
     if (amount == null || amount <= 0) {
-      showSnack(context, 'أدخل مبلغًا صحيحًا أكبر من صفر', error: true);
+      Sfx.reject();
+      showSnack(context, 'أدخل مبلغًا صحيحًا أكبر من صفر', error: true, silent: true);
       return;
     }
 
@@ -394,10 +425,11 @@ class _TxFormState extends ConsumerState<TxForm> {
           Expanded(
             child: Form(
               key: _formKey,
+              autovalidateMode: AutovalidateMode.onUserInteraction,
               child: ListView(
                 controller: scroll,
-                padding: EdgeInsets.fromLTRB(
-                    18, 16, 18, 24 + MediaQuery.of(context).viewInsets.bottom),
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                 children: [
                   _typeGrid(),
                   const SizedBox(height: 18),
@@ -446,32 +478,40 @@ class _TxFormState extends ConsumerState<TxForm> {
                   const SizedBox(height: 10),
                   _smallImagePicker(),
                   const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed:
-                              _saving ? null : () => Navigator.pop(context),
-                          child: const Text('إلغاء'),
-                        ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                          bottom: MediaQuery.of(context).viewInsets.bottom),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed:
+                                  _saving ? null : () => Navigator.pop(context),
+                              child: const Text('إلغاء'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : const Icon(Icons.save_outlined),
+                              label: Text(
+                                  _saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 2,
-                        child: FilledButton.icon(
-                          onPressed: _saving ? null : _save,
-                          icon: _saving
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Icon(Icons.save_outlined),
-                          label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ],
               ),
