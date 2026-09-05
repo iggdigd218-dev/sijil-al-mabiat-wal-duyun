@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../core/sfx.dart';
+
 Future<String?> scanBarcode(BuildContext context) async {
   // الكاميرا غير متاحة على سطح المكتب.
   if (!Platform.isAndroid && !Platform.isIOS) {
@@ -41,6 +43,7 @@ class _BarcodeScannerState extends State<_BarcodeScanner> {
     final code = cap.barcodes.isNotEmpty ? cap.barcodes.first.rawValue : null;
     if (code == null || code.isEmpty) return;
     _handled = true;
+    Sfx.scan(); // "نق" سريع عند التقاط الباركود.
     Navigator.of(context).pop(code);
   }
 

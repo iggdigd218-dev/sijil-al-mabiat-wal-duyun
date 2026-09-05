@@ -16,6 +16,7 @@ import '../data/sync/google_auth_service.dart';
 import '../data/sync/lan_http_transport.dart';
 import '../data/sync/qr_pairing.dart';
 import '../data/sync/sync_engine.dart';
+import '../core/sfx.dart';
 import '../data/sync/sync_service.dart';
 import 'qr_pair_scanner.dart';
 
@@ -381,6 +382,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final ourPort = int.tryParse(_lanPortCtrl.text.trim()) ?? kDefaultLanPort;
       final tok = _pairTokenCtrl.text.trim();
       if (ip.isEmpty || tok.isEmpty) {
+        Sfx.reject();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('أدخل IP ورمز الاقتران')),
         );
@@ -424,6 +426,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final result = await lan.pairWith(ip, hostPort, tok, ourPort: ourPort);
       if (!mounted) return;
       if (!result.ok) {
+        Sfx.error();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}'),
@@ -439,6 +442,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
           await LanSyncService.applySnapshot(() async => db, ourId, result.snapshot!);
         } catch (e) {
           if (mounted) {
+            Sfx.error();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('تم الربط لكن تعذر نسخ البيانات: $e'),
@@ -451,6 +455,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       }
       if (mounted) {
         if (result.snapshot == null) {
+          Sfx.warning();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
@@ -462,6 +467,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
             ),
           );
         } else {
+          Sfx.pair(); // نمط احتفالي عند نجاح الانضمام الكامل.
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(

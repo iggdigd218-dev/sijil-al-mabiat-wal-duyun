@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'barcode_scanner.dart';
@@ -673,7 +674,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
     if ((_payment == _PosPayment.credit || _payment == _PosPayment.partial) &&
         _selectedCustomerId == null) {
-      showSnack(context, 'البيع الآجل أو الجزئي يتطلب اختيار حساب العميل.', error: true);
+      Sfx.reject();
+      showSnack(context, 'البيع الآجل أو الجزئي يتطلب اختيار حساب العميل.', error: true, silent: true);
       return;
     }
 
@@ -796,7 +798,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
           }
         }
         if (low.isNotEmpty && mounted) {
-          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب: ${low.join('، ')}', error: true);
+          Sfx.warning();
+          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب: ${low.join('، ')}', error: true, silent: true);
         }
       }
 
@@ -812,18 +815,23 @@ class _PosScreenState extends ConsumerState<PosScreen>
           }
         }
         if (low.isNotEmpty && mounted) {
+          Sfx.warning();
           showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب:\n${low.join('، ')}',
-              error: true);
+              error: true, silent: true);
         }
       }
 
       if (mounted) {
         Navigator.pop(sheetCtx);
+        Sfx.payment(); // صوت "الدفع الإلكتروني" الأطول عند إتمام الفاتورة.
         _showSuccessDialog(txId, refNum, lines);
         _clearCart();
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر إتمام الفاتورة: $e', error: true);
+      if (mounted) {
+        Sfx.error();
+        showSnack(context, 'تعذّر إتمام الفاتورة: $e', error: true, silent: true);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }

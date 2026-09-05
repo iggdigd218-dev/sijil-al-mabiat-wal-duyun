@@ -289,7 +289,8 @@ class _TxFormState extends ConsumerState<TxForm> {
           bump(ref);
           Navigator.pop(context, true);
           showSnack(context,
-              keepId != null ? 'تم تعديل العملية وفتح واتساب ✅' : 'تمت إضافة العملية وفتح واتساب لإرسال السند ✅');
+              keepId != null ? 'تم تعديل العملية وفتح واتساب ✅' : 'تمت إضافة العملية وفتح واتساب لإرسال السند ✅',
+              silent: true);
           Sfx.success();
         }
       } catch (e) {
@@ -297,7 +298,7 @@ class _TxFormState extends ConsumerState<TxForm> {
           bump(ref);
           Navigator.pop(context, true);
           showSnack(context,
-              'تم حفظ العملية ✅ لكن تعذّر فتح واتساب: $e', error: true);
+              'تم حفظ العملية ✅ لكن تعذّر فتح واتساب: $e', error: true, silent: true);
           Sfx.success(); // الحفظ نجح حتى لو فشل فتح واتساب.
         }
       }
@@ -307,7 +308,8 @@ class _TxFormState extends ConsumerState<TxForm> {
         bump(ref);
         Navigator.pop(context, true);
         showSnack(context,
-            keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
+            keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅',
+            silent: true);
         Sfx.success();
       }
     }
@@ -316,7 +318,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         Sfx.error();
         showSnack(context,
             e is StateError ? e.message : 'تعذّر حفظ العملية: $e',
-            error: true);
+            error: true, silent: true);
       }
     } finally {
       if (mounted) setState(() => _saving = false);

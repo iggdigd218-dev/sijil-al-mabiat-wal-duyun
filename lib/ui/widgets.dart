@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 
 /// شارة ملوّنة صغيرة.
@@ -249,6 +250,8 @@ Future<bool> confirmDialog(
   String confirmText = 'تأكيد',
   bool danger = false,
 }) async {
+  // لمسة اهتزاز عند فتح الحوار (نقرة خفيفة).
+  Sfx.click();
   final r = await showDialog<bool>(
     context: context,
     builder: (c) => AlertDialog(
@@ -256,10 +259,20 @@ Future<bool> confirmDialog(
       content: Text(message, style: const TextStyle(height: 1.6)),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(c, false),
+            onPressed: () {
+              Sfx.click();
+              Navigator.pop(c, false);
+            },
             child: const Text('إلغاء')),
         FilledButton(
-          onPressed: () => Navigator.pop(c, true),
+          onPressed: () {
+            if (danger) {
+              Sfx.dangerConfirm();
+            } else {
+              Sfx.pop();
+            }
+            Navigator.pop(c, true);
+          },
           style: danger
               ? FilledButton.styleFrom(backgroundColor: AppColors.red)
               : null,
@@ -271,12 +284,37 @@ Future<bool> confirmDialog(
   return r ?? false;
 }
 
-void showSnack(BuildContext context, String message, {bool error = false}) {
+void showSnack(BuildContext context, String message, {bool error = false, bool silent = false}) {
+  // ردود فعل صوتية/اهتزازية تلقائية لجميع الرسائل ما لم يُطلب الصمت صراحة.
+  if (!silent) {
+    if (error) {
+      Sfx.error();
+    } else if (message.contains('حذف') ||
+        message.contains('أرشفة') ||
+        message.contains('طرد')) {
+      // إجراءات تدميرية: اهتزاز ثقيل تحذيري.
+      Sfx.delete();
+    } else if (message.contains('⚠️') || message.contains('تحذير')) {
+      Sfx.warning();
+    } else if (message.contains('✅') ||
+        message.contains('نجح') ||
+        message.contains('حُفظ') ||
+        message.contains('أُضيف') ||
+        message.contains('تمت ') ||
+        message.contains('اكتمل') ||
+        message.startsWith('تم ')) {
+      // رسائل النجاح — نغمة خفيفة. المواضع التي تُصدِر أصواتًا مخصّصة (كحفظ
+      // العمليات في tx_form) تُمرّر silent: true لتجنب التكرار.
+      Sfx.pop();
+    } else {
+      Sfx.click();
+    }
+  }
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(
       content: Text(message),
       backgroundColor: error ? AppColors.red : null,
-      duration: const Duration(seconds: 3),
+      duration: Duration(seconds: error ? 4 : 3),
     ));
 }
