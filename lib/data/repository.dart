@@ -90,6 +90,22 @@ class Repo {
     final me = await currentUser();
     _currentUserId = me?.id;
 
+    // تأكد من أن جهازنا مرتبط بالمستخدم الحالي (في الوضع المستقل/المضيف).
+    if (_deviceId != null && _currentUserId != null) {
+      final myDev = await db.query('devices',
+          where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+      if (myDev.isNotEmpty) {
+        final existingUid = myDev.first['user_id'] as int?;
+        final existingOwner = (myDev.first['is_owner'] ?? 0) as int;
+        if (existingUid != _currentUserId || existingOwner == 1) {
+          await db.update('devices', {
+            'user_id': _currentUserId,
+            'paired_by': _currentUserId,
+          }, where: 'id = ?', whereArgs: [_deviceId]);
+        }
+      }
+    }
+
     // استعادة جلسة Google بصمت (لا فتح نوافذ).
     try {
       final authSvc = GoogleAuthService(db);
@@ -193,6 +209,11 @@ class Repo {
         return true; // standalone، لا داعي لشيء.
       }
     }
+    final devName = await deviceName(this);
+    final adminPerms = defaultPerms(UserRole.admin);
+    final permStr = adminPerms.entries
+        .where((e) => e.value).map((e) => e.key).join(',');
+    final newSecret = generateLanSecret();
     await db.transaction((txn) async {
       const tables = [
         'accounts', 'transactions', 'transaction_items', 'vouchers',
@@ -203,20 +224,16 @@ class Repo {
       for (final t in tables) {
         await txn.delete(t);
       }
-      await txn.delete('devices'); // حذف كل سجلات الأجهزة.
-      // إعادة بذرة المدير والجهاز الحالي كمالك.
+      await txn.delete('devices');
       final now = DateTime.now().toIso8601String();
-      final adminPerms = defaultPerms(UserRole.admin);
-      final permStr = adminPerms.entries
-          .where((e) => e.value).map((e) => e.key).join(',');
       await txn.insert('devices', {
         'id': _deviceId,
         'workspace_id': requireWorkspaceId,
-        'name': await deviceName(this),
+        'name': devName,
         'platform': Platform.operatingSystem,
         'is_paired': 1,
         'is_owner': 1,
-        'auth_secret': generateLanSecret(),
+        'auth_secret': newSecret,
         'revoked_at': '',
         'ip_address': '',
         'port': kDefaultLanPort,
@@ -242,6 +259,9 @@ class Repo {
           {'key': 'workspaceMode', 'value': 'standalone'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
+    _currentUserId = null;
+    final me = await currentUser();
+    _currentUserId = me?.id;
     return true;
   }
 
@@ -997,7 +1017,7 @@ class Repo {
       LEFT JOIN users u ON u.id = d.user_id
       WHERE d.workspace_id = ?
       ORDER BY
-        CASE WHEN d.revoked_at = '' THEN 0 ELSE 1 END,
+        CASE WHEN COALESCE(d.revoked_at,'') = '' THEN 0 ELSE 1 END,
         d.last_seen_at DESC
     ''', [requireWorkspaceId]);
   }

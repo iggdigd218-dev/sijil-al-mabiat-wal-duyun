@@ -36,6 +36,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   late TextEditingController _lanPortCtrl;
   late TextEditingController _pairIpCtrl;
   late TextEditingController _pairTokenCtrl;
+  late TextEditingController _pairTokenPortCtrl;
   bool _autoSync = true;
   bool _lanEnabled = true;
 
@@ -47,6 +48,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     _lanPortCtrl = TextEditingController(text: '43053');
     _pairIpCtrl = TextEditingController();
     _pairTokenCtrl = TextEditingController();
+    _pairTokenPortCtrl = TextEditingController(text: '43053');
     _refresh();
   }
 
@@ -56,6 +58,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     _lanPortCtrl.dispose();
     _pairIpCtrl.dispose();
     _pairTokenCtrl.dispose();
+    _pairTokenPortCtrl.dispose();
     super.dispose();
   }
 
@@ -220,7 +223,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     if (data == null || !mounted) return;
     _pairIpCtrl.text = data.ip;
     _pairTokenCtrl.text = data.tok;
-    _lanPortCtrl.text = '${data.port}';
+    _pairTokenPortCtrl.text = '${data.port}';
     setState(() {});
     await _pairWithRemote();
   }
@@ -286,7 +289,26 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     }
   }
 
+  Future<bool> _ensureCanHost() async {
+    final repo = ref.read(repoProvider);
+    final mode = await repo.workspaceMode();
+    final isOwner = await repo.isWorkspaceOwner();
+    if (mode == 'member' || !isOwner) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لا يمكنك إنشاء رمز اقتران لأنك عضو في مجموعة وليس مديراً.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _createPairQr() async {
+    if (!await _ensureCanHost()) return;
     setState(() => _busy = true);
     try {
       final repo = ref.read(repoProvider);
@@ -355,7 +377,8 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     setState(() => _busy = true);
     try {
       final ip = _pairIpCtrl.text.trim();
-      final port = int.tryParse(_lanPortCtrl.text.trim()) ?? 43053;
+      final hostPort = int.tryParse(_pairTokenPortCtrl.text.trim()) ?? 43053;
+      final ourPort = int.tryParse(_lanPortCtrl.text.trim()) ?? kDefaultLanPort;
       final tok = _pairTokenCtrl.text.trim();
       if (ip.isEmpty || tok.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -370,7 +393,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         repo: repo,
         dbProvider: () async => db,
         ourDeviceId: ourId,
-        port: port,
+        port: ourPort,
       );
       // تحذير للمستخدم قبل الانضمام: سيتم مسح البيانات المحلية.
       final confirmJoin = await showDialog<bool>(
@@ -398,7 +421,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       );
       if (confirmJoin != true) return;
 
-      final result = await lan.pairWith(ip, port, tok);
+      final result = await lan.pairWith(ip, hostPort, tok, ourPort: ourPort);
       if (!mounted) return;
       if (!result.ok) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -427,22 +450,31 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         }
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              '✅ تم الانضمام إلى المجموعة.\n'
-              'أنت الآن عضو؛ سيقوم المدير بتعيين صلاحياتك من شاشة إدارة الأجهزة.',
+        if (result.snapshot == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'تم الاقتران ✅ لكن تعذّر استلام نسخة البيانات من المضيف. '
+                'تأكد من أن كلا الجهازين على نفس شبكة Wi-Fi وأعد المحاولة.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 5),
             ),
-            duration: Duration(seconds: 4),
-          ),
-        );
-      }
-      bump(ref);
-      // بعد الانضمام نُعيد تشغيل التدفق ليعرض الواجهة وفق صلاحيات العضو.
-      if (mounted) {
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '✅ تم الانضمام إلى المجموعة وحُذفت البيانات المحلية واستُبدلت بنسخة المضيف.\n'
+                'أنت الآن عضو؛ سيقوم المدير بتعيين صلاحياتك من شاشة إدارة الأجهزة.',
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        bump(ref);
         await Future.delayed(const Duration(milliseconds: 300));
-        // نُعيد تشغيل التطبيق عبر إعادة دفع شاشة البداية يُعاد بناء Riverpod.
-        Navigator.of(context).popUntil((r) => r.isFirst);
+        if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -750,7 +782,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 8),
-                // QR Pairing
+                // QR Pairing (يُعطّل تلقائياً للأعضاء الذين لا يمكنهم استضافة مجموعات).
                 ExpansionTile(
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: const EdgeInsets.only(bottom: 8),
@@ -770,7 +802,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: SelectableText(
-                          'IP: ${_pairIpCtrl.text}   المنفذ: ${_lanPortCtrl.text}   الرمز: ${_pairTokenCtrl.text}',
+                          'IP: ${_pairIpCtrl.text}   منفذ المضيف: ${_pairTokenPortCtrl.text}   الرمز: ${_pairTokenCtrl.text}',
                           style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                         ),
                       ),
@@ -788,6 +820,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                     const Text('أو أدخل بيانات الجهاز الرئيسي يدويًا:'),
                     Row(children: [
                       Expanded(
+                        flex: 3,
                         child: TextField(
                           controller: _pairIpCtrl,
                           enabled: !_busy,
@@ -797,18 +830,32 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 80,
                         child: TextField(
-                          controller: _pairTokenCtrl,
+                          controller: _pairTokenPortCtrl,
                           enabled: !_busy,
+                          keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
-                            labelText: 'رمز الاقتران',
+                            labelText: 'المنفذ',
                             isDense: true,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        flex: 2,
+                        child: TextField(
+                          controller: _pairTokenCtrl,
+                          enabled: !_busy,
+                          decoration: const InputDecoration(
+                            labelText: 'الرمز',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       FilledButton(
                         onPressed: _busy ? null : _pairWithRemote,
                         child: const Text('ربط'),

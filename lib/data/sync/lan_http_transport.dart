@@ -214,6 +214,14 @@ class LanSyncService implements SyncTransport {
       ourSecret = generateLanSecret();
       await db.update('devices', {'auth_secret': ourSecret}, where: 'id = ?', whereArgs: [ourDeviceId]);
     }
+    // هوية المُقرِن (مالك هذا الجهاز / المضيف).
+    int? pairedBy;
+    try {
+      final ourDev = await db.query('devices',
+          where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+      if (ourDev.isNotEmpty) pairedBy = ourDev.first['user_id'] as int?;
+    } catch (_) {}
+
     final now = DateTime.now().toIso8601String();
     // سجّل الجهاز الجديد كعضو (ليس مالكًا) مع السر المرسل.
     await db.insert('devices', {
@@ -230,7 +238,8 @@ class LanSyncService implements SyncTransport {
       'last_seen_at': now,
       'created_at': now,
       'updated_at': now,
-      'paired_by': null, // يُعيّن له المدير لاحقاً من شاشة الأجهزة.
+      'paired_by': pairedBy,
+      // user_id يتركه المدير يحدده من شاشة الأجهزة.
     }, conflictAlgorithm: ConflictAlgorithm.replace);
     // تأكد من أننا نحن أصحاب المساحة (المضيف).
     await db.update('devices', {'is_owner': 1},
@@ -423,12 +432,12 @@ class LanSyncService implements SyncTransport {
   }
 
   /// يرسل طلب pairing وإن نجح يسجل الخصم.
-  Future<LanPairResult> pairWith(String ip, int port, String token) async {
+  Future<LanPairResult> pairWith(String ip, int port, String token, {int? ourPort}) async {
     try {
       final db = await dbProvider();
       final localDev = await db.query('devices', where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
       final name = localDev.isNotEmpty ? (localDev.first['name'] as String? ?? 'Nexora') : 'Nexora';
-      // وُلّد سرنا إن لم يكن موجودًا، ثم أرسله للجهاز الآخر ليخزنه كسر لإرساله إلينا.
+      final localPort = ourPort ?? port;
       var ourSecret = (localDev.isNotEmpty ? localDev.first['auth_secret'] as String? : null) ?? '';
       if (ourSecret.isEmpty) {
         ourSecret = generateLanSecret();
@@ -440,7 +449,7 @@ class LanSyncService implements SyncTransport {
         'token': token,
         'deviceId': ourDeviceId,
         'ipAddress': await _localIp() ?? '',
-        'port': port,
+        'port': localPort, // المنفذ الذي نستمع نحن عليه كعضو.
         'name': name,
         'authSecret': ourSecret,
       }));
@@ -529,9 +538,14 @@ class LanSyncService implements SyncTransport {
             r.forEach((k, v) {
               if (k is String) map[k] = v as Object?;
             });
-            if (table == 'devices' && map['id'] == ourDeviceId) {
-              // سجلنا يأتي من المضيف؛ نحفظه مع تعديل is_owner=0.
-              map['is_owner'] = 0;
+            if (table == 'devices') {
+              if (map['id'] == ourDeviceId) {
+                // سجلنا كما يعرفه المضيف — لسنا مالكين.
+                map['is_owner'] = 0;
+              } else if ((map['is_owner'] ?? 0) == 1) {
+                // تأكد من أن سجل المضيف يظل is_owner=1 (المالك الشرعي).
+                map['is_owner'] = 1;
+              }
             }
             if (table == 'users') {
               // العضو لا يملك أي مستخدم محلي كـ "أنا"؛ الهوية تأتي من
