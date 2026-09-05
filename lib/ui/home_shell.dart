@@ -278,45 +278,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               },
             );
           }),
-          // قائمة «ثلاث نقاط» تجمع كل الشاشات/الاختصارات الإضافية (المدمجة)
-          // حتى يبقى الشريط السفلي مرتّباً بالاختصارات الأساسية فقط.
-          PopupMenuButton<AppScreen>(
-            tooltip: 'كل الأقسام والاختصارات',
-            icon: const Icon(Icons.more_vert),
-            onSelected: (s) => _go(s),
-            itemBuilder: (context) {
-              final items = <PopupMenuEntry<AppScreen>>[];
-              for (final s in _moreItems) {
-                final active = s == _screen;
-                items.add(PopupMenuItem(
-                  value: s,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        active ? s.activeIcon : s.icon,
-                        color: active
-                            ? AppColors.primaryOf(context)
-                            : AppColors.text2Of(context),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        s.title,
-                        style: TextStyle(
-                          fontWeight:
-                              active ? FontWeight.w800 : FontWeight.w600,
-                          color: active
-                              ? AppColors.primaryOf(context)
-                              : AppColors.textOf(context),
-                        ),
-                      ),
-                    ],
-                  ),
-                ));
-              }
-              return items;
-            },
-          ),
           IconButton(
             tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
             icon: Icon(hidden

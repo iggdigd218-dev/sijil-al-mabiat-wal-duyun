@@ -1061,6 +1061,35 @@ class Repo {
     }, where: 'id = ?', whereArgs: [deviceId]);
   }
 
+  /// إعادة توليد المفتاح السرّي للجهاز (يُستخدم بعد تسريب أو للتحكم بكلمة مرور
+  /// جهاز عن بُعد). بعدها يجب على الجهاز إعادة الاقتران.
+  Future<String> resetDeviceSecret(String deviceId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final secret = generateLanSecret();
+    await db.update('devices', {
+      'auth_secret': secret,
+      'pair_token': '',
+      'pair_token_exp': '',
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id = ?', whereArgs: [deviceId]);
+    return secret;
+  }
+
+  /// تغيير كلمة مرور/رمز PIN للمستخدم المرتبط بجهاز ما (يُعيدها للمدير ليخبرها
+  /// للعضو). لا تُعدّل كلمة مرور المستخدم الأصلي إلا إذا كان المستخدم هو نفسه.
+  Future<void> setDeviceUserCredentials(String userId,
+      {String? pin, String? password}) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final patch = <String, Object?>{};
+    if (pin != null) patch['pin'] = pin;
+    if (password != null) patch['password'] = password;
+    if (patch.isEmpty) return;
+    patch['updated_at'] = DateTime.now().toIso8601String();
+    await db.update('users', patch, where: 'id = ?', whereArgs: [userId]);
+  }
+
   /// توليد رمز اقتران جديد صالح 5 دقائق لاستقبال جهاز جديد.
   Future<Map<String, String?>> createPairingToken({
     String? ipAddress,

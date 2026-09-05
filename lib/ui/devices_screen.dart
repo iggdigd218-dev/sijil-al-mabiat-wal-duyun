@@ -243,6 +243,47 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                             }
                           }
                         },
+                        onResetSecret: () async {
+                          final targetName = d['name'] as String? ?? 'الجهاز';
+                          final ok = await confirmDialog(context,
+                              title: 'إعادة تعيين رمز/مفتاح الجهاز',
+                              message:
+                                  'سيتم توليد مفتاح مصادقة جديد لجهاز "$targetName" وسيفقد الجهاز إمكانية المزامنة فوراً إلى أن يعيد المستخدم إدخال الرمز الجديد.\n\n'
+                                  'استخدم هذا الإجراء إذا اشتبهت بتسريب البيانات أو أردت التحكم عن بُعد.',
+                              confirmText: 'إعادة التعيين',
+                              danger: true);
+                          if (ok == true) {
+                            try {
+                              final secret = await ref
+                                  .read(repoProvider)
+                                  .resetDeviceSecret(d['id'] as String);
+                              bump(ref);
+                              if (mounted) {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('تمت إعادة التعيين'),
+                                    content: SelectableText(
+                                      'المفتاح الجديد للجهاز "$targetName":\n\n$secret\n\n'
+                                      'على المستخدم إعادة الاقتران أو إدخال المفتاح في إعدادات جهازه.',
+                                      style: const TextStyle(
+                                          fontFamily: 'monospace', fontSize: 12),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                          onPressed: () => Navigator.pop(ctx),
+                                          child: const Text('حسنًا')),
+                                    ],
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                showSnack(context, 'تعذّر: $e', error: true);
+                              }
+                            }
+                          }
+                        },
                       ),
                   ],
                 );
@@ -385,6 +426,7 @@ class _DeviceCard extends StatelessWidget {
   final VoidCallback onRestore;
   final VoidCallback onExpel;
   final VoidCallback onTransferOwner;
+  final VoidCallback onResetSecret;
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
@@ -397,6 +439,7 @@ class _DeviceCard extends StatelessWidget {
     required this.onRestore,
     required this.onExpel,
     required this.onTransferOwner,
+    required this.onResetSecret,
     required this.isSelf,
     required this.isOwnerDevice,
     required this.amITheOwner,
@@ -564,6 +607,13 @@ class _DeviceCard extends StatelessWidget {
                     onPressed: isSelf ? null : onRevoke,
                     icon: const Icon(Icons.block,
                         size: 20, color: Colors.orange),
+                  ),
+                if (!expelled && !isSelf && amITheOwner)
+                  IconButton(
+                    tooltip: 'إعادة تعيين رمز الجهاز (يُلزم إعادة الاقتران)',
+                    onPressed: onResetSecret,
+                    icon: const Icon(Icons.lock_reset,
+                        size: 20, color: Colors.blueAccent),
                   ),
                 if (!expelled && !isSelf && !isOwnerDevice && amITheOwner)
                   IconButton(

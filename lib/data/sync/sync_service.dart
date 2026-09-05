@@ -56,24 +56,31 @@ class SyncService {
     final cloudUrl = (st['cloudBackendUrl'] ?? '').trim();
     final cloudConfigured = cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
     final lanConfigured = (st['lanSyncEnabled'] ?? '0') == '1';
+    final mode = await repo.workspaceMode();
+    final anyChannel = cloudConfigured || lanConfigured;
 
     SyncState state;
-    if (!cloudConfigured && !lanConfigured && pending == 0 && failed == 0) {
-      state = SyncState.offline;
-    } else if (failed > 0) {
+    if (mode == 'standalone') {
+      // في الوضع المستقل لا مزامنة — نعرض كل شيء كأنه متزامن حتى لو بقيت
+      // سجلات قديمة في sync_queue من جلسة سابقة.
+      state = SyncState.synced;
+    } else if (failed > 0 && anyChannel) {
       state = SyncState.failed;
-    } else if (syncing > 0) {
+    } else if (syncing > 0 && anyChannel) {
       state = SyncState.syncing;
-    } else if (pending > 0) {
+    } else if (pending > 0 && anyChannel) {
       state = SyncState.pending;
+    } else if (!anyChannel) {
+      // المجموعة موجودة لكن لا توجد قناة مزامنة فعّالة.
+      state = SyncState.offline;
     } else {
       state = SyncState.synced;
     }
 
     return SyncStatusInfo(
       state: state,
-      pending: pending,
-      failed: failed,
+      pending: state == SyncState.pending || state == SyncState.syncing ? pending : 0,
+      failed: state == SyncState.failed ? failed : 0,
       lastSyncAt: (lastSync?.isNotEmpty == true) ? lastSync : null,
       cloudUrl: cloudConfigured ? cloudUrl : null,
       cloudConfigured: cloudConfigured,
