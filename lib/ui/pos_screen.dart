@@ -423,22 +423,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final accounts = ref.watch(allAccountsProvider).valueOrNull ?? [];
-            final currencies = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
-            final cur = currencies.first;
-            final customers = accounts.where((a) => a.kind == AccountKind.customer || a.kind == AccountKind.general).toList();
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: StatefulBuilder(
+            builder: (context, setSheetState) {
+              final accounts = ref.watch(allAccountsProvider).valueOrNull ?? [];
+              final currencies = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+              final cur = currencies.first;
+              final customers = accounts.where((a) => a.kind == AccountKind.customer || a.kind == AccountKind.general).toList();
 
-            return DraggableScrollableSheet(
-              initialChildSize: 0.85,
-              minChildSize: 0.5,
-              maxChildSize: 0.95,
-              expand: false,
-              builder: (_, scrollCtrl) {
-                return ListView(
-                  controller: scrollCtrl,
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              return SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -643,12 +640,13 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
                     const SizedBox(height: 20),
 
+                    const SizedBox(height: 10),
                     // زر إتمام البيع
                     SizedBox(
                       width: double.infinity,
-                      height: 50,
+                      height: 52,
                       child: FilledButton.icon(
-                        onPressed: _saving ? null : () => _executeSale(context),
+                        onPressed: _saving ? null : () => _executeSale(ctx),
                         icon: _saving
                             ? const SizedBox(
                                 width: 20,
@@ -656,14 +654,15 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                               )
                             : const Icon(Icons.check_circle_outline),
-                        label: Text(_saving ? 'جارٍ الحفظ…' : 'تأكيد وإصدار الفاتورة'),
+                        label: Text(_saving ? 'جارٍ الحفظ…' : 'تأكيد وإصدار الفاتورة',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       ),
                     ),
                   ],
-                );
-              },
-            );
-          },
+                ),
+              );
+            },
+          ),
         );
       },
     );
@@ -714,6 +713,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات نقدية رقم #$refNum',
           reference: refNum,
+          notes: 'طريقة الدفع: نقداً',
           createdAt: now,
           updatedAt: now,
         );
@@ -728,6 +728,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات آجلة رقم #$refNum',
           reference: refNum,
+          notes: 'طريقة الدفع: آجل (على الحساب)',
           createdAt: now,
           updatedAt: now,
         );
@@ -744,8 +745,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
           currency: cur.code,
           type: OpType.debit,
           date: now,
-          description: 'فاتورة مبيعات جزئية رقم #$refNum (إجمالي الفاتورة)',
+          description: 'فاتورة مبيعات جزئية رقم #$refNum (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
           reference: refNum,
+          notes: 'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}',
           createdAt: now,
           updatedAt: now,
         );
@@ -759,7 +761,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
             currency: cur.code,
             type: OpType.inflow,
             date: now,
-            description: 'دفعة مقدمة من فاتورة #$refNum',
+            description: 'دفعة مقدمة من فاتورة #$refNum (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
             reference: '',
             createdAt: now,
             updatedAt: now,

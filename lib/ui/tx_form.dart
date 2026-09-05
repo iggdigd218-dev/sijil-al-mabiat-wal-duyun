@@ -19,7 +19,7 @@ import 'tx_share.dart';
 import 'widgets.dart';
 
 /// يفتح نموذج العملية المالية (إضافة / تعديل / تكرار).
-Future<bool?> openTxForm(
+Future<Object?> openTxForm(
   BuildContext context,
   WidgetRef ref, {
   Tx? existing,
@@ -27,7 +27,7 @@ Future<bool?> openTxForm(
   bool isCopy = false,
   OpType? presetType,
 }) =>
-    showModalBottomSheet<bool>(
+    showModalBottomSheet<Object>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -95,6 +95,10 @@ class _TxFormState extends ConsumerState<TxForm> {
           ? const <InvoiceLine>[]
           : await repo.transactionItems(t!.id!);
 
+      _accounts = accs;
+      _currencies = curs;
+      _inventoryItems = stockItems;
+
       if (t != null) {
         _type = t.type;
         _accountId = t.type == OpType.transfer ? t.fromId : t.accountId;
@@ -107,9 +111,9 @@ class _TxFormState extends ConsumerState<TxForm> {
         _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
         _rate.text = '${t.rate}';
         _desc.text = t.description;
-        // عند النسخ نفرغ المرجع ليأخذ رقماً تسلسلياً جديداً تلقائياً.
         _ref.text = widget.isCopy ? '' : t.reference;
         _notes.text = t.notes;
+        _invoiceLines = invoiceLines;
       } else {
         if (widget.presetType != null) {
           _type = widget.presetType!;
@@ -365,11 +369,14 @@ class _TxFormState extends ConsumerState<TxForm> {
       color: AppColors.primarySoftOf(context),
       child: ListTile(
         leading: const Icon(Icons.point_of_sale, size: 22),
-        title: Text(_invoiceLines.isEmpty ? 'إضافة أصناف للفاتورة' : 'الأصناف (${_invoiceLines.length}) — ${Fmt.money(_invoiceTotal)}',
-            style: const TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: Text(_invoiceLines.isEmpty ? 'لإدخال تفاصيل مبيعات (منتجات، خصم، ضريبة)' : 'اضغط لتعديل الأصناف'),
+        title: const Text('فتح شاشة المبيعات لإضافة الفاتورة',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: const Text('تنتقل إلى نقطة البيع لتسجيل الفاتورة كاملة مع العملاء والأصناف'),
         trailing: const Icon(Icons.chevron_left),
-        onTap: () => _openInvoiceEditor(),
+        onTap: () {
+          Sfx.click();
+          Navigator.pop(context, 'open_pos');
+        },
       ),
     );
   }
@@ -547,241 +554,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       ? Fmt.money(value)
       : Fmt.money(value, 2);
 
-  Future<void> _openInvoiceEditor() async {
-    Sfx.click();
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-          child: StatefulBuilder(
-            builder: (ctx, setSheet) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  const Icon(Icons.receipt_long_outlined),
-                  const SizedBox(width: 8),
-                  Text('تفاصيل فاتورة المبيعات',
-                      style: Theme.of(ctx).textTheme.titleMedium),
-                  const Spacer(),
-                  Text('الإجمالي: ${Fmt.money(_invoiceTotal)}',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w800, color: Colors.green)),
-                ]),
-                const SizedBox(height: 10),
-                _invoiceItemsListBody(setSheet: setSheet),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      await _addInvoiceLine();
-                      setSheet(() {});
-                      setState(() {});
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('إضافة صنف'),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('تم'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (mounted) setState(() {});
-  }
-
-  Widget _invoiceItemsListBody({required void Function(void Function()) setSheet}) {
-    if (_invoiceLines.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-            child: Text('لم تُضف أي أصناف بعد.',
-                style: TextStyle(color: Colors.black54))),
-      );
-    }
-    return Column(
-      children: [
-        for (int i = 0; i < _invoiceLines.length; i++)
-          _invoiceLineTile(i, setSheet),
-      ],
-    );
-  }
-
-  Widget _invoiceLineTile(
-      int i, void Function(void Function()) setSheet) {
-    final l = _invoiceLines[i];
-    return Card(
-      child: ListTile(
-        leading: CircleAvatar(child: Text('${i + 1}')),
-        title: Text(l.name.isNotEmpty ? l.name : 'صنف ${i + 1}'),
-        subtitle: Text(
-            '${_number(l.quantity)} × ${Fmt.money(l.unitPrice)} = ${Fmt.money(l.total)}'),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.edit, size: 20),
-              onPressed: () async {
-                await _editInvoiceLine(i);
-                setSheet(() {});
-                setState(() {});
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
-              onPressed: () {
-                setSheet(() => _invoiceLines.removeAt(i));
-                setState(() {});
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _invoiceItemsSection() {
-    final c = _selectedCurrency;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface2Of(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderOf(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.shopping_cart_outlined,
-                  size: 19, color: AppColors.primaryOf(context)),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text('تفاصيل المشتريات',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
-              ),
-              TextButton.icon(
-                onPressed: _inventoryItems.isEmpty ? null : _addInvoiceLine,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('إضافة صنف'),
-              ),
-            ],
-          ),
-          Text(
-            'اختياري: اختر الأصناف ليظهر كل صنف وكميته وسعره في الإشعار والسند والصورة.',
-            style: TextStyle(fontSize: 11.5, color: AppColors.text2Of(context)),
-          ),
-          if (_inventoryItems.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
-                'لا توجد أصناف مسجلة. أضف بيانات الأصناف من «المخزون والأصناف» أولًا.',
-                style: TextStyle(
-                    fontSize: 12, color: AppColors.text3Of(context)),
-              ),
-            )
-          else if (_invoiceLines.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
-                'لم تتم إضافة أصناف بعد.',
-                style: TextStyle(
-                    fontSize: 12, color: AppColors.text3Of(context)),
-              ),
-            )
-          else ...[
-            const SizedBox(height: 10),
-            for (var i = 0; i < _invoiceLines.length; i++) ...[
-              if (i > 0) const Divider(height: 18),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _invoiceLines[i].name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 13.5, fontWeight: FontWeight.w800),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          '${_number(_invoiceLines[i].quantity)} ${_invoiceLines[i].unit} × ${Fmt.money(_invoiceLines[i].unitPrice, c.decimal)} ${c.symbol}',
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              color: AppColors.text2Of(context)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${Fmt.money(_invoiceLines[i].total, c.decimal)} ${c.symbol}',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primaryOf(context)),
-                  ),
-                  IconButton(
-                    tooltip: 'تعديل الصنف',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => _editInvoiceLine(i),
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                  ),
-                  IconButton(
-                    tooltip: 'حذف الصنف',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => setState(() => _invoiceLines.removeAt(i)),
-                    icon: Icon(Icons.delete_outline,
-                        size: 18, color: AppColors.dangerOf(context)),
-                  ),
-                ],
-              ),
-            ],
-            const Divider(height: 20),
-            Row(
-              children: [
-                const Expanded(
-                  child: Text('إجمالي المشتريات',
-                      style: TextStyle(fontWeight: FontWeight.w800)),
-                ),
-                Text(
-                  '${Fmt.money(_invoiceTotal, c.decimal)} ${c.symbol}',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primaryOf(context)),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 
   Future<void> _addInvoiceLine() => _editInvoiceLine();
 
