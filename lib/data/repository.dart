@@ -869,23 +869,26 @@ class Repo {
 
   /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.
   Future<void> _ensureCan(String perm) async {
-    final mode = await workspaceMode();
-    if (mode == 'member') {
+    if (!await can(perm)) {
       final me = await currentUser();
-      if (me == null) {
-        throw StateError(
-            'لم يتم تعيين صلاحيات لهذا الجهاز بعد. اطلب من المدير منحك صلاحية.');
-      }
-      if (!me.can(perm)) {
-        throw StateError('ليس لديك صلاحية لهذا الإجراء (${me.role.label}).');
-      }
-      return;
+      throw StateError(
+          'ليس لديك صلاحية لهذا الإجراء${me != null ? ' (${me.role.label})' : ''}.');
     }
+  }
+
+  /// استعلام عام للواجهة: هل المستخدم الحالي يملك الصلاحية؟
+  /// يُستخدم لتعطيل/إخفاء الأزرار قبل لمسها.
+  Future<bool> can(String perm) async {
+    final mode = await workspaceMode();
     final me = await currentUser();
-    if (me == null) return; // قبل وجود مستخدمين (أول تشغيل)
-    if (!me.can(perm)) {
-      throw StateError('ليس لديك صلاحية لهذا الإجراء.');
+    if (mode != 'member') {
+      // في الوضع المستقل/المضيف يُسمح دائمًا ما لم يوجد مستخدم نشط بدور مقيّد.
+      if (me == null) return true; // أول تشغيل/بدون حسابات.
+      return me.can(perm);
     }
+    // عضو: يجب أن يكون له مستخدم معيّن ويمتلك الصلاحية.
+    if (me == null) return false;
+    return me.can(perm);
   }
 
   /// حماية المدير الوحيد.
@@ -1010,6 +1013,9 @@ class Repo {
   }
 
   /// تعيين/تغيير المستخدم (والصلاحيات) المرتبط بجهاز.
+  Future<void> assignDeviceUser(String deviceId, int? userId) async =>
+      assignDeviceToUser(deviceId, userId);
+
   Future<void> assignDeviceToUser(String deviceId, int? userId) async {
     await _ensureCan('manage_users');
     final db = await _db;

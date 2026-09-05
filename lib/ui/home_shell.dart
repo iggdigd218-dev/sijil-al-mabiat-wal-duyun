@@ -25,6 +25,8 @@ import 'pos_screen.dart';
 import 'sync_status_indicator.dart';
 import '../data/sync/sync_service.dart';
 
+import 'group_management_screen.dart';
+
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
   dashboard('لوحة التحكم', Icons.dashboard_outlined, Icons.dashboard),
@@ -37,10 +39,7 @@ enum AppScreen {
   currencies(
       'العملات', Icons.currency_exchange_outlined, Icons.currency_exchange),
   chat('الدردشة', Icons.forum_outlined, Icons.forum),
-  users('المستخدمون والصلاحيات', Icons.manage_accounts_outlined,
-      Icons.manage_accounts),
-  devices('الأجهزة المرتبطة', Icons.devices, Icons.devices),
-  backup('النسخ الاحتياطي', Icons.backup_outlined, Icons.backup),
+  group('إدارة المجموعة', Icons.groups_outlined, Icons.groups),
   trash('سلة المهملات', Icons.delete_outline, Icons.delete),
   activity('سجل النشاط', Icons.history, Icons.history),
   settings('الإعدادات', Icons.settings_outlined, Icons.settings);
@@ -100,8 +99,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     AppScreen.inventory,
     AppScreen.currencies,
     AppScreen.chat,
-    AppScreen.users,
-    AppScreen.backup,
+    AppScreen.group,
     AppScreen.activity,
     AppScreen.trash,
     AppScreen.settings,
@@ -163,9 +161,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         AppScreen.inventory => const InventoryScreen(),
         AppScreen.currencies => const CurrenciesScreen(),
         AppScreen.chat => const ChatScreen(),
-        AppScreen.users => const UsersScreen(),
-        AppScreen.devices => const DevicesScreen(),
-        AppScreen.backup => const BackupScreen(),
+        AppScreen.group => const GroupManagementScreen(),
         AppScreen.trash => const TrashScreen(),
         AppScreen.activity => const ActivityScreen(),
         AppScreen.settings => const SettingsScreen(),
@@ -176,12 +172,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final users = ref.watch(usersProvider).valueOrNull ?? const [];
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
-    // إدارة المستخدمين للمدير فقط، إلا إذا لا يوجد أي مدير/لا مستخدمين بعد
-    // (باب استرداد/بذرة) فيبقى الزر متاحاً لإنشاء مدير وإنقاذ النظام.
     final hasAdmin = users.any((u) => u.role == UserRole.admin);
     final manageUsers =
         can('manage_users') || !hasAdmin || users.isEmpty;
-    final manageBackup = can('manage_backup');
     return switch (_screen) {
         AppScreen.accounts => FloatingActionButton.extended(
             onPressed: add ? () => openAccountForm(context, ref) : null,
@@ -202,11 +195,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             onPressed: add ? () => openItemCategoryForm(context, ref) : null,
             icon: const Icon(Icons.create_new_folder_outlined),
             label: const Text('فئة جديدة'),
-          ),
-        AppScreen.users => FloatingActionButton.extended(
-            onPressed: manageUsers ? () => openUserForm(context, ref) : null,
-            icon: const Icon(Icons.person_add_alt),
-            label: const Text('مستخدم'),
           ),
         _ => null,
     };
@@ -265,7 +253,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
           Consumer(builder: (ctx, rref, _) {
             final modeAsync = rref.watch(workspaceModeProvider);
+            final isOwnerAsync = rref.watch(isOwnerProvider);
             final mode = modeAsync.valueOrNull ?? 'standalone';
+            final isOwner = isOwnerAsync.valueOrNull ?? true;
             if (mode == 'standalone') return const SizedBox.shrink();
             return FutureBuilder<SyncStatusInfo>(
               future: _syncFuture,
@@ -273,7 +263,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 if (!snap.hasData) return const SizedBox.shrink();
                 return SyncStatusBadge(
                   info: snap.data!,
-                  onTap: () => _go(AppScreen.settings),
+                  onTap: () =>
+                      _go(isOwner ? AppScreen.group : AppScreen.settings),
                 );
               },
             );
@@ -408,16 +399,13 @@ class _Drawer extends ConsumerWidget {
 }
 
 /// عناصر الدرج: كل الشاشات ما عدا الموجودة في الشريط السفلي، حتى لا تتكرر
-/// الأيقونة نفسها في مكانين (البند ٥ من ملاحظات المستخدم).
+/// الأيقونة نفسها في مكانين. إدارة المجموعة للمدير فقط.
 class _DrawerItems {
   static List<AppScreen> of({AppUser? user, required bool isOwner}) =>
       AppScreen.values
           .where((s) => !_HomeShellState._tabs.contains(s))
-          // شاشتا المستخدمين والأجهزة للمالك فقط (مدير المجموعة).
           .where((s) {
-            if (s == AppScreen.users || s == AppScreen.devices) {
-              return isOwner;
-            }
+            if (s == AppScreen.group) return isOwner;
             return true;
           })
           .toList();

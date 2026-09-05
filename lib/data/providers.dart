@@ -578,3 +578,9 @@ final deviceRoleProvider = FutureProvider<AppUser?>((ref) async {
   ref.watch(refreshProvider);
   return ref.read(repoProvider).currentUser();
 });
+
+/// يُستخدم من الواجهة لاختبار صلاحية معيّنة (لإخفاء/تعطيل الأزرار).
+final canProvider = FutureProvider.family<bool, String>((ref, perm) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).can(perm);
+});

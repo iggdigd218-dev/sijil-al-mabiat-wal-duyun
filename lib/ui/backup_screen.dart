@@ -16,7 +16,9 @@ import 'widgets.dart';
 
 /// النسخ الاحتياطي والاستعادة وسلة المهملات — نقل شاشة `backup.js`.
 class BackupScreen extends ConsumerStatefulWidget {
-  const BackupScreen({super.key});
+  /// عند true تُعرض بدون Scaffold خاص بها (لتُضمَّن داخل تبويب).
+  final bool embedded;
+  const BackupScreen({super.key, this.embedded = false});
 
   @override
   ConsumerState<BackupScreen> createState() => _BackupScreenState();

@@ -243,6 +243,37 @@ class SectionTitle extends StatelessWidget {
       );
 }
 
+/// حوار إدخال نصي بسيط (إعادة تسمية، إلخ).
+Future<String?> promptDialog(
+  BuildContext context, {
+  required String title,
+  String initial = '',
+  String label = '',
+  String confirmText = 'موافق',
+  String cancelText = 'إلغاء',
+}) {
+  final ctrl = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: Text(title),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: InputDecoration(labelText: label.isEmpty ? title : label),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(c), child: Text(cancelText)),
+        FilledButton(
+          onPressed: () => Navigator.pop(c, ctrl.text),
+          child: Text(confirmText),
+        ),
+      ],
+    ),
+  );
+}
+
 Future<bool> confirmDialog(
   BuildContext context, {
   required String title,
