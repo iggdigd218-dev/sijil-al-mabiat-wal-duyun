@@ -502,19 +502,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     const Text('العميل:', style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     DropdownButtonFormField<int?>(
-                      initialValue: _selectedCustomerId,
+                      value: _selectedCustomerId,
                       decoration: const InputDecoration(
                         isDense: true,
                         prefixIcon: Icon(Icons.person_outline),
                       ),
                       items: [
                         const DropdownMenuItem<int?>(
-                          initialValue: null,
+                            value: null,
                           child: Text('عميل نقدي (بدون حساب)'),
                         ),
                         for (final c in customers)
                           DropdownMenuItem<int?>(
-                            initialValue: c.id,
+                            value: c.id,
                             child: Text('${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})'),
                           ),
                       ],
@@ -531,7 +531,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     const SizedBox(height: 6),
                     SegmentedButton<_PosPayment>(
                       segments: _PosPayment.values
-                          .map((p) => ButtonSegment(initialValue: p, label: Text(p.label)))
+                          .map((p) => ButtonSegment(value: p, label: Text(p.label)))
                           .toList(),
                       selected: {_payment},
                       onSelectionChanged: (set) {
@@ -831,8 +831,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   return;
                 }
                 await TxShare.sendNow(
-                  context: context,
-                  ref: ref,
+                  context,
+                  ref,
                   tx: tx,
                   account: acc,
                 );

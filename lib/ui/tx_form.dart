@@ -426,6 +426,7 @@ class _TxFormState extends ConsumerState<TxForm> {
             ),
           ),
         ],
+      ),
     );
   }
 
@@ -1132,8 +1133,7 @@ class _TxFormState extends ConsumerState<TxForm> {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _hintBox() {

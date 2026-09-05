@@ -80,6 +80,8 @@ class GoogleDriveService {
   static final GoogleDriveService instance = GoogleDriveService._();
 
   static const String backupFileName = 'nexora-backup-latest.nexora';
+  static const String _fileFields =
+      'id,name,mimeType,size,modifiedTime,createdTime,parents,capabilities';
   static const String _driveHost = 'www.googleapis.com';
   static const String _driveBasePath = '/drive/v3';
   static const String _uploadBasePath = '/upload/drive/v3';
