@@ -16,12 +16,12 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_1_8
+        jvmTarget = JavaVersion.VERSION_17
     }
 
     defaultConfig {
@@ -47,19 +47,28 @@ android {
     buildTypes {
         release {
             signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
-            // Keep the release build reliable on low-memory devices and preserve all
-            // Flutter reflection/serialization entry points used by the app.
-            minifyEnabled = false
-            shrinkResources = false
+            minifyEnabled true
+            shrinkResources true
+            zipAlignEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                           'proguard-rules.pro'
         }
     }
+
+    packaging {
+        jniLibs { useLegacyPackaging = false }
+        resources {
+            excludes += [
+                "META-INF/*.kotlin_module","META-INF/AL2.0","META-INF/LGPL2.1",
+                "META-INF/*.version","META-INF/LICENSE*","META-INF/DEPENDENCIES*",
+                "META-INF/NOTICE*","/okhttp3/internal/publicsuffix/*","/kotlin/**",
+                "DebugProbesKt.bin","*.pro",
+            ]
+        }
+    }
 }
 
-flutter {
-    source = "../.."
-}
+flutter { source = "../.." }
 
 dependencies {
     implementation "com.google.android.material:material:1.12.0"

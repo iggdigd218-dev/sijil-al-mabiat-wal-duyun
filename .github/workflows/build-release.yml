@@ -1,0 +1,78 @@
+name: Build Nexora Release (APK + Windows)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK arm64 + Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable platforms & get deps
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          if (-not (Test-Path windows)) { flutter create . --platforms=windows,android --org com.nexora }
+          flutter pub get
+
+      - name: Build Release APK (arm64)
+        run: |
+          flutter build apk --release --target-platform android-arm64 --android-skip-build-dependency-validation
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\app\outputs\flutter-apk\app-release.apk dist\nexora-arm64.apk
+
+      - name: Build Windows Release
+        run: |
+          flutter build windows --release
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\nexora-windows.zip -Force
+
+      - name: Show outputs
+        run: Get-ChildItem dist | Format-Table Name,Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexora-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: flutter-v3.8.${{ github.run_number }}
+          name: Nexora Flutter Native v3.8 (APK + Windows)
+          body: |
+            ## ✅ تم بناء التطبيق بنجاح — أندرويد + ويندوز
+
+            - **Commit**: `${{ github.sha }}`
+            - **نوع البناء**: Release (R8 مضغوط، arm64 فقط)
+
+            ### 📱 للأندرويد (جميع الهواتف الحديثة):
+            - `nexora-arm64.apk`
+
+            ### 💻 للكمبيوتر ويندوز:
+            - `nexora-windows.zip` — فك الضغط ثم شغّل `nexora_app.exe`
+
+            ⚠️ قم بحذف النسخة القديمة أولاً قبل تثبيت هذه (التوقيع مختلف).
+          files: |
+            dist/nexora-arm64.apk
+            dist/nexora-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
