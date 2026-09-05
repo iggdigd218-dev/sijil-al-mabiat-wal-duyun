@@ -14,7 +14,7 @@
 //   - pair      : اقتران جهاز ناجح — نمط احتفالي قصير.
 import 'package:flutter/services.dart';
 
-typedef _Delay = Future<void>;
+typedef _SfxDelay = Future<void>;
 
 class Sfx {
   static bool _muted = false;
@@ -123,7 +123,3 @@ class Sfx {
     HapticFeedback.heavyImpact();
   }
 }
-
-// كتم تنبيه الـ import غير المستخدم.
-// ignore: unused_element
-const _Delay _sfxDelay = Future.value();

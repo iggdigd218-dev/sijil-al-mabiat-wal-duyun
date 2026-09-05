@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
+import '../core/sfx.dart';
 import '../data/providers.dart';
 import 'contact_picker.dart';
 import 'widgets.dart';
@@ -141,6 +142,41 @@ class _State extends ConsumerState<AccountFormScreen> {
 
   /// يملأ الاسم والهاتف والواتساب من جهة اتصال مختارة.
   Future<void> _fromContacts() async {
+    // قائمة خيارات: إمّا اختيار جهة داخل التطبيق، أو فتح تطبيق جهات الاتصال.
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(width: 40, height: 4, decoration: BoxDecoration(
+              color: Colors.black26, borderRadius: BorderRadius.circular(3))),
+            ListTile(
+              leading: const Icon(Icons.person_search_rounded, color: Color(0xFF4CAF50)),
+              title: const Text('اختيار من جهات الاتصال (تعبئة تلقائية)'),
+              subtitle: const Text('سيتم ملء الاسم والرقم تلقائياً'),
+              onTap: () => Navigator.pop(ctx, 'pick'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new_rounded, color: Color(0xFF2196F3)),
+              title: const Text('فتح تطبيق جهات الاتصال'),
+              subtitle: const Text('يفتح التطبيق الخاص بالهاتف لإضافة/تعديل جهة اتصال'),
+              onTap: () => Navigator.pop(ctx, 'open'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'open') {
+      openSystemContactsApp(context);
+      return;
+    }
     final c = await pickContact(context);
     if (c == null || !mounted) return;
     setState(() {
@@ -149,6 +185,7 @@ class _State extends ConsumerState<AccountFormScreen> {
       if (_phone.text.trim().isEmpty) _phone.text = digits;
       if (_whatsapp.text.trim().isEmpty) _whatsapp.text = digits;
     });
+    Sfx.pop();
   }
 
   @override
