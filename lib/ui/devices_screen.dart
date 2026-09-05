@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
+import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
@@ -158,7 +159,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 for (final d in list)
                   _DeviceCard(
                     data: d,
-                    users: usersAsync.value ?? const [],
+                    users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
                     onAssign: (uid) => _assign(uid, d['id'] as String),
                     onRename: () => _rename(d['id'] as String, (d['name'] ?? '') as String),
                     onRevoke: () async {
@@ -336,7 +337,7 @@ class _DeviceCard extends StatelessWidget {
     final lastSeen = (data['last_seen_at'] ?? '') as String;
     final userName = data['user_name'] as String?;
     final userRole = data['user_role'] as String?;
-    final currentUserId = (data['user_id'] as int?);
+    final currentUserId = data['user_id'] as int?;
     final ip = (data['ip_address'] ?? '') as String;
 
     return Padding(
@@ -404,7 +405,11 @@ class _DeviceCard extends StatelessWidget {
                                       : '—'),
                   if (ip.isNotEmpty) _smallLabel('IP', ip),
                   if (lastSeen.isNotEmpty)
-                    _smallLabel('آخر ظهور', Fmt.relTime(DateTime.tryParse(lastSeen))),
+                    _smallLabel(
+                        'آخر ظهور',
+                        DateTime.tryParse(lastSeen) == null
+                            ? lastSeen
+                            : Fmt.relative(DateTime.parse(lastSeen))),
                 ],
               ),
               const SizedBox(height: 8),
