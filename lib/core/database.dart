@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 11;
+  static const int _version = 12;
 
   static int get schemaVersion => _version;
 
@@ -296,10 +296,13 @@ class AppDatabase {
         pair_token_exp TEXT DEFAULT '',
         auth_secret    TEXT DEFAULT '',
         revoked_at     TEXT DEFAULT '',
+        user_id        INTEGER,
+        paired_by      INTEGER,
         is_paired      INTEGER NOT NULL DEFAULT 1,
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       );
 
       CREATE TABLE operations (
@@ -440,7 +443,8 @@ class AppDatabase {
           port INTEGER DEFAULT 0, last_seen_at TEXT DEFAULT '',
           last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
           pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
-          revoked_at TEXT DEFAULT '', is_paired INTEGER NOT NULL DEFAULT 1,
+          revoked_at TEXT DEFAULT '', user_id INTEGER, paired_by INTEGER,
+          is_paired INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )''');
     await _tryCreateTable(db, 'operations', '''
@@ -573,6 +577,25 @@ class AppDatabase {
       await _addColumn(db, 'accounts', 'notify_channel',
           "TEXT NOT NULL DEFAULT 'whatsapp'");
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '11'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v12: إدارة الأجهزة: ربط كل جهاز بمستخدم + من قام بمنح الصلاحية. ======
+    if (from < 12) {
+      await _addColumn(db, 'devices', 'user_id', 'INTEGER');
+      await _addColumn(db, 'devices', 'paired_by', 'INTEGER');
+      // الجهاز الحالي (هذا الهاتف) يُربط بالمستخدم 'أنا' (المدير افتراضياً).
+      try {
+        final me = await db.query('users',
+            where: 'is_me = 1 AND COALESCE(deleted_at, "") = ""',
+            limit: 1);
+        if (me.isNotEmpty) {
+          final myUid = me.first['id'];
+          await db.update('devices',
+              {'user_id': myUid, 'paired_by': myUid, 'is_paired': 1},
+              where: "auth_secret <> '' AND revoked_at = ''");
+        }
+      } catch (_) {}
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '12'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

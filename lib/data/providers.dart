@@ -554,3 +554,9 @@ final stockMovesProvider =
   ref.watch(refreshProvider);
   return ref.read(repoProvider).stockMoves(itemId: itemId);
 });
+
+/// قائمة الأجهزة المرتبطة (تحتاج صلاحية manage_users).
+final devicesProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).devices();
+});

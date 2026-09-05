@@ -797,6 +797,95 @@ class Repo {
     await db.update('users', {'is_me': 1}, where: 'id = ?', whereArgs: [id]);
   }
 
+  // ==================== إدارة الأجهزة ====================
+
+  /// قائمة الأجهزة المرتبطة بالـ workspace مع اسم المستخدم الموكّل لكل جهاز.
+  Future<List<Map<String, Object?>>> devices() async {
+    await _ensureCan('manage_users'); // فقط المدير/من يملك إدارة المستخدمين.
+    final db = await _db;
+    return db.rawQuery('''
+      SELECT d.*, u.name AS user_name, u.role AS user_role
+      FROM devices d
+      LEFT JOIN users u ON u.id = d.user_id
+      WHERE d.workspace_id = ?
+      ORDER BY
+        CASE WHEN d.revoked_at = '' THEN 0 ELSE 1 END,
+        d.last_seen_at DESC
+    ''', [requireWorkspaceId]);
+  }
+
+  /// تعيين/تغيير المستخدم (والصلاحيات) المرتبط بجهاز.
+  Future<void> assignDeviceToUser(String deviceId, int? userId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    await db.update('devices', {
+      'user_id': userId,
+      'paired_by': _currentUserId,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id = ?', whereArgs: [deviceId]);
+  }
+
+  /// تحديث اسم جهاز (ليتعرّف المدير عليه).
+  Future<void> renameDevice(String deviceId, String name) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    await db.update('devices', {
+      'name': name.trim(),
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id = ?', whereArgs: [deviceId]);
+  }
+
+  /// إلغاء اقتران/حظر جهاز — يمنعه من المزامنة حتى يُعاد اقترانه.
+  Future<void> revokeDevice(String deviceId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    await db.update('devices', {
+      'revoked_at': now,
+      'is_paired': 0,
+      'auth_secret': '',
+      'pair_token': '',
+      'pair_token_exp': '',
+      'updated_at': now,
+    }, where: 'id = ?', whereArgs: [deviceId]);
+    // حذف أي عمليات في قائمة المزامنة لهذا الجهاز حتى لا يرسل شيئًا.
+    await db.delete('sync_queue',
+        where: 'operation_id IN (SELECT id FROM operations WHERE device_id = ?)',
+        whereArgs: [deviceId]);
+  }
+
+  /// إعادة السماح لجهاز سبق إلغاؤه.
+  Future<void> restoreDevice(String deviceId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    await db.update('devices', {
+      'revoked_at': '',
+      'is_paired': 1,
+      'auth_secret': generateLanSecret(),
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id = ?', whereArgs: [deviceId]);
+  }
+
+  /// توليد رمز اقتران جديد صالح 5 دقائق لاستقبال جهاز جديد.
+  Future<Map<String, String?>> createPairingToken({
+    String? ipAddress,
+    int? port,
+  }) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final svc = QrPairingService(db: db, ourDeviceId: requireDeviceId);
+    final info = await svc.createPairingToken(
+      workspaceId: requireWorkspaceId,
+      port: port ?? kDefaultLanPort,
+      ipAddress: ipAddress,
+    );
+    return {
+      'token': info.token,
+      'qr': info.qrContent,
+      'expires': info.expiresAt.toIso8601String(),
+    };
+  }
+
   // ==================== الدردشة ====================
 
   /// محادثة لكل حساب، تُنشأ عند أول رسالة.

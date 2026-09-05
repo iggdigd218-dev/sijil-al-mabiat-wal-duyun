@@ -10,6 +10,7 @@ import 'accounts_screen.dart';
 import 'backup_screen.dart';
 import 'chat_screen.dart';
 import 'currencies_screen.dart';
+import 'devices_screen.dart';
 import 'dashboard_screen.dart';
 import 'inventory_screen.dart';
 import 'dart:async';
@@ -38,6 +39,7 @@ enum AppScreen {
   chat('الدردشة', Icons.forum_outlined, Icons.forum),
   users('المستخدمون والصلاحيات', Icons.manage_accounts_outlined,
       Icons.manage_accounts),
+  devices('الأجهزة المرتبطة', Icons.devices, Icons.devices),
   backup('النسخ الاحتياطي', Icons.backup_outlined, Icons.backup),
   trash('سلة المهملات', Icons.delete_outline, Icons.delete),
   activity('سجل النشاط', Icons.history, Icons.history),
@@ -162,6 +164,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         AppScreen.currencies => const CurrenciesScreen(),
         AppScreen.chat => const ChatScreen(),
         AppScreen.users => const UsersScreen(),
+        AppScreen.devices => const DevicesScreen(),
         AppScreen.backup => const BackupScreen(),
         AppScreen.trash => const TrashScreen(),
         AppScreen.activity => const ActivityScreen(),
@@ -351,7 +354,7 @@ class _Drawer extends ConsumerWidget {
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                children: _DrawerItems.of().map((s) {
+                children: _DrawerItems.of(user: user).map((s) {
                   final active = s == current;
                   return ListTile(
                     leading: Icon(active ? s.activeIcon : s.icon,
@@ -398,7 +401,16 @@ class _Drawer extends ConsumerWidget {
 /// عناصر الدرج: كل الشاشات ما عدا الموجودة في الشريط السفلي، حتى لا تتكرر
 /// الأيقونة نفسها في مكانين (البند ٥ من ملاحظات المستخدم).
 class _DrawerItems {
-  static List<AppScreen> of() => AppScreen.values
+  static List<AppScreen> of({AppUser? user}) => AppScreen.values
       .where((s) => !_HomeShellState._tabs.contains(s))
+      // شاشتا المستخدمين والأجهزة محجوزتان لمن يملك صلاحية manage_users.
+      .where((s) {
+        if ((s == AppScreen.users || s == AppScreen.devices) &&
+            user != null &&
+            !user.can('manage_users')) {
+          return false;
+        }
+        return true;
+      })
       .toList();
 }
