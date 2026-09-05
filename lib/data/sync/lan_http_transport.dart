@@ -533,6 +533,11 @@ class LanSyncService implements SyncTransport {
               // سجلنا يأتي من المضيف؛ نحفظه مع تعديل is_owner=0.
               map['is_owner'] = 0;
             }
+            if (table == 'users') {
+              // العضو لا يملك أي مستخدم محلي كـ "أنا"؛ الهوية تأتي من
+              // devices.user_id التي يعيّنها المدير لاحقاً.
+              map['is_me'] = 0;
+            }
             await txn.insert(table, map,
                 conflictAlgorithm: ConflictAlgorithm.replace);
           } catch (_) {}
