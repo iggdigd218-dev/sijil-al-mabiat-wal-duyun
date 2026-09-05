@@ -47,7 +47,14 @@ class LanPairResult {
   final String? ourAuthSecret;
   final String? remoteDeviceId;
   final String? error;
-  const LanPairResult({required this.ok, this.ourAuthSecret, this.remoteDeviceId, this.error});
+  final Map<String, Object?>? snapshot;
+  const LanPairResult({
+    required this.ok,
+    this.ourAuthSecret,
+    this.remoteDeviceId,
+    this.error,
+    this.snapshot,
+  });
 }
 
 class LanSyncService implements SyncTransport {
@@ -112,6 +119,10 @@ class LanSyncService implements SyncTransport {
       }
       if (path == '/ops' && req.method == 'POST') {
         await _handleOps(req, cors);
+        return;
+      }
+      if (path == '/snapshot' && req.method == 'GET') {
+        await _handleSnapshot(req, cors);
         return;
       }
       cors.statusCode = HttpStatus.notFound;
@@ -204,7 +215,7 @@ class LanSyncService implements SyncTransport {
       await db.update('devices', {'auth_secret': ourSecret}, where: 'id = ?', whereArgs: [ourDeviceId]);
     }
     final now = DateTime.now().toIso8601String();
-    // سجّل الجهاز الجديد مع السر الذي أرسله (سيُستخدم عند الإرسال إليه: هو سيعرف هذا السر كسره الخاص).
+    // سجّل الجهاز الجديد كعضو (ليس مالكًا) مع السر المرسل.
     await db.insert('devices', {
       'id': devId,
       'workspace_id': wsId,
@@ -214,16 +225,71 @@ class LanSyncService implements SyncTransport {
       'port': p,
       'auth_secret': theirSecret,
       'is_paired': 1,
+      'is_owner': 0,
       'revoked_at': '',
       'last_seen_at': now,
       'created_at': now,
       'updated_at': now,
+      'paired_by': null, // يُعيّن له المدير لاحقاً من شاشة الأجهزة.
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+    // تأكد من أننا نحن أصحاب المساحة (المضيف).
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [ourDeviceId]);
     // امسح token بعد الاستخدام (one-time).
     await db.update('devices', {'pair_token': '', 'pair_token_exp': ''},
         where: 'pair_token = ?', whereArgs: [tok]);
+    // ضبط الوضع "مُدار" لدى المضيف.
+    await db.insert('sync_meta',
+        {'key': 'workspaceMode', 'value': 'host'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
     // نُعيد سرّنا للجهاز الآخر كي يخزنه ويُرسله عند الإرسال إلينا.
     return LanPairResult(ok: true, ourAuthSecret: ourSecret, remoteDeviceId: devId);
+  }
+
+  /// يُرجع لقطة كاملة من جميع الجداول المحلية للعضو الجديد ليستبدل بها بياناته.
+  Future<void> _handleSnapshot(HttpRequest req, HttpResponse resp) async {
+    // المصادقة بنفس Bearer token (auth_secret) المستخدم في /ops.
+    final auth = req.headers.value('Authorization') ?? '';
+    final secret = auth.startsWith('Bearer ') ? auth.substring(7).trim() : '';
+    resp.headers.contentType = ContentType.json;
+    if (secret.isEmpty) {
+      resp.statusCode = HttpStatus.unauthorized;
+      resp.write(jsonEncode({'ok': false, 'error': 'auth-required'}));
+      await resp.close();
+      return;
+    }
+    try {
+      final db = await dbProvider();
+      final devRows = await db.query('devices',
+          where: 'auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
+          whereArgs: [secret], limit: 1);
+      if (devRows.isEmpty) {
+        resp.statusCode = HttpStatus.forbidden;
+        resp.write(jsonEncode({'ok': false, 'error': 'unknown-device'}));
+        await resp.close();
+        return;
+      }
+      // نجمع كل الجداول التي يجب نسخها.
+      final snapshot = <String, Object?>{};
+      const tables = [
+        'accounts', 'transactions', 'transaction_items',
+        'vouchers', 'currencies', 'categories', 'item_categories',
+        'items', 'stock_moves', 'conversations', 'messages',
+        'users', 'trash', 'activity',
+        'workspaces', 'devices',
+      ];
+      for (final t in tables) {
+        snapshot[t] = await db.query(t);
+      }
+      snapshot['workspaceMode'] = 'member';
+      snapshot['hostDeviceId'] = ourDeviceId;
+      resp.write(jsonEncode({'ok': true, 'data': snapshot}));
+      await resp.close();
+    } catch (e) {
+      resp.statusCode = HttpStatus.internalServerError;
+      resp.write(jsonEncode({'ok': false, 'error': '$e'}));
+      await resp.close();
+    }
   }
 
   Future<void> _handleOps(HttpRequest req, HttpResponse resp) async {
@@ -397,22 +463,102 @@ class LanSyncService implements SyncTransport {
         await db.insert('devices', {
           'id': devId,
           'workspace_id': defaultWorkspaceId,
-          'name': 'جهاز بعيد',
+          'name': 'المضيف',
           'platform': 'lan',
           'ip_address': ip,
           'port': port,
           'auth_secret': remoteSecret,
           'is_paired': 1,
+          'is_owner': 1, // المضيف هو المالك.
           'revoked_at': '',
           'last_seen_at': now,
           'created_at': now,
           'updated_at': now,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
-      return LanPairResult(ok: true, remoteDeviceId: devId.isEmpty ? null : devId);
+      // نجلب اللقطة الكاملة من المضيف ونُعيدها في LanPairResult ليُطبّقها المستدعي.
+      Map<String, Object?>? snapshot;
+      try {
+        final snapReq = await _httpClient.getUrl(Uri.parse('http://$ip:$port/snapshot'));
+        snapReq.headers.set('Authorization', 'Bearer $ourSecret');
+        final snapResp = await snapReq.close().timeout(const Duration(seconds: 10));
+        final snapBody = await snapResp
+            .timeout(const Duration(seconds: 8))
+            .transform(utf8.decoder)
+            .join();
+        final snapJson = jsonDecode(snapBody) as Map;
+        if (snapJson['ok'] == true) {
+          snapshot = (snapJson['data'] as Map?)?.cast<String, Object?>();
+        }
+      } catch (_) {}
+      return LanPairResult(
+          ok: true,
+          remoteDeviceId: devId.isEmpty ? null : devId,
+          snapshot: snapshot);
     } catch (e) {
       return LanPairResult(ok: false, error: '$e');
     }
+  }
+
+  /// يُطبّق لقطة البيانات القادمة من المضيف على الجهاز العضو (يمسح القديم ويستبدله).
+  static Future<void> applySnapshot(
+      Future<Database> Function() dbProvider, String ourDeviceId, Map<String, Object?> snap) async {
+    final db = await dbProvider();
+    await db.transaction((txn) async {
+      // 1) مسح البيانات المحلية (نُبقي devices/workspaces/sync_meta جزئياً).
+      const clearTables = [
+        'accounts', 'transactions', 'transaction_items', 'vouchers',
+        'currencies', 'categories', 'item_categories', 'items',
+        'stock_moves', 'conversations', 'messages', 'users',
+        'trash', 'activity', 'operations', 'sync_queue',
+      ];
+      for (final t in clearTables) {
+        await txn.delete(t);
+      }
+      // نحذف سجلات الأجهزة الأخرى ونُبقي سجلنا وسجل المضيف.
+      await txn.delete('devices', where: 'id <> ?', whereArgs: [ourDeviceId]);
+
+      // 2) نسخ الجداول من اللقطة.
+      Future<void> insertAll(String table) async {
+        final rows = (snap[table] as List?)?.cast<Map>() ?? const <Map>[];
+        for (final r in rows) {
+          try {
+            final map = r.map((k, v) => MapEntry(k.toString(), v));
+            if (table == 'devices' && map['id'] == ourDeviceId) {
+              // سجلنا يأتي من المضيف؛ نحفظه مع تعديل is_owner=0.
+              map['is_owner'] = 0;
+            }
+            await txn.insert(table, map,
+                conflictAlgorithm: ConflictAlgorithm.replace);
+          } catch (_) {}
+        }
+      }
+
+      await insertAll('workspaces');
+      await insertAll('users');
+      await insertAll('devices');
+      await insertAll('accounts');
+      await insertAll('transactions');
+      await insertAll('transaction_items');
+      await insertAll('vouchers');
+      await insertAll('currencies');
+      await insertAll('categories');
+      await insertAll('item_categories');
+      await insertAll('items');
+      await insertAll('stock_moves');
+      await insertAll('conversations');
+      await insertAll('messages');
+      await insertAll('trash');
+      await insertAll('activity');
+
+      // 3) جهازنا الآن عضو (ليس مالكًا).
+      await txn.update('devices', {'is_owner': 0, 'is_paired': 1},
+          where: 'id = ?', whereArgs: [ourDeviceId]);
+      // 4) ضبط وضع المساحة على "عضو".
+      await txn.insert('sync_meta',
+          {'key': 'workspaceMode', 'value': 'member'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   Future<String?> _localIp() async {

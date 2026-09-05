@@ -372,16 +372,78 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         ourDeviceId: ourId,
         port: port,
       );
+      // تحذير للمستخدم قبل الانضمام: سيتم مسح البيانات المحلية.
+      final confirmJoin = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تأكيد الانضمام إلى المجموعة'),
+          content: const Text(
+            'سيتم حذف جميع البيانات والسجلات المحلية في هذا الجهاز '
+            'واستبدالها بنسخة كاملة من بيانات المجموعة على الجهاز المضيف.\n\n'
+            'هذا الإجراء لا يمكن التراجع عنه.\n\n'
+            'هل تريد المتابعة؟',
+            style: TextStyle(height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('إلغاء')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('انضمام ومسح البيانات'),
+            ),
+          ],
+        ),
+      );
+      if (confirmJoin != true) return;
+
       final result = await lan.pairWith(ip, port, tok);
       if (!mounted) return;
-      final ok = result.ok;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ok
-            ? '✅ تم الربط بنجاح'
-            : '❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}'),
-          backgroundColor: ok ? null : Colors.red),
-      );
-      if (ok) bump(ref);
+      if (!result.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      // بعد الاقتران نستبدل البيانات المحلية بلقطة المضيف.
+      if (result.snapshot != null) {
+        try {
+          await LanSyncService.applySnapshot(() async => db, ourId, result.snapshot!);
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('تم الربط لكن تعذر نسخ البيانات: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '✅ تم الانضمام إلى المجموعة.\n'
+              'أنت الآن عضو؛ سيقوم المدير بتعيين صلاحياتك من شاشة إدارة الأجهزة.',
+            ),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      bump(ref);
+      // بعد الانضمام نُعيد تشغيل التدفق ليعرض الواجهة وفق صلاحيات العضو.
+      if (mounted) {
+        await Future.delayed(const Duration(milliseconds: 300));
+        // نُعيد تشغيل التطبيق عبر إعادة دفع شاشة البداية يُعاد بناء Riverpod.
+        Navigator.of(context).popUntil((r) => r.isFirst);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

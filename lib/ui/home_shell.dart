@@ -221,16 +221,63 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       appBar: AppBar(
         title: Text(_screen.title),
         actions: [
-          FutureBuilder<SyncStatusInfo>(
-            future: _syncFuture,
-            builder: (ctx, snap) {
-              if (!snap.hasData) return const SizedBox.shrink();
-              return SyncStatusBadge(
-                info: snap.data!,
-                onTap: () => _go(AppScreen.settings),
-              );
-            },
-          ),
+          // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
+          Consumer(builder: (ctx, rref, _) {
+            final modeAsync = rref.watch(workspaceModeProvider);
+            final roleAsync = rref.watch(deviceRoleProvider);
+            final mode = modeAsync.valueOrNull ?? 'standalone';
+            if (mode == 'standalone') return const SizedBox.shrink();
+            final role = roleAsync.valueOrNull;
+            final (label, color, icon) = switch (role?.role) {
+              UserRole.admin => ('مدير', Colors.amber.shade700, Icons.security),
+              UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
+              UserRole.dataEntry => ('إدخال', Colors.teal, Icons.edit_note),
+              UserRole.viewer => ('عرض فقط', Colors.grey, Icons.visibility_outlined),
+              _ => ('بلا صلاحية', Colors.red, Icons.block),
+            };
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Tooltip(
+                message: mode == 'host'
+                    ? 'أنت مدير هذه المجموعة'
+                    : 'دورك في المجموعة: $label',
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: color.withOpacity(.3)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(icon, size: 13, color: color),
+                    const SizedBox(width: 4),
+                    Text(label,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: color)),
+                  ]),
+                ),
+              ),
+            );
+          }),
+          // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
+          Consumer(builder: (ctx, rref, _) {
+            final modeAsync = rref.watch(workspaceModeProvider);
+            final mode = modeAsync.valueOrNull ?? 'standalone';
+            if (mode == 'standalone') return const SizedBox.shrink();
+            return FutureBuilder<SyncStatusInfo>(
+              future: _syncFuture,
+              builder: (ctx, snap) {
+                if (!snap.hasData) return const SizedBox.shrink();
+                return SyncStatusBadge(
+                  info: snap.data!,
+                  onTap: () => _go(AppScreen.settings),
+                );
+              },
+            );
+          }),
           // قائمة «ثلاث نقاط» تجمع كل الشاشات/الاختصارات الإضافية (المدمجة)
           // حتى يبقى الشريط السفلي مرتّباً بالاختصارات الأساسية فقط.
           PopupMenuButton<AppScreen>(
@@ -306,6 +353,7 @@ class _Drawer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider).valueOrNull;
+    final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
 
     return Drawer(
       child: SafeArea(
@@ -354,7 +402,7 @@ class _Drawer extends ConsumerWidget {
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                children: _DrawerItems.of(user: user).map((s) {
+                children: _DrawerItems.of(user: user, isOwner: isOwner).map((s) {
                   final active = s == current;
                   return ListTile(
                     leading: Icon(active ? s.activeIcon : s.icon,
@@ -401,16 +449,15 @@ class _Drawer extends ConsumerWidget {
 /// عناصر الدرج: كل الشاشات ما عدا الموجودة في الشريط السفلي، حتى لا تتكرر
 /// الأيقونة نفسها في مكانين (البند ٥ من ملاحظات المستخدم).
 class _DrawerItems {
-  static List<AppScreen> of({AppUser? user}) => AppScreen.values
-      .where((s) => !_HomeShellState._tabs.contains(s))
-      // شاشتا المستخدمين والأجهزة محجوزتان لمن يملك صلاحية manage_users.
-      .where((s) {
-        if ((s == AppScreen.users || s == AppScreen.devices) &&
-            user != null &&
-            !user.can('manage_users')) {
-          return false;
-        }
-        return true;
-      })
-      .toList();
+  static List<AppScreen> of({AppUser? user, required bool isOwner}) =>
+      AppScreen.values
+          .where((s) => !_HomeShellState._tabs.contains(s))
+          // شاشتا المستخدمين والأجهزة للمالك فقط (مدير المجموعة).
+          .where((s) {
+            if (s == AppScreen.users || s == AppScreen.devices) {
+              return isOwner;
+            }
+            return true;
+          })
+          .toList();
 }

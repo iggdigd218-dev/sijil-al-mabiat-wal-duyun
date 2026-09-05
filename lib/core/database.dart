@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 12;
+  static const int _version = 13;
 
   static int get schemaVersion => _version;
 
@@ -299,6 +299,7 @@ class AppDatabase {
         user_id        INTEGER,
         paired_by      INTEGER,
         is_paired      INTEGER NOT NULL DEFAULT 1,
+        is_owner       INTEGER NOT NULL DEFAULT 0,
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL,
         FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -444,7 +445,7 @@ class AppDatabase {
           last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
           pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
           revoked_at TEXT DEFAULT '', user_id INTEGER, paired_by INTEGER,
-          is_paired INTEGER NOT NULL DEFAULT 1,
+          is_paired INTEGER NOT NULL DEFAULT 1, is_owner INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )''');
     await _tryCreateTable(db, 'operations', '''
@@ -596,6 +597,33 @@ class AppDatabase {
         }
       } catch (_) {}
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '12'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v13: وضع المساحة (مستقل/مرتبط) + is_owner للجهاز المالك ======
+    if (from < 13) {
+      await _addColumn(db, 'devices', 'is_owner',
+          "INTEGER NOT NULL DEFAULT 0");
+      // في الوضع المستقل (قبل أي اقتران)، الجهاز المحلي هو المالك.
+      final localDev = await db.query('devices',
+          where: "auth_secret <> '' AND COALESCE(revoked_at,'') = ''",
+          orderBy: 'created_at ASC',
+          limit: 1);
+      if (localDev.isNotEmpty) {
+        final ownerDeviceId = localDev.first['id'];
+        final anyPeer = await db.query('devices',
+            where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
+            whereArgs: [ownerDeviceId],
+            limit: 1);
+        // إذا لا يوجد جهاز آخر فهذا الجهاز هو المالك (وضع مستقل).
+        if (anyPeer.isEmpty) {
+          await db.update('devices', {'is_owner': 1},
+              where: 'id = ?', whereArgs: [ownerDeviceId]);
+          await db.insert('sync_meta',
+              {'key': 'workspaceMode', 'value': 'standalone'},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '13'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

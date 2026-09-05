@@ -53,6 +53,7 @@ class Repo {
         'name': await deviceName(this),
         'platform': Platform.operatingSystem,
         'is_paired': 1,
+        'is_owner': 1, // الجهاز المحلي في الوضع المستقل هو المالك.
         'auth_secret': generateLanSecret(),
         'revoked_at': '',
         'ip_address': '',
@@ -115,6 +116,174 @@ class Repo {
   }
 
   String get requireWorkspaceId => _workspaceId ?? defaultWorkspaceId;
+
+  // ---------- حالة المساحة (مستقل/مرتبط) ----------
+
+  Future<String> workspaceMode() async {
+    final db = await _db;
+    final r = await db.query('sync_meta',
+        where: 'key = ?', whereArgs: ['workspaceMode'], limit: 1);
+    if (r.isEmpty) return 'standalone';
+    return (r.first['value'] as String?) ?? 'standalone';
+  }
+
+  Future<bool> isWorkspaceOwner() async {
+    if (_deviceId == null) return true; // قبل التهيئة اعتبره مستقلاً.
+    final db = await _db;
+    final r = await db.query('devices',
+        where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+    if (r.isEmpty) return true;
+    return ((r.first['is_owner'] ?? 0) as int) == 1;
+  }
+
+  /// الجهاز الذي نحن عليه الآن (سجلنا في جدول devices).
+  Future<Map<String, Object?>?> ownDeviceRow() async {
+    if (_deviceId == null) return null;
+    final db = await _db;
+    final r = await db.query('devices',
+        where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+    return r.isEmpty ? null : r.first;
+  }
+
+  /// دور المستخدم الموكّل لهذا الجهاز، أو null إذا لم يُعيَّن بعد (عضو جديد بلا صلاحيات).
+  Future<AppUser?> deviceAssignedUser() async {
+    final row = await ownDeviceRow();
+    if (row == null) return null;
+    final uid = row['user_id'] as int?;
+    if (uid == null) return null;
+    return userById(uid);
+  }
+
+  Future<AppUser?> userById(int id) async {
+    final db = await _db;
+    final r = await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+    if (r.isEmpty) return null;
+    return AppUser.fromMap(r.first);
+  }
+
+  /// تُستدعى على الجهاز المُضيف (المالك) عند استقبال طلب اقتران ناجح:
+  /// يُحوّل الوضع إلى مُدار ويُسجّل الجهاز الجديد كعضو.
+  Future<void> markAsHostAfterPairing(String newDeviceId) async {
+    final db = await _db;
+    // أنا المالك.
+    if (_deviceId != null) {
+      await db.update('devices', {'is_owner': 1, 'is_paired': 1},
+          where: 'id = ?', whereArgs: [_deviceId]);
+    }
+    await db.update('devices', {'is_owner': 0, 'is_paired': 1},
+        where: 'id = ?', whereArgs: [newDeviceId]);
+    await db.insert('sync_meta',
+        {'key': 'workspaceMode', 'value': 'managed'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// الخروج من المجموعة (للعضو): يعيد الجهاز إلى الوضع المستقل ويمسح بيانات المجموعة.
+  /// لا يستطيع المالك الخروج إلا بعد أن يحذف جميع الأجهزة الأخرى (أو يبقى الجهاز وحيداً).
+  Future<bool> leaveGroup() async {
+    final db = await _db;
+    final mode = await workspaceMode();
+    if (mode != 'member') {
+      if (mode == 'host') {
+        final peers = await db.query('devices',
+            where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
+            whereArgs: [_deviceId]);
+        if (peers.isNotEmpty) return false;
+        // لا يوجد أجهزة أخرى — ارجع للوضع المستقل.
+      } else {
+        return true; // standalone، لا داعي لشيء.
+      }
+    }
+    await db.transaction((txn) async {
+      const tables = [
+        'accounts', 'transactions', 'transaction_items', 'vouchers',
+        'currencies', 'categories', 'item_categories', 'items',
+        'stock_moves', 'conversations', 'messages', 'users',
+        'trash', 'activity', 'operations', 'sync_queue',
+      ];
+      for (final t in tables) {
+        await txn.delete(t);
+      }
+      await txn.delete('devices'); // حذف كل سجلات الأجهزة.
+      // إعادة بذرة المدير والجهاز الحالي كمالك.
+      final now = DateTime.now().toIso8601String();
+      final adminPerms = defaultPerms(UserRole.admin);
+      final permStr = adminPerms.entries
+          .where((e) => e.value).map((e) => e.key).join(',');
+      await txn.insert('devices', {
+        'id': _deviceId,
+        'workspace_id': requireWorkspaceId,
+        'name': await deviceName(this),
+        'platform': Platform.operatingSystem,
+        'is_paired': 1,
+        'is_owner': 1,
+        'auth_secret': generateLanSecret(),
+        'revoked_at': '',
+        'ip_address': '',
+        'port': kDefaultLanPort,
+        'last_seen_at': now,
+        'last_sync_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+      await txn.insert('users', {
+        'name': 'المدير',
+        'role': 'admin',
+        'pin': '',
+        'password': '',
+        'permissions': permStr,
+        'is_me': 1,
+        'active': 1,
+        'workspace_id': requireWorkspaceId,
+        'deleted_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+      await txn.insert('sync_meta',
+          {'key': 'workspaceMode', 'value': 'standalone'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+    return true;
+  }
+
+  /// مسح كل البيانات المحلية على العضو الجديد ليستبدلها بنسخة المضيف.
+  /// العملية داخل transaction لضمان النزاهة.
+  Future<void> wipeLocalDataForJoin() async {
+    final db = await _db;
+    await db.transaction((txn) async {
+      const entityTables = [
+        'accounts',
+        'transactions',
+        'transaction_items',
+        'vouchers',
+        'currencies',
+        'categories',
+        'item_categories',
+        'items',
+        'stock_moves',
+        'conversations',
+        'messages',
+        'users',
+        'trash',
+        'activity',
+        'operations',
+        'sync_queue',
+      ];
+      for (final t in entityTables) {
+        await txn.delete(t);
+      }
+      // لا نحذف devices (يبقى سجلنا وسجل المضيف)، ولا نحذف workspace ولا sync_meta.
+      // جهازي لم يعد مالكاً.
+      if (_deviceId != null) {
+        await txn.update('devices',
+            {'is_owner': 0, 'user_id': null, 'is_paired': 1},
+            where: 'id = ?', whereArgs: [_deviceId]);
+      }
+      // ضبط الوضع كـ عضو.
+      await txn.insert('sync_meta',
+          {'key': 'workspaceMode', 'value': 'member'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
 
   /// مسجّل جديد داخل معاملة.
   Future<SyncRecorder> newRecorder(Transaction txn) async {
@@ -673,6 +842,21 @@ class Repo {
   }
 
   Future<AppUser?> currentUser() async {
+    final mode = await workspaceMode();
+    if (mode == 'member') {
+      // في وضع العضو: المستخدم الفعّال هو المُعيّن لهذا الجهاز من قِبل المدير.
+      final assigned = await deviceAssignedUser();
+      if (assigned != null) return assigned;
+      // إن لم يُعيَّن بعد: المستخدم ذو الصلاحيات الأقل (viewer) إن وُجد،
+      // أو null ليمنع كل الإجراءات.
+      final all = await users();
+      if (all.isEmpty) return null;
+      return all.firstWhere(
+        (u) => u.role == UserRole.viewer,
+        orElse: () => all.first,
+      );
+    }
+    // وضع مستقل / مُضيف (مالك): المستخدم "أنا" (is_me=1) أو المدير.
     final all = await users();
     if (all.isEmpty) return null;
     return all.firstWhere(
@@ -686,6 +870,18 @@ class Repo {
 
   /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.
   Future<void> _ensureCan(String perm) async {
+    final mode = await workspaceMode();
+    if (mode == 'member') {
+      final me = await currentUser();
+      if (me == null) {
+        throw StateError(
+            'لم يتم تعيين صلاحيات لهذا الجهاز بعد. اطلب من المدير منحك صلاحية.');
+      }
+      if (!me.can(perm)) {
+        throw StateError('ليس لديك صلاحية لهذا الإجراء (${me.role.label}).');
+      }
+      return;
+    }
     final me = await currentUser();
     if (me == null) return; // قبل وجود مستخدمين (أول تشغيل)
     if (!me.can(perm)) {

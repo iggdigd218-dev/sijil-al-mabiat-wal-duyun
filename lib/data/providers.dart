@@ -560,3 +560,21 @@ final devicesProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
   return ref.read(repoProvider).devices();
 });
+
+/// وضع المساحة الحالي: standalone/host/member.
+final workspaceModeProvider = FutureProvider<String>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).workspaceMode();
+});
+
+/// هل هذا الجهاز هو مالك المساحة (المدير).
+final isOwnerProvider = FutureProvider<bool>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).isWorkspaceOwner();
+});
+
+/// دور الجهاز الحالي (للعرض في الشارة أعلى الشاشة).
+final deviceRoleProvider = FutureProvider<AppUser?>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).currentUser();
+});
