@@ -21,6 +21,8 @@ import 'tx_form.dart';
 import 'users_screen.dart';
 import 'vouchers_screen.dart';
 import 'pos_screen.dart';
+import 'sync_status_indicator.dart';
+import '../data/sync/sync_service.dart';
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -56,6 +58,30 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell> {
   AppScreen _screen = AppScreen.dashboard;
+  Future<SyncStatusInfo>? _syncFuture;
+  Timer? _syncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshSync();
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshSync());
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    super.dispose();
+  }
+
+  void _refreshSync() {
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    if (!engine.hasStarted) engine.start();
+    setState(() {
+      _syncFuture = SyncService(repo: repo, engine: engine).status();
+    });
+  }
 
   /// الشاشات الخمس في الشريط السفلي؛ الباقي من القائمة الجانبية.
   static const _tabs = [
@@ -192,6 +218,16 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       appBar: AppBar(
         title: Text(_screen.title),
         actions: [
+          FutureBuilder<SyncStatusInfo>(
+            future: _syncFuture,
+            builder: (ctx, snap) {
+              if (!snap.hasData) return const SizedBox.shrink();
+              return SyncStatusBadge(
+                info: snap.data!,
+                onTap: () => _go(AppScreen.settings),
+              );
+            },
+          ),
           // قائمة «ثلاث نقاط» تجمع كل الشاشات/الاختصارات الإضافية (المدمجة)
           // حتى يبقى الشريط السفلي مرتّباً بالاختصارات الأساسية فقط.
           PopupMenuButton<AppScreen>(

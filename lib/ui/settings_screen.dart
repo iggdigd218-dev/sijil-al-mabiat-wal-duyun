@@ -9,6 +9,7 @@ import '../core/receipt_image.dart';
 import '../core/security.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'sync_settings_section.dart';
 import 'widgets.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
@@ -574,6 +575,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 18),
+                const SyncSettingsSection(),
                 const SizedBox(height: 18),
                 Card(
                   child: Padding(

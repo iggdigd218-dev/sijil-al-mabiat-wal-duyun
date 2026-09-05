@@ -22,7 +22,10 @@ Future<void> main() async {
   var themeMode = ThemeMode.system;
   var hideBalances = false;
   try {
-    final st = await Repo().settings();
+    final repo = Repo();
+    // تهيئة Workspace + deviceId + تسجيل هذا الجهاز قبل أول استخدام.
+    await repo.initSyncInfra();
+    final st = await repo.settings();
     themeMode = switch (st['theme']) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,

@@ -2,10 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
+import '../core/database.dart';
 import '../core/models.dart';
 import 'repository.dart';
+import 'sync/google_auth_service.dart';
+import 'sync/sync_engine.dart';
 
 final repoProvider = Provider<Repo>((ref) => Repo());
+
+final syncEngineProvider = Provider<SyncEngine>((ref) {
+  final repo = ref.read(repoProvider);
+  final engine = SyncEngine(
+    repo: repo,
+    dbProvider: () => AppDatabase.instance.database,
+  );
+  ref.onDispose(() => engine.stop());
+  return engine;
+});
+
+final googleAuthProvider = FutureProvider<GoogleUser?>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  return GoogleAuthService(db).currentUserFromDb();
+});
 
 /// عدّاد يُزاد بعد كل تعديل ليُعيد بناء كل ما يعتمد على البيانات.
 final refreshProvider = StateProvider<int>((ref) => 0);

@@ -8,6 +8,12 @@ import 'package:sqflite/sqflite.dart';
 import '../core/accounting.dart';
 import '../core/database.dart';
 import '../core/models.dart';
+import 'sync/device_id.dart';
+import 'sync/google_auth_service.dart';
+import 'sync/operation.dart';
+import 'sync/recorder.dart';
+import 'sync/sync_queue.dart';
+import 'sync/workspace_service.dart';
 
 /// خطأ استعادة واضح؛ لا تُعاد رسالة نجاح عند حدوثه.
 class BackupImportException implements Exception {
@@ -22,14 +28,101 @@ class BackupImportException implements Exception {
 /// مستودع البيانات — كل قراءة وكتابة تمرّ من هنا.
 class Repo {
   Future<Database> get _db async => AppDatabase.instance.database;
+  Future<Database> get database async => _db;
+
+  String? _deviceId;
+  String? _workspaceId;
+  int? _currentUserId;
+
+  /// تهيئة البنية التحتية للمزامنة (تُستدعى مرة واحدة عند بدء التطبيق).
+  Future<void> initSyncInfra() async {
+    final db = await _db;
+    // إنشاء Workspace افتراضي إن لم يوجد.
+    _workspaceId = await ensureWorkspace(db, repo: this);
+    // توليد deviceId ثابت.
+    _deviceId = await ensureDeviceId(this);
+    // تسجيل هذا الجهاز في جدول devices إن لم يكن مسجلاً.
+    final now = DateTime.now().toIso8601String();
+    await db.insert(
+      'devices',
+      {
+        'id': _deviceId,
+        'workspace_id': _workspaceId,
+        'name': await deviceName(this),
+        'platform': Platform.operatingSystem,
+        'is_paired': 1,
+        'last_seen_at': now,
+        'last_sync_at': '',
+        'created_at': now,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    // المستخدم الحالي.
+    final me = await currentUser();
+    _currentUserId = me?.id;
+
+    // استعادة جلسة Google بصمت (لا فتح نوافذ).
+    try {
+      final authSvc = GoogleAuthService(db);
+      final ar = await authSvc.restoreSession();
+      final gu = ar.user;
+      if (gu != null && gu.id.isNotEmpty) {
+        await linkWorkspaceToGoogle(db,
+            workspaceId: _workspaceId!,
+            googleId: gu.id,
+            email: gu.email,
+            name: gu.displayName ?? '',
+          );
+      }
+    } catch (_) {}
+  }
+
+  String get requireDeviceId {
+    if (_deviceId == null) {
+      throw StateError('Sync infra not initialized: call initSyncInfra() first');
+    }
+    return _deviceId!;
+  }
+
+  String get requireWorkspaceId => _workspaceId ?? defaultWorkspaceId;
+
+  /// مسجّل جديد داخل معاملة.
+  Future<SyncRecorder> newRecorder(Transaction txn) async {
+    return SyncRecorder(
+      db: txn,
+      deviceId: requireDeviceId,
+      workspaceId: requireWorkspaceId,
+      userId: _currentUserId,
+    );
+  }
+
+  /// مسجّل بسيط خارج المعاملة — يُستخدم كحل آمن بعد الحفظ دون إعادة هيكلة الدوال.
+  Future<void> queueOperation({
+    required EntityKind entityType,
+    required String entityId,
+    required OpKind opType,
+    required Map<String, Object?> payload,
+  }) async {
+    final db = await _db;
+    final rec = SyncRecorder(
+      db: db,
+      deviceId: requireDeviceId,
+      workspaceId: requireWorkspaceId,
+      userId: _currentUserId,
+    );
+    await rec.record(entityType: entityType, entityId: entityId, opType: opType, payload: payload);
+  }
 
   // ==================== الحسابات ====================
 
-  Future<List<Account>> accounts({bool includeArchived = false}) async {
+  Future<List<Account>> accounts({bool includeArchived = false, bool includeDeleted = false}) async {
     final db = await _db;
+    final where = StringBuffer(includeArchived ? '1=1' : 'archived = 0');
+    if (!includeDeleted) where.write(" AND COALESCE(deleted_at,'') = ''");
     final rows = await db.query(
       'accounts',
-      where: includeArchived ? null : 'archived = 0',
+      where: where.toString(),
       orderBy: 'name COLLATE NOCASE ASC',
     );
     return rows.map(Account.fromMap).toList();
@@ -44,40 +137,109 @@ class Repo {
   Future<int> saveAccount(Account a) async {
     await _ensureCan(a.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
-    if (a.id == null) {
-      final id = await db.insert('accounts', a.toMap());
-      await logActivity('إضافة حساب: ${a.name}', 'account', '$id');
-      return id;
-    }
-    await db.update('accounts', a.toMap(), where: 'id = ?', whereArgs: [a.id]);
-    await logActivity('تعديل حساب: ${a.name}', 'account', '${a.id}');
-    return a.id!;
+    final id = await db.transaction<int>((txn) async {
+      final map = a.toMap();
+      map['workspace_id'] = requireWorkspaceId;
+      map.remove('id');
+      map['updated_at'] = DateTime.now().toIso8601String();
+      late int newId;
+      late OpKind op;
+      if (a.id == null) {
+        newId = await txn.insert('accounts', map);
+        op = OpKind.create;
+      } else {
+        newId = a.id!;
+        await txn.update('accounts', map, where: 'id = ?', whereArgs: [newId]);
+        op = OpKind.update;
+      }
+      final rec = await SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      ).record(
+        entityType: EntityKind.account,
+        entityId: '$newId',
+        opType: op,
+        payload: {...map, 'id': newId},
+      );
+      await txn.insert(
+        'activity',
+        {
+          'text': op == OpKind.create ? 'إضافة حساب: ${a.name}' : 'تعديل حساب: ${a.name}',
+          'ref_type': 'account',
+          'ref_id': '$newId',
+          'workspace_id': requireWorkspaceId,
+          'created_at': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      return newId;
+    });
+    return id;
   }
 
   /// الأرشفة بدل الحذف — كما في نسخة الويب.
   Future<void> archiveAccount(int id, bool archived) async {
     final db = await _db;
-    await db.update('accounts', {'archived': archived ? 1 : 0},
-        where: 'id = ?', whereArgs: [id]);
+    final now = DateTime.now().toIso8601String();
+    await db.transaction((txn) async {
+      await txn.update('accounts', {
+        'archived': archived ? 1 : 0,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [id]);
+      final rec = SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      );
+      final row = (await txn.query('accounts', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await rec.record(
+        entityType: EntityKind.account,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: Map<String, Object?>.from(row),
+      );
+    });
     await logActivity(
         archived ? 'أرشفة حساب' : 'استعادة حساب', 'account', '$id');
   }
 
-  /// حذف نهائي مع نسخة في سلة المحذوفات للاستعادة.
+  /// حذف ناعم (soft delete): لا يُحذف السجل فعليًا، بل يوضع deleted_at.
+  /// يُضاف سجل متوافق مع جدول trash القديم لاستمرار عمل شاشة سلة المحذوفات.
   Future<void> deleteAccount(int id) async {
     await _ensureCan('delete_tx');
     final db = await _db;
+    final now = DateTime.now().toIso8601String();
     final a = await account(id);
-    if (a != null) {
-      await db.insert('trash', {
+    if (a == null) return;
+    await db.transaction((txn) async {
+      await txn.update('accounts', {
+        'deleted_at': now,
+        'deleted_by': _currentUserId,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [id]);
+      final updated = (await txn.query('accounts', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      ).record(
+        entityType: EntityKind.account,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: Map<String, Object?>.from(updated),
+      );
+      await txn.insert('trash', {
         'store': 'accounts',
         'payload': jsonEncode(a.toMap()),
         'label': 'حساب: ${a.name}',
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': now,
       });
-    }
-    await db.delete('accounts', where: 'id = ?', whereArgs: [id]);
-    await logActivity('حذف حساب: ${a?.name ?? id}', 'account', '$id');
+    });
+    await logActivity('حذف حساب: ${a.name}', 'account', '$id');
   }
 
   // ==================== العمليات ====================
@@ -87,10 +249,14 @@ class Repo {
     DateTime? from,
     DateTime? to,
     OpType? type,
+    bool includeDeleted = false,
   }) async {
     final db = await _db;
     final where = <String>[];
     final args = <Object?>[];
+    if (!includeDeleted) {
+      where.add("COALESCE(deleted_at,'') = ''");
+    }
     if (accountId != null) {
       // التحويل يمسّ الحساب عبر from_id/to_id أيضًا.
       where.add('(account_id = ? OR from_id = ? OR to_id = ?)');
@@ -124,26 +290,61 @@ class Repo {
     final db = await _db;
     late final int id;
     await db.transaction((txn) async {
+      final rec = await SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      );
+      final now = DateTime.now().toIso8601String();
       if (t.id == null) {
-        // رقم تسلسلي رقمي بحت لكل عملية إن لم يُدخل المستخدم مرجعاً.
         var ref = t.reference.trim();
         if (ref.isEmpty) {
           ref = await nextSeq('counter_tx', table: 'transactions');
         }
         final toSave = ref == t.reference ? t : t.copyWith(reference: ref);
-        id = await txn.insert('transactions', toSave.toMap());
+        final map = toSave.toMap();
+        map['workspace_id'] = requireWorkspaceId;
+        map.remove('id');
+        map['updated_at'] = now;
+        id = await txn.insert('transactions', map);
+        final saved = Map<String, Object?>.from(map)..['id'] = id;
+        if (items != null) {
+          await txn.delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
+          for (final line in items) {
+            final lm = line.toMap(transactionId: id);
+            lm['workspace_id'] = requireWorkspaceId;
+            await txn.insert('transaction_items', lm);
+          }
+        }
+        await rec.record(
+          entityType: EntityKind.tx,
+          entityId: '$id',
+          opType: OpKind.create,
+          payload: saved,
+        );
       } else {
         id = t.id!;
-        await txn.update('transactions', t.toMap(),
-            where: 'id = ?', whereArgs: [id]);
-      }
-
-      if (items != null) {
-        await txn
-            .delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
-        for (final line in items) {
-          await txn.insert('transaction_items', line.toMap(transactionId: id));
+        final map = t.toMap();
+        map['workspace_id'] = requireWorkspaceId;
+        map.remove('id');
+        map['updated_at'] = now;
+        await txn.update('transactions', map, where: 'id = ?', whereArgs: [id]);
+        if (items != null) {
+          await txn.delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
+          for (final line in items) {
+            final lm = line.toMap(transactionId: id);
+            lm['workspace_id'] = requireWorkspaceId;
+            await txn.insert('transaction_items', lm);
+          }
         }
+        final saved = Map<String, Object?>.from(map)..['id'] = id;
+        await rec.record(
+          entityType: EntityKind.tx,
+          entityId: '$id',
+          opType: OpKind.update,
+          payload: saved,
+        );
       }
     });
 
@@ -170,32 +371,33 @@ class Repo {
   Future<void> deleteTx(int id) async {
     await _ensureCan('delete_tx');
     final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    final rows = await db.query('transactions', where: 'id = ?', whereArgs: [id]);
+    if (rows.isEmpty) return;
     await db.transaction((txn) async {
-      final rows =
-          await txn.query('transactions', where: 'id = ?', whereArgs: [id]);
-      if (rows.isNotEmpty) {
-        final lines = await txn.query(
-          'transaction_items',
-          where: 'tx_id = ?',
-          whereArgs: [id],
-          orderBy: 'id ASC',
-        );
-        await txn.insert('trash', {
-          'store': 'transactions',
-          'payload': jsonEncode({
-            'transaction': rows.first,
-            'items': lines,
-          }),
-          'label':
-              'عملية بمبلغ ${rows.first['amount']} ${rows.first['currency']}',
-          'created_at': DateTime.now().toIso8601String(),
-        });
-      }
-      // الحذف الصريح يحافظ على السلوك نفسه حتى في قواعد الاختبار أو
-      // القواعد القديمة التي لم تُفعّل مفاتيح SQLite الأجنبية.
-      await txn
-          .delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
-      await txn.delete('transactions', where: 'id = ?', whereArgs: [id]);
+      await txn.update('transactions', {
+        'deleted_at': now,
+        'deleted_by': _currentUserId,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [id]);
+      final updated = (await txn.query('transactions', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      ).record(
+        entityType: EntityKind.tx,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: Map<String, Object?>.from(updated),
+      );
+      await txn.insert('trash', {
+        'store': 'transactions',
+        'payload': jsonEncode({'transaction': Map.from(rows.first), 'items': []}),
+        'label': 'عملية بمبلغ ${rows.first['amount']} ${rows.first['currency']}',
+        'created_at': now,
+      });
     });
     await logActivity('حذف عملية', 'tx', '$id');
   }
@@ -257,16 +459,25 @@ class Repo {
 
   Future<void> saveCurrency(CurrencyDef c, {double rate = 1}) async {
     final db = await _db;
-    await db.insert(
-      'currencies',
-      {...c.toMap(), 'rate': rate},
-      conflictAlgorithm: ConflictAlgorithm.replace,
+    final payload = {...c.toMap(), 'rate': rate};
+    await db.insert('currencies', payload, conflictAlgorithm: ConflictAlgorithm.replace);
+    await queueOperation(
+      entityType: EntityKind.currency,
+      entityId: c.code,
+      opType: OpKind.update,
+      payload: payload,
     );
   }
 
   Future<void> deleteCurrency(String code) async {
     final db = await _db;
     await db.delete('currencies', where: 'code = ?', whereArgs: [code]);
+    await queueOperation(
+      entityType: EntityKind.currency,
+      entityId: code,
+      opType: OpKind.delete_,
+      payload: {'code': code},
+    );
   }
 
   // ==================== الإعدادات ====================
@@ -294,6 +505,18 @@ class Repo {
       'ref_type': refType,
       'ref_id': refId,
       'user_name': 'المدير',
+      'workspace_id': _workspaceId ?? defaultWorkspaceId,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<void> logActivityTx(Transaction txn, String text, String refType, String refId) async {
+    await txn.insert('activity', {
+      'text': text,
+      'ref_type': refType,
+      'ref_id': refId,
+      'user_name': 'المدير',
+      'workspace_id': _workspaceId ?? defaultWorkspaceId,
       'created_at': DateTime.now().toIso8601String(),
     });
   }
@@ -308,10 +531,12 @@ class Repo {
   Future<List<Voucher>> vouchers({
     VoucherKind? kind,
     String? status,
+    bool includeDeleted = false,
   }) async {
     final db = await _db;
     final where = <String>[];
     final args = <Object?>[];
+    if (!includeDeleted) where.add("COALESCE(deleted_at,'') = ''");
     if (kind != null) {
       where.add('kind = ?');
       args.add(kind.code);
@@ -361,15 +586,28 @@ class Repo {
 
   Future<int> saveVoucher(Voucher v) async {
     final db = await _db;
+    late final int id;
     if (v.id == null) {
-      final id = await db.insert('vouchers', v.toMap());
+      id = await db.insert('vouchers', v.toMap());
+      await queueOperation(
+        entityType: EntityKind.voucher,
+        entityId: '$id',
+        opType: OpKind.create,
+        payload: v.toMap()..['id'] = id,
+      );
       await logActivity('${v.kind.label} ${v.number}', 'voucher', '$id');
-      return id;
+    } else {
+      id = v.id!;
+      await db.update('vouchers', v.toMap(), where: 'id = ?', whereArgs: [id]);
+      await queueOperation(
+        entityType: EntityKind.voucher,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: v.toMap(),
+      );
+      await logActivity('تعديل ${v.kind.label} ${v.number}', 'voucher', '$id');
     }
-    await db.update('vouchers', v.toMap(), where: 'id = ?', whereArgs: [v.id]);
-    await logActivity(
-        'تعديل ${v.kind.label} ${v.number}', 'voucher', '${v.id}');
-    return v.id!;
+    return id;
   }
 
   Future<void> deleteVoucher(int id) async {
@@ -384,14 +622,24 @@ class Repo {
       });
     }
     await db.delete('vouchers', where: 'id = ?', whereArgs: [id]);
+    await queueOperation(
+      entityType: EntityKind.voucher,
+      entityId: '$id',
+      opType: OpKind.delete_,
+      payload: {'id': id},
+    );
     await logActivity('حذف سند', 'voucher', '$id');
   }
 
   // ==================== المستخدمون ====================
 
-  Future<List<AppUser>> users() async {
+  Future<List<AppUser>> users({bool includeDeleted = false}) async {
     final db = await _db;
-    final rows = await db.query('users', orderBy: 'id ASC');
+    final rows = await db.query(
+      'users',
+      where: includeDeleted ? null : "COALESCE(deleted_at,'') = ''",
+      orderBy: 'id ASC',
+    );
     return rows.map(AppUser.fromMap).toList();
   }
 
@@ -461,14 +709,26 @@ class Repo {
       final map = effective.toMap();
       if (allUsers.isEmpty) map['is_me'] = 1; // أول مستخدم = المستخدم الحالي
       final id = await db.insert('users', map);
+      await queueOperation(
+        entityType: EntityKind.user,
+        entityId: '$id',
+        opType: OpKind.create,
+        payload: map..['id'] = id,
+      );
       await logActivity('إضافة مستخدم: ${effective.name}', 'user', '$id');
       return id;
     }
-    await db.update('users', effective.toMap(),
-        where: 'id = ?', whereArgs: [effective.id]);
-    await logActivity(
-        'تعديل مستخدم: ${effective.name}', 'user', '${effective.id}');
-    return effective.id!;
+    final id = effective.id!;
+    final map = effective.toMap();
+    await db.update('users', map, where: 'id = ?', whereArgs: [id]);
+    await queueOperation(
+      entityType: EntityKind.user,
+      entityId: '$id',
+      opType: OpKind.update,
+      payload: map,
+    );
+    await logActivity('تعديل مستخدم: ${effective.name}', 'user', '$id');
+    return id;
   }
 
   Future<void> deleteUser(int id) async {
@@ -488,7 +748,16 @@ class Repo {
         throw StateError('لا يمكن حذف الحساب المستخدم حاليًا.');
       }
     }
-    await db.delete('users', where: 'id = ?', whereArgs: [id]);
+    // Soft-delete بدلاً من الحذف النهائي (للمزامنة).
+    final now = DateTime.now().toIso8601String();
+    await db.update('users', {'deleted_at': now, 'is_active': 0, 'updated_at': now},
+        where: 'id = ?', whereArgs: [id]);
+    await queueOperation(
+      entityType: EntityKind.user,
+      entityId: '$id',
+      opType: OpKind.delete_,
+      payload: {'id': id, 'deleted_at': now},
+    );
     await logActivity('حذف مستخدم', 'user', '$id');
   }
 
@@ -572,39 +841,92 @@ class Repo {
 
   Future<List<Map<String, Object?>>> trash() async {
     final db = await _db;
-    return db.query('trash', orderBy: 'id DESC');
+    // ندمج سلة المحذوفات القديمة مع العناصر المحذوفة ناعمًا حتى ننقل بالكامل.
+    final legacy = await db.query('trash', orderBy: 'id DESC');
+    return legacy;
   }
 
   /// يعيد سجلًا محذوفًا إلى جدوله الأصلي.
+  /// يدعم السجلات القديمة (hard delete مع payload محفوظ) والسجلات الجديدة التي تحمل entity_id.
   Future<void> restoreFromTrash(int trashId) async {
     final db = await _db;
     final r = await db.query('trash', where: 'id = ?', whereArgs: [trashId]);
     if (r.isEmpty) return;
     final store = r.first['store'] as String;
-    final payload =
-        jsonDecode(r.first['payload'] as String) as Map<String, dynamic>;
-    if (store == 'transactions' && payload['transaction'] is Map) {
-      final tx = Map<String, Object?>.from(payload['transaction'] as Map);
-      final rawItems = payload['items'];
-      await db.transaction((txn) async {
-        await txn.insert('transactions', tx,
-            conflictAlgorithm: ConflictAlgorithm.replace);
-        if (rawItems is List) {
-          for (final raw in rawItems) {
-            if (raw is! Map) continue;
-            final item = Map<String, Object?>.from(raw);
-            await txn.insert('transaction_items', item,
-                conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-        }
-      });
-    } else {
-      await db.insert(store, Map<String, Object?>.from(payload),
-          conflictAlgorithm: ConflictAlgorithm.replace);
+    final now = DateTime.now().toIso8601String();
+    Object? decoded;
+    try {
+      decoded = jsonDecode(r.first['payload'] as String);
+    } catch (_) {
+      decoded = null;
     }
-    await db.delete('trash', where: 'id = ?', whereArgs: [trashId]);
+    await db.transaction((txn) async {
+      final rec = SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      );
+      if (store == 'transactions' && decoded is Map && decoded['transaction'] is Map) {
+        final tx = Map<String, Object?>.from(decoded['transaction'] as Map);
+        tx['deleted_at'] = '';
+        tx['updated_at'] = now;
+        await txn.insert('transactions', tx, conflictAlgorithm: ConflictAlgorithm.replace);
+        final txId = tx['id'];
+        if (txId != null) {
+          await rec.record(
+            entityType: EntityKind.tx,
+            entityId: '$txId',
+            opType: OpKind.restore,
+            payload: tx,
+            parentOpId: '',
+          );
+        }
+      } else if (decoded is Map && decoded['id'] != null) {
+        final payload = Map<String, Object?>.from(decoded);
+        // إن كان السجل الأصلي ما زال موجودًا (soft delete)، نُلغِ deleted_at.
+        final id = payload['id'];
+        final exists = await txn.query(store, where: 'id = ?', whereArgs: [id], limit: 1);
+        if (exists.isNotEmpty) {
+          await txn.update(store, {
+            'deleted_at': '',
+            'restore_op_id': '',
+            'updated_at': now,
+          }, where: 'id = ?', whereArgs: [id]);
+          final restored = (await txn.query(store, where: 'id = ?', whereArgs: [id], limit: 1)).first;
+          await rec.record(
+            entityType: _entityKindFor(store),
+            entityId: '$id',
+            opType: OpKind.restore,
+            payload: Map<String, Object?>.from(restored),
+          );
+        } else {
+          payload.remove('deleted_at');
+          payload['updated_at'] = now;
+          await txn.insert(store, payload, conflictAlgorithm: ConflictAlgorithm.replace);
+          await rec.record(
+            entityType: _entityKindFor(store),
+            entityId: '$id',
+            opType: OpKind.restore,
+            payload: payload,
+          );
+        }
+      }
+      await txn.delete('trash', where: 'id = ?', whereArgs: [trashId]);
+    });
     await logActivity('استرجاع من سلة المهملات', store, '$trashId');
   }
+
+  EntityKind _entityKindFor(String table) => switch (table) {
+        'accounts' => EntityKind.account,
+        'transactions' => EntityKind.tx,
+        'items' => EntityKind.item,
+        'vouchers' => EntityKind.voucher,
+        'users' => EntityKind.user,
+        'item_categories' => EntityKind.itemCategory,
+        'stock_moves' => EntityKind.stockMove,
+        _ => EntityKind.tx,
+      };
 
   /// حذف عنصر واحد من السلة نهائيًا.
   Future<void> deleteFromTrash(int trashId) async {
@@ -1174,11 +1496,18 @@ class Repo {
 
     late final int id;
     if (category.id == null) {
+      final now = DateTime.now().toIso8601String();
       id = await db.insert('item_categories', {
         'name': name,
         'created_at': category.createdAt.toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': now,
       });
+      await queueOperation(
+        entityType: EntityKind.itemCategory,
+        entityId: '$id',
+        opType: OpKind.create,
+        payload: {'id': id, 'name': name, 'created_at': category.createdAt.toIso8601String(), 'updated_at': now},
+      );
       await logActivity('إضافة فئة أصناف: $name', 'item_category', '$id');
       return id;
     }
@@ -1198,6 +1527,13 @@ class Repo {
         where: 'category_id = ?',
         whereArgs: [id],
       );
+      final rec = await newRecorder(txn);
+      await rec.record(
+        entityType: EntityKind.itemCategory,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: {'id': id, 'name': name, 'updated_at': now},
+      );
     });
     await logActivity('تعديل فئة أصناف: $name', 'item_category', '$id');
     return id;
@@ -1206,11 +1542,7 @@ class Repo {
   /// يحذف الفئة فقط، ويفك ربط أصنافها لتبقى بيانات الأصناف محفوظة.
   Future<void> deleteItemCategory(int id) async {
     final db = await _db;
-    final rows = await db.query(
-      'item_categories',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    final rows = await db.query('item_categories', where: 'id = ?', whereArgs: [id]);
     if (rows.isEmpty) return;
     final name = rows.first['name'] as String;
     final now = DateTime.now().toIso8601String();
@@ -1222,6 +1554,13 @@ class Repo {
         whereArgs: [id],
       );
       await txn.delete('item_categories', where: 'id = ?', whereArgs: [id]);
+      final rec = await newRecorder(txn);
+      await rec.record(
+        entityType: EntityKind.itemCategory,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: {'id': id},
+      );
     });
     await logActivity('حذف فئة أصناف: $name', 'item_category', '$id');
   }
@@ -1229,11 +1568,12 @@ class Repo {
   // ==================== الأصناف والمخزون ====================
 
   Future<List<Item>> items(
-      {bool includeArchived = false, String q = ''}) async {
+      {bool includeArchived = false, String q = '', bool includeDeleted = false}) async {
     final db = await _db;
     final where = <String>[];
     final args = <Object?>[];
     if (!includeArchived) where.add('archived = 0');
+    if (!includeDeleted) where.add("COALESCE(deleted_at,'') = ''");
     if (q.trim().isNotEmpty) {
       where.add('(name LIKE ? OR sku LIKE ? OR category LIKE ?)');
       final like = '%${q.trim()}%';
@@ -1255,33 +1595,63 @@ class Repo {
   Future<int> saveItem(Item it) async {
     await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
+    late final int id;
     if (it.id == null) {
-      final id = await db.insert('items', it.toMap());
+      id = await db.insert('items', it.toMap());
+      await queueOperation(
+        entityType: EntityKind.item,
+        entityId: '$id',
+        opType: OpKind.create,
+        payload: it.toMap()..['id'] = id,
+      );
       await logActivity('إضافة صنف: ${it.name}', 'item', '$id');
-      return id;
+    } else {
+      id = it.id!;
+      final map = it.toMap();
+      await db.update('items', map, where: 'id = ?', whereArgs: [id]);
+      await queueOperation(
+        entityType: EntityKind.item,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: map,
+      );
+      await logActivity('تعديل صنف: ${it.name}', 'item', '$id');
     }
-    await db.update('items', it.toMap(), where: 'id = ?', whereArgs: [it.id]);
-    await logActivity('تعديل صنف: ${it.name}', 'item', '${it.id}');
-    return it.id!;
+    return id;
   }
 
-  /// حذف صنف إلى سلة المهملات مع حركاته.
+  /// حذف ناعم للصنف (تبقى سطور الفواتير التاريخية باسم الصنف).
   Future<void> deleteItem(int id) async {
     await _ensureCan('delete_tx');
     final db = await _db;
+    final now = DateTime.now().toIso8601String();
     final r = await db.query('items', where: 'id = ?', whereArgs: [id]);
-    if (r.isNotEmpty) {
-      await db.insert('trash', {
+    if (r.isEmpty) return;
+    await db.transaction((txn) async {
+      await txn.update('items', {
+        'deleted_at': now,
+        'deleted_by': _currentUserId,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [id]);
+      final updated = (await txn.query('items', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await SyncRecorder(
+        db: txn,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      ).record(
+        entityType: EntityKind.item,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: Map<String, Object?>.from(updated),
+      );
+      await txn.insert('trash', {
         'store': 'items',
         'payload': jsonEncode(r.first),
         'label': 'صنف: ${r.first['name']}',
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': now,
       });
-    }
-    // تبقى سطور الفواتير التاريخية باسم الصنف حتى بعد حذفه من المخزون.
-    await db.update('transaction_items', {'item_id': null},
-        where: 'item_id = ?', whereArgs: [id]);
-    await db.delete('items', where: 'id = ?', whereArgs: [id]);
+    });
     await logActivity('حذف صنف', 'item', '$id');
   }
 
@@ -1298,43 +1668,74 @@ class Repo {
   /// يسجّل حركة مخزنية ويحدّث كمية الصنف تلقائيًا.
   Future<int> addStockMove(StockMove m) async {
     final db = await _db;
-    final id = await db.insert('stock_moves', m.toMap());
-    final it = await item(m.itemId);
-    if (it != null) {
-      // التسوية تضبط الكمية على القيمة المدخلة، وغيرها يزيد أو ينقص.
-      final delta = m.kind == StockKind.adjust
-          ? m.quantity - it.quantity
-          : m.kind.qtySign * m.quantity;
-      await db.update(
-        'items',
-        {
-          'quantity': it.quantity + delta,
-          'updated_at': DateTime.now().toIso8601String(),
-        },
-        where: 'id = ?',
-        whereArgs: [m.itemId],
-      );
-      await logActivity(
-          '${m.kind.label}: ${it.name} × ${m.quantity}', 'stock', '$id');
-    }
+    late final int id;
+    await db.transaction((txn) async {
+      id = await txn.insert('stock_moves', m.toMap());
+      final r = await txn.query('items', where: 'id = ?', whereArgs: [m.itemId], limit: 1);
+      if (r.isNotEmpty) {
+        final it = Item.fromMap(r.first);
+        final delta = m.kind == StockKind.adjust
+            ? m.quantity - it.quantity
+            : m.kind.qtySign * m.quantity;
+        final now = DateTime.now().toIso8601String();
+        await txn.update(
+          'items',
+          {'quantity': it.quantity + delta, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [m.itemId],
+        );
+        final rec = await newRecorder(txn);
+        await rec.record(
+          entityType: EntityKind.stockMove,
+          entityId: '$id',
+          opType: OpKind.create,
+          payload: m.toMap()..['id'] = id,
+        );
+        await rec.record(
+          entityType: EntityKind.item,
+          entityId: '${m.itemId}',
+          opType: OpKind.update,
+          payload: {'id': m.itemId, 'quantity': it.quantity + delta, 'updated_at': now},
+        );
+        await logActivityTx(txn, '${m.kind.label}: ${it.name} × ${m.quantity}', 'stock', '$id');
+      }
+    });
     return id;
   }
 
   Future<void> deleteStockMove(int id) async {
     final db = await _db;
-    final r = await db.query('stock_moves', where: 'id = ?', whereArgs: [id]);
-    if (r.isEmpty) return;
-    final m = StockMove.fromMap(r.first);
-    final it = await item(m.itemId);
-    await db.delete('stock_moves', where: 'id = ?', whereArgs: [id]);
-    if (it != null && m.kind != StockKind.adjust) {
-      await db.update(
-        'items',
-        {'quantity': it.quantity - m.kind.qtySign * m.quantity},
-        where: 'id = ?',
-        whereArgs: [m.itemId],
+    await db.transaction((txn) async {
+      final r = await txn.query('stock_moves', where: 'id = ?', whereArgs: [id]);
+      if (r.isEmpty) return;
+      final m = StockMove.fromMap(r.first);
+      final itRow = await txn.query('items', where: 'id = ?', whereArgs: [m.itemId], limit: 1);
+      await txn.delete('stock_moves', where: 'id = ?', whereArgs: [id]);
+      final rec = await newRecorder(txn);
+      await rec.record(
+        entityType: EntityKind.stockMove,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: {'id': id},
       );
-    }
+      if (itRow.isNotEmpty && m.kind != StockKind.adjust) {
+        final it = Item.fromMap(itRow.first);
+        final now = DateTime.now().toIso8601String();
+        final newQty = it.quantity - m.kind.qtySign * m.quantity;
+        await txn.update(
+          'items',
+          {'quantity': newQty, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [m.itemId],
+        );
+        await rec.record(
+          entityType: EntityKind.item,
+          entityId: '${m.itemId}',
+          opType: OpKind.update,
+          payload: {'id': m.itemId, 'quantity': newQty, 'updated_at': now},
+        );
+      }
+    });
   }
 
   /// ملخّص المخزون: التكلفة والقيمة والربح المحقق والمتوقع.
