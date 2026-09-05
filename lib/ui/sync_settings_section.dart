@@ -6,8 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../core/sfx.dart';
+import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/backup_service.dart';
@@ -16,7 +19,6 @@ import '../data/sync/google_auth_service.dart';
 import '../data/sync/lan_http_transport.dart';
 import '../data/sync/qr_pairing.dart';
 import '../data/sync/sync_engine.dart';
-import '../core/sfx.dart';
 import '../data/sync/sync_service.dart';
 import 'qr_pair_scanner.dart';
 
@@ -343,30 +345,19 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         ipAddress: ip,
       );
       _pairTokenCtrl.text = info.token;
+      _pairTokenPortCtrl.text = '$port';
       _pairIpCtrl.text = ip ?? '';
       if (!mounted) return;
       setState(() {});
+      Sfx.pair();
       showDialog(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('رمز الاقتران'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('QR Content (امسحه بالجهاز الآخر عبر زر مسح QR):'),
-              const SizedBox(height: 8),
-              SelectableText(
-                info.qrContent,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-              ),
-              const SizedBox(height: 8),
-              Text('ينتهي في: ${info.expiresAt.toLocal().toString().split('.').first}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 11)),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
-          ],
+        barrierDismissible: false,
+        builder: (ctx) => _PairingQrDialog(
+          info: info,
+          port: port,
+          ip: ip,
+          primaryColor: AppColors.primaryOf(context),
         ),
       );
     } finally {
@@ -908,3 +899,240 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     );
   }
 }
+
+// ════════════════════════════════════════════════════════════════════
+// نافذة الباركود الفعلية التي تُعرض للمستخدم عند إنشاء رمز الاقتران.
+// ════════════════════════════════════════════════════════════════════
+class _PairingQrDialog extends StatefulWidget {
+  final PairingInfo info;
+  final int port;
+  final String? ip;
+  final Color primaryColor;
+  const _PairingQrDialog({
+    required this.info,
+    required this.port,
+    required this.ip,
+    required this.primaryColor,
+  });
+
+  @override
+  State<_PairingQrDialog> createState() => _PairingQrDialogState();
+}
+
+class _PairingQrDialogState extends State<_PairingQrDialog> {
+  Duration? _remaining;
+  DateTime? _expiresAt;
+
+  @override
+  void initState() {
+    super.initState();
+    _expiresAt = widget.info.expiresAt;
+    _tick();
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    final rem = _expiresAt?.difference(DateTime.now());
+    setState(() => _remaining = rem);
+    if (rem == null || rem.isNegative) return;
+    Future.delayed(const Duration(seconds: 1), _tick);
+  }
+
+  String _fmtDuration(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final expired = _remaining == null || _remaining!.isNegative;
+    final secondsLeft = (_remaining?.inSeconds ?? 0).clamp(0, 300);
+    final progress = secondsLeft / 300.0;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          elevation: 12,
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // عنوان.
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: widget.primaryColor.withOpacity(.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Icons.qr_code_2_rounded,
+                          color: widget.primaryColor, size: 28),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('ربط جهاز جديد',
+                              style: TextStyle(
+                                  fontSize: 17, fontWeight: FontWeight.w800)),
+                          SizedBox(height: 2),
+                          Text(
+                            'امسح هذا الرمز بالجهاز الآخر من شاشة المزامنة',
+                            style: TextStyle(fontSize: 12, color: Colors.black54),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        Sfx.click();
+                        Navigator.pop(context);
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                // الباركود على خلفية بيضاء داخل إطار ملون.
+                Container(
+                  width: 270,
+                  height: 270,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        widget.primaryColor.withOpacity(.12),
+                        widget.primaryColor.withOpacity(.04),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: widget.primaryColor.withOpacity(.4), width: 2),
+                  ),
+                  child: QrImageView(
+                    data: widget.info.qrContent,
+                    version: QrVersions.auto,
+                    size: 240,
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black87,
+                    errorCorrectionLevel: QrErrorCorrectLevel.M,
+                    eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: Color(0xFF111111),
+                    ),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: Color(0xFF111111),
+                    ),
+                    embeddedImageStyle: const QrEmbeddedImageStyle(
+                      size: Size(40, 40),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                // شريط انتهاء الصلاحية.
+                if (!expired)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 6,
+                      backgroundColor: Colors.black12,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                          progress > .3 ? widget.primaryColor : Colors.redAccent),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Text(
+                  expired
+                      ? 'انتهت صلاحية الرمز — اضغط "توليد رمز جديد" للمتابعة.'
+                      : 'صلاحية الرمز: ${_fmtDuration(_remaining!)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: expired ? Colors.red : Colors.black54,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // الرمز النصي ورقم المنفذ في حال تعذر المسح.
+                if (widget.ip != null && widget.ip!.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(.04),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.wifi, size: 16, color: Colors.black54),
+                        const SizedBox(width: 6),
+                        Directionality(
+                          textDirection: TextDirection.ltr,
+                          child: SelectableText(
+                            'IP: ${widget.ip}  :  ${widget.port}',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  'رمز الاقتران: ${widget.info.token}',
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5),
+                ),
+                const SizedBox(height: 14),
+                // تعليمات مختصرة.
+                const Text(
+                  'على الجهاز الآخر: افتح الإعدادات ← المزامنة ← انضمام لمجموعة موجودة ← اضغط "مسح QR".',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 11, color: Colors.black45, height: 1.5),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: widget.primaryColor,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Sfx.click();
+                      Navigator.pop(context);
+                    },
+                    icon: const Icon(Icons.check),
+                    label: const Text('تم'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
