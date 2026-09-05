@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -270,45 +271,19 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     }
     final saved = tx.copyWith(id: savedId);
-    if (!mounted) return;
-
-    // نُنشئ صورة الإيصال ونرسلها قبل إغلاق النموذج حتى لا نستخدم
-    // WidgetRef أو BuildContext بعد إزالة نافذة العملية من الشجرة.
-    // هذا مهم خصوصًا للبيع الآجل أو الجزئي الذي يُرسل إشعاره تلقائيًا.
-    if (!_isTransfer && _accountId != null) {
-      final acc = _account;
-      // الإرسال التلقائي إعداد رسمي يُقرأ من الإعدادات (افتراضياً مفعّل).
-      final st = await repo.settings();
-      final autoSend = (st['autoSendWhatsapp'] ?? '1') != '0';
-      if (autoSend) {
-        try {
-          await TxShare.sendNow(context, ref,
-              tx: saved, account: acc, silentIfNoPhone: false);
-        } catch (e) {
-          if (mounted) {
-            showSnack(context, 'تم حفظ العملية لكن تعذّر إرسال السند: $e',
-                error: true);
-          }
-        }
-      } else {
-        try {
-          await TxShare.generate(repo: repo, tx: saved, account: acc);
-          bump(ref);
-        } catch (e) {
-          // فشل توليد الصورة لا يبطل العملية المحفوظة، لكنه لا يُخفى.
-          if (mounted) {
-            showSnack(context, 'تم حفظ العملية لكن تعذّر توليد صورة السند: $e',
-                error: true);
-          }
-        }
-      }
+    // أغلق النافذة فورًا بعد الحفظ — لا ننتظر توليد الصورة أو إرسال الواتساب،
+    // لأن أي فشل فيهما لا يجب أن يمنع المستخدم أو يعلق الزر.
+    if (mounted) {
+      bump(ref);
+      Navigator.pop(context, true);
+      showSnack(context,
+          keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
     }
 
-    if (!mounted) return;
-    bump(ref);
-    Navigator.pop(context, true);
-    showSnack(context,
-        keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
+    // توليد السند وإرساله بالواتساب في الخلفية (لا يُعلق الواجهة).
+    if (!_isTransfer && _accountId != null) {
+      unawaited(_finishReceipt(repo, saved, _account));
+    }
     } catch (e) {
       if (mounted) {
         showSnack(context,
@@ -317,6 +292,35 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// يُولّد صورة الإيصال ويرسلها بالواتساب في الخلفية — أي خطأ لا يؤثر على الحفظ.
+  Future<void> _finishReceipt(Repo repo, Tx saved, Account? acc) async {
+    try {
+      final st = await repo.settings().timeout(const Duration(seconds: 3));
+      final autoSend = (st['autoSendWhatsapp'] ?? '1') != '0';
+      if (autoSend) {
+        try {
+          if (!mounted) return;
+          await TxShare.sendNow(context, ref, tx: saved, account: acc, silentIfNoPhone: true)
+              .timeout(const Duration(seconds: 8));
+        } catch (e) {
+          if (mounted) {
+            showSnack(context, 'تعذّر إرسال السند عبر واتساب: $e', error: true);
+          }
+        }
+      } else {
+        try {
+          await TxShare.generate(repo: repo, tx: saved, account: acc)
+              .timeout(const Duration(seconds: 5));
+          if (mounted) bump(ref);
+        } catch (e) {
+          // تجاهل صامت — الحفظ تم بنجاح بالفعل.
+        }
+      }
+    } catch (_) {
+      // أي خطأ في الإعدادات أو الخلفية لا يؤثر على العملية.
     }
   }
 
