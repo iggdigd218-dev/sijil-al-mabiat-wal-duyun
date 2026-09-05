@@ -11,3 +11,9 @@ android/app/src/main/java/io/flutter/plugins/
 *.jks
 *.keystore
 *.apk
+
+# ملفات أنشأتها Flutter محلياً (لا ترفع للمستودع)
+.idea/
+.metadata
+nexora_app.iml
+.DS_Store

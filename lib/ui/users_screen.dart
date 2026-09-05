@@ -272,7 +272,7 @@ class _UserFormState extends ConsumerState<_UserForm> {
                 ),
                 const SizedBox(height: 14),
                 DropdownButtonFormField<UserRole>(
-                  initialValue: _role,
+                  value: _role,
                   decoration: const InputDecoration(
                     labelText: 'الدور',
                     prefixIcon: Icon(Icons.badge_outlined),

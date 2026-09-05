@@ -713,7 +713,7 @@ class _TxFormState extends ConsumerState<TxForm> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<int>(
-                      initialValue: itemId,
+                      value: itemId,
                       isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'الصنف',
@@ -840,7 +840,7 @@ class _TxFormState extends ConsumerState<TxForm> {
                   padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
                   decoration: BoxDecoration(
                     color: isAlayh
-                        ? Colors.red.withOpacity(0.12)
+                        ? Colors.red.withValues(alpha: 0.12)
                         : AppColors.surface2Of(context),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
@@ -892,7 +892,7 @@ class _TxFormState extends ConsumerState<TxForm> {
                   padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
                   decoration: BoxDecoration(
                     color: isLahu
-                        ? Colors.green.withOpacity(0.12)
+                        ? Colors.green.withValues(alpha: 0.12)
                         : AppColors.surface2Of(context),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
@@ -985,7 +985,7 @@ class _TxFormState extends ConsumerState<TxForm> {
     return Column(
       children: [
         DropdownButtonFormField<int>(
-          initialValue: _accountId,
+          value: _accountId,
           isExpanded: true,
           decoration: InputDecoration(
             labelText: _isTransfer ? 'من حساب' : 'الحساب',
@@ -1012,7 +1012,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         if (_isTransfer) ...[
           const SizedBox(height: 14),
           DropdownButtonFormField<int>(
-            initialValue: _toId,
+            value: _toId,
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'إلى حساب',
@@ -1076,7 +1076,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         Expanded(
           flex: 2,
           child: DropdownButtonFormField<String>(
-            initialValue: _currencies.any((c) => c.code == _currency)
+            value: _currencies.any((c) => c.code == _currency)
                 ? _currency
                 : (_currencies.isNotEmpty ? _currencies.first.code : null),
             isExpanded: true,
@@ -1108,33 +1108,35 @@ class _TxFormState extends ConsumerState<TxForm> {
   }
 
   Widget _signPicker() {
-    return RadioGroup<String>(
-      groupValue: _sign,
-      onChanged: (v) {
-        if (v != null) setState(() => _sign = v);
-      },
-      child: Row(
-        children: [
-          Expanded(
-            child: RadioListTile<String>(
-              value: '+',
-              title: const Text('بالزيادة (+)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-            ),
+    return Row(
+      children: [
+        Expanded(
+          child: RadioListTile<String>(
+            value: '+',
+            groupValue: _sign,
+            onChanged: (v) {
+              if (v != null) setState(() => _sign = v);
+            },
+            title: const Text('بالزيادة (+)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
           ),
-          Expanded(
-            child: RadioListTile<String>(
-              value: '-',
-              title: const Text('بالنقصان (−)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-            ),
+        ),
+        Expanded(
+          child: RadioListTile<String>(
+            value: '-',
+            groupValue: _sign,
+            onChanged: (v) {
+              if (v != null) setState(() => _sign = v);
+            },
+            title: const Text('بالنقصان (−)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1198,7 +1200,7 @@ class _TxFormState extends ConsumerState<TxForm> {
       'cancelled': 'ملغاة',
     };
     return DropdownButtonFormField<String>(
-      initialValue: _status,
+      value: _status,
       decoration: const InputDecoration(
         labelText: 'حالة العملية',
         prefixIcon: Icon(Icons.flag_outlined),

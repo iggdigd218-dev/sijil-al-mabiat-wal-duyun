@@ -783,7 +783,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
         return Column(
           children: [
             DropdownButtonFormField<int>(
-              initialValue: validId,
+              value: validId,
               isExpanded: true,
               decoration: InputDecoration(
                 labelText: 'الفئة *',

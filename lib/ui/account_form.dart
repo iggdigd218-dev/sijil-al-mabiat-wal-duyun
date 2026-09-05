@@ -99,18 +99,18 @@ class _State extends ConsumerState<AccountFormScreen> {
       final limit = Fmt.parseAmount(_limit.text);
       final now = DateTime.now();
 
+      final sign = _nature == 'credit' ? -1 : 1;
       final acc = Account(
         id: widget.existing?.id,
         name: _name.text.trim(),
         kind: _kind,
-        openingBalance: finalOpening,
+        openingBalance: finalOpening * sign,
         currency: _currency,
         phone: Fmt.phoneDigits(_phone.text),
-        whatsapp: Fmt.phoneDigits(_phone.text),
+        whatsapp: Fmt.phoneDigits(_whatsapp.text),
         address: _address.text.trim(),
         notes: _notes.text.trim(),
         category: widget.existing?.category ?? '',
-        archived: widget.existing?.archived ?? false,
         creditLimit: limit,
         tags: _tags.text
             .split(RegExp('[,،]'))
@@ -176,7 +176,7 @@ class _State extends ConsumerState<AccountFormScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.35),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -220,7 +220,7 @@ class _State extends ConsumerState<AccountFormScreen> {
             ),
             const SizedBox(height: 13),
             DropdownButtonFormField<String>(
-              initialValue: curs.any((c) => c.code == _currency) ? _currency : null,
+              value: curs.any((c) => c.code == _currency) ? _currency : null,
               decoration: const InputDecoration(labelText: 'العملة'),
               items: curs
                   .map((c) => DropdownMenuItem(

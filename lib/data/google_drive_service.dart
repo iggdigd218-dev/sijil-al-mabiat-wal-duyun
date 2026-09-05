@@ -93,6 +93,8 @@ class GoogleDriveService {
   static const String _serverClientId =
       '872578554938-tf394quhikb2j0s6tsh767qbmlsj27of.apps.googleusercontent.com';
 
+  static const String _fileFields = 'id,name,mimeType,modifiedTime,size,parents';
+
   final GoogleSignIn _signIn = GoogleSignIn(
     serverClientId: _serverClientId,
     scopes: [
