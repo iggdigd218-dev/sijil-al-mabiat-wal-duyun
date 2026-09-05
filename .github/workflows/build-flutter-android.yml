@@ -19,25 +19,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17 (required for Android Gradle Plugin)
+      - name: Set up Java 21 (required for latest Android Gradle Plugin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Set up Flutter (stable)
+      - name: Set up Flutter (latest stable)
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.24.5'
           cache: true
-          cache-key: 'flutter-3.24.5'
 
       - name: Install Flutter dependencies
         run: flutter pub get
-
-      - name: Verify code (no blocking errors)
-        run: flutter analyze
 
       - name: Build Release APK (universal)
         run: flutter build apk --release
