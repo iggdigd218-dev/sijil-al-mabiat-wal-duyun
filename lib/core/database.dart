@@ -12,7 +12,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 9;
+  static const int _version = 10;
 
   static int get schemaVersion => _version;
 
@@ -28,6 +28,10 @@ class AppDatabase {
       onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: (db, v) async => createSchema(db),
       onUpgrade: (db, from, to) async => _migrate(db, from, to),
+      onOpen: (db) async {
+        // حماية إضافية: حتى لو لم يعمل onUpgrade في حالة غريبة نضمن وجود الجداول.
+        await _ensureCoreSyncTables(db);
+      },
     );
     return _db!;
   }
@@ -414,7 +418,79 @@ class AppDatabase {
       )''';
 
   /// ترقية المخطط مع الحفاظ على كل البيانات القائمة.
+  /// ينشئ جداول المزامنة المفقودة بأمان (للدفاع ضد قواعد قديمة ناقصة).
+  static Future<void> _ensureCoreSyncTables(Database db) async {
+    await _tryCreateTable(db, 'sync_meta',
+        'CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    await _tryCreateTable(db, 'workspaces', '''
+        CREATE TABLE IF NOT EXISTS workspaces (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+          owner_google_id TEXT DEFAULT '', owner_email TEXT DEFAULT '',
+          owner_name TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )''');
+    await _tryCreateTable(db, 'devices', '''
+        CREATE TABLE IF NOT EXISTS devices (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '', platform TEXT DEFAULT '',
+          app_version TEXT DEFAULT '', ip_address TEXT DEFAULT '',
+          port INTEGER DEFAULT 0, last_seen_at TEXT DEFAULT '',
+          last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
+          pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
+          revoked_at TEXT DEFAULT '', is_paired INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )''');
+    await _tryCreateTable(db, 'operations', '''
+        CREATE TABLE IF NOT EXISTS operations (
+          id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+          user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+          op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+          parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
+          device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
+          timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0
+        )''');
+    await _tryCreateTable(db, 'sync_queue', '''
+        CREATE TABLE IF NOT EXISTS sync_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
+          attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
+          next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(operation_id, target)
+        )''');
+    await _tryCreateTable(db, 'google_auth', '''
+        CREATE TABLE IF NOT EXISTS google_auth (
+          id INTEGER PRIMARY KEY CHECK (id = 1), google_id TEXT DEFAULT '',
+          email TEXT DEFAULT '', display_name TEXT DEFAULT '', photo_url TEXT DEFAULT '',
+          id_token TEXT DEFAULT '', signed_in_at TEXT DEFAULT '', updated_at TEXT DEFAULT ''
+        )''');
+    // تأكد من وجود Workspace افتراضي.
+    final wsExists = await db.rawQuery('SELECT id FROM workspaces WHERE id = ?', [defaultWorkspaceId]);
+    if (wsExists.isEmpty) {
+      final now = DateTime.now().toIso8601String();
+      await db.insert('workspaces', {
+        'id': defaultWorkspaceId,
+        'name': 'متجري',
+        'owner_google_id': '', 'owner_email': '', 'owner_name': '',
+        'created_at': now, 'updated_at': now,
+      });
+    }
+    // تأكد من وجود صف schemaVersion.
+    final sv = await db.rawQuery('SELECT value FROM sync_meta WHERE key = ?', ['schemaVersion']);
+    if (sv.isEmpty) {
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '$_version'});
+    }
+  }
+
+  static Future<void> _tryCreateTable(Database db, String name, String sql) async {
+    final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", [name]);
+    if (rows.isEmpty) await db.execute(sql);
+  }
+
   static Future<void> _migrate(Database db, int from, int to) async {
+    // هذا يُصلح الحالات التي كانت فيها قواعد البيانات القديمة مفقودة لبعض الجداول
+    // (مثل sync_meta) بسبب نسخ سابقة من التطبيق.
+    await _ensureCoreSyncTables(db);
+
     if (from < 2) {
       await db.execute(createItemsSql);
       await db.execute(createStockSql);
@@ -470,7 +546,22 @@ class AppDatabase {
     // ====== v9: حقل last_synced_op في sync_meta للمزامنة التزايدية ======
     if (from < 9) {
       // لا شيء — sync_meta موجود بالفعل، ونستخدمه كـ key-value عادي.
+      await _ensureCoreSyncTables(db);
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '9'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v10: حماية دفاعية للتأكد من وجود sync_meta وجداول المزامنة (إصلاح عاجل). ======
+    if (from < 10) {
+      await _ensureCoreSyncTables(db);
+      // تأكد من وجود أعمدة v6/v7 في devices إن كانت ناقصة.
+      await _addColumn(db, 'devices', 'auth_secret', "TEXT DEFAULT ''");
+      await _addColumn(db, 'devices', 'revoked_at', "TEXT DEFAULT ''");
+      // تأكد من وجود فهارس v8.
+      await _tryCreateIndex(db, 'idx_queue_target_status',
+          'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)');
+      await _tryCreateIndex(db, 'idx_ops_ws_time',
+          'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)');
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '10'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

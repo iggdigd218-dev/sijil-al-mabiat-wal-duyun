@@ -11,6 +11,8 @@ import '../core/models.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
+import 'sync/lan_http_transport.dart';
+import 'sync/qr_pairing.dart';
 import 'sync/recorder.dart';
 import 'sync/sync_queue.dart';
 import 'sync/workspace_service.dart';
@@ -51,6 +53,10 @@ class Repo {
         'name': await deviceName(this),
         'platform': Platform.operatingSystem,
         'is_paired': 1,
+        'auth_secret': generateLanSecret(),
+        'revoked_at': '',
+        'ip_address': '',
+        'port': kDefaultLanPort,
         'last_seen_at': now,
         'last_sync_at': '',
         'created_at': now,
@@ -58,6 +64,27 @@ class Repo {
       },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
+
+    // 🛟 بذرة مستخدم مدير افتراضي في أول تشغيل (إذا كان جدول المستخدمين فارغًا).
+    // هذا يمنع قفل التطبيق بدون أي مستخدم — المدير الافتراضي يمكن للمستخدم
+    // تغيير اسمه أو إضافة مستخدمين آخرين من شاشة المستخدمين.
+    final existingUsers = await db.query('users', limit: 1);
+    if (existingUsers.isEmpty) {
+      await db.insert('users', {
+        'name': 'المدير',
+        'role': 'admin',
+        'pin': '',
+        'password': '',
+        'permissions': jsonEncode(defaultPerms(UserRole.admin)),
+        'is_me': 1,
+        'active': 1,
+        'workspace_id': _workspaceId,
+        'deleted_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+    }
+
     // المستخدم الحالي.
     final me = await currentUser();
     _currentUserId = me?.id;
@@ -750,7 +777,7 @@ class Repo {
     }
     // Soft-delete بدلاً من الحذف النهائي (للمزامنة).
     final now = DateTime.now().toIso8601String();
-    await db.update('users', {'deleted_at': now, 'is_active': 0, 'updated_at': now},
+    await db.update('users', {'deleted_at': now, 'active': 0, 'updated_at': now},
         where: 'id = ?', whereArgs: [id]);
     await queueOperation(
       entityType: EntityKind.user,
