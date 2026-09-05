@@ -10,6 +10,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../data/repository.dart';
+import 'chat_screen.dart';
 import '../core/receipt_image.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -272,18 +273,70 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     }
     final saved = tx.copyWith(id: savedId);
-    // أغلق النافذة فورًا بعد الحفظ — لا ننتظر توليد الصورة أو إرسال الواتساب،
-    // لأن أي فشل فيهما لا يجب أن يمنع المستخدم أو يعلق الزر.
-    if (mounted) {
-      bump(ref);
-      Navigator.pop(context, true);
-      showSnack(context,
-          keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
-    }
 
-    // توليد السند وإرساله بالواتساب في الخلفية (لا يُعلق الواجهة).
-    if (!_isTransfer && _accountId != null) {
-      unawaited(_finishReceipt(repo, saved, _account));
+    // بعد نجاح الحفظ: نُولّد السند ونُرسله داخل محادثة العميل،
+    // ثم ننتقل إلى شاشة المحادثة. أي خطأ هنا لا يُبطل الحفظ.
+    String? receiptPath;
+    String captionText = '';
+    bool receiptOk = false;
+    if (!_isTransfer && _accountId != null && _account != null) {
+      setState(() => _saving = true); // يبقى الزر يعرض "جارٍ الحفظ..." حتى ينتهي الإرسال.
+      final acc = _account!;
+      try {
+        // 1) توليد صورة السند مع timeout حتى لا يعلق.
+        receiptPath = await TxShare.generate(repo: repo, tx: saved, account: acc)
+            .timeout(const Duration(seconds: 8));
+        // 2) تجهيز نص الإشعار.
+        captionText = await TxShare.caption(repo: repo, tx: saved, account: acc)
+            .timeout(const Duration(seconds: 3));
+        // 3) إيجاد/إنشاء محادثة العميل.
+        final convId = await repo.conversationFor(acc)
+            .timeout(const Duration(seconds: 2));
+        final now = DateTime.now();
+        // 4) إرسال نص الإشعار في المحادثة.
+        await repo.sendMessage(ChatMessage(
+          conversationId: convId,
+          sender: 'me',
+          body: captionText.trim(),
+          kind: 'voucher',
+          createdAt: now,
+        ));
+        // 5) إرسال صورة السند في المحادثة.
+        await repo.sendMessage(ChatMessage(
+          conversationId: convId,
+          sender: 'me',
+          body: '',
+          kind: 'voucher',
+          payload: receiptPath,
+          createdAt: now.add(const Duration(milliseconds: 500)),
+        ));
+        receiptOk = true;
+        if (mounted) {
+          bump(ref);
+          Navigator.pop(context, true);
+          // الانتقال مباشرة إلى محادثة العميل.
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ChatThreadScreen(account: acc)),
+          );
+          showSnack(context,
+              'تمت إضافة العملية وإرسال السند إلى محادثة العميل ✅');
+        }
+      } catch (e) {
+        if (mounted) {
+          Navigator.pop(context, true);
+          showSnack(context,
+              'تم حفظ العملية ✅ لكن تعذّر توليد/إرسال السند: $e', error: true);
+        }
+      }
+    } else {
+      // تحويل داخلي أو بدون حساب: نغلق النافذة مباشرة.
+      if (mounted) {
+        bump(ref);
+        Navigator.pop(context, true);
+        showSnack(context,
+            keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅');
+      }
     }
     } catch (e) {
       if (mounted) {
@@ -293,35 +346,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  /// يُولّد صورة الإيصال ويرسلها بالواتساب في الخلفية — أي خطأ لا يؤثر على الحفظ.
-  Future<void> _finishReceipt(Repo repo, Tx saved, Account? acc) async {
-    try {
-      final st = await repo.settings().timeout(const Duration(seconds: 3));
-      final autoSend = (st['autoSendWhatsapp'] ?? '1') != '0';
-      if (autoSend) {
-        try {
-          if (!mounted) return;
-          await TxShare.sendNow(context, ref, tx: saved, account: acc, silentIfNoPhone: true)
-              .timeout(const Duration(seconds: 8));
-        } catch (e) {
-          if (mounted) {
-            showSnack(context, 'تعذّر إرسال السند عبر واتساب: $e', error: true);
-          }
-        }
-      } else {
-        try {
-          await TxShare.generate(repo: repo, tx: saved, account: acc)
-              .timeout(const Duration(seconds: 5));
-          if (mounted) bump(ref);
-        } catch (e) {
-          // تجاهل صامت — الحفظ تم بنجاح بالفعل.
-        }
-      }
-    } catch (_) {
-      // أي خطأ في الإعدادات أو الخلفية لا يؤثر على العملية.
     }
   }
 

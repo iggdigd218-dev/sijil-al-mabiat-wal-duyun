@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -245,6 +247,10 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final mine = message.isMine;
     final isStatement = message.kind == 'statement';
+    final isVoucher = message.kind == 'voucher';
+    final isImage = isVoucher &&
+        message.payload.trim().isNotEmpty &&
+        File(message.payload).existsSync();
 
     return Align(
       alignment: mine ? Alignment.centerLeft : Alignment.centerRight,
@@ -254,7 +260,7 @@ class _Bubble extends StatelessWidget {
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * .76),
         decoration: BoxDecoration(
-          color: isStatement
+          color: isStatement || isVoucher
               ? AppColors.infoSoftOf(context)
               : (mine
                   ? AppColors.primarySoftOf(context)
@@ -270,8 +276,27 @@ class _Bubble extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Pill('كشف حساب', color: AppColors.infoOf(context)),
               ),
-            Text(message.body,
-                style: const TextStyle(fontSize: 13.5, height: 1.5)),
+            if (isVoucher && !isImage)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Pill('سند / إشعار', color: AppColors.infoOf(context)),
+              ),
+            if (isImage)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(
+                    File(message.payload),
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) =>
+                        const Text('تعذّر عرض الصورة'),
+                  ),
+                ),
+              ),
+            if (message.body.trim().isNotEmpty)
+              Text(message.body,
+                  style: const TextStyle(fontSize: 13.5, height: 1.5)),
             const SizedBox(height: 4),
             Text(
               Fmt.dateTime(message.createdAt),
