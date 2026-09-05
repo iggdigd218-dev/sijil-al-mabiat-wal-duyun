@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -179,16 +180,32 @@ class TxShare {
     final acc = account ??
         (tx.accountId == null ? null : await repo.account(tx.accountId!));
 
-    final phone = _phoneOf(acc);
+    // نحدد القناة من بيانات الحساب نفسه (لكل عميل تفضيله).
+    final channel = (acc?.notifyChannel ?? 'whatsapp').trim();
+    final phone = _phoneOf(acc, channel);
+
+    if (channel == 'none') return; // المستخدم فضّل عدم الإرسال.
+
     if (phone.isEmpty) {
       if (!silentIfNoPhone && context.mounted) {
-        showSnack(context, 'لا يوجد رقم واتساب لهذا الحساب', error: true);
+        showSnack(
+          context,
+          channel == 'sms'
+              ? 'لا يوجد رقم هاتف لهذا الحساب لإرسال رسالة نصية'
+              : 'لا يوجد رقم واتساب لهذا الحساب',
+          error: true,
+        );
       }
       return;
     }
 
     if (context.mounted) {
-      showSnack(context, 'جارٍ تجهيز الإيصال وفتح واتساب…');
+      showSnack(
+        context,
+        channel == 'sms'
+            ? 'جارٍ تجهيز الرسالة وفتح تطبيق الرسائل…'
+            : 'جارٍ تجهيز الإيصال وفتح واتساب…',
+      );
     }
 
     late final List<InvoiceLine> itemLines;
@@ -208,10 +225,45 @@ class TxShare {
     final needsFreshReceipt =
         tx.type == OpType.debit || itemLines.isNotEmpty || hasLogo;
 
+    late final String text;
+    try {
+      text = await caption(repo: repo, tx: tx, account: acc);
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر تجهيز نص الإشعار: $e', error: true);
+      }
+      return;
+    }
+
+    // === فرع الرسائل النصية ===
+    if (channel == 'sms') {
+      // SMS لا يدعم إرفاق صور عبر النية العادية، لذا نولّد السند في الخلفية
+      // للتخزين، لكن نفتح تطبيق الرسائل بالنص فقط.
+      try {
+        if (needsFreshReceipt ||
+            tx.image.isEmpty ||
+            !File(tx.image).existsSync()) {
+          unawaited(generate(repo: repo, tx: tx, account: acc)
+              .timeout(const Duration(seconds: 5)));
+        }
+      } catch (_) {}
+      final ok = await SmsSender.send(phone: phone, body: text);
+      bump(ref);
+      if (context.mounted) {
+        showSnack(
+          context,
+          ok
+              ? 'تم فتح تطبيق الرسائل النصية — يمكنك إرفاق صورة السند يدوياً إن أردت.'
+              : 'تعذّر فتح تطبيق الرسائل النصية',
+          error: !ok,
+        );
+      }
+      return;
+    }
+
+    // === فرع واتساب ===
     String path;
     try {
-      // نعيد توليد إيصال المبلغ له دائمًا، وكذلك أي إيصال يحتوي أصنافًا أو
-      // شعارًا مفعّلًا، حتى لا نعيد إرسال صورة قديمة بعد تعديل العملية.
       if (needsFreshReceipt) {
         path = await generate(repo: repo, tx: tx, account: acc);
       } else if (tx.image.isNotEmpty && File(tx.image).existsSync()) {
@@ -220,7 +272,6 @@ class TxShare {
         path = await generate(repo: repo, tx: tx, account: acc);
       }
     } catch (_) {
-      // لا نرسل نصًا مجردًا في عملية البيع؛ فالسند المصوّر جزء من الإشعار.
       if (context.mounted) {
         showSnack(context, 'تعذّر تجهيز صورة السند، لم يتم إرسال إشعار نصي فقط.',
             error: true);
@@ -236,12 +287,16 @@ class TxShare {
       return;
     }
 
-    late final String text;
     late final WaResult res;
     try {
-      text = await caption(repo: repo, tx: tx, account: acc);
-      final waType = (await repo.settings())['whatsappType'] ?? 'regular';
-      final pkg = waType == 'business' ? 'com.whatsapp.w4b' : null;
+      // نختار حزمة واتساب المناسبة حسب ما هو مثبّت — لا نعتمد على إعداد عام.
+      final installed = await WhatsApp.installed();
+      String? pkg;
+      if (installed.contains('com.whatsapp.w4b')) {
+        pkg = 'com.whatsapp.w4b';
+      } else if (installed.contains('com.whatsapp')) {
+        pkg = null; // العادي هو الافتراضي.
+      }
       res = await WhatsApp.send(
         phone: phone,
         text: text,
@@ -258,8 +313,6 @@ class TxShare {
 
     bump(ref);
     if (res == WaResult.imageFailed || res == WaResult.error) {
-      // احتياط: افتح نافذة المشاركة القياسية مع الصورة والنص معًا إذا
-      // رفض إصدار واتساب المثبّت الإرسال المباشر إلى رقم محدد.
       final shared = await _shareImageWithText(path, text);
       if (context.mounted) {
         showSnack(
@@ -290,8 +343,9 @@ class TxShare {
     }
   }
 
-  static String _phoneOf(Account? a) {
+  static String _phoneOf(Account? a, String channel) {
     if (a == null) return '';
+    if (channel == 'sms') return a.phone.trim();
     final w = a.whatsapp.trim();
     return w.isNotEmpty ? w : a.phone.trim();
   }

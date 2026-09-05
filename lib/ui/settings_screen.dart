@@ -441,44 +441,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ],
                 ),
                 _Collapsible(
-                  title: 'المشاركة والواتساب',
+                  title: 'المشاركة والإشعارات',
                   icon: Icons.send,
                   initiallyExpanded: true,
                   children: [
-                    SwitchListTile(
+                    const ListTile(
                       contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.send),
-                      title: const Text('إرسال السند عبر واتساب تلقائياً بعد الحفظ'),
-                      subtitle: const Text(
-                          'عند تسجيل عملية يُفتح واتساب العميل مع صورة السند وتفاصيله. ويمكن إرساله يدوياً من أي عملية.'),
-                      value: (st['autoSendWhatsapp'] ?? '1') != '0',
-                      onChanged: (v) async {
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('autoSendWhatsapp', v ? '1' : '0');
-                        bump(ref);
-                      },
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.business_center_outlined),
-                      title: const Text('تطبيق الواتساب المستخدم'),
-                      subtitle: const Text('لفتح المحادثة تلقائياً بالطريقة الصحيحة'),
-                      trailing: DropdownButton<String>(
-                        value: st['whatsappType'] ?? 'regular',
-                        underline: const SizedBox.shrink(),
-                        items: const [
-                          DropdownMenuItem(value: 'regular', child: Text('واتساب ماسنجر')),
-                          DropdownMenuItem(value: 'business', child: Text('واتساب للأعمال')),
-                          DropdownMenuItem(value: 'web', child: Text('رابط مباشر wa.me')),
-                        ],
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          await ref.read(repoProvider).setSetting('whatsappType', v);
-                          bump(ref);
-                        },
-                      ),
+                      leading: Icon(Icons.info_outline),
+                      title: Text('طريقة إرسال الإشعار'),
+                      subtitle: Text(
+                          'لكل عميل قناة إشعار خاصة به تُحدد عند إنشاء الحساب أو تعديله: واتساب، رسالة نصية، أو بدون إشعار. اختر القناة من شاشة بيانات العميل.'),
                     ),
                   ],
                 ),

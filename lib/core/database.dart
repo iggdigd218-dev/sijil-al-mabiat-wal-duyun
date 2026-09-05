@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 10;
+  static const int _version = 11;
 
   static int get schemaVersion => _version;
 
@@ -68,6 +68,7 @@ class AppDatabase {
         tags            TEXT DEFAULT '',
         archived        INTEGER NOT NULL DEFAULT 0,
         image           TEXT DEFAULT '',
+        notify_channel  TEXT NOT NULL DEFAULT 'whatsapp',
         deleted_at      TEXT DEFAULT '',
         deleted_by      INTEGER,
         restore_op_id   TEXT DEFAULT '',
@@ -565,6 +566,13 @@ class AppDatabase {
       await _tryCreateIndex(db, 'idx_ops_ws_time',
           'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)');
       await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '10'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v11: عمود قناة الإشعار لكل حساب (واتساب/رسالة نصية/بدون). ======
+    if (from < 11) {
+      await _addColumn(db, 'accounts', 'notify_channel',
+          "TEXT NOT NULL DEFAULT 'whatsapp'");
+      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '11'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

@@ -44,6 +44,10 @@ class _State extends ConsumerState<AccountFormScreen> {
   /// طبيعة الرصيد الافتتاحي: debit = عليه (موجب)، credit = له (سالب).
   late String _nature;
   late bool _archived;
+
+  /// قناة إرسال إشعار السند لهذا الحساب.
+  late String _notifyChannel;
+
   bool _saving = false;
 
   bool get _isEdit => widget.existing != null;
@@ -69,6 +73,7 @@ class _State extends ConsumerState<AccountFormScreen> {
     _currency = a?.currency ?? 'YER';
     _nature = (a?.openingBalance ?? 0) < 0 ? 'credit' : 'debit';
     _archived = a?.archived ?? false;
+    _notifyChannel = a?.notifyChannel ?? 'whatsapp';
   }
 
   @override
@@ -106,7 +111,7 @@ class _State extends ConsumerState<AccountFormScreen> {
         openingBalance: finalOpening,
         currency: _currency,
         phone: Fmt.phoneDigits(_phone.text),
-        whatsapp: Fmt.phoneDigits(_phone.text),
+        whatsapp: Fmt.phoneDigits(_whatsapp.text),
         address: _address.text.trim(),
         notes: _notes.text.trim(),
         category: widget.existing?.category ?? '',
@@ -117,6 +122,7 @@ class _State extends ConsumerState<AccountFormScreen> {
             .where((e) => e.isNotEmpty)
             .toList(),
         archived: _archived,
+        notifyChannel: _notifyChannel,
         createdAt: widget.existing?.createdAt ?? now,
         updatedAt: now,
       );
@@ -232,10 +238,57 @@ class _State extends ConsumerState<AccountFormScreen> {
             TextFormField(
               controller: _phone,
               decoration: const InputDecoration(
-                labelText: 'رقم الهاتف / الواتساب',
+                labelText: 'رقم الهاتف (للرسائل النصية)',
                 hintText: '7xxxxxxxx',
               ),
               keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 13),
+            TextFormField(
+              controller: _whatsapp,
+              decoration: const InputDecoration(
+                labelText: 'رقم الواتساب (إن اختلف عن الهاتف)',
+                hintText: 'اتركه فارغاً لاستخدام رقم الهاتف',
+              ),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 13),
+            // قناة إرسال الإشعار لهذا الحساب.
+            DropdownButtonFormField<String>(
+              value: _notifyChannel,
+              decoration: const InputDecoration(
+                labelText: 'طريقة إرسال إشعار السند',
+                helperText: 'عند حفظ عملية، يُفتح التطبيق المختار لمراسلة العميل بالسند.',
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'whatsapp',
+                  child: Row(children: [
+                    Icon(Icons.chat_bubble_outline, size: 18),
+                    SizedBox(width: 8),
+                    Text('واتساب')
+                  ]),
+                ),
+                DropdownMenuItem(
+                  value: 'sms',
+                  child: Row(children: [
+                    Icon(Icons.sms_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('رسالة نصية (SMS)')
+                  ]),
+                ),
+                DropdownMenuItem(
+                  value: 'none',
+                  child: Row(children: [
+                    Icon(Icons.block, size: 18),
+                    SizedBox(width: 8),
+                    Text('بدون إشعار')
+                  ]),
+                ),
+              ],
+              onChanged: (v) {
+                if (v != null) setState(() => _notifyChannel = v);
+              },
             ),
             const SizedBox(height: 13),
             TextFormField(

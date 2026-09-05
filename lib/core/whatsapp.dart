@@ -75,3 +75,24 @@ class WhatsApp {
         WaResult.error => 'تعذّر فتح المحادثة',
       };
 }
+
+/// يفتح تطبيق الرسائل النصية (SMS) على رقم العميل مع النص.
+/// ملاحظة: لا يمكن إرفاق صورة عبر نية SMS العادية؛ لذا نرسل النص فقط
+/// ويُترك للمستخدم إرفاق الصورة يدوياً إن أراد.
+class SmsSender {
+  /// يفتح تطبيق الرسائل على [phone] مع نص [body].
+  static Future<bool> send({required String phone, required String body}) async {
+    final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (digits.length < 6) return false;
+    final uri = Uri(
+      scheme: 'sms',
+      path: digits,
+      queryParameters: {'body': body},
+    );
+    try {
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      return false;
+    }
+  }
+}

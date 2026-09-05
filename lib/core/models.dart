@@ -18,6 +18,10 @@ class Account {
   final List<String> tags;
   final bool archived;
   final String image;
+
+  /// قناة إشعار السند: 'whatsapp' / 'sms' / 'none'.
+  final String notifyChannel;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -36,12 +40,20 @@ class Account {
     this.tags = const [],
     this.archived = false,
     this.image = '',
+    this.notifyChannel = 'whatsapp',
     required this.createdAt,
     required this.updatedAt,
   });
 
   /// الرقم المستخدم للتواصل: واتساب إن وُجد وإلا الهاتف.
-  String get contactNumber => whatsapp.trim().isNotEmpty ? whatsapp : phone;
+  String get contactNumber {
+    final ch = notifyChannel;
+    if (ch == 'sms') return phone.trim();
+    if (ch == 'whatsapp') {
+      return whatsapp.trim().isNotEmpty ? whatsapp : phone;
+    }
+    return '';
+  }
 
   Account copyWith({
     int? id,
@@ -59,6 +71,7 @@ class Account {
     List<String>? tags,
     bool? archived,
     String? image,
+    String? notifyChannel,
   }) =>
       Account(
         id: id ?? this.id,
@@ -76,6 +89,7 @@ class Account {
         tags: tags ?? this.tags,
         archived: archived ?? this.archived,
         image: image ?? this.image,
+        notifyChannel: notifyChannel ?? this.notifyChannel,
         createdAt: createdAt,
         updatedAt: DateTime.now(),
       );
@@ -95,6 +109,7 @@ class Account {
         'tags': tags.join(','),
         'archived': archived ? 1 : 0,
         'image': image,
+        'notify_channel': notifyChannel,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
@@ -122,6 +137,7 @@ class Account {
               .toList(),
       archived: ((m['archived'] ?? 0) as int) == 1,
       image: (m['image'] ?? '') as String,
+      notifyChannel: (m['notify_channel'] ?? 'whatsapp') as String,
       createdAt: DateTime.parse(m['created_at'] as String),
       updatedAt: DateTime.parse(m['updated_at'] as String),
     );
