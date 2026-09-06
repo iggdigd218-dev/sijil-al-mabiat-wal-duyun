@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../core/models.dart';
 import '../core/receipt_image.dart';
 import '../core/security.dart';
 import '../core/theme.dart';

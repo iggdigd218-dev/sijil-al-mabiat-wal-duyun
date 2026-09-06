@@ -12,13 +12,11 @@ import 'package:share_plus/share_plus.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
-import '../data/repository.dart';
 import '../data/sync/backup_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/google_auth_service.dart';
 import '../data/sync/lan_http_transport.dart';
 import '../data/sync/qr_pairing.dart';
-import '../data/sync/sync_engine.dart';
 import '../data/sync/sync_service.dart';
 import 'qr_pair_scanner.dart';
 

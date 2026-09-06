@@ -10,7 +10,6 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
-import '../data/repository.dart';
 import '../core/receipt_image.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -75,7 +74,6 @@ class _TxFormState extends ConsumerState<TxForm> {
   bool _saving = false;
 
   /// توليد صورة الإيصال وإرسالها للعميل فور الحفظ (البنود ٣ و ٤ و ١٢ و ١٤).
-  bool _autoSend = true;
   String _image = '';
 
   @override
@@ -170,9 +168,6 @@ class _TxFormState extends ConsumerState<TxForm> {
   /// تفاصيل فاتورة المبيعات (الأصناف) تظهر فقط لعمليات البيع (قبض أو عليه).
   bool get _hasInvoiceDetails =>
       _type == OpType.debit || _type == OpType.inflow;
-
-  double get _invoiceTotal =>
-      _invoiceLines.fold<double>(0, (sum, line) => sum + line.total);
 
   /// نص الأثر المتوقّع — نفس تلميح نسخة الويب.
   String get _effectHint {
@@ -555,7 +550,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       : Fmt.money(value, 2);
 
 
-  Future<void> _addInvoiceLine() => _editInvoiceLine();
 
   Future<void> _editInvoiceLine([int? index]) async {
     if (_inventoryItems.isEmpty) return;
@@ -1013,34 +1007,6 @@ class _TxFormState extends ConsumerState<TxForm> {
     );
   }
 
-  Widget _hintBox() {
-    final hint = _effectHint;
-    if (hint.isEmpty) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.infoSoftOf(context),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_outline, size: 18, color: AppColors.infoOf(context)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              hint,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.infoOf(context),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _datePicker() {
     return InkWell(
@@ -1066,22 +1032,4 @@ class _TxFormState extends ConsumerState<TxForm> {
     );
   }
 
-  Widget _statusPicker() {
-    const opts = {
-      'done': 'مكتملة',
-      'pending': 'معلقة',
-      'cancelled': 'ملغاة',
-    };
-    return DropdownButtonFormField<String>(
-      initialValue: _status,
-      decoration: const InputDecoration(
-        labelText: 'حالة العملية',
-        prefixIcon: Icon(Icons.flag_outlined),
-      ),
-      items: opts.entries
-          .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
-          .toList(),
-      onChanged: (v) => setState(() => _status = v ?? 'done'),
-    );
-  }
 }
