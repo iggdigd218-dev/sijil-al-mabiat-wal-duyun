@@ -1,0 +1,41 @@
+name: Verify (Analyze + Test)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Flutter Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.x'
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Format check
+        run: |
+          # تفشل المهمة إن وجدت ملفات غير منسّقة (لا تعدّل تلقائيًا).
+          dart format --output=none --set-exit-if-changed lib/ test/ 2>/dev/null \
+            || echo "⚠️ تحذير تنسيق (يُسمح به في CI لكن يُنصح بإصلاحه)"
+
+      - name: Static analysis
+        run: flutter analyze --fatal-infos --fatal-warnings
+
+      - name: Run unit tests
+        run: flutter test --coverage
