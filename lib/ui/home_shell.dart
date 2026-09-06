@@ -130,8 +130,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
     final hasAdmin = users.any((u) => u.role == UserRole.admin);
-    final manageUsers =
-        can('manage_users') || !hasAdmin || users.isEmpty;
     return switch (_screen) {
         AppScreen.accounts => FloatingActionButton.extended(
             onPressed: add ? () => openAccountForm(context, ref) : null,
