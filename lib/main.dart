@@ -20,18 +20,27 @@ Future<void> main() async {
   await initializeDateFormatting('en');
 
   // Repo واحد ومُهيّأ تُستخدمه كل شاشات التطبيق عبر Riverpod.
+  // كل خطوة بمهلة قصوى حتى لا يعلق الإقلاع للأبد في حالة فساد قاعدة البيانات أو انسداد المقبس.
   final repo = Repo();
-  await repo.initSyncInfra();
+  try {
+    await repo.initSyncInfra().timeout(const Duration(seconds: 10));
+  } catch (e) {
+    debugPrint('initSyncInfra timeout/error: $e');
+  }
   final engine = SyncEngine(
     repo: repo,
     dbProvider: () => AppDatabase.instance.database,
   );
-  await engine.start();
+  try {
+    await engine.start().timeout(const Duration(seconds: 10));
+  } catch (e) {
+    debugPrint('engine.start timeout/error: $e');
+  }
 
   var themeMode = ThemeMode.system;
   var hideBalances = false;
   try {
-    final st = await repo.settings();
+    final st = await repo.settings().timeout(const Duration(seconds: 5));
     themeMode = switch (st['theme']) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,

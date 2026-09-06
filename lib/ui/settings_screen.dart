@@ -176,11 +176,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final mode = ref.watch(themeModeProvider);
 
     return settings.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => EmptyState(
-        icon: Icons.error_outline,
-        title: 'تعذّر تحميل الإعدادات',
-        message: '$e',
+      loading: () => const Center(child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 12),
+          Text('جارٍ تحميل الإعدادات…'),
+        ]),
+      )),
+      error: (e, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            EmptyState(
+              icon: Icons.error_outline,
+              title: 'تعذّر تحميل الإعدادات',
+              message: '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => bump(ref),
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة'),
+            ),
+          ]),
+        ),
       ),
       data: (st) {
         _hydrate(st);

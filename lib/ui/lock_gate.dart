@@ -1,21 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/security.dart';
 import '../core/theme.dart';
-import '../data/repository.dart';
+import '../data/providers.dart';
 
 /// بوابة القفل — تعترض التطبيق قبل عرضه إن كانت البصمة مفعّلة.
 ///
 /// تعيد المحاولة تلقائيًا عند العودة من الخلفية إذا فُعّل «القفل التلقائي».
-class LockGate extends StatefulWidget {
+class LockGate extends ConsumerStatefulWidget {
   final Widget child;
   const LockGate({super.key, required this.child});
 
   @override
-  State<LockGate> createState() => _LockGateState();
+  ConsumerState<LockGate> createState() => _LockGateState();
 }
 
-class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
+class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver {
   bool _checking = true;
   bool _locked = false;
   bool _autoLock = false;
@@ -37,17 +38,20 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   Future<void> _init() async {
     var enabled = false;
     try {
-      final st = await Repo().settings();
+      // نستخدم نفس الـ Repo المُهيّأ في main.dart عبر Riverpod — لا ننشئ اتصالاً جديدًا.
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings().timeout(const Duration(seconds: 3));
       enabled = st['biometric'] == '1';
       _autoLock = st['autoLock'] == '1';
     } catch (_) {
       enabled = false;
     }
+    if (!mounted) return;
     if (!enabled) {
-      if (mounted) setState(() { _checking = false; _locked = false; });
+      setState(() { _checking = false; _locked = false; });
       return;
     }
-    if (mounted) setState(() { _checking = false; _locked = true; });
+    setState(() { _checking = false; _locked = true; });
     await _unlock();
   }
 

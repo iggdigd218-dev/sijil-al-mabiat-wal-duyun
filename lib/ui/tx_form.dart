@@ -172,29 +172,23 @@ class _TxFormState extends ConsumerState<TxForm> {
   /// نص الأثر المتوقّع — نفس تلميح نسخة الويب.
 
   Future<void> _save() async {
-    // إيقاف أي عملية حفظ جارية بالفعل لمنع الضغطات المتكررة.
+    // منع الضغط المزدوج.
     if (_saving) return;
 
-    // إزالة التركيز من الحقول لإخفاء لوحة المفاتيح ولضمان حفظ آخر قيمة مدخلة.
     FocusScope.of(context).unfocus();
     await Future.delayed(const Duration(milliseconds: 50));
 
     final formState = _formKey.currentState;
     if (formState == null) return;
 
-    // التحقق من الصحة مع إعطاء رد فعل مرئي/صوتي واضح.
     final valid = formState.validate();
     if (!valid) {
       Sfx.reject();
-      // محاولة التمرير إلى أول حقل فاشل.
       await Future.delayed(const Duration(milliseconds: 100));
       if (mounted) {
-        Scrollable.ensureVisible(
-          context,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-          alignment: .2,
-        );
+        Scrollable.ensureVisible(context,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut, alignment: .2);
       }
       return;
     }
@@ -219,122 +213,123 @@ class _TxFormState extends ConsumerState<TxForm> {
     }
 
     setState(() => _saving = true);
+    int? savedId;
     try {
-    final repo = ref.read(repoProvider);
-    final now = DateTime.now();
-    final old = widget.existing;
-    final keepId = (old != null && !widget.isCopy) ? old.id : null;
-
-    final tx = Tx(
-      id: keepId,
-      accountId: _isTransfer ? null : _accountId,
-      accountKind: _account?.kind ?? AccountKind.general,
-      type: _type,
-      amount: amount,
-      currency: _currency,
-      sign: _type == OpType.settle ? _sign : '',
-      fromId: _isTransfer ? _accountId : null,
-      toId: _isTransfer ? _toId : null,
-      rate: Fmt.parseAmount(_rate.text) ?? 1,
-      description: _desc.text.trim(),
-      reference: _ref.text.trim(),
-      notes: _notes.text.trim(),
-      image: _image,
-      status: _status,
-      date: _date,
-      createdAt: (keepId != null ? old!.createdAt : now),
-      updatedAt: now,
-    );
-
-    // كشف التكرار: تحذير لا منع، وفقط للعمليات الجديدة.
-    if (keepId == null) {
-      final dups = await repo.findDuplicates(tx);
-      if (dups.isNotEmpty && mounted) {
-        final ok = await confirmDialog(
-          context,
-          title: '⚠️ عملية مكررة محتملة',
-          message:
-              'توجد ${dups.length} عملية مماثلة بنفس المبلغ والنوع اليوم.\nهل تريد المتابعة؟',
-          confirmText: 'متابعة',
-        );
-        if (ok != true) {
-          setState(() => _saving = false);
-          return;
-        }
-      }
-    }
-
-    final saleLines = _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
-    final savedId = await repo.saveTx(tx, items: saleLines);
-    // خصم الكميات من المخزون عند البيع (نقدي أو آجل).
-    if (_type == OpType.inflow || _type == OpType.debit) {
+      final repo = ref.read(repoProvider);
       final now = DateTime.now();
-      for (final line in saleLines) {
-        if (line.itemId == null) continue;
-        try {
-          await repo.addStockMove(StockMove(
-            itemId: line.itemId!,
-            quantity: line.quantity,
-            kind: StockKind.sale,
-            date: now,
-            createdAt: now,
-            notes: 'مبيع عملية #$savedId',
-          ));
-        } catch (_) {/* لا نفشل الحفظ بسبب حركة مخزون */}
-      }
-    }
-    final saved = tx.copyWith(id: savedId);
+      final old = widget.existing;
+      final keepId = (old != null && !widget.isCopy) ? old.id : null;
 
-    // التدفق المطلوب: يحفظ العملية → يولد السند → يفتح واتساب على محادثة العميل
-    // ويرسل الصورة + النص، ثم يغلق نافذة الحفظ. كل خطوة بمهلة حتى لا يعلق.
-    if (!_isTransfer && _accountId != null && _account != null) {
-      final acc = _account!;
-      try {
-        // توليد السند ثم فتح واتساب مباشرة على محادثة العميل.
-        await TxShare.sendNow(context, ref,
-            tx: saved,
-            account: acc,
-            silentIfNoPhone: false,
-        ).timeout(const Duration(seconds: 15));
-        if (mounted) {
-          bump(ref);
-          Navigator.pop(context, true);
-          showSnack(context,
-              keepId != null ? 'تم تعديل العملية وفتح واتساب ✅' : 'تمت إضافة العملية وفتح واتساب لإرسال السند ✅',
-              silent: true);
-          Sfx.success();
-        }
-      } catch (e) {
-        if (mounted) {
-          bump(ref);
-          Navigator.pop(context, true);
-          showSnack(context,
-              'تم حفظ العملية ✅ لكن تعذّر فتح واتساب: $e', error: true, silent: true);
-          Sfx.success(); // الحفظ نجح حتى لو فشل فتح واتساب.
+      final tx = Tx(
+        id: keepId,
+        accountId: _isTransfer ? null : _accountId,
+        accountKind: _account?.kind ?? AccountKind.general,
+        type: _type,
+        amount: amount,
+        currency: _currency,
+        sign: _type == OpType.settle ? _sign : '',
+        fromId: _isTransfer ? _accountId : null,
+        toId: _isTransfer ? _toId : null,
+        rate: Fmt.parseAmount(_rate.text) ?? 1,
+        description: _desc.text.trim(),
+        reference: _ref.text.trim(),
+        notes: _notes.text.trim(),
+        image: _image,
+        status: _status,
+        date: _date,
+        createdAt: (keepId != null ? old!.createdAt : now),
+        updatedAt: now,
+      );
+
+      // كشف التكرار (تحذير فقط).
+      if (keepId == null) {
+        List<Tx> dups = const [];
+        try {
+          dups = await repo.findDuplicates(tx).timeout(const Duration(seconds: 3));
+        } catch (_) { dups = const []; }
+        if (dups.isNotEmpty && mounted) {
+          final ok = await confirmDialog(
+            context,
+            title: '⚠️ عملية مكررة محتملة',
+            message: 'توجد ${dups.length} عملية مماثلة بنفس المبلغ والنوع اليوم.\nهل تريد المتابعة؟',
+            confirmText: 'متابعة',
+          );
+          if (ok != true) {
+            if (mounted) setState(() => _saving = false);
+            return;
+          }
         }
       }
-    } else {
-      // تحويل داخلي أو بدون حساب: نغلق النافذة مباشرة.
+
+      final saleLines = _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
+      // الحفظ بمهلة قصوى حتى لا يعلق الزر أبدًا.
+      savedId = await repo.saveTx(tx, items: saleLines)
+          .timeout(const Duration(seconds: 10));
+
+      // خصم الكميات من المخزون — لا يُفشل الحفظ.
+      if ((_type == OpType.inflow || _type == OpType.debit) && saleLines.isNotEmpty) {
+        for (final line in saleLines) {
+          if (line.itemId == null) continue;
+          try {
+            await repo.addStockMove(StockMove(
+              itemId: line.itemId!,
+              quantity: line.quantity,
+              kind: StockKind.sale,
+              date: now,
+              createdAt: now,
+              notes: 'مبيع عملية #$savedId',
+            )).timeout(const Duration(seconds: 3));
+          } catch (_) {}
+        }
+      }
+      final saved = tx.copyWith(id: savedId);
+
+      // محاولة إرسال السند — بمهلة؛ فشلها لا يبطل الحفظ.
+      bool shareOk = false;
+      String? shareErr;
+      if (!_isTransfer && _accountId != null && _account != null) {
+        try {
+          await TxShare.sendNow(context, ref,
+              tx: saved,
+              account: _account!,
+              silentIfNoPhone: true,
+          ).timeout(const Duration(seconds: 15));
+          shareOk = true;
+        } catch (e) {
+          shareErr = '$e';
+        }
+      }
+
       if (mounted) {
         bump(ref);
         Navigator.pop(context, true);
+        final okMsg = keepId != null
+            ? (shareOk
+                ? 'تم تعديل العملية وإرسال السند ✅'
+                : 'تم تعديل العملية ✅')
+            : (shareOk
+                ? 'تم حفظ العملية وإرسال السند ✅'
+                : 'تم حفظ العملية وتحديث الرصيد ✅');
         showSnack(context,
-            keepId != null ? 'تم تعديل العملية ✅' : 'تمت إضافة العملية وتحديث الرصيد ✅',
+            shareErr != null && !shareOk && _account!.notifyChannel != 'none'
+                ? '$okMsg (تعذّر الإرسال: $shareErr)'
+                : okMsg,
+            error: shareErr != null && !shareOk,
             silent: true);
         Sfx.success();
       }
-    }
     } catch (e) {
       if (mounted) {
         Sfx.error();
         showSnack(context,
-            e is StateError ? e.message : 'تعذّر حفظ العملية: $e',
+            e is StateError ? (e.message ?? 'خطأ') : 'تعذّر حفظ العملية: $e',
             error: true, silent: true);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
+
 
   bool _advancedOpen = false;
 
@@ -376,84 +371,92 @@ class _TxFormState extends ConsumerState<TxForm> {
     final title = widget.isCopy
         ? '🔁 تكرار عملية'
         : (widget.existing != null ? '✏️ تعديل عملية' : '＋ عملية جديدة');
-    return DraggableScrollableSheet(
-      initialChildSize: .92, minChildSize: .5, maxChildSize: .96, expand: false,
-      builder: (context, scroll) => Column(children: [
-        const SizedBox(height: 8),
-        Container(width: 42, height: 4,
-            decoration: BoxDecoration(color: AppColors.borderOf(context),
-                borderRadius: BorderRadius.circular(4))),
-        Padding(padding: const EdgeInsets.fromLTRB(18, 14, 8, 6), child: Row(children: [
-          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
-          IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-        ])),
-        const Divider(height: 1),
-        Expanded(child: Form(
-          key: _formKey,
-          autovalidateMode: AutovalidateMode.onUserInteraction,
-          child: ListView(
-            controller: scroll,
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-            children: [
-              _typeChips(),
-              const SizedBox(height: 14),
-              _accountPickers(),
-              const SizedBox(height: 14),
-              _amountRow(),
-              if (_hasInvoiceDetails) ...[const SizedBox(height: 8), _invoiceShortcut()],
-              if (_type == OpType.settle) ...[const SizedBox(height: 14), _signPicker()],
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _desc,
-                decoration: const InputDecoration(
-                  labelText: 'البيان / الوصف',
-                  prefixIcon: Icon(Icons.notes_outlined),
-                  hintText: 'وصف مختصر (اختياري)',
-                ),
-                textInputAction: TextInputAction.done,
-              ),
-              Theme(data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                child: ExpansionTile(
-                  tilePadding: EdgeInsets.zero, childrenPadding: EdgeInsets.zero,
-                  title: Text(_advancedOpen ? 'إخفاء التفاصيل الإضافية' : 'التفاصيل الإضافية'),
-                  leading: const Icon(Icons.tune),
-                  onExpansionChanged: (v) => setState(() => _advancedOpen = v),
+    return Padding(
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
+          Container(width: 42, height: 4,
+              decoration: BoxDecoration(color: AppColors.borderOf(context),
+                  borderRadius: BorderRadius.circular(4))),
+          Padding(padding: const EdgeInsets.fromLTRB(18, 14, 8, 6), child: Row(children: [
+            Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+            IconButton(onPressed: _saving ? null : () => Navigator.pop(context), icon: const Icon(Icons.close)),
+          ])),
+          const Divider(height: 1),
+          Flexible(
+            child: Form(
+              key: _formKey,
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              child: SingleChildScrollView(
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 6),
-                    _datePicker(),
+                    _typeChips(),
                     const SizedBox(height: 14),
-                    TextFormField(controller: _ref, decoration: const InputDecoration(
-                        labelText: 'رقم مرجعي', prefixIcon: Icon(Icons.tag))),
+                    _accountPickers(),
                     const SizedBox(height: 14),
-                    TextFormField(controller: _notes,
-                        decoration: const InputDecoration(labelText: 'ملاحظات',
-                            prefixIcon: Icon(Icons.sticky_note_2_outlined)),
-                        maxLines: 2),
+                    _amountRow(),
+                    if (_hasInvoiceDetails) ...[const SizedBox(height: 8), _invoiceShortcut()],
+                    if (_type == OpType.settle) ...[const SizedBox(height: 14), _signPicker()],
                     const SizedBox(height: 10),
-                    _smallImagePicker(),
+                    TextFormField(
+                      controller: _desc,
+                      decoration: const InputDecoration(
+                        labelText: 'البيان / الوصف',
+                        prefixIcon: Icon(Icons.notes_outlined),
+                        hintText: 'وصف مختصر (اختياري)',
+                      ),
+                      textInputAction: TextInputAction.done,
+                    ),
+                    Theme(data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                      child: ExpansionTile(
+                        tilePadding: EdgeInsets.zero, childrenPadding: EdgeInsets.zero,
+                        title: Text(_advancedOpen ? 'إخفاء التفاصيل الإضافية' : 'التفاصيل الإضافية'),
+                        leading: const Icon(Icons.tune),
+                        onExpansionChanged: (v) => setState(() => _advancedOpen = v),
+                        children: [
+                          const SizedBox(height: 6),
+                          _datePicker(),
+                          const SizedBox(height: 14),
+                          TextFormField(controller: _ref, decoration: const InputDecoration(
+                              labelText: 'رقم مرجعي', prefixIcon: Icon(Icons.tag))),
+                          const SizedBox(height: 14),
+                          TextFormField(controller: _notes,
+                              decoration: const InputDecoration(labelText: 'ملاحظات',
+                                  prefixIcon: Icon(Icons.sticky_note_2_outlined)),
+                              maxLines: 2),
+                          const SizedBox(height: 10),
+                          _smallImagePicker(),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(children: [
+                      Expanded(child: OutlinedButton(
+                          onPressed: _saving ? null : () => Navigator.pop(context),
+                          child: const Text('إلغاء'))),
+                      const SizedBox(width: 12),
+                      Expanded(flex: 2, child: FilledButton.icon(
+                        onPressed: _saving ? null : _save,
+                        icon: _saving
+                            ? const SizedBox(width: 18, height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : const Icon(Icons.save_outlined),
+                        label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
+                      )),
+                    ]),
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              Row(children: [
-                Expanded(child: OutlinedButton(
-                    onPressed: _saving ? null : () => Navigator.pop(context),
-                    child: const Text('إلغاء'))),
-                const SizedBox(width: 12),
-                Expanded(flex: 2, child: FilledButton.icon(
-                  onPressed: _saving ? null : _save,
-                  icon: _saving
-                      ? const SizedBox(width: 18, height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.save_outlined),
-                  label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
-                )),
-              ]),
-            ],
+            ),
           ),
-        )),
-      ]),
+        ],
+      ),
     );
   }
 

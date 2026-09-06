@@ -25,13 +25,28 @@ class DashboardScreen extends ConsumerWidget {
         children: [
           summary.when(
             loading: () => const Padding(
-              padding: EdgeInsets.symmetric(vertical: 60),
-              child: Center(child: CircularProgressIndicator()),
+              padding: EdgeInsets.symmetric(vertical: 80),
+              child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 12),
+                Text('جارٍ تحميل البيانات…'),
+              ])),
             ),
-            error: (e, _) => EmptyState(
-              icon: Icons.error_outline,
-              title: 'تعذّر تحميل الملخّص',
-              message: '$e',
+            error: (e, _) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Column(children: [
+                EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'تعذّر تحميل الملخّص',
+                  message: '${e.toString().length > 200 ? e.toString().substring(0,200) + '…' : e}',
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: () => bump(ref),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('إعادة المحاولة'),
+                ),
+              ]),
             ),
             data: (s) {
               final curs = currencies.valueOrNull ?? kDefaultCurrencies;

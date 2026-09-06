@@ -220,18 +220,23 @@ class SyncEngine {
       final db = await _db;
       final q = _queue ?? SyncQueueOps(db);
       for (final t in _transports) {
-        final rows = await q.pickPending(limit: 20, target: t.targetId);
+        List<Map<String, Object?>> rows;
+        try {
+          rows = await q.pickPending(limit: 20, target: t.targetId)
+              .timeout(const Duration(seconds: 10));
+        } catch (_) { continue; }
         for (final r in rows) {
           final qid = r['id'] as int;
           final opId = r['operation_id'] as String;
-          await q.markSyncing(qid);
+          try { await q.markSyncing(qid).timeout(const Duration(seconds: 5)); } catch (_) {}
           String? entityTable;
           String? entityId;
           try {
             final opRows = await db.query('operations',
-                where: 'id = ?', whereArgs: [opId], limit: 1);
+                where: 'id = ?', whereArgs: [opId], limit: 1)
+                .timeout(const Duration(seconds: 5));
             if (opRows.isEmpty) {
-              await q.markSynced(qid);
+              try { await q.markSynced(qid).timeout(const Duration(seconds: 3)); } catch (_) {}
               continue;
             }
             final op = SyncOperation.fromMap(opRows.first);
@@ -248,20 +253,21 @@ class SyncEngine {
             };
             entityId = op.entityId;
             if (entityTable == 'transactions') {
-              await db.update('transactions', {'sync_state': 'syncing'},
-                  where: 'id = ?', whereArgs: [entityId]);
+              try { await db.update('transactions', {'sync_state': 'syncing'},
+                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
             }
-            await t.push(op);
-            await q.markSynced(qid);
+            // مهلة 20 ثانية لكل عملية دفع حتى لا تعلق قائمة الانتظار كلها.
+            await t.push(op).timeout(const Duration(seconds: 20));
+            try { await q.markSynced(qid).timeout(const Duration(seconds: 3)); } catch (_) {}
             if (entityTable == 'transactions' && entityId != null) {
-              await db.update('transactions', {'sync_state': 'synced'},
-                  where: 'id = ?', whereArgs: [entityId]);
+              try { await db.update('transactions', {'sync_state': 'synced'},
+                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
             }
           } catch (e) {
-            await q.markFailed(qid, e);
+            try { await q.markFailed(qid, e).timeout(const Duration(seconds: 3)); } catch (_) {}
             if (entityTable == 'transactions' && entityId != null) {
-              await db.update('transactions', {'sync_state': 'failed'},
-                  where: 'id = ?', whereArgs: [entityId]);
+              try { await db.update('transactions', {'sync_state': 'failed'},
+                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
             }
           }
         }
