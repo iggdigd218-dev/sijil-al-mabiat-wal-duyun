@@ -83,3 +83,29 @@ jobs:
           files: ${{ env.ZIP }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update unified latest release (Windows)
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          name: Nexora — الإصدار الرسمي الأحدث
+          body: |
+            ## 📥 التحميل المباشر
+
+            **هذا هو الإصدار الرسمي الأحدث من التطبيق.**
+
+            ### 🖥️ لويندوز
+            - حمّل ملف `nexora-windows-v${{ github.run_number }}.zip` بالأسفل.
+            - فك الضغط في أي مجلد ثم شغّل `nexora_app.exe`.
+
+            ### 📱 للأندرويد (APK)
+            - يُرفع ملف الأندرويد تلقائيًا هنا بعد انتهاء بناء APK (قد يتأخر بضع دقائق).
+            - ثبّت `nexora-arm64.apk` على الجهاز.
+
+            > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
+          files: ${{ env.ZIP }}
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

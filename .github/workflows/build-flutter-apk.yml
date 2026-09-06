@@ -85,3 +85,29 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update unified latest release (APK)
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          name: Nexora — الإصدار الرسمي الأحدث
+          body: |
+            ## 📥 التحميل المباشر
+
+            **هذا هو الإصدار الرسمي الأحدث من التطبيق.**
+
+            ### 📱 للأندرويد (APK arm64)
+            - حمّل الملف `nexora-arm64.apk` بالأسفل وثبّته على جهازك.
+            - يعمل على أجهزة أندرويد الحديثة (معمارية 64 بت).
+
+            ### 🖥️ لويندوز
+            - يُرفع ملف الويندوز تلقائيًا هنا بعد انتهاء بناء ويندوز (قد يتأخر بضع دقائق بعد رفع الأندرويد).
+            - فك ضغط الملف ثم شغّل `nexora.exe`.
+
+            > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
+          files: nexora-arm64.apk
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
