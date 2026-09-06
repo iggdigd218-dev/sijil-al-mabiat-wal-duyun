@@ -34,8 +34,21 @@ jobs:
           dart format --output=none --set-exit-if-changed lib/ test/ 2>/dev/null \
             || echo "⚠️ تحذير تنسيق (يُسمح به في CI لكن يُنصح بإصلاحه)"
 
-      - name: Static analysis (أخطاء فقط — التحذيرات القديمة لا توقف البناء)
-        run: flutter analyze
+      - name: Static analysis
+        run: |
+          # تشغيل التحليل؛ يفشل فقط إن وُجد خطأ حقيقي (error).
+          # التحذيرات القديمة والـ deprecated لا توقف البناء حتى نصلّحها تدريجيًا.
+          set +e
+          flutter analyze 2>&1 | tee /tmp/analyze.txt
+          CODE=${PIPESTATUS[0]}
+          if grep -qE "^\s*error •" /tmp/analyze.txt; then
+            echo "::error::يوجد أخطاء تحليل تمنع البناء."
+            exit 1
+          fi
+          if [ "$CODE" != "0" ]; then
+            echo "⚠️ التحليل أعاد كود $CODE لكن بدون أخطاء حقيقية (تحذيرات قديمة) — يُستكمل."
+          fi
+          exit 0
 
       - name: Run unit tests
         run: flutter test --coverage

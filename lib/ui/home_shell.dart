@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/accounting.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -91,18 +90,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     AppScreen.reports,
   ];
 
-  /// الشاشات الإضافية المجمّعة في قائمة «ثلاث نقاط» أعلى الواجهة.
-  static const _moreItems = [
-    AppScreen.pos,
-    AppScreen.inventory,
-    AppScreen.currencies,
-    AppScreen.chat,
-    AppScreen.group,
-    AppScreen.activity,
-    AppScreen.trash,
-    AppScreen.settings,
-  ];
-
   void _go(AppScreen s) => setState(() => _screen = s);
 
 
@@ -129,7 +116,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final users = ref.watch(usersProvider).valueOrNull ?? const [];
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
-    final hasAdmin = users.any((u) => u.role == UserRole.admin);
     return switch (_screen) {
         AppScreen.accounts => FloatingActionButton.extended(
             onPressed: add ? () => openAccountForm(context, ref) : null,

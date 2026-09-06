@@ -14,7 +14,7 @@ import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'backup_screen.dart';
-import 'devices_screen.dart' show SectionTitle, DeviceCard;
+import 'devices_screen.dart' show DeviceCard;
 import 'qr_pair_scanner.dart' show scanQrPair;
 import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
 import 'users_screen.dart' show UserCard, openUserForm;
