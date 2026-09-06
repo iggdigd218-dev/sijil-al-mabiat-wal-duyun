@@ -19,35 +19,53 @@ Future<void> main() async {
   await initializeDateFormatting('ar');
   await initializeDateFormatting('en');
 
+  // التقاط أي خطأ غير مُعالج في إطار الـ UI بدل تعليق الشاشة بيضاء.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}\n${details.stack}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Uncaught error: $error\n$stack');
+    return true;
+  };
+
   // Repo واحد ومُهيّأ تُستخدمه كل شاشات التطبيق عبر Riverpod.
   // كل خطوة بمهلة قصوى حتى لا يعلق الإقلاع للأبد في حالة فساد قاعدة البيانات أو انسداد المقبس.
   final repo = Repo();
   try {
-    await repo.initSyncInfra().timeout(const Duration(seconds: 10));
+    await repo.initSyncInfra().timeout(const Duration(seconds: 8));
   } catch (e) {
     debugPrint('initSyncInfra timeout/error: $e');
   }
-  final engine = SyncEngine(
-    repo: repo,
-    dbProvider: () => AppDatabase.instance.database,
-  );
+  SyncEngine engine;
   try {
-    await engine.start().timeout(const Duration(seconds: 10));
+    engine = SyncEngine(
+      repo: repo,
+      dbProvider: () => AppDatabase.instance.database,
+    );
+    await engine.start().timeout(const Duration(seconds: 6));
   } catch (e) {
     debugPrint('engine.start timeout/error: $e');
+    engine = SyncEngine(
+      repo: repo,
+      dbProvider: () => AppDatabase.instance.database,
+    );
   }
 
   var themeMode = ThemeMode.system;
   var hideBalances = false;
+  Map<String, String> initialSettings = const {};
   try {
-    final st = await repo.settings().timeout(const Duration(seconds: 5));
-    themeMode = switch (st['theme']) {
+    initialSettings = await repo.settings().timeout(const Duration(seconds: 4));
+    themeMode = switch (initialSettings['theme']) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
       _ => ThemeMode.system,
     };
-    hideBalances = st['hideBalances'] == '1';
-  } catch (_) {}
+    hideBalances = initialSettings['hideBalances'] == '1';
+  } catch (e) {
+    debugPrint('initial settings failed: $e');
+  }
 
   runApp(ProviderScope(
     overrides: [

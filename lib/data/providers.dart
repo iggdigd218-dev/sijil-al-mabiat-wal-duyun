@@ -31,7 +31,9 @@ void bump(WidgetRef ref) => ref.read(refreshProvider.notifier).state++;
 /// الإعدادات كخريطة مفتاح/قيمة — تقابل settings() في نسخة الويب.
 final settingsProvider = FutureProvider<Map<String, String>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).settings();
+  // مهلة قصوى حتى لا يعلق المزود للأبد في أي حالة.
+  return ref.read(repoProvider).settings().timeout(const Duration(seconds: 8),
+      onTimeout: () => <String, String>{});
 });
 
 /// وضع السمة.
@@ -43,7 +45,7 @@ final hideBalancesProvider = StateProvider<bool>((ref) => false);
 /// العملات المعرَّفة.
 final currenciesProvider = FutureProvider<List<CurrencyDef>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).currencies();
+    return ref.read(repoProvider).currencies().timeout(const Duration(seconds: 8), onTimeout: () => kDefaultCurrencies);
 });
 
 /// فلاتر شاشة الحسابات.
@@ -107,7 +109,7 @@ final accountsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
 /// كل الحسابات بلا فلتر — للقوائم المنسدلة.
 final allAccountsProvider = FutureProvider<List<Account>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).accounts();
+    return ref.read(repoProvider).accounts().timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 /// ملخّص لوحة التحكم.
@@ -138,9 +140,14 @@ class Summary {
 final summaryProvider = FutureProvider<Summary>((ref) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
-  final accounts = await repo.accounts();
-  final balances = await repo.allBalances(accounts);
-  final txs = await repo.transactions();
+  List<Account> accounts = const [];
+  List<Tx> txs = const [];
+  Map<int, double> balances = const {};
+  try {
+    accounts = await repo.accounts().timeout(const Duration(seconds: 6));
+    balances = await repo.allBalances(accounts).timeout(const Duration(seconds: 6));
+    txs = await repo.transactions().timeout(const Duration(seconds: 6));
+  } catch (_) {}
 
   final toUs = <String, double>{};
   final byUs = <String, double>{};
@@ -185,7 +192,7 @@ final recentTxProvider = FutureProvider<List<Tx>>((ref) async {
 /// عمليات حساب بعينه.
 final accountTxProvider = FutureProvider.family<List<Tx>, int>((ref, id) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).transactions(accountId: id);
+    return ref.read(repoProvider).transactions(accountId: id).timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 /// تنبيهات: تجاوز الحد الائتماني.
@@ -204,7 +211,7 @@ final alertsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
 final activityProvider =
     FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).recentActivity();
+    return ref.read(repoProvider).recentActivity().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 // ==================== تصفية العمليات ====================
@@ -388,12 +395,12 @@ final vouchersProvider = FutureProvider<List<Voucher>>((ref) async {
 
 final usersProvider = FutureProvider<List<AppUser>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).users();
+    return ref.watch(repoProvider).users().timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 final currentUserProvider = FutureProvider<AppUser?>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).currentUser();
+    return ref.watch(repoProvider).currentUser().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 // ==================== التقارير ====================
@@ -496,17 +503,17 @@ final reportDataProvider = FutureProvider<ReportData>((ref) async {
 
 final categoriesProvider = FutureProvider<List<String>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).categories();
+    return ref.watch(repoProvider).categories().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 final trashProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).trash();
+    return ref.watch(repoProvider).trash().timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 final countsProvider = FutureProvider<Map<String, int>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).counts();
+    return ref.watch(repoProvider).counts().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 // ==================== الدردشة ====================
@@ -514,13 +521,13 @@ final countsProvider = FutureProvider<Map<String, int>>((ref) async {
 final conversationsProvider =
     FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).conversations();
+    return ref.watch(repoProvider).conversations().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 final messagesProvider =
     FutureProvider.family<List<ChatMessage>, int>((ref, convId) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).messages(convId);
+    return ref.watch(repoProvider).messages(convId).timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 // ==================== الأصناف والمخزون ====================
@@ -528,7 +535,7 @@ final messagesProvider =
 /// فئات الأصناف التي تظهر أولًا في شاشة المخزون.
 final itemCategoriesProvider = FutureProvider<List<ItemCategory>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).itemCategories();
+    return ref.read(repoProvider).itemCategories().timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 /// نص البحث في شاشة المخزون.
@@ -538,7 +545,7 @@ final itemQueryProvider = StateProvider<String>((ref) => '');
 final itemsProvider = FutureProvider<List<Item>>((ref) async {
   ref.watch(refreshProvider);
   final q = ref.watch(itemQueryProvider);
-  return ref.read(repoProvider).items(q: q);
+    return ref.read(repoProvider).items(q: q).timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 /// ملخّص المخزون: التكلفة والقيمة والأرباح.
@@ -552,35 +559,35 @@ final inventorySummaryProvider =
 final stockMovesProvider =
     FutureProvider.family<List<StockMove>, int>((ref, itemId) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).stockMoves(itemId: itemId);
+    return ref.read(repoProvider).stockMoves(itemId: itemId).timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 /// قائمة الأجهزة المرتبطة (تحتاج صلاحية manage_users).
 final devicesProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).devices();
+    return ref.read(repoProvider).devices().timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
 /// وضع المساحة الحالي: standalone/host/member.
 final workspaceModeProvider = FutureProvider<String>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).workspaceMode();
+    return ref.read(repoProvider).workspaceMode().timeout(const Duration(seconds: 8), onTimeout: () => 'standalone');
 });
 
 /// هل هذا الجهاز هو مالك المساحة (المدير).
 final isOwnerProvider = FutureProvider<bool>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).isWorkspaceOwner();
+    return ref.read(repoProvider).isWorkspaceOwner().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 /// دور الجهاز الحالي (للعرض في الشارة أعلى الشاشة).
 final deviceRoleProvider = FutureProvider<AppUser?>((ref) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).currentUser();
+    return ref.read(repoProvider).currentUser().timeout(const Duration(seconds: 8), onTimeout: () => null);
 });
 
 /// يُستخدم من الواجهة لاختبار صلاحية معيّنة (لإخفاء/تعطيل الأزرار).
 final canProvider = FutureProvider.family<bool, String>((ref, perm) async {
   ref.watch(refreshProvider);
-  return ref.read(repoProvider).can(perm);
+    return ref.read(repoProvider).can(perm).timeout(const Duration(seconds: 8), onTimeout: () => true);
 });

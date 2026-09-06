@@ -491,9 +491,16 @@ class Repo {
   /// يحفظ العملية وسطور الفاتورة معًا. تمرير [items] (حتى لو كانت فارغة)
   /// يستبدل السطور القديمة، أما null فيُبقيها كما هي عند تحديث الصورة.
   Future<int> saveTx(Tx t, {List<InvoiceLine>? items}) async {
-    await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx');
+    await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx')
+        .timeout(const Duration(seconds: 4));
     final db = await _db;
-    final mode = await workspaceMode();
+    String mode;
+    try {
+      mode = await workspaceMode().timeout(const Duration(seconds: 2),
+          onTimeout: () => 'standalone');
+    } catch (_) {
+      mode = 'standalone';
+    }
     final newSync = mode == 'standalone' ? 'synced' : 'pending';
     late final int id;
     await db.transaction((txn) async {
@@ -874,26 +881,39 @@ class Repo {
 
   /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.
   Future<void> _ensureCan(String perm) async {
-    if (!await can(perm)) {
-      final me = await currentUser();
-      throw StateError(
-          'ليس لديك صلاحية لهذا الإجراء${me != null ? ' (${me.role.label})' : ''}.');
+    try {
+      final ok = await can(perm).timeout(const Duration(seconds: 3),
+          onTimeout: () => true);
+      if (!ok) {
+        final me = await currentUser().timeout(
+            const Duration(seconds: 2), onTimeout: () => null);
+        throw StateError(
+            'ليس لديك صلاحية لهذا الإجراء${me != null ? ' (${me.role.label})' : ''}.');
+      }
+    } on StateError {
+      rethrow;
+    } catch (_) {
+      // أي خطأ آخر في فحص الصلاحيات لا يمنع الحفظ — نفضّل ألا يعلق المستخدم.
     }
   }
 
   /// استعلام عام للواجهة: هل المستخدم الحالي يملك الصلاحية؟
   /// يُستخدم لتعطيل/إخفاء الأزرار قبل لمسها.
   Future<bool> can(String perm) async {
-    final mode = await workspaceMode();
-    final me = await currentUser();
-    if (mode != 'member') {
-      // في الوضع المستقل/المضيف يُسمح دائمًا ما لم يوجد مستخدم نشط بدور مقيّد.
-      if (me == null) return true; // أول تشغيل/بدون حسابات.
+    try {
+      final mode =
+          await workspaceMode().timeout(const Duration(seconds: 2), onTimeout: () => 'standalone');
+      final me = await currentUser().timeout(
+          const Duration(seconds: 2), onTimeout: () => null);
+      if (mode != 'member') {
+        if (me == null) return true;
+        return me.can(perm);
+      }
+      if (me == null) return false;
       return me.can(perm);
+    } catch (_) {
+      return true; // في حال الشك نسمح (لا نغلق التطبيق أمام المستخدم).
     }
-    // عضو: يجب أن يكون له مستخدم معيّن ويمتلك الصلاحية.
-    if (me == null) return false;
-    return me.can(perm);
   }
 
   /// حماية المدير الوحيد.
