@@ -211,7 +211,7 @@ final alertsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
 final activityProvider =
     FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-    return ref.read(repoProvider).recentActivity().timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.read(repoProvider).recentActivity().timeout(const Duration(seconds: 8), onTimeout: () => const []);
 });
 
 // ==================== تصفية العمليات ====================
@@ -503,7 +503,7 @@ final reportDataProvider = FutureProvider<ReportData>((ref) async {
 
 final categoriesProvider = FutureProvider<List<String>>((ref) async {
   ref.watch(refreshProvider);
-    return ref.watch(repoProvider).categories().timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.watch(repoProvider).categories().timeout(const Duration(seconds: 8), onTimeout: () => const []);
 });
 
 final trashProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
@@ -513,7 +513,7 @@ final trashProvider = FutureProvider<List<Map<String, Object?>>>((ref) async {
 
 final countsProvider = FutureProvider<Map<String, int>>((ref) async {
   ref.watch(refreshProvider);
-    return ref.watch(repoProvider).counts().timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.watch(repoProvider).counts().timeout(const Duration(seconds: 8), onTimeout: () => <String, int>{});
 });
 
 // ==================== الدردشة ====================
@@ -521,13 +521,13 @@ final countsProvider = FutureProvider<Map<String, int>>((ref) async {
 final conversationsProvider =
     FutureProvider<List<Map<String, Object?>>>((ref) async {
   ref.watch(refreshProvider);
-    return ref.watch(repoProvider).conversations().timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.watch(repoProvider).conversations().timeout(const Duration(seconds: 8), onTimeout: () => <Map<String, Object?>>[]);
 });
 
 final messagesProvider =
     FutureProvider.family<List<ChatMessage>, int>((ref, convId) async {
   ref.watch(refreshProvider);
-    return ref.watch(repoProvider).messages(convId).timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.watch(repoProvider).messages(convId).timeout(const Duration(seconds: 8), onTimeout: () => const []);
 });
 
 // ==================== الأصناف والمخزون ====================
@@ -559,7 +559,7 @@ final inventorySummaryProvider =
 final stockMovesProvider =
     FutureProvider.family<List<StockMove>, int>((ref, itemId) async {
   ref.watch(refreshProvider);
-    return ref.read(repoProvider).stockMoves(itemId: itemId).timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.read(repoProvider).stockMoves(itemId: itemId).timeout(const Duration(seconds: 8), onTimeout: () => const []);
 });
 
 /// قائمة الأجهزة المرتبطة (تحتاج صلاحية manage_users).
@@ -577,7 +577,7 @@ final workspaceModeProvider = FutureProvider<String>((ref) async {
 /// هل هذا الجهاز هو مالك المساحة (المدير).
 final isOwnerProvider = FutureProvider<bool>((ref) async {
   ref.watch(refreshProvider);
-    return ref.read(repoProvider).isWorkspaceOwner().timeout(const Duration(seconds: 8), onTimeout: () => null);
+    return ref.read(repoProvider).isWorkspaceOwner().timeout(const Duration(seconds: 8), onTimeout: () => true);
 });
 
 /// دور الجهاز الحالي (للعرض في الشارة أعلى الشاشة).
