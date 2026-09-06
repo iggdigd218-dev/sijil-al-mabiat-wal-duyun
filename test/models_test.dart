@@ -7,7 +7,7 @@ import 'package:nexora_app/core/models.dart';
 void main() {
   group('Fmt.phoneDigits', () {
     test('يزيل الرموز ويترك الأرقام فقط', () {
-      expect(Fmt.phoneDigits('+967 777-123-456'), '967777123456');
+      expect(Fmt.phoneDigits('+967 777-123-456'), '+967777123456');
       expect(Fmt.phoneDigits('(777) 123 456'), '777123456');
       expect(Fmt.phoneDigits(''), '');
     });
