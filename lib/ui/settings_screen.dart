@@ -7,11 +7,10 @@ import 'package:image_picker/image_picker.dart';
 import '../core/app_version.dart';
 import '../core/receipt_image.dart';
 import '../core/security.dart';
-import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
-import 'sync_settings_section.dart';
 import 'update_section.dart';
+import 'appearance_screen.dart';
 import 'widgets.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
@@ -197,7 +196,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final currencies = ref.watch(currenciesProvider).valueOrNull ?? [];
-    final mode = ref.watch(themeModeProvider);
 
     return settings.when(
       loading: () => const Center(
@@ -357,106 +355,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 18),
-                const SectionTitle('المظهر'),
                 Card(
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.brightness_6_outlined),
-                        title: const Text('السمة'),
-                        subtitle: Text(switch (mode) {
-                          ThemeMode.light => 'فاتح',
-                          ThemeMode.dark => 'داكن',
-                          ThemeMode.system => 'حسب النظام',
-                        }),
-                        trailing: SegmentedButton<ThemeMode>(
-                          segments: const [
-                            ButtonSegment(
-                              value: ThemeMode.light,
-                              icon: Icon(Icons.light_mode_outlined),
-                            ),
-                            ButtonSegment(
-                              value: ThemeMode.system,
-                              icon: Icon(Icons.brightness_auto_outlined),
-                            ),
-                            ButtonSegment(
-                              value: ThemeMode.dark,
-                              icon: Icon(Icons.dark_mode_outlined),
-                            ),
-                          ],
-                          selected: {mode},
-                          showSelectedIcon: false,
-                          onSelectionChanged: (s) async {
-                            final v = s.first;
-                            ref.read(themeModeProvider.notifier).state = v;
-                            await ref
-                                .read(repoProvider)
-                                .setSetting('theme', v.name);
-                          },
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        secondary: const Icon(Icons.visibility_off_outlined),
-                        title: const Text('إخفاء الأرصدة افتراضيًا'),
-                        subtitle: const Text('تظهر الأرصدة كنقاط حتى تكشفها'),
-                        value: ref.watch(hideBalancesProvider),
-                        onChanged: (v) async {
-                          ref.read(hideBalancesProvider.notifier).state = v;
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('hideBalances', v ? '1' : '0');
-                        },
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        secondary: const Icon(Icons.format_size),
-                        title: const Text('خط أكبر في لوحة التحكم'),
-                        subtitle: const Text('تكبير الأرقام والعناوين'),
-                        value: (st['bigText'] ?? '1') == '1',
-                        onChanged: (v) async {
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('bigText', v ? '1' : '0');
-                          bump(ref);
-                        },
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        secondary: const Icon(Icons.volume_up_outlined),
-                        title: const Text('الأصوات'),
-                        subtitle: const Text('نغمات النجاح والخطأ والأزرار'),
-                        value: (st['sfxSound'] ?? '1') == '1',
-                        onChanged: (v) async {
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('sfxSound', v ? '1' : '0');
-                          Sfx.applySettings(
-                              sound: v,
-                              haptic:
-                                  (st['sfxHaptic'] ?? '1') == '1');
-                          if (v) Sfx.pop();
-                          bump(ref);
-                        },
-                      ),
-                      const Divider(height: 1),
-                      SwitchListTile(
-                        secondary: const Icon(Icons.vibration_outlined),
-                        title: const Text('الاهتزاز'),
-                        subtitle: const Text('ردود اهتزازية عند الحفظ والدفع'),
-                        value: (st['sfxHaptic'] ?? '1') == '1',
-                        onChanged: (v) async {
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('sfxHaptic', v ? '1' : '0');
-                          Sfx.applySettings(
-                              sound: (st['sfxSound'] ?? '1') == '1',
-                              haptic: v);
-                          if (v) Sfx.success();
-                          bump(ref);
-                        },
-                      ),
-                    ],
+                  child: ListTile(
+                    leading: const Icon(Icons.palette_outlined),
+                    title: const Text('المظهر والأصوات'),
+                    subtitle: const Text('السمة، إخفاء الأرصدة، حجم الخط، الأصوات والاهتزاز'),
+                    trailing: const Icon(Icons.chevron_left),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const AppearanceScreen()),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 18),
@@ -655,8 +563,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
-                const SyncSettingsSection(),
                 const SizedBox(height: 18),
                 const UpdateSection(),
                 const SizedBox(height: 18),

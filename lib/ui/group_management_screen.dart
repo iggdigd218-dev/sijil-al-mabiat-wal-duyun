@@ -5,6 +5,7 @@
 //  3) قائمة المستخدمين والصلاحيات + إعادة تعيين PIN/كلمة المرور.
 //  4) النسخ الاحتياطي.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,7 +13,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
-import 'backup_screen.dart';
 import 'devices_screen.dart' show DeviceCard;
 import 'qr_pair_scanner.dart' show scanQrPair;
 import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
@@ -33,7 +33,7 @@ class _State extends ConsumerState<GroupManagementScreen>
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 3, vsync: this);
+    _tab = TabController(length: 2, vsync: this);
   }
 
   @override
@@ -77,7 +77,6 @@ class _State extends ConsumerState<GroupManagementScreen>
               tabs: const [
                 Tab(icon: Icon(Icons.devices), text: 'الأجهزة'),
                 Tab(icon: Icon(Icons.manage_accounts), text: 'المستخدمون'),
-                Tab(icon: Icon(Icons.cloud_sync_outlined), text: 'نسخ احتياطي'),
               ],
             ),
             actions: [
@@ -93,7 +92,6 @@ class _State extends ConsumerState<GroupManagementScreen>
             children: const [
               _DevicesTab(),
               _UsersTab(),
-              BackupScreen(embedded: true),
             ],
           ),
         );
@@ -512,7 +510,35 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
     setState(() => _busy = true);
     try {
       final repo = ref.read(repoProvider);
-      final info = await repo.createPairingToken();
+      final st = await repo.settings();
+      final port = int.tryParse(st['lanSyncPort'] ?? '43053') ?? 43053;
+      // تأكّد من أن خادم المزامنة يستمع فعلاً قبل توليد الرمز.
+      String? ip;
+      try {
+        for (final iface in await NetworkInterface.list(
+            includeLoopback: false, type: InternetAddressType.IPv4)) {
+          for (final a in iface.addresses) {
+            if (!a.isLoopback && a.type == InternetAddressType.IPv4) {
+              ip = a.address;
+              break;
+            }
+          }
+          if (ip != null) break;
+        }
+      } catch (_) {}
+      final engine = ref.read(syncEngineProvider);
+      if (engine.hasStarted) engine.start();
+      final hostUp = await engine.ensureLanHost(port);
+      if (!hostUp) {
+        if (mounted) {
+          showSnack(
+              context,
+              'تعذّر تشغيل خادم المزامنة على المنفذ $port. تأكد أن المنفذ حر واسمح للتطبيق في جدار الحماية.',
+              error: true);
+        }
+        return;
+      }
+      final info = await repo.createPairingToken(ipAddress: ip, port: port);
       setState(() {
         _pairAt = DateTime.now();
       });
@@ -531,9 +557,6 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
       // افتح حوار QR الكبير.
       if (!mounted) return;
       Navigator.pop(context);
-      final port =
-          int.tryParse((await repo.settings())['lanSyncPort'] ?? '43053') ??
-              43053;
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -545,7 +568,7 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
                 DateTime.now().add(const Duration(minutes: 5)),
           ),
           port: port,
-          ip: null,
+          ip: ip,
           primaryColor: Theme.of(context).colorScheme.primary,
         ),
       );
@@ -639,13 +662,27 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
     );
   }
 
-  void _showActivationCode(BuildContext context) {
+  void _showActivationCode(BuildContext context) async {
+    final repo = ref.read(repoProvider);
+    final st = await repo.settings();
+    final port = int.tryParse(st['lanSyncPort'] ?? '43053') ?? 43053;
+    final engine = ref.read(syncEngineProvider);
+    if (engine.hasStarted) engine.start();
+    final ok = await engine.ensureLanHost(port);
+    if (!ok) {
+      if (mounted) {
+        showSnack(context, 'تعذّر تشغيل خادم المزامنة على المنفذ $port.',
+            error: true);
+      }
+      return;
+    }
+    if (!context.mounted) return;
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('كود تعريف الجهاز'),
         content: FutureBuilder<Map<String, String?>>(
-          future: ref.read(repoProvider).createPairingToken(),
+          future: repo.createPairingToken(port: port),
           builder: (ctx, snap) {
             if (!snap.hasData) {
               return const SizedBox(

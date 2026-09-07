@@ -48,6 +48,7 @@ enum AppScreen {
   group('إدارة المجموعة', Icons.groups_outlined, Icons.groups),
   trash('سلة المهملات', Icons.delete_outline, Icons.delete),
   activity('سجل النشاط', Icons.history, Icons.history),
+  backup('النسخ الاحتياطي', Icons.backup_outlined, Icons.backup),
   settings('الإعدادات', Icons.settings_outlined, Icons.settings);
 
   const AppScreen(this.title, this.icon, this.activeIcon);
@@ -147,6 +148,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         AppScreen.group => const GroupManagementScreen(),
         AppScreen.trash => const TrashScreen(),
         AppScreen.activity => const ActivityScreen(),
+        AppScreen.backup => const BackupScreen(),
         AppScreen.settings => const SettingsScreen(),
       };
 
@@ -361,6 +363,7 @@ class _Drawer extends ConsumerWidget {
         AppScreen.group => const Color(0xFF8B5CF6),
         AppScreen.trash => const Color(0xFFE11D48),
         AppScreen.activity => const Color(0xFF64748B),
+        AppScreen.backup => const Color(0xFF0D9488),
       };
 
   @override
