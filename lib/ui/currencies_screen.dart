@@ -61,39 +61,48 @@ class CurrenciesScreen extends ConsumerWidget {
       builder: (c) => AlertDialog(
         title: const Text('إضافة عملة'),
         content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              controller: code,
-              decoration: const InputDecoration(
-                  labelText: 'الرمز الدولي (مثل EUR)'),
-              textCapitalization: TextCapitalization.characters,
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: name,
-              decoration: const InputDecoration(labelText: 'الاسم'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: symbol,
-              decoration: const InputDecoration(labelText: 'العلامة'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: rate,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration:
-                  const InputDecoration(labelText: 'سعر الصرف مقابل الأساس'),
-            ),
-          ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: code,
+                decoration: const InputDecoration(
+                  labelText: 'الرمز الدولي (مثل EUR)',
+                ),
+                textCapitalization: TextCapitalization.characters,
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: name,
+                decoration: const InputDecoration(labelText: 'الاسم'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: symbol,
+                decoration: const InputDecoration(labelText: 'العلامة'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: rate,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'سعر الصرف مقابل الأساس',
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(c, false),
-              child: const Text('إلغاء')),
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(c, true),
-              child: const Text('حفظ')),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('حفظ'),
+          ),
         ],
       ),
     );
@@ -102,8 +111,12 @@ class CurrenciesScreen extends ConsumerWidget {
     final cd = code.text.trim().toUpperCase();
     if (cd.isEmpty || name.text.trim().isEmpty) return;
     await ref.read(repoProvider).saveCurrency(
-          CurrencyDef(cd, name.text.trim(),
-              symbol.text.trim().isEmpty ? cd : symbol.text.trim(), 2),
+          CurrencyDef(
+            cd,
+            name.text.trim(),
+            symbol.text.trim().isEmpty ? cd : symbol.text.trim(),
+            2,
+          ),
           rate: Fmt.parseAmount(rate.text) ?? 1,
         );
     bump(ref);
@@ -156,29 +169,41 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
             Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.primarySoftOf(context),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(c.symbol,
-                      style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primaryOf(context))),
+                  child: Text(
+                    c.symbol,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primaryOf(context),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(c.name,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 14.5)),
-                      Text(c.code,
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              color: AppColors.text3Of(context))),
+                      Text(
+                        c.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14.5,
+                        ),
+                      ),
+                      Text(
+                        c.code,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: AppColors.text3Of(context),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -206,8 +231,9 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
                   Expanded(
                     child: TextField(
                       controller: _rate,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'سعر الصرف مقابل العملة الأساسية',
                         isDense: true,
@@ -230,14 +256,14 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
                           danger: true,
                         );
                         if (ok) {
-                          await ref
-                              .read(repoProvider)
-                              .deleteCurrency(c.code);
+                          await ref.read(repoProvider).deleteCurrency(c.code);
                           bump(ref);
                         }
                       },
-                      icon: Icon(Icons.delete_outline,
-                          color: AppColors.dangerOf(context)),
+                      icon: Icon(
+                        Icons.delete_outline,
+                        color: AppColors.dangerOf(context),
+                      ),
                     ),
                 ],
               ),
@@ -283,8 +309,10 @@ class _ConverterState extends ConsumerState<_Converter> {
     super.initState();
     _from = widget.baseCode;
     _to = widget.currencies
-        .firstWhere((c) => c.code != widget.baseCode,
-            orElse: () => widget.currencies.first)
+        .firstWhere(
+          (c) => c.code != widget.baseCode,
+          orElse: () => widget.currencies.first,
+        )
         .code;
     _loadSettings();
   }
@@ -315,8 +343,10 @@ class _ConverterState extends ConsumerState<_Converter> {
 
   @override
   Widget build(BuildContext context) {
-    final toDef = widget.currencies.firstWhere((c) => c.code == _to,
-        orElse: () => widget.currencies.first);
+    final toDef = widget.currencies.firstWhere(
+      (c) => c.code == _to,
+      orElse: () => widget.currencies.first,
+    );
 
     return Card(
       child: Padding(
@@ -325,7 +355,9 @@ class _ConverterState extends ConsumerState<_Converter> {
           children: [
             TextField(
               controller: _amount,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'المبلغ'),
               onChanged: (_) => setState(() {}),
             ),
@@ -338,10 +370,15 @@ class _ConverterState extends ConsumerState<_Converter> {
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'من'),
                     items: widget.currencies
-                        .map((c) => DropdownMenuItem(
+                        .map(
+                          (c) => DropdownMenuItem(
                             value: c.code,
-                            child:
-                                Text(c.name, overflow: TextOverflow.ellipsis)))
+                            child: Text(
+                              c.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
                         .toList(),
                     onChanged: (v) => setState(() => _from = v),
                   ),
@@ -353,10 +390,15 @@ class _ConverterState extends ConsumerState<_Converter> {
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'إلى'),
                     items: widget.currencies
-                        .map((c) => DropdownMenuItem(
+                        .map(
+                          (c) => DropdownMenuItem(
                             value: c.code,
-                            child:
-                                Text(c.name, overflow: TextOverflow.ellipsis)))
+                            child: Text(
+                              c.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
                         .toList(),
                     onChanged: (v) => setState(() => _to = v),
                   ),
@@ -384,8 +426,10 @@ class _ConverterState extends ConsumerState<_Converter> {
             const SizedBox(height: 8),
             Text(
               'يُستخدم سعر الصرف المدخل مقابل العملة الأساسية للتحويل.',
-              style:
-                  TextStyle(fontSize: 11.5, color: AppColors.text3Of(context)),
+              style: TextStyle(
+                fontSize: 11.5,
+                color: AppColors.text3Of(context),
+              ),
             ),
           ],
         ),

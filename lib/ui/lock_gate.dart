@@ -16,7 +16,8 @@ class LockGate extends ConsumerStatefulWidget {
   ConsumerState<LockGate> createState() => _LockGateState();
 }
 
-class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver {
+class _LockGateState extends ConsumerState<LockGate>
+    with WidgetsBindingObserver {
   bool _checking = true;
   bool _locked = false;
   bool _autoLock = false;
@@ -48,10 +49,16 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
     }
     if (!mounted) return;
     if (!enabled) {
-      setState(() { _checking = false; _locked = false; });
+      setState(() {
+        _checking = false;
+        _locked = false;
+      });
       return;
     }
-    setState(() { _checking = false; _locked = true; });
+    setState(() {
+      _checking = false;
+      _locked = true;
+    });
     await _unlock();
   }
 
@@ -87,24 +94,35 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(28),
-                child: Image.asset('assets/images/logo.png',
-                    width: 112, height: 112),
+                child: Image.asset(
+                  'assets/images/logo.png',
+                  width: 112,
+                  height: 112,
+                ),
               ),
               const SizedBox(height: 18),
-              Icon(Icons.fingerprint,
-                  size: 46, color: AppColors.primaryOf(context)),
+              Icon(
+                Icons.fingerprint,
+                size: 46,
+                color: AppColors.primaryOf(context),
+              ),
               const SizedBox(height: 12),
-              Text('إدارة البيانات',
-                  style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primaryOf(context))),
+              Text(
+                'إدارة البيانات',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primaryOf(context),
+                ),
+              ),
               const SizedBox(height: 8),
               Text(
                 'التطبيق مقفل — أكّد هويتك بالبصمة للمتابعة',
                 textAlign: TextAlign.center,
-                style:
-                    TextStyle(fontSize: 13.5, color: AppColors.text2Of(context)),
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: AppColors.text2Of(context),
+                ),
               ),
               const SizedBox(height: 28),
               FilledButton.icon(

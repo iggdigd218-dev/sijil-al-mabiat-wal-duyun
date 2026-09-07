@@ -23,30 +23,39 @@ class TransactionsScreen extends ConsumerWidget {
         const _TxFilterBar(),
         Expanded(
           child: page.when(
-            loading: () => const Center(child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 12),
-                Text('جارٍ تحميل العمليات…'),
-              ]),
-            )),
+            loading: () => const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 12),
+                    Text('جارٍ تحميل العمليات…'),
+                  ],
+                ),
+              ),
+            ),
             error: (e, _) => Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  EmptyState(
-                    icon: Icons.error_outline,
-                    title: 'تعذّر تحميل العمليات',
-                    message: '${'$e'.length > 200 ? '$e'.substring(0,200)+'…' : '$e'}',
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () => bump(ref),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('إعادة المحاولة'),
-                  ),
-                ]),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'تعذّر تحميل العمليات',
+                      message:
+                          '${'$e'.length > 200 ? '$e'.substring(0, 200) + '…' : '$e'}',
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () => bump(ref),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة المحاولة'),
+                    ),
+                  ],
+                ),
               ),
             ),
             data: (p) {
@@ -144,11 +153,13 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _openFilters(f, accounts, currencies),
-                  icon: Icon(Icons.tune,
-                      size: 18,
-                      color: f.isActive
-                          ? AppColors.primaryOf(context)
-                          : AppColors.text2Of(context)),
+                  icon: Icon(
+                    Icons.tune,
+                    size: 18,
+                    color: f.isActive
+                        ? AppColors.primaryOf(context)
+                        : AppColors.text2Of(context),
+                  ),
                   label: Text(
                     f.isActive
                         ? 'الفلاتر مفعّلة (${_activeCount(f)}) — اضغط للتعديل'
@@ -163,14 +174,17 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
                   ),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(
-                        color: f.isActive
-                            ? AppColors.primaryOf(context)
-                            : AppColors.borderOf(context)),
+                      color: f.isActive
+                          ? AppColors.primaryOf(context)
+                          : AppColors.borderOf(context),
+                    ),
                     backgroundColor: f.isActive
                         ? AppColors.primarySoftOf(context)
                         : AppColors.surface2Of(context),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                   ),
                 ),
               ),
@@ -200,8 +214,9 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
         title: 'نوع العملية',
         items: [
           const _SheetItem(value: '', label: 'كل الأنواع'),
-          ...OpType.values
-              .map((t) => _SheetItem(value: t, label: '${t.icon}  ${t.label}')),
+          ...OpType.values.map(
+            (t) => _SheetItem(value: t, label: '${t.icon}  ${t.label}'),
+          ),
         ],
       ),
     );
@@ -216,8 +231,9 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
         title: 'الحساب',
         items: [
           const _SheetItem(value: '', label: 'كل الحسابات'),
-          ...accounts.map((a) =>
-              _SheetItem(value: a.id!, label: '${a.kind.icon}  ${a.name}')),
+          ...accounts.map(
+            (a) => _SheetItem(value: a.id!, label: '${a.kind.icon}  ${a.name}'),
+          ),
         ],
       ),
     );
@@ -232,15 +248,18 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
         title: 'العملة',
         items: [
           const _SheetItem(value: '', label: 'كل العملات'),
-          ...curs.map((c) =>
-              _SheetItem(value: c.code, label: '${c.symbol}  ${c.name}')),
+          ...curs.map(
+            (c) => _SheetItem(value: c.code, label: '${c.symbol}  ${c.name}'),
+          ),
         ],
       ),
     );
     if (v == null) return;
-    _set(v is String && v.isNotEmpty
-        ? f.copyWith(currency: v)
-        : f.copyWith(clearCurrency: true));
+    _set(
+      v is String && v.isNotEmpty
+          ? f.copyWith(currency: v)
+          : f.copyWith(clearCurrency: true),
+    );
   }
 
   Future<void> _pickSort(TxFilter f) async {
@@ -267,10 +286,12 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
           : null,
     );
     if (r == null) return;
-    _set(f.copyWith(
-      from: DateTime(r.start.year, r.start.month, r.start.day),
-      to: DateTime(r.end.year, r.end.month, r.end.day, 23, 59, 59),
-    ));
+    _set(
+      f.copyWith(
+        from: DateTime(r.start.year, r.start.month, r.start.day),
+        to: DateTime(r.end.year, r.end.month, r.end.day, 23, 59, 59),
+      ),
+    );
   }
 
   /// عدد الفلاتر المفعّلة حالياً (يظهر على زر التصفية).
@@ -296,24 +317,38 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
 
   /// نافذة واحدة تجمع كل خيارات الفلترة (النوع/الحساب/العملة/الفترة/الترتيب/مسح).
   Future<void> _openFilters(
-      TxFilter f, List<Account> accounts, List<CurrencyDef> currencies) async {
+    TxFilter f,
+    List<Account> accounts,
+    List<CurrencyDef> currencies,
+  ) async {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetCtx) {
-        Widget tile(IconData icon, String title, String value,
-            VoidCallback onTap,
-            {bool active = false}) {
+        Widget tile(
+          IconData icon,
+          String title,
+          String value,
+          VoidCallback onTap, {
+          bool active = false,
+        }) {
           return ListTile(
-            leading: Icon(icon,
-                color: active
-                    ? AppColors.primaryOf(sheetCtx)
-                    : AppColors.text2Of(sheetCtx)),
-            title: Text(title,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+            leading: Icon(
+              icon,
+              color: active
+                  ? AppColors.primaryOf(sheetCtx)
+                  : AppColors.text2Of(sheetCtx),
+            ),
+            title: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             subtitle: Text(value),
-            trailing:
-                const Icon(Icons.chevron_left, color: Colors.grey, size: 22),
+            trailing: const Icon(
+              Icons.chevron_left,
+              color: Colors.grey,
+              size: 22,
+            ),
             onTap: () {
               Navigator.pop(sheetCtx);
               onTap();
@@ -327,32 +362,60 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
             children: [
               Padding(
                 padding: const EdgeInsets.all(8),
-                child: Text('تصفية العمليات',
-                    style: Theme.of(sheetCtx).textTheme.titleMedium),
+                child: Text(
+                  'تصفية العمليات',
+                  style: Theme.of(sheetCtx).textTheme.titleMedium,
+                ),
               ),
               const Divider(height: 1),
-              tile(Icons.category_outlined, 'نوع العملية',
-                  f.type?.label ?? 'كل الأنواع', () => _pickType(f),
-                  active: f.type != null),
-              tile(Icons.people_alt_outlined, 'الحساب',
-                  _accountLabel(f, accounts), () => _pickAccount(f, accounts),
-                  active: f.accountId != null),
-              tile(Icons.currency_exchange, 'العملة',
-                  f.currency ?? 'كل العملات', () => _pickCurrency(f, currencies),
-                  active: f.currency != null),
-              tile(Icons.date_range_outlined, 'الفترة الزمنية',
-                  _rangeLabel(f), () => _pickRange(f),
-                  active: f.from != null || f.to != null),
-              tile(Icons.sort, 'الترتيب', f.sort.label, () => _pickSort(f),
-                  active: f.sort != TxSort.newest),
+              tile(
+                Icons.category_outlined,
+                'نوع العملية',
+                f.type?.label ?? 'كل الأنواع',
+                () => _pickType(f),
+                active: f.type != null,
+              ),
+              tile(
+                Icons.people_alt_outlined,
+                'الحساب',
+                _accountLabel(f, accounts),
+                () => _pickAccount(f, accounts),
+                active: f.accountId != null,
+              ),
+              tile(
+                Icons.currency_exchange,
+                'العملة',
+                f.currency ?? 'كل العملات',
+                () => _pickCurrency(f, currencies),
+                active: f.currency != null,
+              ),
+              tile(
+                Icons.date_range_outlined,
+                'الفترة الزمنية',
+                _rangeLabel(f),
+                () => _pickRange(f),
+                active: f.from != null || f.to != null,
+              ),
+              tile(
+                Icons.sort,
+                'الترتيب',
+                f.sort.label,
+                () => _pickSort(f),
+                active: f.sort != TxSort.newest,
+              ),
               const Divider(height: 1),
               ListTile(
-                leading: Icon(Icons.filter_alt_off_outlined,
-                    color: AppColors.dangerOf(sheetCtx)),
-                title: Text('مسح كل الفلاتر',
-                    style: TextStyle(
-                        color: AppColors.dangerOf(sheetCtx),
-                        fontWeight: FontWeight.w700)),
+                leading: Icon(
+                  Icons.filter_alt_off_outlined,
+                  color: AppColors.dangerOf(sheetCtx),
+                ),
+                title: Text(
+                  'مسح كل الفلاتر',
+                  style: TextStyle(
+                    color: AppColors.dangerOf(sheetCtx),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 enabled: f.isActive,
                 onTap: () {
                   Navigator.pop(sheetCtx);
@@ -388,8 +451,7 @@ class _SheetList extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Text(title,
-                style: Theme.of(context).textTheme.titleMedium),
+            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
           ),
           const Divider(height: 1),
           Flexible(
@@ -457,11 +519,14 @@ class _Totals extends StatelessWidget {
             ),
           Row(
             children: [
-              Text('${page.items.length} عملية',
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.text2Of(context))),
+              Text(
+                '${page.items.length} عملية',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text2Of(context),
+                ),
+              ),
               const Spacer(),
             ],
           ),
@@ -515,19 +580,22 @@ class _TxCard extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 alignment: Alignment.center,
-                child: Text(tx.type.icon,
-                    style: const TextStyle(fontSize: 19)),
+                child: Text(tx.type.icon, style: const TextStyle(fontSize: 19)),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 14.5)),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14.5,
+                      ),
+                    ),
                     const SizedBox(height: 3),
                     Row(
                       children: [
@@ -541,17 +609,22 @@ class _TxCard extends ConsumerWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.text3Of(context)),
+                              fontSize: 12,
+                              color: AppColors.text3Of(context),
+                            ),
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Wrap(spacing: 5, runSpacing: 4, children: [
-                      _statusPill(context, tx.status),
-                      _syncPill(context, tx.syncState),
-                    ]),
+                    Wrap(
+                      spacing: 5,
+                      runSpacing: 4,
+                      children: [
+                        _statusPill(context, tx.status),
+                        _syncPill(context, tx.syncState),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -562,16 +635,20 @@ class _TxCard extends ConsumerWidget {
                   Text(
                     hidden ? '••••' : Fmt.money(tx.amount),
                     style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15.5,
-                        color: color),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15.5,
+                      color: color,
+                    ),
                   ),
                   const SizedBox(height: 2),
-                  Text(tx.currency,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.text3Of(context))),
+                  Text(
+                    tx.currency,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.text3Of(context),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -584,8 +661,16 @@ class _TxCard extends ConsumerWidget {
   Widget _statusPill(BuildContext context, String status) {
     final (label, color, icon) = switch (status) {
       'done' => ('ناجحة', Colors.green.shade600, Icons.check_circle_outline),
-      'pending' => ('قيد التنفيذ', Colors.orange.shade700, Icons.hourglass_empty),
-      'failed' || 'cancelled' => ('فاشلة', Colors.red.shade600, Icons.cancel_outlined),
+      'pending' => (
+          'قيد التنفيذ',
+          Colors.orange.shade700,
+          Icons.hourglass_empty,
+        ),
+      'failed' || 'cancelled' => (
+          'فاشلة',
+          Colors.red.shade600,
+          Icons.cancel_outlined
+        ),
       _ => ('ناجحة', Colors.green.shade600, Icons.check_circle_outline),
     };
     return _Badge(label: label, color: color, icon: icon);
@@ -593,10 +678,18 @@ class _TxCard extends ConsumerWidget {
 
   Widget _syncPill(BuildContext context, String sync) {
     final (label, color, icon) = switch (sync) {
-      'synced' => ('تمت المزامنة', Colors.green.shade600, Icons.cloud_done_outlined),
+      'synced' => (
+          'تمت المزامنة',
+          Colors.green.shade600,
+          Icons.cloud_done_outlined,
+        ),
       'syncing' => ('جاري المزامنة', Colors.orange.shade700, Icons.sync),
       'failed' => ('فشلت المزامنة', Colors.red.shade600, Icons.error_outline),
-      'pending' => ('بانتظار المزامنة', Colors.amber.shade800, Icons.cloud_upload_outlined),
+      'pending' => (
+          'بانتظار المزامنة',
+          Colors.amber.shade800,
+          Icons.cloud_upload_outlined,
+        ),
       _ => ('غير متزامنة', Colors.grey.shade600, Icons.cloud_off_outlined),
     };
     return _Badge(label: label, color: color, icon: icon);
@@ -633,10 +726,14 @@ class _TxCard extends ConsumerWidget {
               onTap: () => Navigator.pop(context, 'image'),
             ),
             ListTile(
-              leading: Icon(Icons.delete_outline,
-                  color: AppColors.dangerOf(context)),
-              title: Text('حذف العملية',
-                  style: TextStyle(color: AppColors.dangerOf(context))),
+              leading: Icon(
+                Icons.delete_outline,
+                color: AppColors.dangerOf(context),
+              ),
+              title: Text(
+                'حذف العملية',
+                style: TextStyle(color: AppColors.dangerOf(context)),
+              ),
               onTap: () => Navigator.pop(context, 'delete'),
             ),
             const SizedBox(height: 8),
@@ -685,15 +782,25 @@ class _Badge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 10.5, color: color, fontWeight: FontWeight.w700)),
-      ]),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -24,7 +24,8 @@ class SyncSettingsSection extends ConsumerStatefulWidget {
   const SyncSettingsSection({super.key});
 
   @override
-  ConsumerState<SyncSettingsSection> createState() => _SyncSettingsSectionState();
+  ConsumerState<SyncSettingsSection> createState() =>
+      _SyncSettingsSectionState();
 }
 
 class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
@@ -41,7 +42,6 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   bool _autoSync = true;
   bool _lanEnabled = true;
 
-  @override
   @override
   void initState() {
     super.initState();
@@ -64,36 +64,52 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   }
 
   Future<void> _refresh() async {
-    final repo = ref.read(repoProvider);
-    _deviceId = await getDeviceIdCached(repo) ?? '';
-    final db = await repo.database;
-    final auth = GoogleAuthService(db);
-    final gu = await auth.currentUserFromDb();
-    final st = await repo.settings();
-    _cloudUrlCtrl.text = st['cloudBackendUrl'] ?? '';
-    _autoSync = (st['cloudAutoSync'] ?? '1') != '0';
-    _lanEnabled = (st['lanSyncEnabled'] ?? '0') == '1';
-    _lanPortCtrl.text = st['lanSyncPort'] ?? '43053';
-    final engine = ref.read(syncEngineProvider);
-    final svc = SyncService(repo: repo, engine: engine);
-    final info = await svc.status();
-    final paired = await db.query('devices',
-        where: "is_paired = 1 AND ip_address <> ''",
-        orderBy: 'last_seen_at DESC');
     if (!mounted) return;
-    setState(() {
-      _info = info;
-      _googleUser = gu;
-      _pairedDevices = paired;
-    });
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    try {
+      final deviceId = await getDeviceIdCached(repo) ?? '';
+      final db = await repo.database;
+      final gu = await GoogleAuthService(db).currentUserFromDb();
+      final st = await repo.settings();
+      if (!mounted) return;
+      final info = await SyncService(repo: repo, engine: engine).status();
+      final paired = await db.query('devices',
+          where: "is_paired = 1 AND ip_address <> ''",
+          orderBy: 'last_seen_at DESC');
+      if (!mounted) return;
+      setState(() {
+        _deviceId = deviceId;
+        _cloudUrlCtrl.text = st['cloudBackendUrl'] ?? '';
+        _autoSync = (st['cloudAutoSync'] ?? '1') != '0';
+        _lanEnabled = (st['lanSyncEnabled'] ?? '0') == '1';
+        _lanPortCtrl.text = st['lanSyncPort'] ?? '43053';
+        _info = info;
+        _googleUser = gu;
+        _pairedDevices = paired;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _info = SyncStatusInfo(
+            state: SyncState.failed,
+            pending: 0,
+            failed: 1,
+            cloudConfigured: false,
+            lanConfigured: false,
+            error: '$e',
+          ));
+    }
   }
 
   Future<String?> _localIp() async {
     try {
       for (final iface in await NetworkInterface.list(
-          includeLoopback: false, type: InternetAddressType.IPv4)) {
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      )) {
         for (final a in iface.addresses) {
-          if (!a.isLoopback && a.type == InternetAddressType.IPv4) return a.address;
+          if (!a.isLoopback && a.type == InternetAddressType.IPv4)
+            return a.address;
         }
       }
     } catch (_) {}
@@ -110,7 +126,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('⚠️ رابط Firebase غير صالح — يجب أن يبدأ بـ https://'),
+              content: Text(
+                '⚠️ رابط Firebase غير صالح — يجب أن يبدأ بـ https://',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
@@ -128,7 +146,10 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         } catch (e) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('⚠️ تعذر الاتصال بالسحابة: $e'), backgroundColor: Colors.orange),
+            SnackBar(
+              content: Text('⚠️ تعذر الاتصال بالسحابة: $e'),
+              backgroundColor: Colors.orange,
+            ),
           );
         }
       }
@@ -152,11 +173,16 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       if (!mounted) return;
       if (!res.ok) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res.error ?? 'فشل'), backgroundColor: Colors.orange),
+          SnackBar(
+            content: Text(res.error ?? 'فشل'),
+            backgroundColor: Colors.orange,
+          ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ تم تسجيل الدخول: ${res.user?.email ?? ''}')),
+          SnackBar(
+            content: Text('✅ تم تسجيل الدخول: ${res.user?.email ?? ''}'),
+          ),
         );
       }
       bump(ref);
@@ -171,10 +197,18 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('تسجيل الخروج'),
-        content: const Text('لن يتم حذف البيانات المحلية. سيتم إيقاف المزامنة السحابية فقط.'),
+        content: const Text(
+          'لن يتم حذف البيانات المحلية. سيتم إيقاف المزامنة السحابية فقط.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تسجيل الخروج')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('تسجيل الخروج'),
+          ),
         ],
       ),
     );
@@ -185,7 +219,8 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final db = await repo.database;
       await GoogleAuthService(db).signOut();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تسجيل الخروج')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('تم تسجيل الخروج')));
       bump(ref);
       await _refresh();
     } finally {
@@ -200,7 +235,11 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final db = await repo.database;
       final svc = BackupService(db);
       final dir = await getApplicationDocumentsDirectory();
-      final ts = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')
+          .first;
       final f = File(p.join(dir.path, 'nexora-backup-$ts.nexora'));
       await svc.exportToFile(f);
       if (!mounted) return;
@@ -212,7 +251,10 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ فشل النسخ الاحتياطي: $e'), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text('❌ فشل النسخ الاحتياطي: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -234,9 +276,14 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('إلغاء الجهاز'),
-        content: const Text('سيتم رفض أي مزامنة قادمة من هذا الجهاز حتى تتم إعادة اقترانه. هل تريد المتابعة؟'),
+        content: const Text(
+          'سيتم رفض أي مزامنة قادمة من هذا الجهاز حتى تتم إعادة اقترانه. هل تريد المتابعة؟',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -250,17 +297,24 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
     try {
       final db = await ref.read(repoProvider).database;
       // نستخدم soft-revoke (set revoked_at) بدلاً من الحذف النهائي لتبقى الأثر ويُرفض الجهاز.
-      await db.update('devices', {
-        'revoked_at': DateTime.now().toIso8601String(),
-        'is_paired': 0,
-        'auth_secret': '',
-        'updated_at': DateTime.now().toIso8601String(),
-      }, where: 'id = ?', whereArgs: [devId]);
+      await db.update(
+        'devices',
+        {
+          'revoked_at': DateTime.now().toIso8601String(),
+          'is_paired': 0,
+          'auth_secret': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [devId],
+      );
       bump(ref);
       await _refresh();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ تم إلغاء الجهاز؛ لن تتم مزامنته بعد الآن')),
+        const SnackBar(
+          content: Text('✅ تم إلغاء الجهاز؛ لن تتم مزامنته بعد الآن'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -281,9 +335,13 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       await _refresh();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_lanEnabled
-            ? '✅ تم تشغيل خادم المزامنة المحلي على المنفذ ${_lanPortCtrl.text}'
-            : '✅ تم إيقاف خادم المزامنة المحلي')),
+        SnackBar(
+          content: Text(
+            _lanEnabled
+                ? '✅ تم تشغيل خادم المزامنة المحلي على المنفذ ${_lanPortCtrl.text}'
+                : '✅ تم إيقاف خادم المزامنة المحلي',
+          ),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -298,7 +356,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('لا يمكنك إنشاء رمز اقتران لأنك عضو في مجموعة وليس مديراً.'),
+            content: Text(
+              'لا يمكنك إنشاء رمز اقتران لأنك عضو في مجموعة وليس مديراً.',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -319,7 +379,12 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final ip = await _localIp();
       final ourId = await ensureDeviceId(repo);
       // تأكد من وجود سجل الجهاز في devices (لضمان وجود port/auth_secret).
-      final devRows = await db.query('devices', where: 'id = ?', whereArgs: [ourId], limit: 1);
+      final devRows = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [ourId],
+        limit: 1,
+      );
       if (devRows.isEmpty) {
         final now = DateTime.now().toIso8601String();
         await db.insert('devices', {
@@ -376,9 +441,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final tok = _pairTokenCtrl.text.trim();
       if (ip.isEmpty || tok.isEmpty) {
         Sfx.reject();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('أدخل IP ورمز الاقتران')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('أدخل IP ورمز الاقتران')));
         return;
       }
       final repo = ref.read(repoProvider);
@@ -404,8 +469,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('إلغاء')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () => Navigator.pop(ctx, true),
@@ -422,7 +488,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         Sfx.error();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}'),
+            content: Text(
+              '❌ فشل الربط: ${result.error ?? "تأكد من الرمز والشبكة"}',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -432,7 +500,11 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       // بعد الاقتران نستبدل البيانات المحلية بلقطة المضيف.
       if (result.snapshot != null) {
         try {
-          await LanSyncService.applySnapshot(() async => db, ourId, result.snapshot!);
+          await LanSyncService.applySnapshot(
+            () async => db,
+            ourId,
+            result.snapshot!,
+          );
         } catch (e) {
           if (mounted) {
             Sfx.error();
@@ -483,7 +555,6 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   // ملاحظة: لم يعد الأعضاء قادرين على الخروج من المجموعة من تلقاء أنفسهم (زر الخروج استُبدل برسالة إرشادية).
   // الخروج ممكن فقط بطرد المدير للجهاز، أو بحذف التطبيق.
 
-
   Future<void> _restoreBackup() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -495,8 +566,14 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
           'هل تريد المتابعة؟',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('استعادة')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('استعادة'),
+          ),
         ],
       ),
     );
@@ -519,21 +596,34 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final svc = BackupService(db);
       final counts = await svc.inspect(File(path));
       if (!mounted) return;
-      final summary = counts.entries.map((e) => '• ${e.key}: ${e.value}').join('\n');
+      final summary =
+          counts.entries.map((e) => '• ${e.key}: ${e.value}').join('\n');
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('النسخة تحتوي على:'),
-          content: Text('$summary\n\nسيتم إغلاق التطبيق بعد الاستعادة. أعد تشغيله يدويًا.'),
+          content: Text(
+            '$summary\n\nسيتم إغلاق التطبيق بعد الاستعادة. أعد تشغيله يدويًا.',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-            FilledButton(onPressed: () async {
-              Navigator.pop(ctx);
-              // نُعيد هنا فقط للسجل؛ الاستعادة الكاملة ستُنفذ في مرحلة لاحقة.
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('⚠️ تم تحضير النسخة. سيتم دعم الاستعادة الكاملة آليًا في التحديث القادم.'),
-              ));
-            }, child: const Text('متابعة')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                // نُعيد هنا فقط للسجل؛ الاستعادة الكاملة ستُنفذ في مرحلة لاحقة.
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      '⚠️ تم تحضير النسخة. سيتم دعم الاستعادة الكاملة آليًا في التحديث القادم.',
+                    ),
+                  ),
+                );
+              },
+              child: const Text('متابعة'),
+            ),
           ],
         ),
       );
@@ -554,7 +644,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       await engine.forceSyncNow();
       await _refresh();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🔄 جرت محاولة المزامنة الآن')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('🔄 جرت محاولة المزامنة الآن')),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -568,8 +660,10 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 18, 0, 8),
-          child: Text('المزامنة والنسخ الاحتياطي',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          child: Text(
+            'المزامنة والنسخ الاحتياطي',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
         ),
         Card(
           child: Padding(
@@ -595,9 +689,11 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                             : switch (info.state) {
                                 SyncState.synced => '🟢 متزامن',
                                 SyncState.syncing => '🟡 جاري المزامنة',
-                                SyncState.pending => '🟠 عمليات معلقة (${info.pending})',
+                                SyncState.pending =>
+                                  '🟠 عمليات معلقة (${info.pending})',
                                 SyncState.failed => '🔴 فشل (${info.failed})',
-                                SyncState.offline => '⚪ المزامنة السحابية غير مُفعّلة',
+                                SyncState.offline =>
+                                  '⚪ المزامنة السحابية غير مُفعّلة',
                               },
                       ),
                     ),
@@ -608,8 +704,13 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                     padding: const EdgeInsets.only(top: 4),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('آخر مزامنة: ${info.lastSyncAt}',
-                          style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      child: Text(
+                        'آخر مزامنة: ${info.lastSyncAt}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
                     ),
                   ),
                 const SizedBox(height: 10),
@@ -619,9 +720,11 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.account_circle_outlined),
-                    title: Text(_googleUser!.displayName?.isNotEmpty == true
-                        ? _googleUser!.displayName!
-                        : _googleUser!.email),
+                    title: Text(
+                      _googleUser!.displayName?.isNotEmpty == true
+                          ? _googleUser!.displayName!
+                          : _googleUser!.email,
+                    ),
                     subtitle: Text(_googleUser!.email),
                     trailing: TextButton.icon(
                       onPressed: _busy ? null : _signOut,
@@ -640,7 +743,9 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                           : 'متاح على أندرويد فقط في هذه المرحلة',
                     ),
                     trailing: FilledButton.icon(
-                      onPressed: _busy || !isPlatformSupportingGoogleSignIn() ? null : _signIn,
+                      onPressed: _busy || !isPlatformSupportingGoogleSignIn()
+                          ? null
+                          : _signIn,
                       icon: const Icon(Icons.login, size: 16),
                       label: const Text('دخول'),
                     ),
@@ -649,8 +754,10 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                 // إعدادات Cloud
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 6),
-                  child: Text('المزامنة السحابية (Firebase)',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  child: Text(
+                    'المزامنة السحابية (Firebase)',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
                 TextField(
                   controller: _cloudUrlCtrl,
@@ -665,11 +772,12 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('مزامنة تلقائية'),
-                  subtitle: const Text('رفع العمليات الجديدة للسحابة عند توفر الإنترنت'),
+                  subtitle: const Text(
+                    'رفع العمليات الجديدة للسحابة عند توفر الإنترنت',
+                  ),
                   value: _autoSync,
-                  onChanged: _busy
-                      ? null
-                      : (v) => setState(() => _autoSync = v),
+                  onChanged:
+                      _busy ? null : (v) => setState(() => _autoSync = v),
                 ),
                 Align(
                   alignment: Alignment.centerLeft,
@@ -679,7 +787,8 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                     label: const Text('حفظ ومزامنة الآن'),
                   ),
                 ),
-                if (_info?.cloudConfigured != true && _cloudUrlCtrl.text.trim().isEmpty)
+                if (_info?.cloudConfigured != true &&
+                    _cloudUrlCtrl.text.trim().isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text(
@@ -691,36 +800,43 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                 // LAN Sync
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 6),
-                  child: Text('المزامنة المحلية (شبكة Wi-Fi نفسها)',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  child: Text(
+                    'المزامنة المحلية (شبكة Wi-Fi نفسها)',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('تشغيل خادم المزامنة المحلي'),
-                  subtitle: const Text('يسمح للأجهزة على نفس الشبكة بالاتصال بهذا الجهاز'),
+                  subtitle: const Text(
+                    'يسمح للأجهزة على نفس الشبكة بالاتصال بهذا الجهاز',
+                  ),
                   value: _lanEnabled,
-                  onChanged: _busy ? null : (v) => setState(() => _lanEnabled = v),
+                  onChanged:
+                      _busy ? null : (v) => setState(() => _lanEnabled = v),
                 ),
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _lanPortCtrl,
-                      enabled: !_busy,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'المنفذ المحلي',
-                        prefixIcon: Icon(Icons.router_outlined),
-                        isDense: true,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _lanPortCtrl,
+                        enabled: !_busy,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'المنفذ المحلي',
+                          prefixIcon: Icon(Icons.router_outlined),
+                          isDense: true,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _saveNetworkConfig,
-                    icon: const Icon(Icons.save, size: 16),
-                    label: const Text('حفظ'),
-                  ),
-                ]),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _saveNetworkConfig,
+                      icon: const Icon(Icons.save, size: 16),
+                      label: const Text('حفظ'),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 Text(
                   'IP المحلي: ${(Uri.base.scheme == "file") ? "(يعرض وقت التشغيل)" : "—"}',
@@ -734,85 +850,98 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   title: const Text('ربط جهاز جديد عبر QR'),
                   leading: const Icon(Icons.qr_code_2_outlined),
                   children: [
-                    Row(children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _busy ? null : _createPairQr,
-                          icon: const Icon(Icons.qr_code, size: 16),
-                          label: const Text('إنشاء QR للاقتران'),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _busy ? null : _createPairQr,
+                            icon: const Icon(Icons.qr_code, size: 16),
+                            label: const Text('إنشاء QR للاقتران'),
+                          ),
                         ),
-                      ),
-                    ]),
-                    if (_pairIpCtrl.text.isNotEmpty || _pairTokenCtrl.text.isNotEmpty)
+                      ],
+                    ),
+                    if (_pairIpCtrl.text.isNotEmpty ||
+                        _pairTokenCtrl.text.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: SelectableText(
                           'IP: ${_pairIpCtrl.text}   منفذ المضيف: ${_pairTokenPortCtrl.text}   الرمز: ${_pairTokenCtrl.text}',
-                          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     const Divider(height: 16),
-                    Row(children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _busy ? null : _scanAndPair,
-                          icon: const Icon(Icons.camera_alt, size: 16),
-                          label: const Text('مسح QR بالكاميرا وربط'),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _busy ? null : _scanAndPair,
+                            icon: const Icon(Icons.camera_alt, size: 16),
+                            label: const Text('مسح QR بالكاميرا وربط'),
+                          ),
                         ),
-                      ),
-                    ]),
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     const Text('أو أدخل بيانات الجهاز الرئيسي يدويًا:'),
-                    Row(children: [
-                      Expanded(
-                        flex: 3,
-                        child: TextField(
-                          controller: _pairIpCtrl,
-                          enabled: !_busy,
-                          decoration: const InputDecoration(
-                            labelText: 'IP الجهاز الرئيسي',
-                            isDense: true,
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: _pairIpCtrl,
+                            enabled: !_busy,
+                            decoration: const InputDecoration(
+                              labelText: 'IP الجهاز الرئيسي',
+                              isDense: true,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      SizedBox(
-                        width: 80,
-                        child: TextField(
-                          controller: _pairTokenPortCtrl,
-                          enabled: !_busy,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'المنفذ',
-                            isDense: true,
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 80,
+                          child: TextField(
+                            controller: _pairTokenPortCtrl,
+                            enabled: !_busy,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'المنفذ',
+                              isDense: true,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        flex: 2,
-                        child: TextField(
-                          controller: _pairTokenCtrl,
-                          enabled: !_busy,
-                          decoration: const InputDecoration(
-                            labelText: 'الرمز',
-                            isDense: true,
+                        const SizedBox(width: 6),
+                        Expanded(
+                          flex: 2,
+                          child: TextField(
+                            controller: _pairTokenCtrl,
+                            enabled: !_busy,
+                            decoration: const InputDecoration(
+                              labelText: 'الرمز',
+                              isDense: true,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      FilledButton(
-                        onPressed: _busy ? null : _pairWithRemote,
-                        child: const Text('ربط'),
-                      ),
-                    ]),
+                        const SizedBox(width: 6),
+                        FilledButton(
+                          onPressed: _busy ? null : _pairWithRemote,
+                          child: const Text('ربط'),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
                 if (_pairedDevices.isNotEmpty) ...[
                   const Divider(height: 16),
                   const Align(
                     alignment: Alignment.centerRight,
-                    child: Text('الأجهزة المقترنة:', style: TextStyle(fontWeight: FontWeight.w700)),
+                    child: Text(
+                      'الأجهزة المقترنة:',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
                   ),
                   const SizedBox(height: 6),
                   ...List.generate(_pairedDevices.length, (i) {
@@ -829,63 +958,85 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                         dense: true,
                         leading: const Icon(Icons.devices),
                         title: Text('$name ${isSelf ? "(هذا الجهاز)" : ""}'),
-                        subtitle: Text('$ip:$port${lastSeen.isNotEmpty ? " — آخر ظهور: ${lastSeen.substring(0,16)}" : ""}',
-                            style: const TextStyle(fontSize: 11)),
-                        trailing: isSelf ? null : IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                          onPressed: _busy ? null : () => _removeDevice(devId),
+                        subtitle: Text(
+                          '$ip:$port${lastSeen.isNotEmpty ? " — آخر ظهور: ${lastSeen.substring(0, 16)}" : ""}',
+                          style: const TextStyle(fontSize: 11),
                         ),
+                        trailing: isSelf
+                            ? null
+                            : IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: Colors.red,
+                                ),
+                                onPressed:
+                                    _busy ? null : () => _removeDevice(devId),
+                              ),
                       ),
                     );
                   }),
                 ],
                 const Divider(height: 12),
                 // ملاحظة للأعضاء: لا يمكن الخروج من المجموعة إلا بطرد المدير.
-                Consumer(builder: (ctx, rref, _) {
-                  final modeAsync = rref.watch(workspaceModeProvider);
-                  final mode = modeAsync.valueOrNull ?? 'standalone';
-                  if (mode != 'member') return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.withOpacity(.12),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.amber.withOpacity(.3)),
-                      ),
-                      child: const Row(children: [
-                        Icon(Icons.info_outline, size: 18, color: Colors.orange),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'أنت عضو في هذه المجموعة. لا يمكن الخروج إلا بطرد المدير، '
-                            'أو بحذف التطبيق وإعادة تثبيته.',
-                            style: TextStyle(fontSize: 11, height: 1.4),
+                Consumer(
+                  builder: (ctx, rref, _) {
+                    final modeAsync = rref.watch(workspaceModeProvider);
+                    final mode = modeAsync.valueOrNull ?? 'standalone';
+                    if (mode != 'member') return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: .12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.amber.withValues(alpha: .3),
                           ),
                         ),
-                      ]),
+                        child: const Row(
+                          children: [
+                            Icon(
+                              Icons.info_outline,
+                              size: 18,
+                              color: Colors.orange,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'أنت عضو في هذه المجموعة. لا يمكن الخروج إلا بطرد المدير، '
+                                'أو بحذف التطبيق وإعادة تثبيته.',
+                                style: TextStyle(fontSize: 11, height: 1.4),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _syncNow,
+                      icon: const Icon(Icons.sync, size: 18),
+                      label: const Text('مزامنة الآن'),
                     ),
-                  );
-                }),
-                Wrap(spacing: 8, runSpacing: 8, children: [
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _syncNow,
-                    icon: const Icon(Icons.sync, size: 18),
-                    label: const Text('مزامنة الآن'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _createLocalBackup,
-                    icon: const Icon(Icons.save_alt, size: 18),
-                    label: const Text('نسخة احتياطية محلية'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _restoreBackup,
-                    icon: const Icon(Icons.restore, size: 18),
-                    label: const Text('استعادة نسخة'),
-                  ),
-                ]),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _createLocalBackup,
+                      icon: const Icon(Icons.save_alt, size: 18),
+                      label: const Text('نسخة احتياطية محلية'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _restoreBackup,
+                      icon: const Icon(Icons.restore, size: 18),
+                      label: const Text('استعادة نسخة'),
+                    ),
+                  ],
+                ),
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
                   child: Text(
@@ -911,8 +1062,11 @@ class PairingQrInfo {
   final String token;
   final String qrContent;
   final DateTime expiresAt;
-  const PairingQrInfo(
-      {required this.token, required this.qrContent, required this.expiresAt});
+  const PairingQrInfo({
+    required this.token,
+    required this.qrContent,
+    required this.expiresAt,
+  });
 }
 
 class PairingQrDialog extends StatefulWidget {
@@ -982,24 +1136,34 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: widget.primaryColor.withOpacity(.15),
+                        color: widget.primaryColor.withValues(alpha: .15),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Icon(Icons.qr_code_2_rounded,
-                          color: widget.primaryColor, size: 28),
+                      child: Icon(
+                        Icons.qr_code_2_rounded,
+                        color: widget.primaryColor,
+                        size: 28,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     const Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('ربط جهاز جديد',
-                              style: TextStyle(
-                                  fontSize: 17, fontWeight: FontWeight.w800)),
+                          Text(
+                            'ربط جهاز جديد',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
                           SizedBox(height: 2),
                           Text(
                             'امسح هذا الرمز بالجهاز الآخر من شاشة المزامنة',
-                            style: TextStyle(fontSize: 12, color: Colors.black54),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.black54,
+                            ),
                           ),
                         ],
                       ),
@@ -1022,22 +1186,23 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        widget.primaryColor.withOpacity(.12),
-                        widget.primaryColor.withOpacity(.04),
+                        widget.primaryColor.withValues(alpha: .12),
+                        widget.primaryColor.withValues(alpha: .04),
                       ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                        color: widget.primaryColor.withOpacity(.4), width: 2),
+                      color: widget.primaryColor.withValues(alpha: .4),
+                      width: 2,
+                    ),
                   ),
                   child: QrImageView(
                     data: widget.info.qrContent,
                     version: QrVersions.auto,
                     size: 240,
                     backgroundColor: Colors.white,
-                    foregroundColor: Colors.black87,
                     errorCorrectionLevel: QrErrorCorrectLevel.M,
                     eyeStyle: const QrEyeStyle(
                       eyeShape: QrEyeShape.square,
@@ -1062,7 +1227,8 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                       minHeight: 6,
                       backgroundColor: Colors.black12,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                          progress > .3 ? widget.primaryColor : Colors.redAccent),
+                        progress > .3 ? widget.primaryColor : Colors.redAccent,
+                      ),
                     ),
                   ),
                 const SizedBox(height: 8),
@@ -1081,9 +1247,11 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                 if (widget.ip != null && widget.ip!.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(.04),
+                      color: Colors.black.withValues(alpha: .04),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Row(
@@ -1110,17 +1278,22 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                 SelectableText(
                   'رمز الاقتران: ${widget.info.token}',
                   style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.5),
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 14),
                 // تعليمات مختصرة.
                 const Text(
                   'على الجهاز الآخر: افتح الإعدادات ← المزامنة ← انضمام لمجموعة موجودة ← اضغط "مسح QR".',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 11, color: Colors.black45, height: 1.5),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.black45,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
@@ -1130,7 +1303,8 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                       backgroundColor: widget.primaryColor,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     onPressed: () {
                       Sfx.click();
@@ -1148,4 +1322,3 @@ class PairingQrDialogState extends State<PairingQrDialog> {
     );
   }
 }
-

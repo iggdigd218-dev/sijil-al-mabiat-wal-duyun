@@ -19,7 +19,8 @@ class AccountDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(refreshProvider);
-    final curs = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final curs =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final hidden = ref.watch(hideBalancesProvider);
 
     return FutureBuilder<Account?>(
@@ -30,11 +31,15 @@ class AccountDetailScreen extends ConsumerWidget {
           return Scaffold(
             appBar: AppBar(),
             body: const EmptyState(
-                icon: Icons.person_off_outlined, title: 'الحساب غير موجود'),
+              icon: Icons.person_off_outlined,
+              title: 'الحساب غير موجود',
+            ),
           );
         }
-        final c = curs.firstWhere((x) => x.code == a.currency,
-            orElse: () => kDefaultCurrencies.first);
+        final c = curs.firstWhere(
+          (x) => x.code == a.currency,
+          orElse: () => kDefaultCurrencies.first,
+        );
         final txs = ref.watch(accountTxProvider(accountId)).valueOrNull ?? [];
 
         // الرصيد يُحسب من السجل دائمًا، لا يُخزَّن.
@@ -76,7 +81,9 @@ class AccountDetailScreen extends ConsumerWidget {
                     child: Text(a.archived ? 'إلغاء الأرشفة' : 'أرشفة'),
                   ),
                   const PopupMenuItem(
-                      value: 'delete', child: Text('حذف نهائي')),
+                    value: 'delete',
+                    child: Text('حذف نهائي'),
+                  ),
                 ],
               ),
             ],
@@ -99,23 +106,31 @@ class AccountDetailScreen extends ConsumerWidget {
                               color: AppColors.teal.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Text(a.kind.icon,
-                                style: const TextStyle(fontSize: 21)),
+                            child: Text(
+                              a.kind.icon,
+                              style: const TextStyle(fontSize: 21),
+                            ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(a.name,
-                                    style: const TextStyle(
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.w800)),
+                                Text(
+                                  a.name,
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
                                 const SizedBox(height: 3),
-                                Text('${a.kind.label} · ${c.name}',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context).hintColor)),
+                                Text(
+                                  '${a.kind.label} · ${c.name}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context).hintColor,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -124,10 +139,13 @@ class AccountDetailScreen extends ConsumerWidget {
                       const SizedBox(height: 16),
                       const Divider(height: 1),
                       const SizedBox(height: 14),
-                      Text('الرصيد الحالي',
-                          style: TextStyle(
-                              fontSize: 12.5,
-                              color: Theme.of(context).hintColor)),
+                      Text(
+                        'الرصيد الحالي',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: Theme.of(context).hintColor,
+                        ),
+                      ),
                       const SizedBox(height: 6),
                       BalanceText(
                         value: balance,
@@ -148,9 +166,10 @@ class AccountDetailScreen extends ConsumerWidget {
                             ),
                           ),
                           Container(
-                              width: 1,
-                              height: 32,
-                              color: Theme.of(context).dividerColor),
+                            width: 1,
+                            height: 32,
+                            color: Theme.of(context).dividerColor,
+                          ),
                           Expanded(
                             child: _MiniStat(
                               label: 'إجمالي له',
@@ -196,8 +215,7 @@ class AccountDetailScreen extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (a.address.isNotEmpty)
-                          _InfoRow(
-                              icon: Icons.place_outlined, text: a.address),
+                          _InfoRow(icon: Icons.place_outlined, text: a.address),
                         if (a.notes.isNotEmpty)
                           _InfoRow(icon: Icons.notes, text: a.notes),
                       ],
@@ -223,8 +241,7 @@ class AccountDetailScreen extends ConsumerWidget {
                     children: [
                       for (var i = 0; i < txs.length; i++) ...[
                         if (i > 0) const Divider(height: 1, indent: 52),
-                        _TxTile(
-                            tx: txs[i], accountId: accountId, currency: c),
+                        _TxTile(tx: txs[i], accountId: accountId, currency: c),
                       ],
                     ],
                   ),
@@ -245,7 +262,11 @@ class AccountDetailScreen extends ConsumerWidget {
   }
 
   Future<void> _action(
-      BuildContext context, WidgetRef ref, Account a, String v) async {
+    BuildContext context,
+    WidgetRef ref,
+    Account a,
+    String v,
+  ) async {
     final repo = ref.read(repoProvider);
     if (v == 'archive') {
       await repo.archiveAccount(a.id!, !a.archived);
@@ -272,14 +293,19 @@ class AccountDetailScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _whatsapp(BuildContext context, Account a, double balance,
-      CurrencyDef c) async {
+  Future<void> _whatsapp(
+    BuildContext context,
+    Account a,
+    double balance,
+    CurrencyDef c,
+  ) async {
     final nature = balance > 0 ? 'عليكم' : 'لكم';
     final text = 'مرحباً ${a.name}\n'
         'رصيدكم الحالي: ${Fmt.money(balance.abs(), c.decimal)} ${c.symbol} '
         '($nature)';
     final uri = Uri.parse(
-        'https://wa.me/${Fmt.waNumber(a.contactNumber)}?text=${Uri.encodeComponent(text)}');
+      'https://wa.me/${Fmt.waNumber(a.contactNumber)}?text=${Uri.encodeComponent(text)}',
+    );
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (context.mounted) {
         showSnack(context, 'تعذّر فتح واتساب', error: true);
@@ -299,19 +325,29 @@ class _MiniStat extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-  const _MiniStat(
-      {required this.label, required this.value, required this.color});
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) => Column(
         children: [
-          Text(label,
-              style: TextStyle(
-                  fontSize: 11.5, color: Theme.of(context).hintColor)),
+          Text(
+            label,
+            style:
+                TextStyle(fontSize: 11.5, color: Theme.of(context).hintColor),
+          ),
           const SizedBox(height: 4),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800, color: color)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
         ],
       );
 }
@@ -329,8 +365,7 @@ class _InfoRow extends StatelessWidget {
           children: [
             Icon(icon, size: 16, color: Theme.of(context).hintColor),
             const SizedBox(width: 8),
-            Expanded(
-                child: Text(text, style: const TextStyle(fontSize: 13))),
+            Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
           ],
         ),
       );
@@ -340,8 +375,11 @@ class _TxTile extends StatelessWidget {
   final Tx tx;
   final int accountId;
   final CurrencyDef currency;
-  const _TxTile(
-      {required this.tx, required this.accountId, required this.currency});
+  const _TxTile({
+    required this.tx,
+    required this.accountId,
+    required this.currency,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -360,8 +398,10 @@ class _TxTile extends StatelessWidget {
         ),
         child: Text(tx.type.icon, style: const TextStyle(fontSize: 16)),
       ),
-      title: Text(tx.type.label,
-          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+      title: Text(
+        tx.type.label,
+        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+      ),
       subtitle: Text(
         '${Fmt.date(tx.date)}'
         '${tx.description.isEmpty ? '' : ' · ${tx.description}'}',
@@ -372,7 +412,10 @@ class _TxTile extends StatelessWidget {
       trailing: Text(
         '${effect > 0 ? '+' : '−'}${Fmt.money(effect.abs(), currency.decimal)}',
         style: TextStyle(
-            fontSize: 13.5, fontWeight: FontWeight.w800, color: color),
+          fontSize: 13.5,
+          fontWeight: FontWeight.w800,
+          color: color,
+        ),
       ),
     );
   }

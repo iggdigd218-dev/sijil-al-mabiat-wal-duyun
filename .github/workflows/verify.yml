@@ -12,46 +12,22 @@ permissions:
 
 jobs:
   verify:
-    name: Flutter Analyze & Test
+    name: Flutter quality gate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.x'
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
-
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Format check
-        run: |
-          # تفشل المهمة إن وجدت ملفات غير منسّقة (لا تعدّل تلقائيًا).
-          dart format --output=none --set-exit-if-changed lib/ test/ 2>/dev/null \
-            || echo "⚠️ تحذير تنسيق (يُسمح به في CI لكن يُنصح بإصلاحه)"
-
-      - name: Static analysis
-        run: |
-          # تشغيل التحليل؛ يفشل فقط إن وُجد خطأ حقيقي (error).
-          # التحذيرات القديمة والـ deprecated لا توقف البناء حتى نصلّحها تدريجيًا.
-          set +e
-          flutter analyze 2>&1 | tee /tmp/analyze.txt
-          CODE=${PIPESTATUS[0]}
-          if grep -qE "^\s*error •" /tmp/analyze.txt; then
-            echo "::error::يوجد أخطاء تحليل تمنع البناء."
-            exit 1
-          fi
-          if [ "$CODE" != "0" ]; then
-            echo "⚠️ التحليل أعاد كود $CODE لكن بدون أخطاء حقيقية (تحذيرات قديمة) — يُستكمل."
-          fi
-          exit 0
-
-      - name: Run unit tests (لا يُفشل البناء مؤقتًا — صلاحيات المجموعة تحتاج مواءمة)
-        run: |
-          set +e
-          flutter test --coverage
-          echo "✅ الاختبارات اكتملت (أي فشل حاليًا لا يوقف البناء حتى إصلاح مواءمة الصلاحيات)."
+      - name: Format check (blocking)
+        run: dart format --output=none --set-exit-if-changed lib/ test/
+      - name: Static analysis (blocking)
+        run: flutter analyze --no-pub
+      - name: Tests including release blockers (blocking)
+        run: flutter test --no-pub --concurrency=1 --coverage

@@ -1,4 +1,5 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,8 +11,6 @@ import 'core/theme.dart';
 import 'data/providers.dart';
 import 'data/repository.dart';
 import 'data/sync/sync_engine.dart';
-import 'ui/home_shell.dart';
-import 'ui/lock_gate.dart';
 import 'ui/splash.dart';
 
 Future<void> main() async {
@@ -23,7 +22,9 @@ Future<void> main() async {
   // التقاط أي خطأ غير مُعالج في إطار الـ UI بدل تعليق الشاشة بيضاء.
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    debugPrint('FlutterError: ${details.exceptionAsString()}\n${details.stack}');
+    debugPrint(
+      'FlutterError: ${details.exceptionAsString()}\n${details.stack}',
+    );
   };
   PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('Uncaught error: $error\n$stack');
@@ -68,15 +69,17 @@ Future<void> main() async {
     debugPrint('initial settings failed: $e');
   }
 
-  runApp(ProviderScope(
-    overrides: [
-      repoProvider.overrideWithValue(repo),
-      syncEngineProvider.overrideWithValue(engine),
-      themeModeProvider.overrideWith((ref) => themeMode),
-      hideBalancesProvider.overrideWith((ref) => hideBalances),
-    ],
-    child: const NexoraApp(),
-  ));
+  runApp(
+    ProviderScope(
+      overrides: [
+        repoProvider.overrideWithValue(repo),
+        syncEngineProvider.overrideWithValue(engine),
+        themeModeProvider.overrideWith((ref) => themeMode),
+        hideBalancesProvider.overrideWith((ref) => hideBalances),
+      ],
+      child: const NexoraApp(),
+    ),
+  );
 }
 
 class NexoraApp extends ConsumerWidget {

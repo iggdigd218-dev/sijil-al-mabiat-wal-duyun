@@ -17,8 +17,10 @@ enum AccountKind {
   final String icon;
   final String code;
 
-  static AccountKind fromCode(String c) => AccountKind.values
-      .firstWhere((e) => e.code == c, orElse: () => AccountKind.general);
+  static AccountKind fromCode(String c) => AccountKind.values.firstWhere(
+        (e) => e.code == c,
+        orElse: () => AccountKind.general,
+      );
 }
 
 /// أنواع العمليات المالية — كما في نسخة الويب تمامًا.
@@ -49,8 +51,12 @@ class CurrencyDef {
   final int decimal;
   const CurrencyDef(this.code, this.name, this.symbol, this.decimal);
 
-  Map<String, Object?> toMap() =>
-      {'code': code, 'name': name, 'symbol': symbol, 'decimal': decimal};
+  Map<String, Object?> toMap() => {
+        'code': code,
+        'name': name,
+        'symbol': symbol,
+        'decimal': decimal,
+      };
 
   factory CurrencyDef.fromMap(Map<String, Object?> m) => CurrencyDef(
         (m['code'] ?? '') as String,

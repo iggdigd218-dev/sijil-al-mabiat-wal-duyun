@@ -30,6 +30,8 @@ Future<Object?> openTxForm(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (_) => TxForm(
         existing: existing,
         presetAccountId: presetAccountId,
@@ -43,7 +45,13 @@ class TxForm extends ConsumerStatefulWidget {
   final int? presetAccountId;
   final bool isCopy;
   final OpType? presetType;
-  const TxForm({super.key, this.existing, this.presetAccountId, this.isCopy = false, this.presetType});
+  const TxForm({
+    super.key,
+    this.existing,
+    this.presetAccountId,
+    this.isCopy = false,
+    this.presetType,
+  });
 
   @override
   ConsumerState<TxForm> createState() => _TxFormState();
@@ -68,10 +76,10 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   List<Account> _accounts = [];
   List<CurrencyDef> _currencies = [];
-  List<Item> _inventoryItems = [];
   List<InvoiceLine> _invoiceLines = [];
   bool _loading = true;
   bool _saving = false;
+  bool _saveSlow = false;
 
   /// توليد صورة الإيصال وإرسالها للعميل فور الحفظ (البنود ٣ و ٤ و ١٢ و ١٤).
   String _image = '';
@@ -87,7 +95,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       final repo = ref.read(repoProvider);
       final accs = await repo.accounts(includeArchived: true);
       final curs = await repo.currencies();
-      final stockItems = await repo.items(includeArchived: true);
       final t = widget.existing;
       final invoiceLines = t?.id == null
           ? const <InvoiceLine>[]
@@ -95,7 +102,6 @@ class _TxFormState extends ConsumerState<TxForm> {
 
       _accounts = accs;
       _currencies = curs;
-      _inventoryItems = stockItems;
 
       if (t != null) {
         _type = t.type;
@@ -132,8 +138,8 @@ class _TxFormState extends ConsumerState<TxForm> {
             _notes.text = defNotes;
           }
         }
-        _accountId = widget.presetAccountId ??
-            (accs.isNotEmpty ? accs.first.id : null);
+        _accountId =
+            widget.presetAccountId ?? (accs.isNotEmpty ? accs.first.id : null);
       }
 
       final acc = accs.where((a) => a.id == _accountId).firstOrNull;
@@ -141,7 +147,12 @@ class _TxFormState extends ConsumerState<TxForm> {
     } catch (e) {
       if (mounted) {
         Sfx.error();
-        showSnack(context, 'تعذّر تحميل البيانات: $e', error: true, silent: true);
+        showSnack(
+          context,
+          'تعذّر تحميل البيانات: $e',
+          error: true,
+          silent: true,
+        );
       }
     } finally {
       if (mounted) {
@@ -172,54 +183,40 @@ class _TxFormState extends ConsumerState<TxForm> {
   /// نص الأثر المتوقّع — نفس تلميح نسخة الويب.
 
   Future<void> _save() async {
-    // منع الضغط المزدوج.
-    if (_saving) return;
-
-    FocusScope.of(context).unfocus();
-    await Future.delayed(const Duration(milliseconds: 50));
-
-    final formState = _formKey.currentState;
-    if (formState == null) return;
-
-    final valid = formState.validate();
-    if (!valid) {
-      Sfx.reject();
-      await Future.delayed(const Duration(milliseconds: 100));
-      if (mounted) {
-        Scrollable.ensureVisible(context,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut, alignment: .2);
-      }
-      return;
-    }
-    formState.save();
-
-    if (_accountId == null) {
-      Sfx.reject();
-      showSnack(context, 'اختر الحساب', error: true, silent: true);
-      return;
-    }
-    if (_isTransfer && (_toId == null || _toId == _accountId)) {
-      Sfx.reject();
-      showSnack(context, 'اختر حساب الوجهة (مختلفًا عن المصدر)', error: true, silent: true);
-      return;
-    }
-
-    final amount = Fmt.parseAmount(_amount.text);
-    if (amount == null || amount <= 0) {
-      Sfx.reject();
-      showSnack(context, 'أدخل مبلغًا صحيحًا أكبر من صفر', error: true, silent: true);
-      return;
-    }
-
-    setState(() => _saving = true);
+    // Acquire the lock synchronously, before unfocus/validation awaits.
+    if (_saving || !mounted) return;
+    setState(() {
+      _saving = true;
+      _saveSlow = false;
+    });
+    Timer? slowWarning;
     int? savedId;
     try {
+      FocusScope.of(context).unfocus();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+      final form = _formKey.currentState;
+      if (form == null || !form.validate()) {
+        Sfx.reject();
+        return;
+      }
+      form.save();
+      if (_accountId == null) throw StateError('اختر الحساب');
+      if (_isTransfer && (_toId == null || _toId == _accountId)) {
+        throw StateError('اختر حساب الوجهة (مختلفًا عن المصدر)');
+      }
+      final amount = Fmt.parseAmount(_amount.text);
+      if (amount == null || amount <= 0) {
+        throw StateError('أدخل مبلغًا صحيحًا أكبر من صفر');
+      }
+      final rate = Fmt.parseAmount(_rate.text);
+      if (_isTransfer && (rate == null || rate <= 0)) {
+        throw StateError('أدخل سعر صرف صحيحًا أكبر من صفر');
+      }
       final repo = ref.read(repoProvider);
       final now = DateTime.now();
       final old = widget.existing;
-      final keepId = (old != null && !widget.isCopy) ? old.id : null;
-
+      final keepId = old != null && !widget.isCopy ? old.id : null;
       final tx = Tx(
         id: keepId,
         accountId: _isTransfer ? null : _accountId,
@@ -230,106 +227,124 @@ class _TxFormState extends ConsumerState<TxForm> {
         sign: _type == OpType.settle ? _sign : '',
         fromId: _isTransfer ? _accountId : null,
         toId: _isTransfer ? _toId : null,
-        rate: Fmt.parseAmount(_rate.text) ?? 1,
+        rate: rate ?? 1,
         description: _desc.text.trim(),
         reference: _ref.text.trim(),
         notes: _notes.text.trim(),
         image: _image,
         status: _status,
         date: _date,
-        createdAt: (keepId != null ? old!.createdAt : now),
+        createdAt: keepId != null ? old!.createdAt : now,
         updatedAt: now,
       );
-
-      // كشف التكرار (تحذير فقط).
       if (keepId == null) {
-        List<Tx> dups = const [];
+        List<Tx> duplicates = const [];
         try {
-          dups = await repo.findDuplicates(tx).timeout(const Duration(seconds: 3));
-        } catch (_) { dups = const []; }
-        if (dups.isNotEmpty && mounted) {
-          final ok = await confirmDialog(
-            context,
-            title: '⚠️ عملية مكررة محتملة',
-            message: 'توجد ${dups.length} عملية مماثلة بنفس المبلغ والنوع اليوم.\nهل تريد المتابعة؟',
-            confirmText: 'متابعة',
-          );
-          if (ok != true) {
-            if (mounted) setState(() => _saving = false);
-            return;
-          }
+          duplicates =
+              await repo.findDuplicates(tx).timeout(const Duration(seconds: 3));
+        } catch (_) {
+          // Advisory only; the in-flight lock is independent of this lookup.
+        }
+        if (!mounted) return;
+        if (duplicates.isNotEmpty) {
+          final proceed = await confirmDialog(context,
+              title: '⚠️ عملية مكررة محتملة',
+              message:
+                  'توجد ${duplicates.length} عملية مماثلة. هل تريد المتابعة؟',
+              confirmText: 'متابعة');
+          if (proceed != true || !mounted) return;
         }
       }
+      final saleLines =
+          _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
+      // A timeout does NOT cancel an SQLite write. Report a slow/unknown state
+      // without permitting a retry until the original write has resolved.
+      slowWarning = Timer(const Duration(seconds: 10), () {
+        if (mounted) setState(() => _saveSlow = true);
+      });
+      savedId = await repo.saveTx(tx, items: saleLines);
+      slowWarning.cancel();
+      if (mounted) bump(ref);
 
-      final saleLines = _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
-      // الحفظ بمهلة قصوى حتى لا يعلق الزر أبدًا.
-      savedId = await repo.saveTx(tx, items: saleLines)
-          .timeout(const Duration(seconds: 10));
-
-      // خصم الكميات من المخزون — لا يُفشل الحفظ.
-      if ((_type == OpType.inflow || _type == OpType.debit) && saleLines.isNotEmpty) {
+      // Existing stock workflow is separate from the financial transaction.
+      // Its atomicity is tracked explicitly as an outstanding QA issue.
+      var stockFailed = false;
+      if ((_type == OpType.inflow || _type == OpType.debit) &&
+          saleLines.isNotEmpty) {
         for (final line in saleLines) {
           if (line.itemId == null) continue;
           try {
-            await repo.addStockMove(StockMove(
-              itemId: line.itemId!,
-              quantity: line.quantity,
-              kind: StockKind.sale,
-              date: now,
-              createdAt: now,
-              notes: 'مبيع عملية #$savedId',
-            )).timeout(const Duration(seconds: 3));
-          } catch (_) {}
+            await repo
+                .addStockMove(StockMove(
+                  itemId: line.itemId!,
+                  quantity: line.quantity,
+                  kind: StockKind.sale,
+                  date: now,
+                  createdAt: now,
+                  notes: 'مبيع عملية #$savedId',
+                ))
+                .timeout(const Duration(seconds: 3));
+          } catch (_) {
+            stockFailed = true;
+          }
         }
       }
-      final saved = tx.copyWith(id: savedId);
-
-      // محاولة إرسال السند — بمهلة؛ فشلها لا يبطل الحفظ.
-      bool shareOk = false;
-      String? shareErr;
-      if (!_isTransfer && _accountId != null && _account != null) {
+      var saved = tx.copyWith(id: savedId);
+      try {
+        saved = await repo
+                .transactionById(savedId)
+                .timeout(const Duration(seconds: 2)) ??
+            saved;
+      } catch (_) {
+        // The save is committed; failure of a follow-up read is not a save failure.
+      }
+      var share = TxShareOutcome.skipped;
+      if (!_isTransfer && _account != null && mounted) {
         try {
-          await TxShare.sendNow(context, ref,
-              tx: saved,
-              account: _account!,
-              silentIfNoPhone: true,
-          ).timeout(const Duration(seconds: 15));
-          shareOk = true;
-        } catch (e) {
-          shareErr = '$e';
+          share = await TxShare.sendNow(context, ref,
+                  tx: saved, account: _account!, silentIfNoPhone: true)
+              .timeout(const Duration(seconds: 15));
+        } catch (_) {
+          share = TxShareOutcome.failed;
         }
       }
-
-      if (mounted) {
-        bump(ref);
-        Navigator.pop(context, true);
-        final okMsg = keepId != null
-            ? (shareOk
-                ? 'تم تعديل العملية وإرسال السند ✅'
-                : 'تم تعديل العملية ✅')
-            : (shareOk
-                ? 'تم حفظ العملية وإرسال السند ✅'
-                : 'تم حفظ العملية وتحديث الرصيد ✅');
-        showSnack(context,
-            shareErr != null && !shareOk && _account!.notifyChannel != 'none'
-                ? '$okMsg (تعذّر الإرسال: $shareErr)'
-                : okMsg,
-            error: shareErr != null && !shareOk,
-            silent: true);
-        Sfx.success();
-      }
+      if (!mounted) return;
+      bump(ref);
+      final message = StringBuffer(keepId != null
+          ? 'تم تعديل العملية وتحديث الرصيد ✅'
+          : 'تم حفظ العملية وتحديث الرصيد ✅');
+      if (share == TxShareOutcome.opened)
+        message.write(' — تم فتح تطبيق المشاركة');
+      if (share == TxShareOutcome.failed)
+        message.write(' — تعذّر فتح المشاركة؛ الحفظ المحلي ناجح');
+      if (stockFailed)
+        message.write(' — تعذّر تحديث بعض المخزون، راجعه قبل المتابعة');
+      showSnack(context, message.toString(),
+          error: stockFailed || share == TxShareOutcome.failed, silent: true);
+      Navigator.pop(context, true);
+      Sfx.success();
     } catch (e) {
-      if (mounted) {
-        Sfx.error();
-        showSnack(context,
-            e is StateError ? (e.message ?? 'خطأ') : 'تعذّر حفظ العملية: $e',
+      if (!mounted) return;
+      Sfx.error();
+      if (savedId != null) {
+        bump(ref);
+        showSnack(context, 'تم الحفظ محليًا، لكن تعذّر إكمال خطوة لاحقة: $e',
+            error: true);
+        Navigator.pop(context, true);
+      } else {
+        showSnack(
+            context, e is StateError ? e.message : 'تعذّر حفظ العملية: $e',
             error: true, silent: true);
       }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      slowWarning?.cancel();
+      if (mounted)
+        setState(() {
+          _saving = false;
+          _saveSlow = false;
+        });
     }
   }
-
 
   bool _advancedOpen = false;
 
@@ -340,9 +355,13 @@ class _TxFormState extends ConsumerState<TxForm> {
       color: AppColors.primarySoftOf(context),
       child: ListTile(
         leading: const Icon(Icons.point_of_sale, size: 22),
-        title: const Text('فتح شاشة المبيعات لإضافة الفاتورة',
-            style: TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: const Text('تنتقل إلى نقطة البيع لتسجيل الفاتورة كاملة مع العملاء والأصناف'),
+        title: const Text(
+          'فتح شاشة المبيعات لإضافة الفاتورة',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        subtitle: const Text(
+          'تنتقل إلى نقطة البيع لتسجيل الفاتورة كاملة مع العملاء والأصناف',
+        ),
         trailing: const Icon(Icons.chevron_left),
         onTap: () {
           Sfx.click();
@@ -355,107 +374,189 @@ class _TxFormState extends ConsumerState<TxForm> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const SizedBox(height: 260, child: Center(child: CircularProgressIndicator()));
+      return const SizedBox(
+        height: 260,
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
     if (_accounts.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const EmptyState(icon: Icons.person_off_outlined, title: 'لا توجد حسابات',
-              message: 'أضف حسابًا أولًا قبل تسجيل أي عملية.'),
-          const SizedBox(height: 12),
-          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('حسنًا')),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const EmptyState(
+              icon: Icons.person_off_outlined,
+              title: 'لا توجد حسابات',
+              message: 'أضف حسابًا أولًا قبل تسجيل أي عملية.',
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('حسنًا'),
+            ),
+          ],
+        ),
       );
     }
     final title = widget.isCopy
         ? '🔁 تكرار عملية'
         : (widget.existing != null ? '✏️ تعديل عملية' : '＋ عملية جديدة');
-    return Padding(
-      padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          Container(width: 42, height: 4,
-              decoration: BoxDecoration(color: AppColors.borderOf(context),
-                  borderRadius: BorderRadius.circular(4))),
-          Padding(padding: const EdgeInsets.fromLTRB(18, 14, 8, 6), child: Row(children: [
-            Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
-            IconButton(onPressed: _saving ? null : () => Navigator.pop(context), icon: const Icon(Icons.close)),
-          ])),
-          const Divider(height: 1),
-          Flexible(
-            child: Form(
-              key: _formKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              child: SingleChildScrollView(
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _typeChips(),
-                    const SizedBox(height: 14),
-                    _accountPickers(),
-                    const SizedBox(height: 14),
-                    _amountRow(),
-                    if (_hasInvoiceDetails) ...[const SizedBox(height: 8), _invoiceShortcut()],
-                    if (_type == OpType.settle) ...[const SizedBox(height: 14), _signPicker()],
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      controller: _desc,
-                      decoration: const InputDecoration(
-                        labelText: 'البيان / الوصف',
-                        prefixIcon: Icon(Icons.notes_outlined),
-                        hintText: 'وصف مختصر (اختياري)',
-                      ),
-                      textInputAction: TextInputAction.done,
+    return PopScope(
+      canPop: !_saving,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.borderOf(context),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 8, 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
-                    Theme(data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                      child: ExpansionTile(
-                        tilePadding: EdgeInsets.zero, childrenPadding: EdgeInsets.zero,
-                        title: Text(_advancedOpen ? 'إخفاء التفاصيل الإضافية' : 'التفاصيل الإضافية'),
-                        leading: const Icon(Icons.tune),
-                        onExpansionChanged: (v) => setState(() => _advancedOpen = v),
+                  ),
+                  IconButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: Form(
+                key: _formKey,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                child: SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _typeChips(),
+                      const SizedBox(height: 14),
+                      _accountPickers(),
+                      const SizedBox(height: 14),
+                      _amountRow(),
+                      if (_hasInvoiceDetails) ...[
+                        const SizedBox(height: 8),
+                        _invoiceShortcut(),
+                      ],
+                      if (_type == OpType.settle) ...[
+                        const SizedBox(height: 14),
+                        _signPicker(),
+                      ],
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: _desc,
+                        decoration: const InputDecoration(
+                          labelText: 'البيان / الوصف',
+                          prefixIcon: Icon(Icons.notes_outlined),
+                          hintText: 'وصف مختصر (اختياري)',
+                        ),
+                        textInputAction: TextInputAction.done,
+                      ),
+                      Theme(
+                        data: Theme.of(context)
+                            .copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          childrenPadding: EdgeInsets.zero,
+                          title: Text(
+                            _advancedOpen
+                                ? 'إخفاء التفاصيل الإضافية'
+                                : 'التفاصيل الإضافية',
+                          ),
+                          leading: const Icon(Icons.tune),
+                          onExpansionChanged: (v) =>
+                              setState(() => _advancedOpen = v),
+                          children: [
+                            const SizedBox(height: 6),
+                            _datePicker(),
+                            const SizedBox(height: 14),
+                            TextFormField(
+                              controller: _ref,
+                              decoration: const InputDecoration(
+                                labelText: 'رقم مرجعي',
+                                prefixIcon: Icon(Icons.tag),
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            TextFormField(
+                              controller: _notes,
+                              decoration: const InputDecoration(
+                                labelText: 'ملاحظات',
+                                prefixIcon: Icon(Icons.sticky_note_2_outlined),
+                              ),
+                              maxLines: 2,
+                            ),
+                            const SizedBox(height: 10),
+                            _smallImagePicker(),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      if (_saveSlow)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 10),
+                          child: Text(
+                              'الحفظ أبطأ من المعتاد. ننتظر نتيجة قاعدة البيانات؛ لا تُكرر العملية.',
+                              style: TextStyle(color: Colors.orange)),
+                        ),
+                      Row(
                         children: [
-                          const SizedBox(height: 6),
-                          _datePicker(),
-                          const SizedBox(height: 14),
-                          TextFormField(controller: _ref, decoration: const InputDecoration(
-                              labelText: 'رقم مرجعي', prefixIcon: Icon(Icons.tag))),
-                          const SizedBox(height: 14),
-                          TextFormField(controller: _notes,
-                              decoration: const InputDecoration(labelText: 'ملاحظات',
-                                  prefixIcon: Icon(Icons.sticky_note_2_outlined)),
-                              maxLines: 2),
-                          const SizedBox(height: 10),
-                          _smallImagePicker(),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed:
+                                  _saving ? null : () => Navigator.pop(context),
+                              child: const Text('إلغاء'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.save_outlined),
+                              label: Text(
+                                _saving ? 'جارٍ الحفظ...' : 'حفظ العملية',
+                              ),
+                            ),
+                          ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(children: [
-                      Expanded(child: OutlinedButton(
-                          onPressed: _saving ? null : () => Navigator.pop(context),
-                          child: const Text('إلغاء'))),
-                      const SizedBox(width: 12),
-                      Expanded(flex: 2, child: FilledButton.icon(
-                        onPressed: _saving ? null : _save,
-                        icon: _saving
-                            ? const SizedBox(width: 18, height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                            : const Icon(Icons.save_outlined),
-                        label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ العملية'),
-                      )),
-                    ]),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -466,37 +567,52 @@ class _TxFormState extends ConsumerState<TxForm> {
     final hasImage = _image.isNotEmpty && File(_image).existsSync();
     return Row(
       children: [
-        Icon(Icons.attach_file,
-            size: 16, color: AppColors.text3Of(context)),
+        Icon(Icons.attach_file, size: 16, color: AppColors.text3Of(context)),
         const SizedBox(width: 6),
-        Text('إرفاق صورة (اختياري):',
-            style: TextStyle(
-                fontSize: 12.5, color: AppColors.text2Of(context))),
+        Text(
+          'إرفاق صورة (اختياري):',
+          style: TextStyle(fontSize: 12.5, color: AppColors.text2Of(context)),
+        ),
         const SizedBox(width: 6),
         IconButton(
           tooltip: 'من المعرض',
           visualDensity: VisualDensity.compact,
-          icon: Icon(Icons.photo_library_outlined,
-              size: 20, color: AppColors.primaryOf(context)),
+          icon: Icon(
+            Icons.photo_library_outlined,
+            size: 20,
+            color: AppColors.primaryOf(context),
+          ),
           onPressed: _pickImage,
         ),
         IconButton(
           tooltip: 'التقاط من الكاميرا',
           visualDensity: VisualDensity.compact,
-          icon: Icon(Icons.photo_camera_outlined,
-              size: 20, color: AppColors.primaryOf(context)),
+          icon: Icon(
+            Icons.photo_camera_outlined,
+            size: 20,
+            color: AppColors.primaryOf(context),
+          ),
           onPressed: _captureImage,
         ),
         if (hasImage) ...[
           const SizedBox(width: 4),
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
-            child: Image.file(File(_image), width: 34, height: 34, fit: BoxFit.cover),
+            child: Image.file(
+              File(_image),
+              width: 34,
+              height: 34,
+              fit: BoxFit.cover,
+            ),
           ),
           IconButton(
             tooltip: 'إزالة الصورة',
             visualDensity: VisualDensity.compact,
-            icon: Icon(Icons.close, size: 18, color: AppColors.dangerOf(context)),
+            icon: Icon(
+              Icons.close,
+              size: 18,
+              color: AppColors.dangerOf(context),
+            ),
             onPressed: () => setState(() => _image = ''),
           ),
         ],
@@ -505,8 +621,10 @@ class _TxFormState extends ConsumerState<TxForm> {
   }
 
   Future<void> _pickImage() async {
-    final x = await ImagePicker()
-        .pickImage(source: ImageSource.gallery, imageQuality: 82);
+    final x = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 82,
+    );
     if (x == null) return;
     final saved = await saveImageBytes(await x.readAsBytes(), prefix: 'tx');
     if (mounted) setState(() => _image = saved);
@@ -514,8 +632,10 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   Future<void> _captureImage() async {
     try {
-      final x = await ImagePicker()
-          .pickImage(source: ImageSource.camera, imageQuality: 82);
+      final x = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        imageQuality: 82,
+      );
       if (x == null) return;
       final saved = await saveImageBytes(await x.readAsBytes(), prefix: 'tx');
       if (mounted) setState(() => _image = saved);
@@ -523,18 +643,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       if (mounted) showSnack(context, 'تعذّر فتح الكاميرا', error: true);
     }
   }
-
-  CurrencyDef get _selectedCurrency => _currencies.firstWhere(
-        (c) => c.code == _currency,
-        orElse: () => kDefaultCurrencies.first,
-      );
-
-  String _number(double value) => value == value.roundToDouble()
-      ? Fmt.money(value)
-      : Fmt.money(value, 2);
-
-
-
 
   Widget _typeGrid() {
     final isAlayh = _type == OpType.debit || _type == OpType.outflow;
@@ -551,10 +659,13 @@ class _TxFormState extends ConsumerState<TxForm> {
                 onTap: () => setState(() => _type = OpType.debit),
                 borderRadius: BorderRadius.circular(14),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 11,
+                    horizontal: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: isAlayh
-                        ? Colors.red.withOpacity(0.12)
+                        ? Colors.red.withValues(alpha: 0.12)
                         : AppColors.surface2Of(context),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
@@ -603,14 +714,18 @@ class _TxFormState extends ConsumerState<TxForm> {
                 onTap: () => setState(() => _type = OpType.credit),
                 borderRadius: BorderRadius.circular(14),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 11,
+                    horizontal: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: isLahu
-                        ? Colors.green.withOpacity(0.12)
+                        ? Colors.green.withValues(alpha: 0.12)
                         : AppColors.surface2Of(context),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: isLahu ? Colors.green : AppColors.borderOf(context),
+                      color:
+                          isLahu ? Colors.green : AppColors.borderOf(context),
                       width: isLahu ? 2 : 1,
                     ),
                   ),
@@ -706,15 +821,20 @@ class _TxFormState extends ConsumerState<TxForm> {
             prefixIcon: const Icon(Icons.account_balance_wallet_outlined),
           ),
           items: _accounts
-              .map((a) => DropdownMenuItem(
-                    value: a.id,
-                    child: Text('${a.kind.icon}  ${a.name}',
-                        overflow: TextOverflow.ellipsis),
-                  ))
+              .map(
+                (a) => DropdownMenuItem(
+                  value: a.id,
+                  child: Text(
+                    '${a.kind.icon}  ${a.name}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
               .toList(),
           onChanged: (v) {
             setState(() {
               _accountId = v;
+              if (_toId == v) _toId = null;
               final acc = _account;
               if (acc != null && widget.existing == null) {
                 _currency = acc.currency;
@@ -726,6 +846,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         if (_isTransfer) ...[
           const SizedBox(height: 14),
           DropdownButtonFormField<int>(
+            key: ValueKey('to_$_accountId'),
             initialValue: _toId,
             isExpanded: true,
             decoration: const InputDecoration(
@@ -734,11 +855,15 @@ class _TxFormState extends ConsumerState<TxForm> {
             ),
             items: _accounts
                 .where((a) => a.id != _accountId)
-                .map((a) => DropdownMenuItem(
-                      value: a.id,
-                      child: Text('${a.kind.icon}  ${a.name}',
-                          overflow: TextOverflow.ellipsis),
-                    ))
+                .map(
+                  (a) => DropdownMenuItem(
+                    value: a.id,
+                    child: Text(
+                      '${a.kind.icon}  ${a.name}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (v) => setState(() => _toId = v),
             validator: (v) => v == null ? 'اختر حساب الوجهة' : null,
@@ -756,10 +881,9 @@ class _TxFormState extends ConsumerState<TxForm> {
           flex: 3,
           child: TextFormField(
             controller: _amount,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩.,٫]')),
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹.,٫٬+-]')),
             ],
             decoration: InputDecoration(
               labelText: 'المبلغ *',
@@ -769,8 +893,10 @@ class _TxFormState extends ConsumerState<TxForm> {
                 tooltip: 'آلة حاسبة',
                 icon: const Icon(Icons.calculate_outlined),
                 onPressed: () async {
-                  final v =
-                      await openCalculator(context, initial: _amount.text);
+                  final v = await openCalculator(
+                    context,
+                    initial: _amount.text,
+                  );
                   if (v == null) return;
                   setState(() {
                     _amount.text =
@@ -796,11 +922,15 @@ class _TxFormState extends ConsumerState<TxForm> {
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'العملة'),
             items: _currencies
-                .map((c) => DropdownMenuItem(
-                      value: c.code,
-                      child: Text('${c.symbol}  ${c.code}',
-                          overflow: TextOverflow.ellipsis),
-                    ))
+                .map(
+                  (c) => DropdownMenuItem(
+                    value: c.code,
+                    child: Text(
+                      '${c.symbol}  ${c.code}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (v) => setState(() => _currency = v ?? _currency),
           ),
@@ -811,8 +941,9 @@ class _TxFormState extends ConsumerState<TxForm> {
             flex: 2,
             child: TextFormField(
               controller: _rate,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'سعر الصرف'),
             ),
           ),
@@ -832,8 +963,10 @@ class _TxFormState extends ConsumerState<TxForm> {
           Expanded(
             child: RadioListTile<String>(
               value: '+',
-              title: const Text('بالزيادة (+)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              title: const Text(
+                'بالزيادة (+)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
               contentPadding: EdgeInsets.zero,
               dense: true,
             ),
@@ -841,8 +974,10 @@ class _TxFormState extends ConsumerState<TxForm> {
           Expanded(
             child: RadioListTile<String>(
               value: '-',
-              title: const Text('بالنقصان (−)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              title: const Text(
+                'بالنقصان (−)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
               contentPadding: EdgeInsets.zero,
               dense: true,
             ),
@@ -851,7 +986,6 @@ class _TxFormState extends ConsumerState<TxForm> {
       ),
     );
   }
-
 
   Widget _datePicker() {
     return InkWell(
@@ -871,10 +1005,11 @@ class _TxFormState extends ConsumerState<TxForm> {
           labelText: 'التاريخ',
           prefixIcon: Icon(Icons.event_outlined),
         ),
-        child: Text(Fmt.date(_date),
-            style: const TextStyle(fontWeight: FontWeight.w700)),
+        child: Text(
+          Fmt.date(_date),
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }
-
 }

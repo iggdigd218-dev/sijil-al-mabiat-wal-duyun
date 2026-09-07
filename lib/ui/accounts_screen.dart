@@ -17,7 +17,8 @@ class AccountsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final list = ref.watch(accountsProvider);
     final filter = ref.watch(accountFilterProvider);
-    final curs = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final curs =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final hidden = ref.watch(hideBalancesProvider);
 
     return Column(
@@ -25,30 +26,39 @@ class AccountsScreen extends ConsumerWidget {
         _FilterBar(filter: filter, currencies: curs),
         Expanded(
           child: list.when(
-            loading: () => const Center(child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 12),
-                Text('جارٍ تحميل الحسابات…'),
-              ]),
-            )),
+            loading: () => const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 12),
+                    Text('جارٍ تحميل الحسابات…'),
+                  ],
+                ),
+              ),
+            ),
             error: (e, _) => Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  EmptyState(
-                    icon: Icons.error_outline,
-                    title: 'تعذّر تحميل الحسابات',
-                    message: '${'$e'.length > 200 ? '$e'.substring(0,200)+'…' : '$e'}',
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () => bump(ref),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('إعادة المحاولة'),
-                  ),
-                ]),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'تعذّر تحميل الحسابات',
+                      message:
+                          '${'$e'.length > 200 ? '$e'.substring(0, 200) + '…' : '$e'}',
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () => bump(ref),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة المحاولة'),
+                    ),
+                  ],
+                ),
               ),
             ),
             data: (items) {
@@ -111,14 +121,13 @@ class _FilterBar extends ConsumerWidget {
                   ? null
                   : IconButton(
                       icon: const Icon(Icons.close, size: 18),
-                      onPressed: () =>
-                          n.state = filter.copyWith(query: ''),
+                      onPressed: () => n.state = filter.copyWith(query: ''),
                     ),
               isDense: true,
             ),
-            controller: TextEditingController(text: filter.query)
-              ..selection =
-                  TextSelection.collapsed(offset: filter.query.length),
+            controller: TextEditingController(
+              text: filter.query,
+            )..selection = TextSelection.collapsed(offset: filter.query.length),
             onChanged: (v) => n.state = filter.copyWith(query: v),
           ),
           const SizedBox(height: 9),
@@ -132,22 +141,26 @@ class _FilterBar extends ConsumerWidget {
                   'الكل',
                   filter.kind == null && !filter.showArchived,
                   () => n.state = filter.copyWith(
-                      clearKind: true, showArchived: false),
+                    clearKind: true,
+                    showArchived: false,
+                  ),
                 ),
                 for (final k in AccountKind.values)
                   _chip(
                     context,
                     '${k.icon} ${k.label}',
                     filter.kind == k && !filter.showArchived,
-                    () => n.state =
-                        filter.copyWith(kind: k, showArchived: false),
+                    () =>
+                        n.state = filter.copyWith(kind: k, showArchived: false),
                   ),
                 _chip(
                   context,
                   'المؤرشفة',
                   filter.showArchived,
                   () => n.state = filter.copyWith(
-                      showArchived: !filter.showArchived, clearKind: true),
+                    showArchived: !filter.showArchived,
+                    clearKind: true,
+                  ),
                 ),
               ],
             ),
@@ -157,8 +170,7 @@ class _FilterBar extends ConsumerWidget {
     );
   }
 
-  Widget _chip(
-          BuildContext c, String label, bool active, VoidCallback onTap) =>
+  Widget _chip(BuildContext c, String label, bool active, VoidCallback onTap) =>
       Padding(
         padding: const EdgeInsets.only(left: 7),
         child: ChoiceChip(
@@ -174,9 +186,10 @@ class _FilterBar extends ConsumerWidget {
           ),
           backgroundColor: Theme.of(c).cardColor,
           side: BorderSide(
-              color: active
-                  ? AppColors.teal.withValues(alpha: 0.4)
-                  : Theme.of(c).dividerColor),
+            color: active
+                ? AppColors.teal.withValues(alpha: 0.4)
+                : Theme.of(c).dividerColor,
+          ),
         ),
       );
 }
@@ -195,8 +208,10 @@ class _AccountCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final a = item.account;
-    final c = currencies.firstWhere((x) => x.code == a.currency,
-        orElse: () => kDefaultCurrencies.first);
+    final c = currencies.firstWhere(
+      (x) => x.code == a.currency,
+      orElse: () => kDefaultCurrencies.first,
+    );
     final kindColor = switch (a.kind) {
       AccountKind.customer => AppColors.info,
       AccountKind.supplier => AppColors.violet,
@@ -209,7 +224,8 @@ class _AccountCard extends ConsumerWidget {
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => AccountDetailScreen(accountId: a.id!)),
+            builder: (_) => AccountDetailScreen(accountId: a.id!),
+          ),
         ),
         child: Opacity(
           opacity: a.archived ? 0.6 : 1,
@@ -228,8 +244,10 @@ class _AccountCard extends ConsumerWidget {
                         color: kindColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(11),
                       ),
-                      child:
-                          Text(a.kind.icon, style: const TextStyle(fontSize: 18)),
+                      child: Text(
+                        a.kind.icon,
+                        style: const TextStyle(fontSize: 18),
+                      ),
                     ),
                     const SizedBox(width: 11),
                     Expanded(
@@ -244,8 +262,9 @@ class _AccountCard extends ConsumerWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                  ),
                                 ),
                               ),
                               if (a.archived) ...[
@@ -254,8 +273,10 @@ class _AccountCard extends ConsumerWidget {
                               ],
                               if (item.overLimit) ...[
                                 const SizedBox(width: 6),
-                                const Pill('تجاوز الحد',
-                                    color: AppColors.amber),
+                                const Pill(
+                                  'تجاوز الحد',
+                                  color: AppColors.amber,
+                                ),
                               ],
                             ],
                           ),
@@ -269,8 +290,9 @@ class _AccountCard extends ConsumerWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                fontSize: 11.5,
-                                color: Theme.of(context).hintColor),
+                              fontSize: 11.5,
+                              color: Theme.of(context).hintColor,
+                            ),
                           ),
                         ],
                       ),
@@ -280,10 +302,13 @@ class _AccountCard extends ConsumerWidget {
                 const SizedBox(height: 11),
                 Row(
                   children: [
-                    Text('الرصيد',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).hintColor)),
+                    Text(
+                      'الرصيد',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).hintColor,
+                      ),
+                    ),
                     const Spacer(),
                     BalanceText(
                       value: item.balance,

@@ -26,27 +26,35 @@ class DashboardScreen extends ConsumerWidget {
           summary.when(
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 80),
-              child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 12),
-                Text('جارٍ تحميل البيانات…'),
-              ])),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 12),
+                    Text('جارٍ تحميل البيانات…'),
+                  ],
+                ),
+              ),
             ),
             error: (e, _) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 40),
-              child: Column(children: [
-                EmptyState(
-                  icon: Icons.error_outline,
-                  title: 'تعذّر تحميل الملخّص',
-                  message: '${e.toString().length > 200 ? e.toString().substring(0,200) + '…' : e}',
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: () => bump(ref),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('إعادة المحاولة'),
-                ),
-              ]),
+              child: Column(
+                children: [
+                  EmptyState(
+                    icon: Icons.error_outline,
+                    title: 'تعذّر تحميل الملخّص',
+                    message:
+                        '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () => bump(ref),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('إعادة المحاولة'),
+                  ),
+                ],
+              ),
             ),
             data: (s) {
               final curs = currencies.valueOrNull ?? kDefaultCurrencies;
@@ -181,16 +189,24 @@ class _CurrencyTotals extends StatelessWidget {
                   child: Icon(icon, size: 17, color: color),
                 ),
                 const SizedBox(width: 9),
-                Text(title,
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w800)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 10),
             if (entries.isEmpty)
-              Text('لا يوجد',
-                  style: TextStyle(
-                      fontSize: 14.5, color: Theme.of(context).hintColor))
+              Text(
+                'لا يوجد',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  color: Theme.of(context).hintColor,
+                ),
+              )
             else
               ...entries.map((e) {
                 final c = currencies.firstWhere(
@@ -201,9 +217,13 @@ class _CurrencyTotals extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
                     children: [
-                      Text(c.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w800)),
+                      Text(
+                        c.name,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                       const Spacer(),
                       if (signed)
                         BalanceText(
@@ -218,9 +238,10 @@ class _CurrencyTotals extends StatelessWidget {
                               ? '••••••'
                               : '${Fmt.money(e.value, c.decimal)} ${c.symbol}',
                           style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: color),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: color,
+                          ),
                         ),
                     ],
                   ),
@@ -240,7 +261,8 @@ class _Alerts extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final alerts = ref.watch(alertsProvider).valueOrNull ?? [];
     if (alerts.isEmpty) return const SizedBox.shrink();
-    final curs = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final curs =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,24 +271,35 @@ class _Alerts extends ConsumerWidget {
         Card(
           child: Column(
             children: alerts.map((a) {
-              final c = curs.firstWhere((x) => x.code == a.account.currency,
-                  orElse: () => kDefaultCurrencies.first);
+              final c = curs.firstWhere(
+                (x) => x.code == a.account.currency,
+                orElse: () => kDefaultCurrencies.first,
+              );
               return ListTile(
-                leading: const Icon(Icons.warning_amber_rounded,
-                    color: AppColors.amber),
-                title: Text(a.account.name,
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w800)),
+                leading: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: AppColors.amber,
+                ),
+                title: Text(
+                  a.account.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
                 subtitle: Text(
                   'تجاوز الحد الائتماني '
                   '(${Fmt.money(a.account.creditLimit ?? 0, c.decimal)} ${c.symbol})',
                   style: const TextStyle(fontSize: 13.5),
                 ),
-                trailing: Text('${Fmt.money(a.balance, c.decimal)} ${c.symbol}',
-                    style: const TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.amber)),
+                trailing: Text(
+                  '${Fmt.money(a.balance, c.decimal)} ${c.symbol}',
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.amber,
+                  ),
+                ),
               );
             }).toList(),
           ),
@@ -285,14 +318,17 @@ class _Recent extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final txs = ref.watch(recentTxProvider).valueOrNull ?? [];
     final accounts = ref.watch(allAccountsProvider).valueOrNull ?? [];
-    final curs = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final curs =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SectionTitle('آخر العمليات',
-            actionLabel: txs.isEmpty ? null : 'عرض الكل',
-            onAction: () => onNavigate?.call(2)),
+        SectionTitle(
+          'آخر العمليات',
+          actionLabel: txs.isEmpty ? null : 'عرض الكل',
+          onAction: () => onNavigate?.call(2),
+        ),
         if (txs.isEmpty)
           Card(
             child: Padding(
@@ -310,11 +346,7 @@ class _Recent extends ConsumerWidget {
               children: [
                 for (var i = 0; i < txs.length; i++) ...[
                   if (i > 0) const Divider(height: 1, indent: 56),
-                  _TxRow(
-                    tx: txs[i],
-                    accounts: accounts,
-                    currencies: curs,
-                  ),
+                  _TxRow(tx: txs[i], accounts: accounts, currencies: curs),
                 ],
               ],
             ),
@@ -328,13 +360,18 @@ class _TxRow extends StatelessWidget {
   final dynamic tx;
   final List accounts;
   final List<CurrencyDef> currencies;
-  const _TxRow(
-      {required this.tx, required this.accounts, required this.currencies});
+  const _TxRow({
+    required this.tx,
+    required this.accounts,
+    required this.currencies,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final c = currencies.firstWhere((x) => x.code == tx.currency,
-        orElse: () => kDefaultCurrencies.first);
+    final c = currencies.firstWhere(
+      (x) => x.code == tx.currency,
+      orElse: () => kDefaultCurrencies.first,
+    );
     final acc = accounts.where((a) => a.id == tx.accountId).toList();
     final name = acc.isEmpty
         ? (tx.type == OpType.transfer ? 'تحويل' : '—')
@@ -356,10 +393,12 @@ class _TxRow extends StatelessWidget {
         ),
         child: Text(tx.type.icon, style: const TextStyle(fontSize: 20)),
       ),
-      title: Text(name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+      title: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+      ),
       subtitle: Text(
         '${tx.type.label} · ${Fmt.date(tx.date)}'
         '${tx.description.isEmpty ? '' : ' · ${tx.description}'}',
@@ -370,7 +409,10 @@ class _TxRow extends StatelessWidget {
       trailing: Text(
         '${Fmt.money(tx.amount, c.decimal)} ${c.symbol}',
         style: TextStyle(
-            fontSize: 16.5, fontWeight: FontWeight.w800, color: color),
+          fontSize: 16.5,
+          fontWeight: FontWeight.w800,
+          color: color,
+        ),
       ),
     );
   }

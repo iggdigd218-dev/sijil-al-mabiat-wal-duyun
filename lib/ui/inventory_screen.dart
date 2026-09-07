@@ -54,19 +54,25 @@ class InventoryScreen extends ConsumerWidget {
                   color: AppColors.primarySoftOf(context),
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: Icon(Icons.category_outlined,
-                    color: AppColors.primaryOf(context)),
+                child: Icon(
+                  Icons.category_outlined,
+                  color: AppColors.primaryOf(context),
+                ),
               ),
               const SizedBox(width: 10),
               const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('الفئات والأصناف',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
+                    Text(
+                      'الفئات والأصناف',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
                     SizedBox(height: 2),
-                    Text('أضف فئة أولًا ثم سجّل الأصناف داخلها',
-                        style: TextStyle(fontSize: 11.5)),
+                    Text(
+                      'أضف فئة أولًا ثم سجّل الأصناف داخلها',
+                      style: TextStyle(fontSize: 11.5),
+                    ),
                   ],
                 ),
               ),
@@ -170,9 +176,11 @@ class _InventorySections extends ConsumerWidget {
     final visibleCategories = query.trim().isEmpty
         ? categories
         : categories
-            .where((category) =>
-                category.id != null &&
-                (grouped[category.id!]?.isNotEmpty ?? false))
+            .where(
+              (category) =>
+                  category.id != null &&
+                  (grouped[category.id!]?.isNotEmpty ?? false),
+            )
             .toList();
 
     return ListView(
@@ -189,10 +197,12 @@ class _InventorySections extends ConsumerWidget {
             ),
           ),
         ),
-        ...visibleCategories.map((category) => _CategorySection(
-              category: category,
-              items: grouped[category.id!] ?? const [],
-            )),
+        ...visibleCategories.map(
+          (category) => _CategorySection(
+            category: category,
+            items: grouped[category.id!] ?? const [],
+          ),
+        ),
         if (uncategorized.isNotEmpty)
           _UncategorizedSection(items: uncategorized),
         if (visibleCategories.isEmpty && uncategorized.isEmpty)
@@ -252,24 +262,33 @@ class _CategorySection extends ConsumerWidget {
                     color: AppColors.primarySoftOf(context),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(Icons.folder_outlined,
-                      color: AppColors.primaryOf(context)),
+                  child: Icon(
+                    Icons.folder_outlined,
+                    color: AppColors.primaryOf(context),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(category.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w800)),
+                      Text(
+                        category.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                       const SizedBox(height: 2),
-                      Text('${items.length} صنف داخل هذه الفئة',
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              color: AppColors.text2Of(context))),
+                      Text(
+                        '${items.length} صنف داخل هذه الفئة',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: AppColors.text2Of(context),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -279,8 +298,10 @@ class _CategorySection extends ConsumerWidget {
                       ? null
                       : () =>
                           openItemForm(context, ref, categoryId: category.id),
-                  icon: Icon(Icons.add_box_outlined,
-                      color: AppColors.primaryOf(context)),
+                  icon: Icon(
+                    Icons.add_box_outlined,
+                    color: AppColors.primaryOf(context),
+                  ),
                 ),
                 PopupMenuButton<_CategoryAction>(
                   tooltip: 'خيارات الفئة',
@@ -319,17 +340,25 @@ class _CategorySection extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
               child: Column(
                 children: [
-                  Icon(Icons.inventory_2_outlined,
-                      size: 34, color: AppColors.text3Of(context)),
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    size: 34,
+                    color: AppColors.text3Of(context),
+                  ),
                   const SizedBox(height: 7),
-                  Text('لا توجد أصناف داخل هذه الفئة بعد',
-                      style: TextStyle(color: AppColors.text2Of(context))),
+                  Text(
+                    'لا توجد أصناف داخل هذه الفئة بعد',
+                    style: TextStyle(color: AppColors.text2Of(context)),
+                  ),
                   const SizedBox(height: 9),
                   FilledButton.tonalIcon(
                     onPressed: category.id == null
                         ? null
-                        : () =>
-                            openItemForm(context, ref, categoryId: category.id),
+                        : () => openItemForm(
+                              context,
+                              ref,
+                              categoryId: category.id,
+                            ),
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('إضافة أول صنف'),
                   ),
@@ -340,9 +369,7 @@ class _CategorySection extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 10, 10, 2),
               child: Column(
-                children: [
-                  ...items.map((item) => _ItemCard(item: item)),
-                ],
+                children: [...items.map((item) => _ItemCard(item: item))],
               ),
             ),
         ],
@@ -361,10 +388,14 @@ class _UncategorizedSection extends StatelessWidget {
         child: Column(
           children: [
             ListTile(
-              leading: Icon(Icons.folder_off_outlined,
-                  color: AppColors.accentOf(context)),
-              title: const Text('بدون فئة',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
+              leading: Icon(
+                Icons.folder_off_outlined,
+                color: AppColors.accentOf(context),
+              ),
+              title: const Text(
+                'بدون فئة',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
               subtitle: Text('${items.length} صنف يحتاج إلى فئة'),
             ),
             Padding(
@@ -408,19 +439,25 @@ class _ItemCard extends ConsumerWidget {
                       color: AppColors.primarySoftOf(context),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(Icons.inventory_2_outlined,
-                        color: AppColors.primaryOf(context)),
+                    child: Icon(
+                      Icons.inventory_2_outlined,
+                      color: AppColors.primaryOf(context),
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(item.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w800)),
+                        Text(
+                          item.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                         const SizedBox(height: 2),
                         Text(
                           [
@@ -428,7 +465,9 @@ class _ItemCard extends ConsumerWidget {
                             item.unit,
                           ].join(' · '),
                           style: TextStyle(
-                              fontSize: 12, color: AppColors.text3Of(context)),
+                            fontSize: 12,
+                            color: AppColors.text3Of(context),
+                          ),
                         ),
                       ],
                     ),
@@ -440,13 +479,15 @@ class _ItemCard extends ConsumerWidget {
               Row(
                 children: [
                   _Cell(
-                      label: 'سعر الشراء',
-                      value: Fmt.money(item.buyPrice, 0),
-                      color: AppColors.info),
+                    label: 'سعر الشراء',
+                    value: Fmt.money(item.buyPrice, 0),
+                    color: AppColors.info,
+                  ),
                   _Cell(
-                      label: 'سعر البيع',
-                      value: Fmt.money(item.sellPrice, 0),
-                      color: AppColors.teal),
+                    label: 'سعر البيع',
+                    value: Fmt.money(item.sellPrice, 0),
+                    color: AppColors.teal,
+                  ),
                   _Cell(
                     label: 'الكمية',
                     value: Fmt.money(item.quantity, 0),
@@ -482,8 +523,10 @@ class _ItemCard extends ConsumerWidget {
                         showSnack(context, 'نُقل الصنف إلى سلة المهملات');
                       }
                     },
-                    icon: Icon(Icons.delete_outline,
-                        color: AppColors.dangerOf(context)),
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: AppColors.dangerOf(context),
+                    ),
                   ),
                 ],
               ),
@@ -511,25 +554,32 @@ class _Cell extends StatelessWidget {
   Widget build(BuildContext context) => Expanded(
         child: Column(
           children: [
-            Text(label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 11.5, color: AppColors.text3Of(context))),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(fontSize: 11.5, color: AppColors.text3Of(context)),
+            ),
             const SizedBox(height: 3),
             FittedBox(
               fit: BoxFit.scaleDown,
-              child: Text(value,
-                  style: TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w800,
-                      color: color)),
+              child: Text(
+                value,
+                style: TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
             ),
             if (sub != null)
-              Text(sub!,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 10.5, color: color)),
+              Text(
+                sub!,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10.5, color: color),
+              ),
           ],
         ),
       );
@@ -547,8 +597,9 @@ Future<int?> openItemCategoryForm(
       isScrollControlled: true,
       useSafeArea: true,
       builder: (_) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: _ItemCategoryForm(category: category),
       ),
     ).then((id) {
@@ -615,18 +666,22 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(children: [
-                Icon(Icons.folder_outlined,
-                    color: AppColors.primaryOf(context)),
-                const SizedBox(width: 8),
-                Text(
+              Row(
+                children: [
+                  Icon(Icons.folder_outlined,
+                      color: AppColors.primaryOf(context)),
+                  const SizedBox(width: 8),
+                  Text(
                     widget.category == null ? 'إضافة فئة جديدة' : 'تعديل الفئة',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
-                IconButton(
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const Spacer(),
+                  IconButton(
                     onPressed: _saving ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close)),
-              ]),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               TextField(
                 controller: _name,
@@ -653,7 +708,8 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
                         )
                       : const Icon(Icons.save_outlined),
                   label: Text(
-                      widget.category == null ? 'حفظ الفئة' : 'حفظ التعديل'),
+                    widget.category == null ? 'حفظ الفئة' : 'حفظ التعديل',
+                  ),
                 ),
               ),
             ],
@@ -741,7 +797,9 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   }
 
   Widget _categoryPicker(
-      BuildContext context, AsyncValue<List<ItemCategory>> state) {
+    BuildContext context,
+    AsyncValue<List<ItemCategory>> state,
+  ) {
     return state.when(
       loading: () => const Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
@@ -792,11 +850,15 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 prefixIcon: const Icon(Icons.category_outlined),
               ),
               items: categories
-                  .map((category) => DropdownMenuItem<int>(
-                        value: category.id,
-                        child: Text(category.name,
-                            overflow: TextOverflow.ellipsis),
-                      ))
+                  .map(
+                    (category) => DropdownMenuItem<int>(
+                      value: category.id,
+                      child: Text(
+                        category.name,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
                   .toList(),
               onChanged: (value) {
                 setState(() {
@@ -812,7 +874,8 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 icon: const Icon(Icons.add, size: 17),
                 label: const Text('إضافة فئة جديدة'),
                 style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 4)),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                ),
               ),
             ),
           ],
@@ -862,9 +925,11 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        showSnack(context,
-            e is StateError ? e.message : 'تعذّر حفظ الصنف: $e',
-            error: true);
+        showSnack(
+          context,
+          e is StateError ? e.message : 'تعذّر حفظ الصنف: $e',
+          error: true,
+        );
       }
     }
   }
@@ -880,17 +945,24 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(children: [
-                Icon(Icons.inventory_2_outlined,
-                    color: AppColors.primaryOf(context)),
-                const SizedBox(width: 8),
-                Text(widget.item == null ? 'صنف جديد' : 'تعديل الصنف',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
-                IconButton(
+              Row(
+                children: [
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    color: AppColors.primaryOf(context),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.item == null ? 'صنف جديد' : 'تعديل الصنف',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const Spacer(),
+                  IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close)),
-              ]),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
               const SizedBox(height: 6),
               TextField(
                 controller: _name,
@@ -907,36 +979,39 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
               const SizedBox(height: 10),
               _categoryPicker(context, categories),
               const SizedBox(height: 4),
-              Row(children: [
-                Expanded(
-                  child: TextField(
-                    controller: _sku,
-                    decoration: InputDecoration(
-                      labelText: 'الرمز / الباركود',
-                      prefixIcon: const Icon(Icons.qr_code),
-                      suffixIcon: IconButton(
-                        tooltip: 'مسح الباركود بالكاميرا',
-                        icon: const Icon(Icons.barcode_reader),
-                        onPressed: () async {
-                          final code = await scanBarcode(context);
-                          if (code != null && code.isNotEmpty) {
-                            setState(() => _sku.text = code);
-                          }
-                        },
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _sku,
+                      decoration: InputDecoration(
+                        labelText: 'الرمز / الباركود',
+                        prefixIcon: const Icon(Icons.qr_code),
+                        suffixIcon: IconButton(
+                          tooltip: 'مسح الباركود بالكاميرا',
+                          icon: const Icon(Icons.barcode_reader),
+                          onPressed: () async {
+                            final code = await scanBarcode(context);
+                            if (code != null && code.isNotEmpty) {
+                              setState(() => _sku.text = code);
+                            }
+                          },
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _unit,
-                    decoration: const InputDecoration(
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _unit,
+                      decoration: const InputDecoration(
                         labelText: 'الوحدة',
-                        prefixIcon: Icon(Icons.straighten)),
+                        prefixIcon: Icon(Icons.straighten),
+                      ),
+                    ),
                   ),
-                ),
-              ]),
+                ],
+              ),
               Align(
                 alignment: AlignmentDirectional.centerStart,
                 child: TextButton.icon(
@@ -954,21 +1029,25 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 ),
               ),
               const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                  child: _AmountField(
+              Row(
+                children: [
+                  Expanded(
+                    child: _AmountField(
                       controller: _buy,
                       label: 'سعر الشراء',
-                      icon: Icons.shopping_cart_outlined),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _AmountField(
+                      icon: Icons.shopping_cart_outlined,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _AmountField(
                       controller: _sell,
                       label: 'سعر البيع',
-                      icon: Icons.sell_outlined),
-                ),
-              ]),
+                      icon: Icons.sell_outlined,
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
@@ -982,11 +1061,13 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(profit >= 0 ? Icons.trending_up : Icons.trending_down,
-                        size: 18,
-                        color: profit >= 0
-                            ? AppColors.greenOf(context)
-                            : AppColors.dangerOf(context)),
+                    Icon(
+                      profit >= 0 ? Icons.trending_up : Icons.trending_down,
+                      size: 18,
+                      color: profit >= 0
+                          ? AppColors.greenOf(context)
+                          : AppColors.dangerOf(context),
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'ربح الوحدة: ${Fmt.money(profit, 0)}'
@@ -1002,28 +1083,33 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 ),
               ),
               const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                  child: _AmountField(
+              Row(
+                children: [
+                  Expanded(
+                    child: _AmountField(
                       controller: _qty,
                       label: 'الكمية الحالية',
-                      icon: Icons.inventory_outlined),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _AmountField(
+                      icon: Icons.inventory_outlined,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _AmountField(
                       controller: _min,
                       label: 'حد التنبيه',
-                      icon: Icons.warning_amber_outlined),
-                ),
-              ]),
+                      icon: Icons.warning_amber_outlined,
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 10),
               TextField(
                 controller: _notes,
                 maxLines: 2,
                 decoration: const InputDecoration(
-                    labelText: 'ملاحظات',
-                    prefixIcon: Icon(Icons.notes_outlined)),
+                  labelText: 'ملاحظات',
+                  prefixIcon: Icon(Icons.notes_outlined),
+                ),
               ),
               const SizedBox(height: 16),
               SizedBox(

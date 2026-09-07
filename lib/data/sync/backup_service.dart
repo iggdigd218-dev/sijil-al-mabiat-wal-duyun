@@ -14,8 +14,11 @@ class BackupInfo {
   final File file;
   final int sizeBytes;
   final DateTime createdAt;
-  const BackupInfo(
-      {required this.file, required this.sizeBytes, required this.createdAt});
+  const BackupInfo({
+    required this.file,
+    required this.sizeBytes,
+    required this.createdAt,
+  });
 }
 
 class BackupService {
@@ -75,7 +78,8 @@ class BackupService {
   /// ينشئ نسخة احتياطية مؤقتة (قبل migration مثلاً) ويُعيد الملف.
   Future<File> createPreMigrationBackup() async {
     final dir = await getTemporaryDirectory();
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+    final ts =
+        DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
     final f = File(p.join(dir.path, 'nexora-backup-before-migration-$ts.json'));
     return exportToFile(f);
   }

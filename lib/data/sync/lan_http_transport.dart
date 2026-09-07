@@ -13,6 +13,7 @@ import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/models.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'conflict_resolver.dart';
@@ -81,7 +82,11 @@ class LanSyncService implements SyncTransport {
   Future<void> startServer() async {
     if (_server != null) return;
     try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, port, shared: true);
+      _server = await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        port,
+        shared: true,
+      );
     } catch (_) {
       _server = null;
       return;
@@ -102,7 +107,10 @@ class LanSyncService implements SyncTransport {
     final cors = req.response;
     cors.headers.set('Access-Control-Allow-Origin', '*');
     cors.headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    cors.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    cors.headers.set(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization',
+    );
     if (req.method == 'OPTIONS') {
       await cors.close();
       return;
@@ -139,18 +147,29 @@ class LanSyncService implements SyncTransport {
   Future<void> _handleStatus(HttpResponse resp) async {
     try {
       final db = await dbProvider();
-      final dev = await db.query('devices', where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
-      final devName = dev.isNotEmpty ? (dev.first['name'] as String? ?? 'Nexora') : 'Nexora';
+      final dev = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+        limit: 1,
+      );
+      final devName = dev.isNotEmpty
+          ? (dev.first['name'] as String? ?? 'Nexora')
+          : 'Nexora';
       final wsRows = await db.query('workspaces', limit: 1);
-      final wsId = wsRows.isNotEmpty ? (wsRows.first['id'] as String) : defaultWorkspaceId;
+      final wsId = wsRows.isNotEmpty
+          ? (wsRows.first['id'] as String)
+          : defaultWorkspaceId;
       resp.headers.contentType = ContentType.json;
-      resp.write(jsonEncode({
-        'deviceId': ourDeviceId,
-        'name': devName,
-        'port': port,
-        'workspaceId': wsId,
-        'version': 'flutter-native',
-      }));
+      resp.write(
+        jsonEncode({
+          'deviceId': ourDeviceId,
+          'name': devName,
+          'port': port,
+          'workspaceId': wsId,
+          'version': 'flutter-native',
+        }),
+      );
     } catch (_) {}
     await resp.close();
   }
@@ -173,14 +192,21 @@ class LanSyncService implements SyncTransport {
   Future<void> _handlePairEndpoint(HttpRequest req, HttpResponse resp) async {
     try {
       final body = await _readJsonLimited(req);
+      // The receiving socket knows the peer address even if interface discovery
+      // is unavailable, and avoids trusting an arbitrary advertised host.
+      final address = req.connectionInfo?.remoteAddress.address;
+      if (address != null && address.isNotEmpty) body['ipAddress'] = address;
       final ok = await _handlePair(body);
       resp.statusCode = ok.ok ? HttpStatus.ok : HttpStatus.forbidden;
       resp.headers.contentType = ContentType.json;
-      resp.write(jsonEncode({
-        'ok': ok.ok,
-        if (ok.ok) 'authSecret': ok.ourAuthSecret,
-        if (!ok.ok) 'error': ok.error,
-      }));
+      resp.write(
+        jsonEncode({
+          'ok': ok.ok,
+          if (ok.ok) 'authSecret': ok.ourAuthSecret,
+          if (ok.ok) 'deviceId': ourDeviceId,
+          if (!ok.ok) 'error': ok.error,
+        }),
+      );
     } catch (e) {
       resp.statusCode = HttpStatus.badRequest;
       resp.headers.contentType = ContentType.json;
@@ -196,63 +222,107 @@ class LanSyncService implements SyncTransport {
     final p = body['port'] as int?;
     final name = (body['name'] as String?) ?? 'جهاز';
     final theirSecret = (body['authSecret'] as String?) ?? '';
-    if (tok.length < 6 || devId.isEmpty || ip.isEmpty || p == null || theirSecret.isEmpty) {
+    if (tok.length < 6 ||
+        devId.isEmpty ||
+        ip.isEmpty ||
+        p == null ||
+        theirSecret.isEmpty) {
       return const LanPairResult(ok: false, error: 'bad-request');
     }
     final db = await dbProvider();
-    final rec = await db.query('devices',
-        where: 'pair_token = ? AND pair_token_exp > ?',
-        whereArgs: [tok, DateTime.now().toIso8601String()], limit: 1);
-    if (rec.isEmpty) return const LanPairResult(ok: false, error: 'invalid-token');
+    final rec = await db.query(
+      'devices',
+      where: 'pair_token = ? AND pair_token_exp > ?',
+      whereArgs: [tok, DateTime.now().toIso8601String()],
+      limit: 1,
+    );
+    if (rec.isEmpty)
+      return const LanPairResult(ok: false, error: 'invalid-token');
 
     final wsId = rec.first['workspace_id'] as String? ?? defaultWorkspaceId;
 
     // تأكد من وجود سر محلي لنا، وإلا وُلّد واحد.
-    final ourDevRows = await db.query('devices', where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
-    var ourSecret = (ourDevRows.isNotEmpty ? ourDevRows.first['auth_secret'] as String? : null) ?? '';
+    final ourDevRows = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [ourDeviceId],
+      limit: 1,
+    );
+    var ourSecret = (ourDevRows.isNotEmpty
+            ? ourDevRows.first['auth_secret'] as String?
+            : null) ??
+        '';
     if (ourSecret.isEmpty) {
       ourSecret = generateLanSecret();
-      await db.update('devices', {'auth_secret': ourSecret}, where: 'id = ?', whereArgs: [ourDeviceId]);
+      await db.update(
+        'devices',
+        {'auth_secret': ourSecret},
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+      );
     }
     // هوية المُقرِن (مالك هذا الجهاز / المضيف).
     int? pairedBy;
     try {
-      final ourDev = await db.query('devices',
-          where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+      final ourDev = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+        limit: 1,
+      );
       if (ourDev.isNotEmpty) pairedBy = ourDev.first['user_id'] as int?;
     } catch (_) {}
 
     final now = DateTime.now().toIso8601String();
     // سجّل الجهاز الجديد كعضو (ليس مالكًا) مع السر المرسل.
-    await db.insert('devices', {
-      'id': devId,
-      'workspace_id': wsId,
-      'name': name,
-      'platform': 'lan',
-      'ip_address': ip,
-      'port': p,
-      'auth_secret': theirSecret,
-      'is_paired': 1,
-      'is_owner': 0,
-      'revoked_at': '',
-      'last_seen_at': now,
-      'created_at': now,
-      'updated_at': now,
-      'paired_by': pairedBy,
-      // user_id يتركه المدير يحدده من شاشة الأجهزة.
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+        'devices',
+        {
+          'id': devId,
+          'workspace_id': wsId,
+          'name': name,
+          'platform': 'lan',
+          'ip_address': ip,
+          'port': p,
+          'auth_secret': theirSecret,
+          'is_paired': 1,
+          'is_owner': 0,
+          'revoked_at': '',
+          'last_seen_at': now,
+          'created_at': now,
+          'updated_at': now,
+          'paired_by': pairedBy,
+          // user_id يتركه المدير يحدده من شاشة الأجهزة.
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
     // تأكد من أننا نحن أصحاب المساحة (المضيف).
-    await db.update('devices', {'is_owner': 1},
-        where: 'id = ?', whereArgs: [ourDeviceId]);
+    await db.update(
+      'devices',
+      {'is_owner': 1},
+      where: 'id = ?',
+      whereArgs: [ourDeviceId],
+    );
     // امسح token بعد الاستخدام (one-time).
-    await db.update('devices', {'pair_token': '', 'pair_token_exp': ''},
-        where: 'pair_token = ?', whereArgs: [tok]);
+    await db.update(
+      'devices',
+      {'pair_token': '', 'pair_token_exp': ''},
+      where: 'pair_token = ?',
+      whereArgs: [tok],
+    );
     // ضبط الوضع "مُدار" لدى المضيف.
-    await db.insert('sync_meta',
-        {'key': 'workspaceMode', 'value': 'host'},
+    await db.insert(
+        'sync_meta',
+        {
+          'key': 'workspaceMode',
+          'value': 'host',
+        },
         conflictAlgorithm: ConflictAlgorithm.replace);
     // نُعيد سرّنا للجهاز الآخر كي يخزنه ويُرسله عند الإرسال إلينا.
-    return LanPairResult(ok: true, ourAuthSecret: ourSecret, remoteDeviceId: devId);
+    return LanPairResult(
+      ok: true,
+      ourAuthSecret: ourSecret,
+      remoteDeviceId: devId,
+    );
   }
 
   /// يُرجع لقطة كاملة من جميع الجداول المحلية للعضو الجديد ليستبدل بها بياناته.
@@ -269,9 +339,13 @@ class LanSyncService implements SyncTransport {
     }
     try {
       final db = await dbProvider();
-      final devRows = await db.query('devices',
-          where: 'auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
-          whereArgs: [secret], limit: 1);
+      final devRows = await db.query(
+        'devices',
+        where:
+            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [secret],
+        limit: 1,
+      );
       if (devRows.isEmpty) {
         resp.statusCode = HttpStatus.forbidden;
         resp.write(jsonEncode({'ok': false, 'error': 'unknown-device'}));
@@ -281,14 +355,38 @@ class LanSyncService implements SyncTransport {
       // نجمع كل الجداول التي يجب نسخها.
       final snapshot = <String, Object?>{};
       const tables = [
-        'accounts', 'transactions', 'transaction_items',
-        'vouchers', 'currencies', 'categories', 'item_categories',
-        'items', 'stock_moves', 'conversations', 'messages',
-        'users', 'trash', 'activity',
-        'workspaces', 'devices',
+        'accounts',
+        'transactions',
+        'transaction_items',
+        'vouchers',
+        'currencies',
+        'categories',
+        'item_categories',
+        'items',
+        'stock_moves',
+        'conversations',
+        'messages',
+        'users',
+        'trash',
+        'activity',
+        'workspaces',
+        'devices',
       ];
       for (final t in tables) {
-        snapshot[t] = await db.query(t);
+        final rows = await db.query(t);
+        snapshot[t] = rows.map((source) {
+          final row = Map<String, Object?>.from(source);
+          if (t == 'users') {
+            row['pin'] = '';
+            row['password'] = '';
+          }
+          if (t == 'devices') {
+            if (row['id'] != devRows.first['id']) row['auth_secret'] = '';
+            row['pair_token'] = '';
+            row['pair_token_exp'] = '';
+          }
+          return row;
+        }).toList();
       }
       snapshot['workspaceMode'] = 'member';
       snapshot['hostDeviceId'] = ourDeviceId;
@@ -320,26 +418,63 @@ class LanSyncService implements SyncTransport {
       // 2) تحقق من صلاحيات الجهاز المرسل.
       final db = await dbProvider();
       // تحقق هل الجهاز مطرود (حتى وإن عرف السر الصحيح).
-      final expelledRows = await db.query('devices',
-          where: 'id = ? AND (COALESCE(revoked_at,"") <> "" OR COALESCE(expelled_at,"") <> "")',
-          whereArgs: [op.deviceId], limit: 1);
+      final expelledRows = await db.query(
+        'devices',
+        where:
+            "id = ? AND (COALESCE(revoked_at,'') <> '' OR COALESCE(expelled_at,'') <> '')",
+        whereArgs: [op.deviceId],
+        limit: 1,
+      );
       if (expelledRows.isNotEmpty) {
         // 410 Gone يُخبر العضو أنه مطرود ويجب أن يمسح بياناته ويعود مستقلاً.
         statusCode = HttpStatus.gone;
         error = 'device-expelled';
         return;
       }
-      final senderRows = await db.query('devices',
-          where: 'id = ? AND is_paired = 1 AND COALESCE(revoked_at, "") = "" AND COALESCE(expelled_at,"") = "" AND auth_secret = ?',
-          whereArgs: [op.deviceId, secret], limit: 1);
+      final senderRows = await db.query(
+        'devices',
+        where:
+            "id = ? AND is_paired = 1 AND COALESCE(revoked_at, '') = '' AND COALESCE(expelled_at,'') = '' AND auth_secret = ?",
+        whereArgs: [op.deviceId, secret],
+        limit: 1,
+      );
       if (senderRows.isEmpty) {
         statusCode = HttpStatus.forbidden;
         error = 'device-not-authorized';
         return;
       }
+      final sender = senderRows.first;
+      if ((sender['is_owner'] as int? ?? 0) != 1) {
+        final userId = sender['user_id'] as int?;
+        final users = userId == null
+            ? <Map<String, Object?>>[]
+            : await db.query('users',
+                where:
+                    "id = ? AND active = 1 AND COALESCE(deleted_at, '') = ''",
+                whereArgs: [userId],
+                limit: 1);
+        final user = users.isEmpty ? null : AppUser.fromMap(users.first);
+        final permission = switch (op.entityType) {
+          EntityKind.user => 'manage_users',
+          EntityKind.setting || EntityKind.currency => 'manage_users',
+          _ => switch (op.opType) {
+              OpKind.create || OpKind.restore => 'add_tx',
+              OpKind.update => 'edit_tx',
+              OpKind.delete_ => 'delete_tx',
+              OpKind.settings => 'manage_users',
+            },
+        };
+        if (user == null || !user.can(permission)) {
+          statusCode = HttpStatus.forbidden;
+          error = 'user-not-authorized';
+          return;
+        }
+      }
       // 3) تحقق من workspaceId المطابق.
       final wsRows = await db.query('workspaces', limit: 1);
-      final localWsId = wsRows.isNotEmpty ? (wsRows.first['id'] as String) : defaultWorkspaceId;
+      final localWsId = wsRows.isNotEmpty
+          ? (wsRows.first['id'] as String)
+          : defaultWorkspaceId;
       if (op.workspaceId != localWsId) {
         statusCode = HttpStatus.forbidden;
         error = 'workspace-mismatch';
@@ -361,23 +496,32 @@ class LanSyncService implements SyncTransport {
       await db.transaction((txn) async {
         final ok = await repo.applyRemoteOperation(txn, op, _resolver);
         if (ok) applied++;
-        await txn.insert('sync_queue', {
-          'operation_id': op.id,
-          'status': SyncStatus.synced.name,
-          'target': SyncTarget.lanBroadcast,
-          'attempts': 0,
-          'last_error': '',
-          'next_try_at': '',
-          'created_at': DateTime.now().toIso8601String(),
-          'updated_at': DateTime.now().toIso8601String(),
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        await txn.insert(
+            'sync_queue',
+            {
+              'operation_id': op.id,
+              'status': SyncStatus.synced.name,
+              'target': SyncTarget.lanBroadcast,
+              'attempts': 0,
+              'last_error': '',
+              'next_try_at': '',
+              'created_at': DateTime.now().toIso8601String(),
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore);
       });
       await repo.setSetting('lastLanSync', DateTime.now().toLocal().toString());
       // تحديث last_seen للمرسل.
-      await db.update('devices', {
-        'last_seen_at': DateTime.now().toIso8601String(),
-        'ip_address': (req.connectionInfo?.remoteAddress.address) ?? senderRows.first['ip_address'],
-      }, where: 'id = ?', whereArgs: [op.deviceId]);
+      await db.update(
+        'devices',
+        {
+          'last_seen_at': DateTime.now().toIso8601String(),
+          'ip_address': (req.connectionInfo?.remoteAddress.address) ??
+              senderRows.first['ip_address'],
+        },
+        where: 'id = ?',
+        whereArgs: [op.deviceId],
+      );
     } on StateError catch (e) {
       error = e.message;
       statusCode = HttpStatus.requestEntityTooLarge;
@@ -387,7 +531,9 @@ class LanSyncService implements SyncTransport {
     } finally {
       resp.statusCode = statusCode;
       resp.headers.contentType = ContentType.json;
-      resp.write(jsonEncode({'ok': error == null, 'applied': applied, 'error': error}));
+      resp.write(
+        jsonEncode({'ok': error == null, 'applied': applied, 'error': error}),
+      );
       await resp.close();
     }
   }
@@ -401,26 +547,42 @@ class LanSyncService implements SyncTransport {
   @override
   Future<void> push(SyncOperation op) async {
     final db = await dbProvider();
-    final devices = await db.query('devices',
-        where: "is_paired = 1 AND COALESCE(revoked_at, '') = '' AND ip_address <> '' AND id <> ? AND auth_secret <> ''",
-        whereArgs: [ourDeviceId]);
+    final own = await db.query('devices',
+        columns: ['auth_secret'],
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+        limit: 1);
+    final senderSecret =
+        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+    if (senderSecret.isEmpty) throw StateError('missing-sender-credential');
+    final devices = await db.query(
+      'devices',
+      where:
+          "is_paired = 1 AND COALESCE(revoked_at, '') = '' AND ip_address <> '' AND id <> ?",
+      whereArgs: [ourDeviceId],
+    );
+    if (devices.isEmpty) throw StateError('no-paired-peers');
     final errors = <String>[];
     for (final d in devices) {
       final ip = d['ip_address'] as String?;
       final p = d['port'] as int?;
       final devId = d['id'] as String;
-      final secret = d['auth_secret'] as String? ?? '';
-      if (ip == null || ip.isEmpty || p == null || secret.isEmpty) continue;
+      if (ip == null || ip.isEmpty || p == null) continue;
       try {
         final req = await _httpClient.postUrl(Uri.parse('http://$ip:$p/ops'));
         req.headers.contentType = ContentType.json;
-        req.headers.set('Authorization', 'Bearer $secret');
+        req.headers.set('Authorization', 'Bearer $senderSecret');
         req.write(op.toJson());
         final resp = await req.close().timeout(const Duration(seconds: 5));
-        final body = await resp.timeout(const Duration(seconds: 3)).transform(utf8.decoder).join();
+        final body = await resp
+            .timeout(const Duration(seconds: 3))
+            .transform(utf8.decoder)
+            .join();
         if (resp.statusCode == HttpStatus.gone) {
           // المضيف أبلغنا أننا مطرودون → نمسح البيانات محلياً ونعود مستقلين.
-          try { await repo.resetToStandaloneAfterExpulsion(); } catch (_) {}
+          try {
+            await repo.resetToStandaloneAfterExpulsion();
+          } catch (_) {}
           errors.add('$devId: expelled');
           continue;
         }
@@ -432,9 +594,12 @@ class LanSyncService implements SyncTransport {
           } catch (_) {}
           errors.add('$devId: $errMsg');
         }
-        await db.update('devices', {
-          'last_seen_at': DateTime.now().toIso8601String(),
-        }, where: 'id = ?', whereArgs: [devId]);
+        await db.update(
+          'devices',
+          {'last_seen_at': DateTime.now().toIso8601String()},
+          where: 'id = ?',
+          whereArgs: [devId],
+        );
       } catch (e) {
         errors.add('$devId: $e');
       }
@@ -445,65 +610,99 @@ class LanSyncService implements SyncTransport {
   }
 
   /// يرسل طلب pairing وإن نجح يسجل الخصم.
-  Future<LanPairResult> pairWith(String ip, int port, String token, {int? ourPort}) async {
+  Future<LanPairResult> pairWith(
+    String ip,
+    int port,
+    String token, {
+    int? ourPort,
+  }) async {
     try {
       final db = await dbProvider();
-      final localDev = await db.query('devices', where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
-      final name = localDev.isNotEmpty ? (localDev.first['name'] as String? ?? 'Nexora') : 'Nexora';
+      final localDev = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+        limit: 1,
+      );
+      final name = localDev.isNotEmpty
+          ? (localDev.first['name'] as String? ?? 'Nexora')
+          : 'Nexora';
       final localPort = ourPort ?? port;
-      var ourSecret = (localDev.isNotEmpty ? localDev.first['auth_secret'] as String? : null) ?? '';
+      var ourSecret = (localDev.isNotEmpty
+              ? localDev.first['auth_secret'] as String?
+              : null) ??
+          '';
       if (ourSecret.isEmpty) {
         ourSecret = generateLanSecret();
-        await db.update('devices', {'auth_secret': ourSecret}, where: 'id = ?', whereArgs: [ourDeviceId]);
+        await db.update(
+          'devices',
+          {'auth_secret': ourSecret},
+          where: 'id = ?',
+          whereArgs: [ourDeviceId],
+        );
       }
       final req = await _httpClient.postUrl(Uri.parse('http://$ip:$port/pair'));
       req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({
-        'token': token,
-        'deviceId': ourDeviceId,
-        'ipAddress': await _localIp() ?? '',
-        'port': localPort, // المنفذ الذي نستمع نحن عليه كعضو.
-        'name': name,
-        'authSecret': ourSecret,
-      }));
+      req.write(
+        jsonEncode({
+          'token': token,
+          'deviceId': ourDeviceId,
+          'ipAddress': await _localIp() ?? '',
+          'port': localPort, // المنفذ الذي نستمع نحن عليه كعضو.
+          'name': name,
+          'authSecret': ourSecret,
+        }),
+      );
       final resp = await req.close().timeout(const Duration(seconds: 5));
-      final bodyText = await resp.timeout(const Duration(seconds: 3)).transform(utf8.decoder).join();
+      final bodyText = await resp
+          .timeout(const Duration(seconds: 3))
+          .transform(utf8.decoder)
+          .join();
       if (resp.statusCode != 200) {
         return LanPairResult(ok: false, error: 'HTTP ${resp.statusCode}');
       }
       final m = jsonDecode(bodyText) as Map;
       final ok = m['ok'] == true;
-      if (!ok) return LanPairResult(ok: false, error: '${m['error'] ?? 'failed'}');
+      if (!ok)
+        return LanPairResult(ok: false, error: '${m['error'] ?? 'failed'}');
       final remoteSecret = (m['authSecret'] as String?) ?? '';
-      if (remoteSecret.isEmpty) return const LanPairResult(ok: false, error: 'no-secret');
+      if (remoteSecret.isEmpty)
+        return const LanPairResult(ok: false, error: 'no-secret');
       // سجّل الجهاز الآخر مع سرّه.
       // لاحظ: الجهاز الآخر قد لا يعرف بعد deviceId/name/ip لنا قبل أن نكمل الاقتران،
       // لكنه سجّلنا بالفعل في _handlePair عنده (وولّد لنا سر ourSecret).
       final devId = m['deviceId'] as String? ?? '';
       final now = DateTime.now().toIso8601String();
       if (devId.isNotEmpty) {
-        await db.insert('devices', {
-          'id': devId,
-          'workspace_id': defaultWorkspaceId,
-          'name': 'المضيف',
-          'platform': 'lan',
-          'ip_address': ip,
-          'port': port,
-          'auth_secret': remoteSecret,
-          'is_paired': 1,
-          'is_owner': 1, // المضيف هو المالك.
-          'revoked_at': '',
-          'last_seen_at': now,
-          'created_at': now,
-          'updated_at': now,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await db.insert(
+            'devices',
+            {
+              'id': devId,
+              'workspace_id': defaultWorkspaceId,
+              'name': 'المضيف',
+              'platform': 'lan',
+              'ip_address': ip,
+              'port': port,
+              'auth_secret': remoteSecret,
+              'is_paired': 1,
+              'is_owner': 1, // المضيف هو المالك.
+              'revoked_at': '',
+              'last_seen_at': now,
+              'created_at': now,
+              'updated_at': now,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
       // نجلب اللقطة الكاملة من المضيف ونُعيدها في LanPairResult ليُطبّقها المستدعي.
       Map<String, Object?>? snapshot;
       try {
-        final snapReq = await _httpClient.getUrl(Uri.parse('http://$ip:$port/snapshot'));
+        final snapReq = await _httpClient.getUrl(
+          Uri.parse('http://$ip:$port/snapshot'),
+        );
         snapReq.headers.set('Authorization', 'Bearer $ourSecret');
-        final snapResp = await snapReq.close().timeout(const Duration(seconds: 10));
+        final snapResp = await snapReq.close().timeout(
+              const Duration(seconds: 10),
+            );
         final snapBody = await snapResp
             .timeout(const Duration(seconds: 8))
             .transform(utf8.decoder)
@@ -514,9 +713,10 @@ class LanSyncService implements SyncTransport {
         }
       } catch (_) {}
       return LanPairResult(
-          ok: true,
-          remoteDeviceId: devId.isEmpty ? null : devId,
-          snapshot: snapshot);
+        ok: true,
+        remoteDeviceId: devId.isEmpty ? null : devId,
+        snapshot: snapshot,
+      );
     } catch (e) {
       return LanPairResult(ok: false, error: '$e');
     }
@@ -524,15 +724,35 @@ class LanSyncService implements SyncTransport {
 
   /// يُطبّق لقطة البيانات القادمة من المضيف على الجهاز العضو (يمسح القديم ويستبدله).
   static Future<void> applySnapshot(
-      Future<Database> Function() dbProvider, String ourDeviceId, Map<String, Object?> snap) async {
+    Future<Database> Function() dbProvider,
+    String ourDeviceId,
+    Map<String, Object?> snap,
+  ) async {
     final db = await dbProvider();
     await db.transaction((txn) async {
+      final knownDevices =
+          await txn.query('devices', columns: ['id', 'auth_secret']);
+      final knownSecrets = {
+        for (final d in knownDevices) d['id']: d['auth_secret']
+      };
       // 1) مسح البيانات المحلية (نُبقي devices/workspaces/sync_meta جزئياً).
       const clearTables = [
-        'accounts', 'transactions', 'transaction_items', 'vouchers',
-        'currencies', 'categories', 'item_categories', 'items',
-        'stock_moves', 'conversations', 'messages', 'users',
-        'trash', 'activity', 'operations', 'sync_queue',
+        'accounts',
+        'transactions',
+        'transaction_items',
+        'vouchers',
+        'currencies',
+        'categories',
+        'item_categories',
+        'items',
+        'stock_moves',
+        'conversations',
+        'messages',
+        'users',
+        'trash',
+        'activity',
+        'operations',
+        'sync_queue',
       ];
       for (final t in clearTables) {
         await txn.delete(t);
@@ -552,6 +772,11 @@ class LanSyncService implements SyncTransport {
               if (k is String) map[k] = v as Object?;
             });
             if (table == 'devices') {
+              if ((map['auth_secret'] as String? ?? '').isEmpty) {
+                // Retain only credentials already obtained through pairing;
+                // redacted snapshots never distribute other peers' secrets.
+                map['auth_secret'] = knownSecrets[map['id']] ?? '';
+              }
               if (map['id'] == ourDeviceId) {
                 // سجلنا كما يعرفه المضيف — لسنا مالكين.
                 map['is_owner'] = 0;
@@ -565,8 +790,11 @@ class LanSyncService implements SyncTransport {
               // devices.user_id التي يعيّنها المدير لاحقاً.
               map['is_me'] = 0;
             }
-            await txn.insert(table, map,
-                conflictAlgorithm: ConflictAlgorithm.replace);
+            await txn.insert(
+              table,
+              map,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
           } catch (_) {}
         }
       }
@@ -589,20 +817,32 @@ class LanSyncService implements SyncTransport {
       await insertAll('activity');
 
       // 3) جهازنا الآن عضو (ليس مالكًا).
-      await txn.update('devices', {'is_owner': 0, 'is_paired': 1},
-          where: 'id = ?', whereArgs: [ourDeviceId]);
+      await txn.update(
+        'devices',
+        {'is_owner': 0, 'is_paired': 1},
+        where: 'id = ?',
+        whereArgs: [ourDeviceId],
+      );
       // 4) ضبط وضع المساحة على "عضو".
-      await txn.insert('sync_meta',
-          {'key': 'workspaceMode', 'value': 'member'},
+      await txn.insert(
+          'sync_meta',
+          {
+            'key': 'workspaceMode',
+            'value': 'member',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
 
   Future<String?> _localIp() async {
     try {
-      for (final iface in await NetworkInterface.list(includeLoopback: false, type: InternetAddressType.IPv4)) {
+      for (final iface in await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      )) {
         for (final a in iface.addresses) {
-          if (!a.isLoopback && a.type == InternetAddressType.IPv4) return a.address;
+          if (!a.isLoopback && a.type == InternetAddressType.IPv4)
+            return a.address;
         }
       }
     } catch (_) {}

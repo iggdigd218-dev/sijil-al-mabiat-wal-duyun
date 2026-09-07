@@ -22,6 +22,8 @@ String _quantity(double value) =>
 ///
 /// المسار كاملًا بلا نافذة مشاركة: تُولَّد الصورة، تُحفظ في العملية، ثم
 /// تُفتح محادثة العميل مباشرة ومعها الصورة والنص.
+enum TxShareOutcome { skipped, opened, failed }
+
 class TxShare {
   /// يولّد الصورة ويحفظ مسارها في العملية، ويعيد المسار.
   static Future<String> generate({
@@ -47,17 +49,19 @@ class TxShare {
       }
     }
 
-    final path = await buildReceiptImage(ReceiptData.fromTx(
-      tx: tx,
-      account: account,
-      currency: cur,
-      balanceAfter: after,
-      settings: settings,
-      items: items,
-    ));
+    final path = await buildReceiptImage(
+      ReceiptData.fromTx(
+        tx: tx,
+        account: account,
+        currency: cur,
+        balanceAfter: after,
+        settings: settings,
+        items: items,
+      ),
+    );
 
     if (tx.id != null) {
-      await repo.saveTx(tx.copyWith(image: path));
+      await repo.updateTxImage(tx.id!, path);
     }
     return path;
   }
@@ -116,8 +120,7 @@ class TxShare {
       amountLine,
       'التاريخ: ${Fmt.date(tx.date)}',
       if (tx.reference.trim().isNotEmpty) 'رقم العملية: ${tx.reference.trim()}',
-      if (tx.description.trim().isNotEmpty)
-        'البيان: ${tx.description.trim()}',
+      if (tx.description.trim().isNotEmpty) 'البيان: ${tx.description.trim()}',
     ];
     if (items.isNotEmpty) {
       lines.add('━━━━━━━━━━━━━');
@@ -132,7 +135,8 @@ class TxShare {
       final total = items.fold<double>(0, (sum, line) => sum + line.total);
       lines.add('━━━━━━━━━━━━━');
       lines.add(
-          '💰 إجمالي الفاتورة: ${Fmt.money(total, cur.decimal)} ${cur.symbol}');
+        '💰 إجمالي الفاتورة: ${Fmt.money(total, cur.decimal)} ${cur.symbol}',
+      );
     }
 
     // رصيد العميل الحالي بعد العملية (وضوح كامل للمطلوب).
@@ -147,7 +151,9 @@ class TxShare {
             : 'المطلوب منا (له)';
         if (bal.abs() > 0.001) {
           final label = bal > 0 ? oweLabel : themLabel;
-          lines.add('📊 $label: ${Fmt.money(bal.abs(), cur.decimal)} ${cur.symbol}');
+          lines.add(
+            '📊 $label: ${Fmt.money(bal.abs(), cur.decimal)} ${cur.symbol}',
+          );
         } else {
           lines.add('📊 الرصيد الحالي: صفر — جميع المستحقات مسددة ✅');
         }
@@ -169,7 +175,7 @@ class TxShare {
   /// المسار الكامل: توليد + حفظ + فتح واتساب على رقم العميل.
   ///
   /// يعمل نفسه للعملية الجديدة ولإعادة الإرسال لعملية قديمة.
-  static Future<void> sendNow(
+  static Future<TxShareOutcome> sendNow(
     BuildContext context,
     WidgetRef ref, {
     required Tx tx,
@@ -184,7 +190,8 @@ class TxShare {
     final channel = (acc?.notifyChannel ?? 'whatsapp').trim();
     final phone = _phoneOf(acc, channel);
 
-    if (channel == 'none') return; // المستخدم فضّل عدم الإرسال.
+    if (channel == 'none')
+      return TxShareOutcome.skipped; // المستخدم فضّل عدم الإرسال.
 
     if (phone.isEmpty) {
       if (!silentIfNoPhone && context.mounted) {
@@ -196,7 +203,7 @@ class TxShare {
           error: true,
         );
       }
-      return;
+      return TxShareOutcome.skipped;
     }
 
     if (context.mounted) {
@@ -219,7 +226,7 @@ class TxShare {
       if (context.mounted) {
         showSnack(context, 'تعذّر تحميل بيانات السند: $e', error: true);
       }
-      return;
+      return TxShareOutcome.failed;
     }
     final hasLogo = (currentSettings['logo'] ?? '').trim().isNotEmpty;
     final needsFreshReceipt =
@@ -232,7 +239,7 @@ class TxShare {
       if (context.mounted) {
         showSnack(context, 'تعذّر تجهيز نص الإشعار: $e', error: true);
       }
-      return;
+      return TxShareOutcome.failed;
     }
 
     // === فرع الرسائل النصية ===
@@ -243,8 +250,16 @@ class TxShare {
         if (needsFreshReceipt ||
             tx.image.isEmpty ||
             !File(tx.image).existsSync()) {
-          unawaited(generate(repo: repo, tx: tx, account: acc)
-              .timeout(const Duration(seconds: 5)));
+          unawaited(
+            generate(
+              repo: repo,
+              tx: tx,
+              account: acc,
+            ).timeout(const Duration(seconds: 5)).then<void>((_) {},
+                onError: (Object e, StackTrace st) {
+              debugPrint('Receipt generation failed: $e');
+            }),
+          );
         }
       } catch (_) {}
       final ok = await SmsSender.send(phone: phone, body: text);
@@ -258,7 +273,7 @@ class TxShare {
           error: !ok,
         );
       }
-      return;
+      return ok ? TxShareOutcome.opened : TxShareOutcome.failed;
     }
 
     // === فرع واتساب ===
@@ -273,18 +288,24 @@ class TxShare {
       }
     } catch (_) {
       if (context.mounted) {
-        showSnack(context, 'تعذّر تجهيز صورة السند، لم يتم إرسال إشعار نصي فقط.',
-            error: true);
+        showSnack(
+          context,
+          'تعذّر تجهيز صورة السند، لم يتم إرسال إشعار نصي فقط.',
+          error: true,
+        );
       }
-      return;
+      return TxShareOutcome.failed;
     }
 
     if (path.isEmpty || !File(path).existsSync()) {
       if (context.mounted) {
-        showSnack(context, 'تعذّر العثور على صورة السند، لم يتم إرسال النص وحده.',
-            error: true);
+        showSnack(
+          context,
+          'تعذّر العثور على صورة السند، لم يتم إرسال النص وحده.',
+          error: true,
+        );
       }
-      return;
+      return TxShareOutcome.failed;
     }
 
     late final WaResult res;
@@ -305,10 +326,9 @@ class TxShare {
       );
     } catch (e) {
       if (context.mounted) {
-        showSnack(context, 'تعذّر إرسال السند بالصورة والنص: $e',
-            error: true);
+        showSnack(context, 'تعذّر إرسال السند بالصورة والنص: $e', error: true);
       }
-      return;
+      return TxShareOutcome.failed;
     }
 
     bump(ref);
@@ -323,9 +343,11 @@ class TxShare {
           error: !shared,
         );
       }
+      return shared ? TxShareOutcome.opened : TxShareOutcome.failed;
     } else if (context.mounted && res != WaResult.ok) {
       showSnack(context, WhatsApp.messageFor(res), error: true);
     }
+    return res == WaResult.ok ? TxShareOutcome.opened : TxShareOutcome.failed;
   }
 
   /// مشاركة احتياطية تحفظ الصورة والنص معًا عبر نافذة مشاركة أندرويد.
@@ -391,16 +413,21 @@ Future<void> showReceiptPreview(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
-            child: Row(children: [
-              Icon(Icons.image_outlined, color: AppColors.primaryOf(ctx)),
-              const SizedBox(width: 8),
-              Text('إيصال العملية',
-                  style: Theme.of(ctx).textTheme.titleMedium),
-              const Spacer(),
-              IconButton(
+            child: Row(
+              children: [
+                Icon(Icons.image_outlined, color: AppColors.primaryOf(ctx)),
+                const SizedBox(width: 8),
+                Text(
+                  'إيصال العملية',
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                IconButton(
                   onPressed: () => Navigator.pop(ctx),
-                  icon: const Icon(Icons.close)),
-            ]),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
           ),
           Expanded(
             child: SingleChildScrollView(
@@ -415,42 +442,54 @@ Future<void> showReceiptPreview(
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(14),
-              child: Row(children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      Navigator.pop(ctx);
-                      try {
-                        await TxShare.generate(
-                            repo: repo, tx: tx, account: acc);
-                        bump(ref);
-                        if (context.mounted) {
-                          showSnack(context, 'أُعيد توليد الصورة');
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        try {
+                          await TxShare.generate(
+                            repo: repo,
+                            tx: tx,
+                            account: acc,
+                          );
+                          bump(ref);
+                          if (context.mounted) {
+                            showSnack(context, 'أُعيد توليد الصورة');
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            showSnack(
+                              context,
+                              'تعذّرت إعادة توليد الصورة: $e',
+                              error: true,
+                            );
+                          }
                         }
-                      } catch (e) {
-                        if (context.mounted) {
-                          showSnack(context, 'تعذّرت إعادة توليد الصورة: $e',
-                              error: true);
-                        }
-                      }
-                    },
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('إعادة التوليد'),
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة التوليد'),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      TxShare.sendNow(context, ref,
-                          tx: tx.copyWith(image: path), account: acc);
-                    },
-                    icon: const Icon(Icons.send),
-                    label: const Text('إرسال واتساب'),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        TxShare.sendNow(
+                          context,
+                          ref,
+                          tx: tx.copyWith(image: path),
+                          account: acc,
+                        );
+                      },
+                      icon: const Icon(Icons.send),
+                      label: const Text('إرسال واتساب'),
+                    ),
                   ),
-                ),
-              ]),
+                ],
+              ),
             ),
           ),
         ],

@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/accounting.dart';
+import '../core/ids.dart';
 import '../core/database.dart';
 import '../core/models.dart';
 import 'sync/device_id.dart';
@@ -29,7 +30,15 @@ class BackupImportException implements Exception {
 
 /// مستودع البيانات — كل قراءة وكتابة تمرّ من هنا.
 class Repo {
-  Future<Database> get _db async => AppDatabase.instance.database;
+  /// Optional injection keeps multi-device QA databases independent. Production
+  /// callers still use the existing application database by default.
+  Repo({Future<Database> Function()? databaseProvider})
+      : _databaseProvider = databaseProvider;
+
+  final Future<Database> Function()? _databaseProvider;
+  Future<Database> get _db async => _databaseProvider != null
+      ? _databaseProvider()
+      : AppDatabase.instance.database;
   Future<Database> get database async => _db;
 
   String? _deviceId;
@@ -46,31 +55,31 @@ class Repo {
     // تسجيل هذا الجهاز في جدول devices إن لم يكن مسجلاً.
     final now = DateTime.now().toIso8601String();
     await db.insert(
-      'devices',
-      {
-        'id': _deviceId,
-        'workspace_id': _workspaceId,
-        'name': await deviceName(this),
-        'platform': Platform.operatingSystem,
-        'is_paired': 1,
-        'is_owner': 1, // الجهاز المحلي في الوضع المستقل هو المالك.
-        'auth_secret': generateLanSecret(),
-        'revoked_at': '',
-        'ip_address': '',
-        'port': kDefaultLanPort,
-        'last_seen_at': now,
-        'last_sync_at': '',
-        'created_at': now,
-        'updated_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+        'devices',
+        {
+          'id': _deviceId,
+          'workspace_id': _workspaceId,
+          'name': await deviceName(this),
+          'platform': Platform.operatingSystem,
+          'is_paired': 1,
+          'is_owner': 1, // الجهاز المحلي في الوضع المستقل هو المالك.
+          'auth_secret': generateLanSecret(),
+          'revoked_at': '',
+          'ip_address': '',
+          'port': kDefaultLanPort,
+          'last_seen_at': now,
+          'last_sync_at': '',
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore);
 
     // 🛟 بذرة مستخدم مدير افتراضي في أول تشغيل (إذا كان جدول المستخدمين فارغًا).
     final existingUsers = await db.query('users', limit: 1);
     if (existingUsers.isEmpty) {
       final adminPerms = defaultPerms(UserRole.admin);
-      final permStr = adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
+      final permStr =
+          adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
       await db.insert('users', {
         'name': 'المدير',
         'role': 'admin',
@@ -92,16 +101,22 @@ class Repo {
 
     // تأكد من أن جهازنا مرتبط بالمستخدم الحالي (في الوضع المستقل/المضيف).
     if (_deviceId != null && _currentUserId != null) {
-      final myDev = await db.query('devices',
-          where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+      final myDev = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [_deviceId],
+        limit: 1,
+      );
       if (myDev.isNotEmpty) {
         final existingUid = myDev.first['user_id'] as int?;
         final existingOwner = (myDev.first['is_owner'] ?? 0) as int;
         if (existingUid != _currentUserId || existingOwner == 1) {
-          await db.update('devices', {
-            'user_id': _currentUserId,
-            'paired_by': _currentUserId,
-          }, where: 'id = ?', whereArgs: [_deviceId]);
+          await db.update(
+            'devices',
+            {'user_id': _currentUserId, 'paired_by': _currentUserId},
+            where: 'id = ?',
+            whereArgs: [_deviceId],
+          );
         }
       }
     }
@@ -112,12 +127,13 @@ class Repo {
       final ar = await authSvc.restoreSession();
       final gu = ar.user;
       if (gu != null && gu.id.isNotEmpty) {
-        await linkWorkspaceToGoogle(db,
-            workspaceId: _workspaceId!,
-            googleId: gu.id,
-            email: gu.email,
-            name: gu.displayName ?? '',
-          );
+        await linkWorkspaceToGoogle(
+          db,
+          workspaceId: _workspaceId!,
+          googleId: gu.id,
+          email: gu.email,
+          name: gu.displayName ?? '',
+        );
       }
     } catch (_) {}
   }
@@ -137,8 +153,12 @@ class Repo {
 
   Future<String> workspaceMode() async {
     final db = await _db;
-    final r = await db.query('sync_meta',
-        where: 'key = ?', whereArgs: ['workspaceMode'], limit: 1);
+    final r = await db.query(
+      'sync_meta',
+      where: 'key = ?',
+      whereArgs: ['workspaceMode'],
+      limit: 1,
+    );
     if (r.isEmpty) return 'standalone';
     return (r.first['value'] as String?) ?? 'standalone';
   }
@@ -146,8 +166,12 @@ class Repo {
   Future<bool> isWorkspaceOwner() async {
     if (_deviceId == null) return true; // قبل التهيئة اعتبره مستقلاً.
     final db = await _db;
-    final r = await db.query('devices',
-        where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+    final r = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [_deviceId],
+      limit: 1,
+    );
     if (r.isEmpty) return true;
     return ((r.first['is_owner'] ?? 0) as int) == 1;
   }
@@ -156,8 +180,12 @@ class Repo {
   Future<Map<String, Object?>?> ownDeviceRow() async {
     if (_deviceId == null) return null;
     final db = await _db;
-    final r = await db.query('devices',
-        where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+    final r = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [_deviceId],
+      limit: 1,
+    );
     return r.isEmpty ? null : r.first;
   }
 
@@ -172,7 +200,12 @@ class Repo {
 
   Future<AppUser?> userById(int id) async {
     final db = await _db;
-    final r = await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+    final r = await db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     if (r.isEmpty) return null;
     return AppUser.fromMap(r.first);
   }
@@ -183,13 +216,25 @@ class Repo {
     final db = await _db;
     // أنا المالك.
     if (_deviceId != null) {
-      await db.update('devices', {'is_owner': 1, 'is_paired': 1},
-          where: 'id = ?', whereArgs: [_deviceId]);
+      await db.update(
+        'devices',
+        {'is_owner': 1, 'is_paired': 1},
+        where: 'id = ?',
+        whereArgs: [_deviceId],
+      );
     }
-    await db.update('devices', {'is_owner': 0, 'is_paired': 1},
-        where: 'id = ?', whereArgs: [newDeviceId]);
-    await db.insert('sync_meta',
-        {'key': 'workspaceMode', 'value': 'managed'},
+    await db.update(
+      'devices',
+      {'is_owner': 0, 'is_paired': 1},
+      where: 'id = ?',
+      whereArgs: [newDeviceId],
+    );
+    await db.insert(
+        'sync_meta',
+        {
+          'key': 'workspaceMode',
+          'value': 'managed',
+        },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
@@ -199,15 +244,27 @@ class Repo {
     final db = await _db;
     final devName = await deviceName(this);
     final adminPerms = defaultPerms(UserRole.admin);
-    final permStr = adminPerms.entries
-        .where((e) => e.value).map((e) => e.key).join(',');
+    final permStr =
+        adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
     final newSecret = generateLanSecret();
     await db.transaction((txn) async {
       const tables = [
-        'accounts', 'transactions', 'transaction_items', 'vouchers',
-        'currencies', 'categories', 'item_categories', 'items',
-        'stock_moves', 'conversations', 'messages', 'users',
-        'trash', 'activity', 'operations', 'sync_queue',
+        'accounts',
+        'transactions',
+        'transaction_items',
+        'vouchers',
+        'currencies',
+        'categories',
+        'item_categories',
+        'items',
+        'stock_moves',
+        'conversations',
+        'messages',
+        'users',
+        'trash',
+        'activity',
+        'operations',
+        'sync_queue',
       ];
       for (final t in tables) {
         await txn.delete(t);
@@ -243,8 +300,12 @@ class Repo {
         'created_at': now,
         'updated_at': now,
       });
-      await txn.insert('sync_meta',
-          {'key': 'workspaceMode', 'value': 'standalone'},
+      await txn.insert(
+          'sync_meta',
+          {
+            'key': 'workspaceMode',
+            'value': 'standalone',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
     _currentUserId = null;
@@ -281,13 +342,20 @@ class Repo {
       // لا نحذف devices (يبقى سجلنا وسجل المضيف)، ولا نحذف workspace ولا sync_meta.
       // جهازي لم يعد مالكاً.
       if (_deviceId != null) {
-        await txn.update('devices',
-            {'is_owner': 0, 'user_id': null, 'is_paired': 1},
-            where: 'id = ?', whereArgs: [_deviceId]);
+        await txn.update(
+          'devices',
+          {'is_owner': 0, 'user_id': null, 'is_paired': 1},
+          where: 'id = ?',
+          whereArgs: [_deviceId],
+        );
       }
       // ضبط الوضع كـ عضو.
-      await txn.insert('sync_meta',
-          {'key': 'workspaceMode', 'value': 'member'},
+      await txn.insert(
+          'sync_meta',
+          {
+            'key': 'workspaceMode',
+            'value': 'member',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
@@ -316,12 +384,20 @@ class Repo {
       workspaceId: requireWorkspaceId,
       userId: _currentUserId,
     );
-    await rec.record(entityType: entityType, entityId: entityId, opType: opType, payload: payload);
+    await rec.record(
+      entityType: entityType,
+      entityId: entityId,
+      opType: opType,
+      payload: payload,
+    );
   }
 
   // ==================== الحسابات ====================
 
-  Future<List<Account>> accounts({bool includeArchived = false, bool includeDeleted = false}) async {
+  Future<List<Account>> accounts({
+    bool includeArchived = false,
+    bool includeDeleted = false,
+  }) async {
     final db = await _db;
     final where = StringBuffer(includeArchived ? '1=1' : 'archived = 0');
     if (!includeDeleted) where.write(" AND COALESCE(deleted_at,'') = ''");
@@ -350,6 +426,7 @@ class Repo {
       late int newId;
       late OpKind op;
       if (a.id == null) {
+        map['id'] = newGlobalId();
         newId = await txn.insert('accounts', map);
         op = OpKind.create;
       } else {
@@ -357,7 +434,7 @@ class Repo {
         await txn.update('accounts', map, where: 'id = ?', whereArgs: [newId]);
         op = OpKind.update;
       }
-      final rec = await SyncRecorder(
+      await SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
         workspaceId: requireWorkspaceId,
@@ -369,16 +446,17 @@ class Repo {
         payload: {...map, 'id': newId},
       );
       await txn.insert(
-        'activity',
-        {
-          'text': op == OpKind.create ? 'إضافة حساب: ${a.name}' : 'تعديل حساب: ${a.name}',
-          'ref_type': 'account',
-          'ref_id': '$newId',
-          'workspace_id': requireWorkspaceId,
-          'created_at': DateTime.now().toIso8601String(),
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+          'activity',
+          {
+            'text': op == OpKind.create
+                ? 'إضافة حساب: ${a.name}'
+                : 'تعديل حساب: ${a.name}',
+            'ref_type': 'account',
+            'ref_id': '$newId',
+            'workspace_id': requireWorkspaceId,
+            'created_at': DateTime.now().toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
       return newId;
     });
     return id;
@@ -389,17 +467,25 @@ class Repo {
     final db = await _db;
     final now = DateTime.now().toIso8601String();
     await db.transaction((txn) async {
-      await txn.update('accounts', {
-        'archived': archived ? 1 : 0,
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [id]);
+      await txn.update(
+        'accounts',
+        {'archived': archived ? 1 : 0, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
       final rec = SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
         workspaceId: requireWorkspaceId,
         userId: _currentUserId,
       );
-      final row = (await txn.query('accounts', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      final row = (await txn.query(
+        'accounts',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      ))
+          .first;
       await rec.record(
         entityType: EntityKind.account,
         entityId: '$id',
@@ -408,7 +494,10 @@ class Repo {
       );
     });
     await logActivity(
-        archived ? 'أرشفة حساب' : 'استعادة حساب', 'account', '$id');
+      archived ? 'أرشفة حساب' : 'استعادة حساب',
+      'account',
+      '$id',
+    );
   }
 
   /// حذف ناعم (soft delete): لا يُحذف السجل فعليًا، بل يوضع deleted_at.
@@ -420,12 +509,19 @@ class Repo {
     final a = await account(id);
     if (a == null) return;
     await db.transaction((txn) async {
-      await txn.update('accounts', {
-        'deleted_at': now,
-        'deleted_by': _currentUserId,
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [id]);
-      final updated = (await txn.query('accounts', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await txn.update(
+        'accounts',
+        {'deleted_at': now, 'deleted_by': _currentUserId, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final updated = (await txn.query(
+        'accounts',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      ))
+          .first;
       await SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
@@ -448,6 +544,41 @@ class Repo {
   }
 
   // ==================== العمليات ====================
+
+  Future<Tx?> transactionById(int id) async {
+    final db = await _db;
+    final rows = await db.query('transactions',
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : Tx.fromMap(rows.first);
+  }
+
+  Future<void> updateTxImage(int id, String path) async {
+    await _ensureCan('edit_tx');
+    final db = await _db;
+    final mode = await workspaceMode();
+    await db.transaction((txn) async {
+      final rows = await txn.query('transactions',
+          where: 'id = ?', whereArgs: [id], limit: 1);
+      if (rows.isEmpty) throw StateError('العملية غير موجودة.');
+      final patch = <String, Object?>{
+        'image': path,
+        'updated_at': DateTime.now().toIso8601String(),
+        'sync_state': mode == 'standalone' ? 'synced' : 'pending',
+      };
+      await txn.update('transactions', patch, where: 'id = ?', whereArgs: [id]);
+      await SyncRecorder(
+              db: txn,
+              deviceId: requireDeviceId,
+              workspaceId: requireWorkspaceId,
+              userId: _currentUserId)
+          .record(
+        entityType: EntityKind.tx,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: {...rows.first, ...patch},
+      );
+    });
+  }
 
   Future<List<Tx>> transactions({
     int? accountId,
@@ -490,21 +621,49 @@ class Repo {
 
   /// يحفظ العملية وسطور الفاتورة معًا. تمرير [items] (حتى لو كانت فارغة)
   /// يستبدل السطور القديمة، أما null فيُبقيها كما هي عند تحديث الصورة.
-  Future<int> saveTx(Tx t, {List<InvoiceLine>? items}) async {
+  Future<int> saveTx(Tx tx, {List<InvoiceLine>? items}) async {
+    // معرّف الحساب 0 يعني "بدون حساب" (بيع نقدي لعميل عابر). نخزّنه NULL
+    // حتى لا يكسر قيد المفتاح الأجنبي (FOREIGN KEY 787).
+    final t = (tx.accountId == 0 || tx.fromId == 0 || tx.toId == 0)
+        ? tx.copyWith(
+            accountId: tx.accountId == 0 ? null : tx.accountId,
+            clearAccountId: tx.accountId == 0,
+            fromId: tx.fromId == 0 ? null : tx.fromId,
+            clearFromId: tx.fromId == 0,
+            toId: tx.toId == 0 ? null : tx.toId,
+            clearToId: tx.toId == 0,
+          )
+        : tx;
+    if (!t.amount.isFinite || t.amount <= 0) {
+      throw StateError('أدخل مبلغًا صحيحًا أكبر من صفر.');
+    }
+    if (t.currency.trim().isEmpty) throw StateError('اختر العملة.');
+    if (t.type == OpType.transfer) {
+      if (t.fromId == null || t.toId == null || t.fromId == t.toId) {
+        throw StateError('اختر حسابي تحويل مختلفين.');
+      }
+      if (!t.rate.isFinite || t.rate <= 0) {
+        throw StateError('أدخل سعر صرف صحيحًا أكبر من صفر.');
+      }
+    } else if (t.accountId == null && !_allowsAnonymousAccount(t.type)) {
+      throw StateError('اختر الحساب.');
+    }
     await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx')
         .timeout(const Duration(seconds: 4));
     final db = await _db;
     String mode;
     try {
-      mode = await workspaceMode().timeout(const Duration(seconds: 2),
-          onTimeout: () => 'standalone');
+      mode = await workspaceMode().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => 'standalone',
+      );
     } catch (_) {
       mode = 'standalone';
     }
     final newSync = mode == 'standalone' ? 'synced' : 'pending';
     late final int id;
     await db.transaction((txn) async {
-      final rec = await SyncRecorder(
+      final rec = SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
         workspaceId: requireWorkspaceId,
@@ -514,22 +673,27 @@ class Repo {
       if (t.id == null) {
         var ref = t.reference.trim();
         if (ref.isEmpty) {
-          ref = await nextSeq('counter_tx', table: 'transactions');
+          ref = await _nextSequence(txn, 'counter_tx', table: 'transactions');
         }
         final toSave = ref == t.reference
             ? t.copyWith(syncState: newSync)
             : t.copyWith(reference: ref, syncState: newSync);
         final map = toSave.toMap();
         map['workspace_id'] = requireWorkspaceId;
-        map.remove('id');
+        map['id'] = newGlobalId();
         map['updated_at'] = now;
         id = await txn.insert('transactions', map);
         final saved = Map<String, Object?>.from(map)..['id'] = id;
         if (items != null) {
-          await txn.delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
+          await txn.delete(
+            'transaction_items',
+            where: 'tx_id = ?',
+            whereArgs: [id],
+          );
           for (final line in items) {
             final lm = line.toMap(transactionId: id);
             lm['workspace_id'] = requireWorkspaceId;
+            lm['id'] = newGlobalId();
             await txn.insert('transaction_items', lm);
           }
         }
@@ -537,7 +701,7 @@ class Repo {
           entityType: EntityKind.tx,
           entityId: '$id',
           opType: OpKind.create,
-          payload: saved,
+          payload: saved..['items'] = await _lineMaps(txn, id),
         );
       } else {
         id = t.id!;
@@ -548,10 +712,15 @@ class Repo {
         map['updated_at'] = now;
         await txn.update('transactions', map, where: 'id = ?', whereArgs: [id]);
         if (items != null) {
-          await txn.delete('transaction_items', where: 'tx_id = ?', whereArgs: [id]);
+          await txn.delete(
+            'transaction_items',
+            where: 'tx_id = ?',
+            whereArgs: [id],
+          );
           for (final line in items) {
             final lm = line.toMap(transactionId: id);
             lm['workspace_id'] = requireWorkspaceId;
+            lm['id'] = newGlobalId();
             await txn.insert('transaction_items', lm);
           }
         }
@@ -560,18 +729,34 @@ class Repo {
           entityType: EntityKind.tx,
           entityId: '$id',
           opType: OpKind.update,
-          payload: saved,
+          payload: saved..['items'] = await _lineMaps(txn, id),
         );
       }
+      await logActivityTx(
+        txn,
+        t.id == null ? '${t.type.label}: ${t.amount}' : 'تعديل عملية',
+        'tx',
+        '$id',
+      );
     });
-
-    await logActivity(
-      t.id == null ? '${t.type.label}: ${t.amount}' : 'تعديل عملية',
-      'tx',
-      '$id',
-    );
     return id;
   }
+
+  /// سطور الفاتورة بصيغة خرائط لإرفاقها في حمولة المزامنة.
+  Future<List<Map<String, Object?>>> _lineMaps(
+      DatabaseExecutor txn, int txId) async {
+    final rows = await txn.query('transaction_items',
+        where: 'tx_id = ?', whereArgs: [txId], orderBy: 'id ASC');
+    return rows.map(Map<String, Object?>.from).toList();
+  }
+
+  /// العمليات النقدية (إيراد/مصروف/قبض/صرف) يمكن حفظها بدون حساب مرتبط،
+  /// مثل بيع نقدي لعميل عابر في نقطة البيع.
+  static bool _allowsAnonymousAccount(OpType type) =>
+      type == OpType.revenue ||
+      type == OpType.expense ||
+      type == OpType.inflow ||
+      type == OpType.outflow;
 
   /// تفاصيل الأصناف المرتبطة بعملية مالية.
   Future<List<InvoiceLine>> transactionItems(int txId) async {
@@ -589,15 +774,26 @@ class Repo {
     await _ensureCan('delete_tx');
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    final rows = await db.query('transactions', where: 'id = ?', whereArgs: [id]);
+    final rows = await db.query(
+      'transactions',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     if (rows.isEmpty) return;
     await db.transaction((txn) async {
-      await txn.update('transactions', {
-        'deleted_at': now,
-        'deleted_by': _currentUserId,
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [id]);
-      final updated = (await txn.query('transactions', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await txn.update(
+        'transactions',
+        {'deleted_at': now, 'deleted_by': _currentUserId, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final updated = (await txn.query(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      ))
+          .first;
       await SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
@@ -611,8 +807,12 @@ class Repo {
       );
       await txn.insert('trash', {
         'store': 'transactions',
-        'payload': jsonEncode({'transaction': Map.from(rows.first), 'items': []}),
-        'label': 'عملية بمبلغ ${rows.first['amount']} ${rows.first['currency']}',
+        'payload': jsonEncode({
+          'transaction': Map.from(rows.first),
+          'items': [],
+        }),
+        'label':
+            'عملية بمبلغ ${rows.first['amount']} ${rows.first['currency']}',
         'created_at': now,
       });
     });
@@ -650,7 +850,10 @@ class Repo {
   /// أرصدة كل الحسابات دفعة واحدة — استعلام واحد بدل استعلام لكل حساب.
   Future<Map<int, double>> allBalances(List<Account> accounts) async {
     final db = await _db;
-    final rows = await db.query('transactions');
+    final rows = await db.query(
+      'transactions',
+      where: "COALESCE(deleted_at, '') = ''",
+    );
     final txs = rows.map(Tx.fromMap).toList();
     final out = <int, double>{};
     for (final a in accounts) {
@@ -677,7 +880,11 @@ class Repo {
   Future<void> saveCurrency(CurrencyDef c, {double rate = 1}) async {
     final db = await _db;
     final payload = {...c.toMap(), 'rate': rate};
-    await db.insert('currencies', payload, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+      'currencies',
+      payload,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     await queueOperation(
       entityType: EntityKind.currency,
       entityId: c.code,
@@ -702,14 +909,17 @@ class Repo {
   Future<Map<String, String>> settings() async {
     final db = await _db;
     final rows = await db.query('settings');
-    return {
-      for (final r in rows) r['key'] as String: r['value'] as String,
-    };
+    return {for (final r in rows) r['key'] as String: r['value'] as String};
   }
 
   Future<void> setSetting(String key, String value) async {
     final db = await _db;
-    await db.insert('settings', {'key': key, 'value': value},
+    await db.insert(
+        'settings',
+        {
+          'key': key,
+          'value': value,
+        },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
@@ -727,7 +937,12 @@ class Repo {
     });
   }
 
-  Future<void> logActivityTx(Transaction txn, String text, String refType, String refId) async {
+  Future<void> logActivityTx(
+    Transaction txn,
+    String text,
+    String refType,
+    String refId,
+  ) async {
     await txn.insert('activity', {
       'text': text,
       'ref_type': refType,
@@ -779,33 +994,53 @@ class Repo {
 
   /// ترقيم رقمي تسلسلي بحت (بدون أحرف/بادئات).
   Future<String> nextSeq(String counterKey, {String? table}) async {
-    final st = await settings();
-    var counter = int.tryParse(st[counterKey] ?? '0') ?? 0;
-    if (table != null) {
-      try {
-        final db = await _db;
-        final r = await db.rawQuery('SELECT MAX(id) AS m FROM $table');
-        final maxId = (r.first['m'] as int?) ?? 0;
-        if (maxId > counter) counter = maxId;
-      } catch (_) {}
+    final db = await _db;
+    return db
+        .transaction((txn) => _nextSequence(txn, counterKey, table: table));
+  }
+
+  Future<String> _nextSequence(DatabaseExecutor db, String counterKey,
+      {String? table}) async {
+    final rows = await db.query('settings',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: [counterKey],
+        limit: 1);
+    var counter =
+        rows.isEmpty ? 0 : int.tryParse('${rows.first['value']}') ?? 0;
+    if (table != null && !const {'transactions', 'vouchers'}.contains(table)) {
+      throw ArgumentError.value(table, 'table');
     }
-    counter += 1;
-    await setSetting(counterKey, '$counter');
-    return '$counter';
+    // ملاحظة: المعرّفات (id) صارت عالمية غير متسلسلة، لذلك لم يعد العدّاد
+    // يعتمد على MAX(id)؛ الرقم التسلسلي هنا للعرض على الإيصال/إشعار العميل فقط.
+    if (table == 'transactions') {
+      final r = await db.rawQuery(
+          "SELECT MAX(CAST(reference AS INTEGER)) AS m FROM transactions "
+          "WHERE reference GLOB '[0-9]*'");
+      final maxRef = (r.first['m'] as int?) ?? 0;
+      if (maxRef > counter) counter = maxRef;
+    }
+    final next = '${counter + 1}';
+    await db.insert('settings', {'key': counterKey, 'value': next},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    return next;
   }
 
   /// الرقم التسلسلي التالي لأي عملية مالية (رقمي بحت).
   Future<String> nextTxNumber() => nextSeq('counter_tx', table: 'transactions');
 
-  /// الرقم التسلسلي التالي للسند (رقمي بحت بدون بادئة حرفية).
-  Future<String> nextVoucherNumber([Object? _]) =>
-      nextSeq('counter_voucher', table: 'vouchers');
+  /// الرقم التسلسلي التالي للسند مع البادئة الحرفية حسب النوع.
+  Future<String> nextVoucherNumber(VoucherKind kind) async {
+    final key = 'counter_voucher_${kind.code}';
+    final seq = await nextSeq(key);
+    return '${kind.prefix}${seq.padLeft(4, '0')}';
+  }
 
   Future<int> saveVoucher(Voucher v) async {
     final db = await _db;
     late final int id;
     if (v.id == null) {
-      id = await db.insert('vouchers', v.toMap());
+      id = await db.insert('vouchers', v.toMap()..['id'] = newGlobalId());
       await queueOperation(
         entityType: EntityKind.voucher,
         entityId: '$id',
@@ -881,38 +1116,23 @@ class Repo {
 
   /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.
   Future<void> _ensureCan(String perm) async {
-    try {
-      final ok = await can(perm).timeout(const Duration(seconds: 3),
-          onTimeout: () => true);
-      if (!ok) {
-        final me = await currentUser().timeout(
-            const Duration(seconds: 2), onTimeout: () => null);
-        throw StateError(
-            'ليس لديك صلاحية لهذا الإجراء${me != null ? ' (${me.role.label})' : ''}.');
-      }
-    } on StateError {
-      rethrow;
-    } catch (_) {
-      // أي خطأ آخر في فحص الصلاحيات لا يمنع الحفظ — نفضّل ألا يعلق المستخدم.
+    final allowed = await can(perm).timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => false,
+    );
+    if (!allowed) {
+      throw StateError(
+          'ليس لديك صلاحية لهذا الإجراء أو تعذّر التحقق منها. أعد المحاولة.');
     }
   }
 
-  /// استعلام عام للواجهة: هل المستخدم الحالي يملك الصلاحية؟
-  /// يُستخدم لتعطيل/إخفاء الأزرار قبل لمسها.
+  /// Failure to verify identity never grants privileges (fail closed).
   Future<bool> can(String perm) async {
     try {
-      final mode =
-          await workspaceMode().timeout(const Duration(seconds: 2), onTimeout: () => 'standalone');
-      final me = await currentUser().timeout(
-          const Duration(seconds: 2), onTimeout: () => null);
-      if (mode != 'member') {
-        if (me == null) return true;
-        return me.can(perm);
-      }
-      if (me == null) return false;
-      return me.can(perm);
+      final me = await currentUser().timeout(const Duration(seconds: 2));
+      return me != null && me.active && me.can(perm);
     } catch (_) {
-      return true; // في حال الشك نسمح (لا نغلق التطبيق أمام المستخدم).
+      return false;
     }
   }
 
@@ -960,6 +1180,7 @@ class Repo {
     if (effective.id == null) {
       final map = effective.toMap();
       if (allUsers.isEmpty) map['is_me'] = 1; // أول مستخدم = المستخدم الحالي
+      map['id'] = newGlobalId();
       final id = await db.insert('users', map);
       await queueOperation(
         entityType: EntityKind.user,
@@ -1002,8 +1223,12 @@ class Repo {
     }
     // Soft-delete بدلاً من الحذف النهائي (للمزامنة).
     final now = DateTime.now().toIso8601String();
-    await db.update('users', {'deleted_at': now, 'active': 0, 'updated_at': now},
-        where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'users',
+      {'deleted_at': now, 'active': 0, 'updated_at': now},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     await queueOperation(
       entityType: EntityKind.user,
       entityId: '$id',
@@ -1026,7 +1251,8 @@ class Repo {
   Future<List<Map<String, Object?>>> devices() async {
     await _ensureCan('manage_users'); // فقط المدير/من يملك إدارة المستخدمين.
     final db = await _db;
-    return db.rawQuery('''
+    return db.rawQuery(
+      '''
       SELECT d.*, u.name AS user_name, u.role AS user_role
       FROM devices d
       LEFT JOIN users u ON u.id = d.user_id
@@ -1034,7 +1260,9 @@ class Repo {
       ORDER BY
         CASE WHEN COALESCE(d.revoked_at,'') = '' THEN 0 ELSE 1 END,
         d.last_seen_at DESC
-    ''', [requireWorkspaceId]);
+    ''',
+      [requireWorkspaceId],
+    );
   }
 
   /// تعيين/تغيير المستخدم (والصلاحيات) المرتبط بجهاز.
@@ -1044,21 +1272,28 @@ class Repo {
   Future<void> assignDeviceToUser(String deviceId, int? userId) async {
     await _ensureCan('manage_users');
     final db = await _db;
-    await db.update('devices', {
-      'user_id': userId,
-      'paired_by': _currentUserId,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {
+        'user_id': userId,
+        'paired_by': _currentUserId,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
   }
 
   /// تحديث اسم جهاز (ليتعرّف المدير عليه).
   Future<void> renameDevice(String deviceId, String name) async {
     await _ensureCan('manage_users');
     final db = await _db;
-    await db.update('devices', {
-      'name': name.trim(),
-      'updated_at': DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {'name': name.trim(), 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
   }
 
   /// إلغاء اقتران/حظر جهاز — يمنعه من المزامنة حتى يُعاد اقترانه.
@@ -1066,30 +1301,42 @@ class Repo {
     await _ensureCan('manage_users');
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    await db.update('devices', {
-      'revoked_at': now,
-      'is_paired': 0,
-      'auth_secret': '',
-      'pair_token': '',
-      'pair_token_exp': '',
-      'updated_at': now,
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {
+        'revoked_at': now,
+        'is_paired': 0,
+        'auth_secret': '',
+        'pair_token': '',
+        'pair_token_exp': '',
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
     // حذف أي عمليات في قائمة المزامنة لهذا الجهاز حتى لا يرسل شيئًا.
-    await db.delete('sync_queue',
-        where: 'operation_id IN (SELECT id FROM operations WHERE device_id = ?)',
-        whereArgs: [deviceId]);
+    await db.delete(
+      'sync_queue',
+      where: 'operation_id IN (SELECT id FROM operations WHERE device_id = ?)',
+      whereArgs: [deviceId],
+    );
   }
 
   /// إعادة السماح لجهاز سبق إلغاؤه.
   Future<void> restoreDevice(String deviceId) async {
     await _ensureCan('manage_users');
     final db = await _db;
-    await db.update('devices', {
-      'revoked_at': '',
-      'is_paired': 1,
-      'auth_secret': generateLanSecret(),
-      'updated_at': DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {
+        'revoked_at': '',
+        'is_paired': 1,
+        'auth_secret': generateLanSecret(),
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
   }
 
   /// إعادة توليد المفتاح السرّي للجهاز (يُستخدم بعد تسريب أو للتحكم بكلمة مرور
@@ -1098,19 +1345,27 @@ class Repo {
     await _ensureCan('manage_users');
     final db = await _db;
     final secret = generateLanSecret();
-    await db.update('devices', {
-      'auth_secret': secret,
-      'pair_token': '',
-      'pair_token_exp': '',
-      'updated_at': DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {
+        'auth_secret': secret,
+        'pair_token': '',
+        'pair_token_exp': '',
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
     return secret;
   }
 
   /// تغيير كلمة مرور/رمز PIN للمستخدم المرتبط بجهاز ما (يُعيدها للمدير ليخبرها
   /// للعضو). لا تُعدّل كلمة مرور المستخدم الأصلي إلا إذا كان المستخدم هو نفسه.
-  Future<void> setDeviceUserCredentials(String userId,
-      {String? pin, String? password}) async {
+  Future<void> setDeviceUserCredentials(
+    String userId, {
+    String? pin,
+    String? password,
+  }) async {
     await _ensureCan('manage_users');
     final db = await _db;
     final patch = <String, Object?>{};
@@ -1146,7 +1401,8 @@ class Repo {
   Future<List<String>> autoExpireStaleDevices() async {
     final db = await _db;
     if (!(await isWorkspaceOwner())) return const [];
-    final cutoff = DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
+    final cutoff =
+        DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
     final now = DateTime.now().toIso8601String();
     // طرد الأجهزة التي لم تُرَ منذ 30 يوم ولم تُطرَد/تُلغَ سابقاً.
     final stale = await db.query(
@@ -1159,15 +1415,20 @@ class Repo {
     );
     final ids = stale.map((r) => r['id'] as String).toList();
     for (final id in ids) {
-      await db.update('devices', {
-        'revoked_at': now,
-        'expelled_at': now,
-        'is_paired': 0,
-        'auth_secret': '',
-        'pair_token': '',
-        'pair_token_exp': '',
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [id]);
+      await db.update(
+        'devices',
+        {
+          'revoked_at': now,
+          'expelled_at': now,
+          'is_paired': 0,
+          'auth_secret': '',
+          'pair_token': '',
+          'pair_token_exp': '',
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
     }
     return ids;
   }
@@ -1177,23 +1438,30 @@ class Repo {
     await _ensureCan('manage_users');
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    await db.update('devices', {
-      'revoked_at': now,
-      'expelled_at': now,
-      'is_paired': 0,
-      'auth_secret': '',
-      'pair_token': '',
-      'pair_token_exp': '',
-      'updated_at': now,
-    }, where: 'id = ?', whereArgs: [deviceId]);
+    await db.update(
+      'devices',
+      {
+        'revoked_at': now,
+        'expelled_at': now,
+        'is_paired': 0,
+        'auth_secret': '',
+        'pair_token': '',
+        'pair_token_exp': '',
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [deviceId],
+    );
   }
 
   /// ينقل ملكية/إدارة المجموعة لجهاز آخر (يعينه is_owner=1 ويُعيّن له المستخدم
   /// صاحب دور المدير إن لم يكن معيّناً، ويجعل جهازنا الحالي عضواً عادياً بصلاحيات
   /// الدور الذي يختاره المدير السابق أو viewer كافتراضي).
   /// المتطلب: أنا المالك حالياً، والجهاز المستهدف مقترن وغير مطرود/محظور.
-  Future<void> transferOwnership(String newOwnerDeviceId,
-      {String? newUserRoleForMe}) async {
+  Future<void> transferOwnership(
+    String newOwnerDeviceId, {
+    String? newUserRoleForMe,
+  }) async {
     await _ensureCan('manage_users');
     final db = await _db;
     if (_deviceId == null) {
@@ -1201,9 +1469,13 @@ class Repo {
     }
     if (newOwnerDeviceId == _deviceId) return; // لا شيء يفعله.
 
-    final peer = await db.query('devices',
-        where: 'id = ? AND COALESCE(revoked_at,"") = "" AND COALESCE(expelled_at,"") = ""',
-        whereArgs: [newOwnerDeviceId], limit: 1);
+    final peer = await db.query(
+      'devices',
+      where:
+          'id = ? AND COALESCE(revoked_at,"") = "" AND COALESCE(expelled_at,"") = ""',
+      whereArgs: [newOwnerDeviceId],
+      limit: 1,
+    );
     if (peer.isEmpty) {
       throw StateError('الجهاز المطلوب غير موجود أو مطرود/محظور.');
     }
@@ -1219,38 +1491,55 @@ class Repo {
         // إن لم يكن معيّناً له مستخدم، أنشئ/ابحث عن مستخدم مدير واربطه.
         // (لتبسيط الأمر: نُبقي user_id كما هو ونجعل المدير عليه أن يُكمل التعيين).
       }
-      await txn.update('devices', {
-        'is_owner': 1,
-        'user_id': newOwnerUserId,
-        'paired_by': _currentUserId,
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [newOwnerDeviceId]);
+      await txn.update(
+        'devices',
+        {
+          'is_owner': 1,
+          'user_id': newOwnerUserId,
+          'paired_by': _currentUserId,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [newOwnerDeviceId],
+      );
 
       // 3) جهازي الحالي: أُصبح عضواً عادياً بالدور المطلوب أو viewer.
       //    نُنشئ مستخدماً بدور محدود لي إن لم أكن موجوداً في جدول المستخدمين كعضو غير مدير.
-      final myUser = await txn.query('users',
-          where: 'id = ?', whereArgs: [_currentUserId], limit: 1);
+      final myUser = await txn.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: [_currentUserId],
+        limit: 1,
+      );
       if (myUser.isNotEmpty) {
         final targetRole = newUserRoleForMe ?? 'viewer';
         final perms = defaultPerms(UserRole.fromCode(targetRole));
-        final permStr = perms.entries
-            .where((e) => e.value).map((e) => e.key).join(',');
-        await txn.update('users', {
-          'role': targetRole,
-          'permissions': permStr,
-          'is_me': 1, // نظل أنا المستخدم الفعال على جهازنا.
-          'updated_at': now,
-        }, where: 'id = ?', whereArgs: [_currentUserId]);
-        await txn.update('devices', {
-          'is_owner': 0,
-          'user_id': _currentUserId,
-          'updated_at': now,
-        }, where: 'id = ?', whereArgs: [_deviceId]);
+        final permStr =
+            perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+        await txn.update(
+          'users',
+          {
+            'role': targetRole,
+            'permissions': permStr,
+            'is_me': 1, // نظل أنا المستخدم الفعال على جهازنا.
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [_currentUserId],
+        );
+        await txn.update(
+          'devices',
+          {'is_owner': 0, 'user_id': _currentUserId, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [_deviceId],
+        );
       }
 
-      await txn.insert('sync_meta',
-          {'key': 'workspaceMode', 'value': 'host'}, // دائماً مدار.
-          conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert(
+        'sync_meta',
+        {'key': 'workspaceMode', 'value': 'host'}, // دائماً مدار.
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     });
   }
 
@@ -1261,7 +1550,6 @@ class Repo {
   /// يتحقق العضو مما إذا كان قد طُرِد (بناءً على سجلنا المحلي للأجهزة).
   Future<bool> amIExpelled() async {
     if (_deviceId == null) return false;
-    final db = await _db;
     final me = await ownDeviceRow();
     if (me == null) return false;
     final expelled = (me['expelled_at'] ?? '') as String;
@@ -1274,8 +1562,11 @@ class Repo {
   /// محادثة لكل حساب، تُنشأ عند أول رسالة.
   Future<int> conversationFor(Account a) async {
     final db = await _db;
-    final r = await db
-        .query('conversations', where: 'title = ?', whereArgs: [a.name]);
+    final r = await db.query(
+      'conversations',
+      where: 'title = ?',
+      whereArgs: [a.name],
+    );
     if (r.isNotEmpty) return r.first['id'] as int;
     final now = DateTime.now().toIso8601String();
     return db.insert('conversations', {
@@ -1292,10 +1583,12 @@ class Repo {
 
   Future<List<ChatMessage>> messages(int conversationId) async {
     final db = await _db;
-    final rows = await db.query('messages',
-        where: 'conversation_id = ?',
-        whereArgs: [conversationId],
-        orderBy: 'id ASC');
+    final rows = await db.query(
+      'messages',
+      where: 'conversation_id = ?',
+      whereArgs: [conversationId],
+      orderBy: 'id ASC',
+    );
     return rows.map(ChatMessage.fromMap).toList();
   }
 
@@ -1368,11 +1661,17 @@ class Repo {
         workspaceId: requireWorkspaceId,
         userId: _currentUserId,
       );
-      if (store == 'transactions' && decoded is Map && decoded['transaction'] is Map) {
+      if (store == 'transactions' &&
+          decoded is Map &&
+          decoded['transaction'] is Map) {
         final tx = Map<String, Object?>.from(decoded['transaction'] as Map);
         tx['deleted_at'] = '';
         tx['updated_at'] = now;
-        await txn.insert('transactions', tx, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert(
+          'transactions',
+          tx,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
         final txId = tx['id'];
         if (txId != null) {
           await rec.record(
@@ -1387,14 +1686,26 @@ class Repo {
         final payload = Map<String, Object?>.from(decoded);
         // إن كان السجل الأصلي ما زال موجودًا (soft delete)، نُلغِ deleted_at.
         final id = payload['id'];
-        final exists = await txn.query(store, where: 'id = ?', whereArgs: [id], limit: 1);
+        final exists = await txn.query(
+          store,
+          where: 'id = ?',
+          whereArgs: [id],
+          limit: 1,
+        );
         if (exists.isNotEmpty) {
-          await txn.update(store, {
-            'deleted_at': '',
-            'restore_op_id': '',
-            'updated_at': now,
-          }, where: 'id = ?', whereArgs: [id]);
-          final restored = (await txn.query(store, where: 'id = ?', whereArgs: [id], limit: 1)).first;
+          await txn.update(
+            store,
+            {'deleted_at': '', 'restore_op_id': '', 'updated_at': now},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          final restored = (await txn.query(
+            store,
+            where: 'id = ?',
+            whereArgs: [id],
+            limit: 1,
+          ))
+              .first;
           await rec.record(
             entityType: _entityKindFor(store),
             entityId: '$id',
@@ -1404,7 +1715,11 @@ class Repo {
         } else {
           payload.remove('deleted_at');
           payload['updated_at'] = now;
-          await txn.insert(store, payload, conflictAlgorithm: ConflictAlgorithm.replace);
+          await txn.insert(
+            store,
+            payload,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
           await rec.record(
             entityType: _entityKindFor(store),
             entityId: '$id',
@@ -1999,6 +2314,7 @@ class Repo {
     if (category.id == null) {
       final now = DateTime.now().toIso8601String();
       id = await db.insert('item_categories', {
+        'id': newGlobalId(),
         'name': name,
         'created_at': category.createdAt.toIso8601String(),
         'updated_at': now,
@@ -2007,7 +2323,12 @@ class Repo {
         entityType: EntityKind.itemCategory,
         entityId: '$id',
         opType: OpKind.create,
-        payload: {'id': id, 'name': name, 'created_at': category.createdAt.toIso8601String(), 'updated_at': now},
+        payload: {
+          'id': id,
+          'name': name,
+          'created_at': category.createdAt.toIso8601String(),
+          'updated_at': now,
+        },
       );
       await logActivity('إضافة فئة أصناف: $name', 'item_category', '$id');
       return id;
@@ -2043,7 +2364,11 @@ class Repo {
   /// يحذف الفئة فقط، ويفك ربط أصنافها لتبقى بيانات الأصناف محفوظة.
   Future<void> deleteItemCategory(int id) async {
     final db = await _db;
-    final rows = await db.query('item_categories', where: 'id = ?', whereArgs: [id]);
+    final rows = await db.query(
+      'item_categories',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     if (rows.isEmpty) return;
     final name = rows.first['name'] as String;
     final now = DateTime.now().toIso8601String();
@@ -2068,8 +2393,11 @@ class Repo {
 
   // ==================== الأصناف والمخزون ====================
 
-  Future<List<Item>> items(
-      {bool includeArchived = false, String q = '', bool includeDeleted = false}) async {
+  Future<List<Item>> items({
+    bool includeArchived = false,
+    String q = '',
+    bool includeDeleted = false,
+  }) async {
     final db = await _db;
     final where = <String>[];
     final args = <Object?>[];
@@ -2080,10 +2408,12 @@ class Repo {
       final like = '%${q.trim()}%';
       args.addAll([like, like, like]);
     }
-    final rows = await db.query('items',
-        where: where.isEmpty ? null : where.join(' AND '),
-        whereArgs: args.isEmpty ? null : args,
-        orderBy: 'name COLLATE NOCASE');
+    final rows = await db.query(
+      'items',
+      where: where.isEmpty ? null : where.join(' AND '),
+      whereArgs: args.isEmpty ? null : args,
+      orderBy: 'name COLLATE NOCASE',
+    );
     return rows.map(Item.fromMap).toList();
   }
 
@@ -2098,7 +2428,7 @@ class Repo {
     final db = await _db;
     late final int id;
     if (it.id == null) {
-      id = await db.insert('items', it.toMap());
+      id = await db.insert('items', it.toMap()..['id'] = newGlobalId());
       await queueOperation(
         entityType: EntityKind.item,
         entityId: '$id',
@@ -2129,12 +2459,19 @@ class Repo {
     final r = await db.query('items', where: 'id = ?', whereArgs: [id]);
     if (r.isEmpty) return;
     await db.transaction((txn) async {
-      await txn.update('items', {
-        'deleted_at': now,
-        'deleted_by': _currentUserId,
-        'updated_at': now,
-      }, where: 'id = ?', whereArgs: [id]);
-      final updated = (await txn.query('items', where: 'id = ?', whereArgs: [id], limit: 1)).first;
+      await txn.update(
+        'items',
+        {'deleted_at': now, 'deleted_by': _currentUserId, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final updated = (await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      ))
+          .first;
       await SyncRecorder(
         db: txn,
         deviceId: requireDeviceId,
@@ -2158,11 +2495,13 @@ class Repo {
 
   Future<List<StockMove>> stockMoves({int? itemId, int limit = 200}) async {
     final db = await _db;
-    final rows = await db.query('stock_moves',
-        where: itemId == null ? null : 'item_id = ?',
-        whereArgs: itemId == null ? null : [itemId],
-        orderBy: 'date DESC, id DESC',
-        limit: limit);
+    final rows = await db.query(
+      'stock_moves',
+      where: itemId == null ? null : 'item_id = ?',
+      whereArgs: itemId == null ? null : [itemId],
+      orderBy: 'date DESC, id DESC',
+      limit: limit,
+    );
     return rows.map(StockMove.fromMap).toList();
   }
 
@@ -2171,8 +2510,13 @@ class Repo {
     final db = await _db;
     late final int id;
     await db.transaction((txn) async {
-      id = await txn.insert('stock_moves', m.toMap());
-      final r = await txn.query('items', where: 'id = ?', whereArgs: [m.itemId], limit: 1);
+      id = await txn.insert('stock_moves', m.toMap()..['id'] = newGlobalId());
+      final r = await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [m.itemId],
+        limit: 1,
+      );
       if (r.isNotEmpty) {
         final it = Item.fromMap(r.first);
         final delta = m.kind == StockKind.adjust
@@ -2196,9 +2540,18 @@ class Repo {
           entityType: EntityKind.item,
           entityId: '${m.itemId}',
           opType: OpKind.update,
-          payload: {'id': m.itemId, 'quantity': it.quantity + delta, 'updated_at': now},
+          payload: {
+            'id': m.itemId,
+            'quantity': it.quantity + delta,
+            'updated_at': now,
+          },
         );
-        await logActivityTx(txn, '${m.kind.label}: ${it.name} × ${m.quantity}', 'stock', '$id');
+        await logActivityTx(
+          txn,
+          '${m.kind.label}: ${it.name} × ${m.quantity}',
+          'stock',
+          '$id',
+        );
       }
     });
     return id;
@@ -2207,10 +2560,19 @@ class Repo {
   Future<void> deleteStockMove(int id) async {
     final db = await _db;
     await db.transaction((txn) async {
-      final r = await txn.query('stock_moves', where: 'id = ?', whereArgs: [id]);
+      final r = await txn.query(
+        'stock_moves',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
       if (r.isEmpty) return;
       final m = StockMove.fromMap(r.first);
-      final itRow = await txn.query('items', where: 'id = ?', whereArgs: [m.itemId], limit: 1);
+      final itRow = await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [m.itemId],
+        limit: 1,
+      );
       await txn.delete('stock_moves', where: 'id = ?', whereArgs: [id]);
       final rec = await newRecorder(txn);
       await rec.record(
@@ -2280,8 +2642,11 @@ class Repo {
   Future<Map<String, int>> counts() async {
     final db = await _db;
     Future<int> c(String t, [String? where]) async =>
-        Sqflite.firstIntValue(await db.rawQuery(
-            'SELECT COUNT(*) FROM $t${where == null ? '' : ' WHERE $where'}')) ??
+        Sqflite.firstIntValue(
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM $t${where == null ? '' : ' WHERE $where'}',
+          ),
+        ) ??
         0;
     return {
       'accounts': await c('accounts', 'archived = 0'),

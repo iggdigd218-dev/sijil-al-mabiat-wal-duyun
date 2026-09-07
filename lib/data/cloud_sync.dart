@@ -65,15 +65,20 @@ class CloudSync {
 
   static String targetFor(String base, String code) {
     final root = base.replaceAll(RegExp(r'/+$'), '');
-    if (RegExp(r'firebaseio\.com|firebasedatabase\.app', caseSensitive: false)
-        .hasMatch(root)) {
+    if (RegExp(
+      r'firebaseio\.com|firebasedatabase\.app',
+      caseSensitive: false,
+    ).hasMatch(root)) {
       return '$root/codes/$code.json';
     }
     return '$root/codes/$code';
   }
 
-  static Future<Map<String, dynamic>?> _requestJson(String target,
-      {String method = 'GET', Object? body}) async {
+  static Future<Map<String, dynamic>?> _requestJson(
+    String target, {
+    String method = 'GET',
+    Object? body,
+  }) async {
     final uri = Uri.parse(target);
     final headers = {'Content-Type': 'application/json'};
     final res = method == 'PUT'
@@ -127,7 +132,10 @@ class CloudSync {
   }) async {
     final c = await config(repo);
     if (!c.ready) {
-      return {'ok': false, 'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.'};
+      return {
+        'ok': false,
+        'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.',
+      };
     }
     final code = c.code.isNotEmpty ? c.code : await ensureCode(repo);
     final target = targetFor(c.backendUrl, code);
@@ -179,7 +187,10 @@ class CloudSync {
   static Future<Map<String, dynamic>> pull(Repo repo) async {
     final c = await config(repo);
     if (!c.ready) {
-      return {'ok': false, 'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.'};
+      return {
+        'ok': false,
+        'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.',
+      };
     }
     if (c.code.isEmpty) return {'ok': false, 'error': 'لا يوجد رمز سحابي.'};
     Map<String, dynamic>? rec;
@@ -194,11 +205,14 @@ class CloudSync {
     if (payload is! Map) {
       return {'ok': false, 'error': 'محتوى النسخة السحابية غير صالح.'};
     }
-    final map = Map<String, Object?>.from(payload as Map);
+    final map = Map<String, Object?>.from(payload);
     final data = map['data'];
     final hasTables = data is Map && data.isNotEmpty;
     if (!hasTables) {
-      return {'ok': false, 'error': 'النسخة السحابية فارغة أو تالفة، لم يُمسّ شيء.'};
+      return {
+        'ok': false,
+        'error': 'النسخة السحابية فارغة أو تالفة، لم يُمسّ شيء.',
+      };
     }
     return {
       'ok': true,

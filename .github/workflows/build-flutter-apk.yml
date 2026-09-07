@@ -27,7 +27,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.x'
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
 
@@ -50,6 +50,15 @@ jobs:
 
       - name: Get Flutter dependencies
         run: flutter pub get
+
+      - name: Format check (blocking)
+        run: dart format --output=none --set-exit-if-changed lib/ test/
+
+      - name: Static analysis (blocking)
+        run: flutter analyze --no-pub
+
+      - name: Tests including release blockers (blocking)
+        run: flutter test --no-pub --concurrency=1
 
       - name: Build Android APK (arm64 — ملف واحد)
         env:
@@ -86,6 +95,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate update manifest (version.json)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          RAW=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
+          VER=${RAW%%+*}
+          BUILD=${RAW##*+}
+          BASE=https://github.com/${GITHUB_REPOSITORY}/releases/download/latest
+          # minSupported يُقرأ من ملف اختياري، وإلا فلا تحديث إجباري.
+          MIN=$(cat .github/min_supported_version 2>/dev/null | tr -d '[:space:]' || true)
+          MIN=${MIN:-0.0.0}
+          cat > version.json <<EOF
+          {
+            "version": "${VER}+${BUILD}",
+            "minSupported": "${MIN}",
+            "releaseUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/tag/latest",
+            "downloads": {
+              "android": "${BASE}/nexora-arm64.apk",
+              "windows": "${BASE}/nexora-windows.zip"
+            },
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "notes": "إصدار ${VER} (بناء ${BUILD}) — تحسينات وإصلاحات."
+          }
+          EOF
+          cat version.json
+          python3 -c "import json;json.load(open('version.json'))"
+          echo "تم توليد بيان التحديث بنجاح"
+
       - name: Update unified latest release (APK)
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
@@ -106,7 +143,9 @@ jobs:
             - فك ضغط الملف ثم شغّل `nexora.exe`.
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
-          files: nexora-arm64.apk
+          files: |
+            nexora-arm64.apk
+            version.json
           prerelease: false
           make_latest: true
         env:

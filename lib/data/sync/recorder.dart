@@ -2,7 +2,6 @@
 // وإدراجها في sync_queue atomically مع حفظ الكيان المحلي.
 import 'package:sqflite/sqflite.dart';
 
-import 'device_id.dart';
 import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
@@ -25,17 +24,26 @@ class SyncRecorder {
     this.userId,
   });
 
-  static Future<SyncRecorder> forTransaction(Transaction txn,
-      {required String deviceId, int? userId, String workspaceId = defaultWorkspaceId}) async {
+  static Future<SyncRecorder> forTransaction(
+    Transaction txn, {
+    required String deviceId,
+    int? userId,
+    String workspaceId = defaultWorkspaceId,
+  }) async {
     return SyncRecorder(
-        db: txn, deviceId: deviceId, userId: userId, workspaceId: workspaceId);
+      db: txn,
+      deviceId: deviceId,
+      userId: userId,
+      workspaceId: workspaceId,
+    );
   }
 
   /// آخر version معروف للكيان (للبدء من 1 إن لم يوجد).
   Future<int> nextVersion(EntityKind entity, String entityId) async {
     final r = await db.rawQuery(
-        'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
-        [entity.name, entityId]);
+      'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
+      [entity.name, entityId],
+    );
     final cur = (r.first['v'] as int?) ?? 0;
     return cur + 1;
   }
@@ -72,18 +80,30 @@ class SyncRecorder {
 
     final qnow = now.toIso8601String();
     // هدف Cloud دائمًا إن كان مُفعّلًا لاحقًا — نضيفه افتراضيًا حتى لا يضيع أي operation.
-    final targets = <String>{SyncTarget.cloud, ...extraTargets};
+    final lan = await db.query('settings',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['lanSyncEnabled'],
+        limit: 1);
+    final targets = <String>{
+      SyncTarget.cloud,
+      if (lan.isNotEmpty && lan.first['value'] == '1') SyncTarget.lanBroadcast,
+      ...extraTargets,
+    };
     for (final t in targets) {
-      await db.insert('sync_queue', {
-        'operation_id': id,
-        'status': SyncStatus.pending.name,
-        'target': t,
-        'attempts': 0,
-        'last_error': '',
-        'next_try_at': '',
-        'created_at': qnow,
-        'updated_at': qnow,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await db.insert(
+          'sync_queue',
+          {
+            'operation_id': id,
+            'status': SyncStatus.pending.name,
+            'target': t,
+            'attempts': 0,
+            'last_error': '',
+            'next_try_at': '',
+            'created_at': qnow,
+            'updated_at': qnow,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     // إشعار بمحاولة push فورية بعد الانتهاء من المعاملة (جدولة خارج الـ txn).
     try {

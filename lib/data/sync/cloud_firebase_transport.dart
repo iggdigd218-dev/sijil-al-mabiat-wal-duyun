@@ -17,7 +17,6 @@ import 'apply_remote.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
-import 'sync_queue.dart';
 
 class CloudFirebaseTransport implements SyncTransport {
   final Repo repo;
@@ -49,7 +48,8 @@ class CloudFirebaseTransport implements SyncTransport {
     if (u == null || !u.hasScheme || !u.isScheme('https')) {
       throw ArgumentError('رابط Firebase يجب أن يبدأ بـ https://');
     }
-    if (!u.host.contains('firebaseio.com') && !u.host.contains('firebasedatabase.app')) {
+    if (!u.host.contains('firebaseio.com') &&
+        !u.host.contains('firebasedatabase.app')) {
       // نقبل أيضًا روابط مخصصة ولكن مع تحذير ضمني — نسمح لمرونة التطوير.
     }
     return CloudFirebaseTransport(
@@ -69,7 +69,8 @@ class CloudFirebaseTransport implements SyncTransport {
   String get _root =>
       '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(workspaceId)}';
 
-  String _opPath(String opId) => '$_root/operations/${Uri.encodeComponent(opId)}.json';
+  String _opPath(String opId) =>
+      '$_root/operations/${Uri.encodeComponent(opId)}.json';
   String get _opsPath => '$_root/operations.json';
 
   Map<String, String> get _authHeaders {
@@ -77,9 +78,15 @@ class CloudFirebaseTransport implements SyncTransport {
   }
 
   Future<String?> _authQuery() async {
+    final tok = await _idToken();
+    if (tok == null) return null;
+    return 'auth=${Uri.encodeQueryComponent(tok)}';
+  }
+
+  Future<String?> _idToken() async {
     final tok = await _idTokenProvider();
     if (tok == null || tok.isEmpty) return null;
-    return 'auth=${Uri.encodeQueryComponent(tok)}';
+    return tok;
   }
 
   @override
@@ -88,7 +95,8 @@ class CloudFirebaseTransport implements SyncTransport {
     final body = op.toJson();
     final auth = await _authQuery();
     final targetUri = auth == null ? uri : uri.replace(query: auth);
-    final res = await http.put(targetUri, body: body, headers: _authHeaders)
+    final res = await http
+        .put(targetUri, body: body, headers: _authHeaders)
         .timeout(const Duration(seconds: 10));
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw StateError('cloud-auth-failed: ${res.statusCode}');
@@ -97,27 +105,42 @@ class CloudFirebaseTransport implements SyncTransport {
       throw StateError('cloud-http-${res.statusCode}');
     }
     final db = await _db;
-    await db.update('operations', {
-      'server_time': DateTime.now().toIso8601String(),
-      'synced': 1,
-    }, where: 'id = ?', whereArgs: [op.id]);
-    await db.update('devices', {
-      'last_sync_at': DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [op.deviceId]);
+    await db.update(
+      'operations',
+      {'server_time': DateTime.now().toIso8601String(), 'synced': 1},
+      where: 'id = ?',
+      whereArgs: [op.id],
+    );
+    await db.update(
+      'devices',
+      {'last_sync_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [op.deviceId],
+    );
   }
 
   Future<int> pull({ConflictResolver? resolver}) async {
     final db = await _db;
     // نستخدم timestamp-based cursor مع overlap للسماح بالوصول المتأخر.
-    final lastTsRow = await db.query('sync_meta',
-        where: 'key = ?', whereArgs: ['lastCloudTs:$workspaceId'], limit: 1);
+    final lastTsRow = await db.query(
+      'sync_meta',
+      where: 'key = ?',
+      whereArgs: ['lastCloudTs:$workspaceId'],
+      limit: 1,
+    );
     int lastTsMs = 0;
     if (lastTsRow.isNotEmpty) {
-      final v = lastTsRow.first['value'];
-      lastTsMs = int.tryParse('$v') ?? 0;
+      final v = '${lastTsRow.first['value']}';
+      // القيمة المخزّنة قد تكون ISO (الشكل الجديد) أو ميلي ثانية (قواعد قديمة).
+      lastTsMs = DateTime.tryParse(v)?.millisecondsSinceEpoch ??
+          (int.tryParse(v) ?? 0);
     }
     // overlap بثانيتين لالتقاط العمليات التي وصلت متأخرة أو بنفس الوقت.
     final startAtMs = lastTsMs > 2000 ? lastTsMs - 2000 : 0;
+    // مهم: عمود timestamp مخزّن كنص ISO في Firebase، لذلك يجب أن يكون
+    // startAt نصًا ISO أيضًا وإلا لن يطابق أي عملية (مقارنة نصية).
+    final startAtIso =
+        DateTime.fromMillisecondsSinceEpoch(startAtMs).toIso8601String();
     final r = resolver ?? ConflictResolver();
     int applied = 0;
     int maxTsMs = lastTsMs;
@@ -125,12 +148,16 @@ class CloudFirebaseTransport implements SyncTransport {
     bool hasMore = true;
     String? startAfterKey;
     while (hasMore) {
-      var q = 'orderBy="timestamp"&limitToFirst=$kPullPageSize';
-      if (startAtMs > 0) q += '&startAt="$startAtMs"';
-      if (startAfterKey != null) q += '&startAfter="$startAfterKey"';
-      final auth = await _authQuery();
-      final url = auth == null ? '$_opsPath?$q' : '$_opsPath?$q&$auth';
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      final params = <String, String>{
+        'orderBy': jsonEncode('timestamp'),
+        'limitToFirst': '$kPullPageSize',
+        if (startAtMs > 0) 'startAt': jsonEncode(startAtIso),
+        if (startAfterKey != null) 'startAfter': jsonEncode(startAfterKey),
+      };
+      final tok = await _idToken();
+      if (tok != null) params['auth'] = tok;
+      final uri = Uri.parse(_opsPath).replace(queryParameters: params);
+      final res = await http.get(uri).timeout(const Duration(seconds: 15));
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw StateError('cloud-auth-failed');
       }
@@ -165,11 +192,16 @@ class CloudFirebaseTransport implements SyncTransport {
           final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
           if (op.workspaceId != workspaceId) continue;
           // parse timestamp لمللي ثانية.
-          final opMs = DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ?? 0;
+          final opMs =
+              DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ?? 0;
           if (opMs > maxTsMs) maxTsMs = opMs;
           // idempotent: نفس opId موجود مسبقًا -> تجاهل.
-          final idempotentQ = await txn.query('operations',
-              where: 'id = ?', whereArgs: [op.id], limit: 1);
+          final idempotentQ = await txn.query(
+            'operations',
+            where: 'id = ?',
+            whereArgs: [op.id],
+            limit: 1,
+          );
           if (idempotentQ.isNotEmpty) {
             lastKey = entry.key as String;
             continue;
@@ -185,10 +217,14 @@ class CloudFirebaseTransport implements SyncTransport {
     }
 
     if (maxTsMs > lastTsMs) {
-      await db.insert('sync_meta', {
-        'key': 'lastCloudTs:$workspaceId',
-        'value': '$maxTsMs',
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'lastCloudTs:$workspaceId',
+            'value':
+                DateTime.fromMillisecondsSinceEpoch(maxTsMs).toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await repo.setSetting('lastCloudSync', DateTime.now().toLocal().toString());
     return applied;

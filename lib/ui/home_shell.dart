@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/models.dart';
+import '../core/app_version.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'update_section.dart';
 import 'account_form.dart';
 import 'accounts_screen.dart';
 import 'backup_screen.dart';
@@ -11,7 +13,9 @@ import 'chat_screen.dart';
 import 'currencies_screen.dart';
 import 'dashboard_screen.dart';
 import 'inventory_screen.dart';
+
 import 'dart:async';
+
 import 'reports_screen.dart';
 import 'settings_screen.dart';
 import 'trash_screen.dart';
@@ -34,7 +38,10 @@ enum AppScreen {
   reports('التقارير', Icons.bar_chart_outlined, Icons.bar_chart),
   inventory('المخزون والأصناف', Icons.inventory_2_outlined, Icons.inventory_2),
   currencies(
-      'العملات', Icons.currency_exchange_outlined, Icons.currency_exchange),
+    'العملات',
+    Icons.currency_exchange_outlined,
+    Icons.currency_exchange,
+  ),
   chat('الدردشة', Icons.forum_outlined, Icons.forum),
   group('إدارة المجموعة', Icons.groups_outlined, Icons.groups),
   trash('سلة المهملات', Icons.delete_outline, Icons.delete),
@@ -58,12 +65,44 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   AppScreen _screen = AppScreen.dashboard;
   Future<SyncStatusInfo>? _syncFuture;
   Timer? _syncTimer;
+  bool _updatePrompted = false;
 
   @override
   void initState() {
     super.initState();
     _refreshSync();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshSync());
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _refreshSync(),
+    );
+    _checkForUpdateOnStart();
+  }
+
+  /// فحص تحديث صامت عند الإقلاع: لا يزعج المستخدم إلا إذا وُجد تحديث فعلًا،
+  /// ولا يظهر الحوار الاختياري أكثر من مرة واحدة في اليوم.
+  Future<void> _checkForUpdateOnStart() async {
+    if (_updatePrompted) return;
+    _updatePrompted = true;
+    try {
+      final repo = ref.read(repoProvider);
+      final info = await ref.read(updateServiceProvider).check();
+      if (!mounted || !info.hasUpdate) return;
+      if (!info.isMandatory) {
+        // كتم الحوار الاختياري 24 ساعة بعد آخر عرض/تأجيل.
+        final st = await repo.settings();
+        final last = DateTime.tryParse(st['lastUpdatePrompt'] ?? '');
+        if (last != null &&
+            DateTime.now().difference(last) < const Duration(hours: 24)) {
+          return;
+        }
+        await repo.setSetting(
+            'lastUpdatePrompt', DateTime.now().toIso8601String());
+      }
+      if (!mounted) return;
+      await showUpdateDialog(context, info);
+    } catch (_) {
+      // الفحص الصامت لا يجب أن يعطّل الإقلاع أبدًا.
+    }
   }
 
   @override
@@ -92,7 +131,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   void _go(AppScreen s) => setState(() => _screen = s);
 
-
   Widget _body() => switch (_screen) {
         AppScreen.pos => const PosScreen(),
         AppScreen.dashboard => DashboardScreen(
@@ -113,34 +151,35 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   Widget? _fab() {
     final me = ref.watch(currentUserProvider).valueOrNull;
-    final users = ref.watch(usersProvider).valueOrNull ?? const [];
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
     return switch (_screen) {
-        AppScreen.accounts => FloatingActionButton.extended(
-            onPressed: add ? () => openAccountForm(context, ref) : null,
-            icon: const Icon(Icons.add),
-            label: const Text('حساب جديد'),
-          ),
-        AppScreen.transactions => FloatingActionButton.extended(
-            onPressed: add ? () async {
-              final r = await openTxForm(context, ref);
-              if (r == 'open_pos' && mounted) _go(AppScreen.pos);
-            } : null,
-            icon: const Icon(Icons.add),
-            label: const Text('تسجيل عملية'),
-          ),
-        AppScreen.vouchers => FloatingActionButton.extended(
-            onPressed: add ? () => openVoucherForm(context, ref) : null,
-            icon: const Icon(Icons.add),
-            label: const Text('سند جديد'),
-          ),
-        AppScreen.inventory => FloatingActionButton.extended(
-            onPressed: add ? () => openItemCategoryForm(context, ref) : null,
-            icon: const Icon(Icons.create_new_folder_outlined),
-            label: const Text('فئة جديدة'),
-          ),
-        _ => null,
+      AppScreen.accounts => FloatingActionButton.extended(
+          onPressed: add ? () => openAccountForm(context, ref) : null,
+          icon: const Icon(Icons.add),
+          label: const Text('حساب جديد'),
+        ),
+      AppScreen.transactions => FloatingActionButton.extended(
+          onPressed: add
+              ? () async {
+                  final r = await openTxForm(context, ref);
+                  if (r == 'open_pos' && mounted) _go(AppScreen.pos);
+                }
+              : null,
+          icon: const Icon(Icons.add),
+          label: const Text('تسجيل عملية'),
+        ),
+      AppScreen.vouchers => FloatingActionButton.extended(
+          onPressed: add ? () => openVoucherForm(context, ref) : null,
+          icon: const Icon(Icons.add),
+          label: const Text('سند جديد'),
+        ),
+      AppScreen.inventory => FloatingActionButton.extended(
+          onPressed: add ? () => openItemCategoryForm(context, ref) : null,
+          icon: const Icon(Icons.create_new_folder_outlined),
+          label: const Text('فئة جديدة'),
+        ),
+      _ => null,
     };
   }
 
@@ -154,70 +193,92 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         title: Text(_screen.title),
         actions: [
           // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
-          Consumer(builder: (ctx, rref, _) {
-            final modeAsync = rref.watch(workspaceModeProvider);
-            final roleAsync = rref.watch(deviceRoleProvider);
-            final mode = modeAsync.valueOrNull ?? 'standalone';
-            if (mode == 'standalone') return const SizedBox.shrink();
-            final role = roleAsync.valueOrNull;
-            final (label, color, icon) = switch (role?.role) {
-              UserRole.admin => ('مدير', Colors.amber.shade700, Icons.security),
-              UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
-              UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
-              UserRole.viewer => ('عرض فقط', Colors.grey, Icons.visibility_outlined),
-              _ => ('بلا صلاحية', Colors.red, Icons.block),
-            };
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Tooltip(
-                message: mode == 'host'
-                    ? 'أنت مدير هذه المجموعة'
-                    : 'دورك في المجموعة: $label',
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(.12),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: color.withOpacity(.3)),
+          Consumer(
+            builder: (ctx, rref, _) {
+              final modeAsync = rref.watch(workspaceModeProvider);
+              final roleAsync = rref.watch(deviceRoleProvider);
+              final mode = modeAsync.valueOrNull ?? 'standalone';
+              if (mode == 'standalone') return const SizedBox.shrink();
+              final role = roleAsync.valueOrNull;
+              final (label, color, icon) = switch (role?.role) {
+                UserRole.admin => (
+                    'مدير',
+                    Colors.amber.shade700,
+                    Icons.security,
                   ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(icon, size: 13, color: color),
-                    const SizedBox(width: 4),
-                    Text(label,
-                        style: TextStyle(
+                UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
+                UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
+                UserRole.viewer => (
+                    'عرض فقط',
+                    Colors.grey,
+                    Icons.visibility_outlined,
+                  ),
+                _ => ('بلا صلاحية', Colors.red, Icons.block),
+              };
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Tooltip(
+                  message: mode == 'host'
+                      ? 'أنت مدير هذه المجموعة'
+                      : 'دورك في المجموعة: $label',
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: color.withValues(alpha: .3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(icon, size: 13, color: color),
+                        const SizedBox(width: 4),
+                        Text(
+                          label,
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: color)),
-                  ]),
+                            color: color,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            },
+          ),
           // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
-          Consumer(builder: (ctx, rref, _) {
-            final modeAsync = rref.watch(workspaceModeProvider);
-            final isOwnerAsync = rref.watch(isOwnerProvider);
-            final mode = modeAsync.valueOrNull ?? 'standalone';
-            final isOwner = isOwnerAsync.valueOrNull ?? true;
-            if (mode == 'standalone') return const SizedBox.shrink();
-            return FutureBuilder<SyncStatusInfo>(
-              future: _syncFuture,
-              builder: (ctx, snap) {
-                if (!snap.hasData) return const SizedBox.shrink();
-                return SyncStatusBadge(
-                  info: snap.data!,
-                  onTap: () =>
-                      _go(isOwner ? AppScreen.group : AppScreen.settings),
-                );
-              },
-            );
-          }),
+          Consumer(
+            builder: (ctx, rref, _) {
+              final modeAsync = rref.watch(workspaceModeProvider);
+              final isOwnerAsync = rref.watch(isOwnerProvider);
+              final mode = modeAsync.valueOrNull ?? 'standalone';
+              final isOwner = isOwnerAsync.valueOrNull ?? true;
+              if (mode == 'standalone') return const SizedBox.shrink();
+              return FutureBuilder<SyncStatusInfo>(
+                future: _syncFuture,
+                builder: (ctx, snap) {
+                  if (!snap.hasData) return const SizedBox.shrink();
+                  return SyncStatusBadge(
+                    info: snap.data!,
+                    onTap: () =>
+                        _go(isOwner ? AppScreen.group : AppScreen.settings),
+                  );
+                },
+              );
+            },
+          ),
           IconButton(
             tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
-            icon: Icon(hidden
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined),
+            icon: Icon(
+              hidden
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+            ),
             onPressed: () =>
                 ref.read(hideBalancesProvider.notifier).state = !hidden,
           ),
@@ -230,11 +291,13 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         selectedIndex: tabIndex < 0 ? 0 : tabIndex,
         onDestinationSelected: (i) => _go(_tabs[i]),
         destinations: _tabs
-            .map((s) => NavigationDestination(
-                  icon: Icon(s.icon),
-                  selectedIcon: Icon(s.activeIcon),
-                  label: s == AppScreen.dashboard ? 'الرئيسية' : s.title,
-                ))
+            .map(
+              (s) => NavigationDestination(
+                icon: Icon(s.icon),
+                selectedIcon: Icon(s.activeIcon),
+                label: s == AppScreen.dashboard ? 'الرئيسية' : s.title,
+              ),
+            )
             .toList(),
       ),
     );
@@ -266,26 +329,34 @@ class _Drawer extends ConsumerWidget {
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(14),
-                        child: Image.asset('assets/images/logo.png',
-                            width: 52, height: 52, fit: BoxFit.cover),
+                        child: Image.asset(
+                          'assets/images/logo.png',
+                          width: 52,
+                          height: 52,
+                          fit: BoxFit.cover,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('إدارة البيانات',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 16,
-                                    color: AppColors.primaryOf(context))),
+                            Text(
+                              'إدارة البيانات',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                                color: AppColors.primaryOf(context),
+                              ),
+                            ),
                             Text(
                               user == null
                                   ? 'النظام المحاسبي'
                                   : '${user.role.icon} ${user.name}',
                               style: TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.text2Of(context)),
+                                fontSize: 12,
+                                color: AppColors.text2Of(context),
+                              ),
                             ),
                           ],
                         ),
@@ -298,13 +369,17 @@ class _Drawer extends ConsumerWidget {
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                children: _DrawerItems.of(user: user, isOwner: isOwner).map((s) {
+                children: _DrawerItems.of(user: user, isOwner: isOwner).map((
+                  s,
+                ) {
                   final active = s == current;
                   return ListTile(
-                    leading: Icon(active ? s.activeIcon : s.icon,
-                        color: active
-                            ? AppColors.primaryOf(context)
-                            : AppColors.text2Of(context)),
+                    leading: Icon(
+                      active ? s.activeIcon : s.icon,
+                      color: active
+                          ? AppColors.primaryOf(context)
+                          : AppColors.text2Of(context),
+                    ),
                     title: Text(
                       s.title,
                       style: TextStyle(
@@ -330,9 +405,11 @@ class _Drawer extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                'الإصدار 3.4.0',
-                style:
-                    TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+                appVersionLabel,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.text3Of(context),
+                ),
               ),
             ),
           ],
@@ -349,8 +426,7 @@ class _DrawerItems {
       AppScreen.values
           .where((s) => !_HomeShellState._tabs.contains(s))
           .where((s) {
-            if (s == AppScreen.group) return isOwner;
-            return true;
-          })
-          .toList();
+        if (s == AppScreen.group) return isOwner;
+        return true;
+      }).toList();
 }

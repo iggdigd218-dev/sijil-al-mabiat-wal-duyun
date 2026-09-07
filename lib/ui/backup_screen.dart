@@ -58,11 +58,19 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _loadFirebaseState() async {
     final repo = ref.read(repoProvider);
-    final cfg = await CloudSync.config(repo);
-    _cloudUrlCtrl.text = cfg.backendUrl;
-    _cloudCodeCtrl.text = cfg.code;
-    final st = await CloudSync.status(repo);
-    if (mounted) setState(() => _cloudStatus = st);
+    try {
+      final cfg = await CloudSync.config(repo);
+      if (!mounted) return;
+      final status = await CloudSync.status(repo);
+      if (!mounted) return;
+      setState(() {
+        _cloudUrlCtrl.text = cfg.backendUrl;
+        _cloudCodeCtrl.text = cfg.code;
+        _cloudStatus = status;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _cloudStatus = {'error': '$e'});
+    }
   }
 
   Future<void> _saveCloudConfig() async {
@@ -85,9 +93,16 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       await _loadFirebaseState();
       if (!mounted) return;
       if (r['ok'] != true) {
-        showSnack(context, '${r['error'] ?? 'تعذّر الرفع السحابي'}', error: true);
+        showSnack(
+          context,
+          '${r['error'] ?? 'تعذّر الرفع السحابي'}',
+          error: true,
+        );
       } else if (r['skipped'] == true) {
-        showSnack(context, 'النسخة السحابية أحدث من المحلية — لم يُرفع لتفادي الكتابة فوقها.');
+        showSnack(
+          context,
+          'النسخة السحابية أحدث من المحلية — لم يُرفع لتفادي الكتابة فوقها.',
+        );
       } else {
         showSnack(context, 'تم رفع النسخة للسحابة ✅ (الرمز: ${r['code']})');
       }
@@ -102,7 +117,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     final repo = ref.read(repoProvider);
     final r = await CloudSync.pull(repo);
     if (r['ok'] != true) {
-      if (mounted) showSnack(context, '${r['error'] ?? 'تعذّر السحب'}', error: true);
+      if (mounted)
+        showSnack(context, '${r['error'] ?? 'تعذّر السحب'}', error: true);
       return;
     }
     if (r['exists'] != true) {
@@ -122,7 +138,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       final payload = r['payload'] as Map<String, Object?>;
       final count = await repo.importAll(payload);
       bump(ref);
-      if (mounted) showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
+      if (mounted)
+        showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
     } catch (e) {
       if (mounted) showSnack(context, 'تعذّرت الاستعادة: $e', error: true);
     } finally {
@@ -156,15 +173,12 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<File> _createBackupFile() async {
-    final data = await ref
-        .read(repoProvider)
-        .exportAll(withImages: _withImages);
+    final data =
+        await ref.read(repoProvider).exportAll(withImages: _withImages);
     final json = const JsonEncoder.withIndent('  ').convert(data);
     final dir = await getTemporaryDirectory();
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .substring(0, 19)
-        .replaceAll(':', '-');
+    final stamp =
+        DateTime.now().toIso8601String().substring(0, 19).replaceAll(':', '-');
     final file = File('${dir.path}/nexora-backup-$stamp.nexora');
     await file.writeAsString(json, flush: true);
     return file;
@@ -412,12 +426,14 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     setState(() => _busy = true);
     try {
       final file = await _createBackupFile();
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'نسخة احتياطية سحابية — Google Drive',
-      );
+      await Share.shareXFiles([
+        XFile(file.path),
+      ], subject: 'نسخة احتياطية سحابية — Google Drive');
       if (mounted) {
-        showSnack(context, 'تم تجهيز النسخة لمشاركتها وحفظها في Google Drive ☁️');
+        showSnack(
+          context,
+          'تم تجهيز النسخة لمشاركتها وحفظها في Google Drive ☁️',
+        );
       }
     } catch (e) {
       if (mounted) showSnack(context, 'تعذّر تصدير النسخة: ', error: true);
@@ -425,7 +441,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       if (mounted) setState(() => _busy = false);
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -436,13 +451,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
       children: [
         const SectionTitle('حالة البيانات'),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          childAspectRatio: 2.1,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
+        StatCardGrid(
           children: [
             StatCard(
               title: 'الحسابات',
@@ -482,20 +491,26 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                   'تُحفظ النسخة كملف واحد يحتوي كل الحسابات والعمليات والسندات '
                   'والأصناف والإعدادات، ويمكنك حفظه في هاتفك أو إرساله لنفسك.',
                   style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.6,
-                      color: AppColors.text2Of(context)),
+                    fontSize: 12.5,
+                    height: 1.6,
+                    color: AppColors.text2Of(context),
+                  ),
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   secondary: const Icon(Icons.image_outlined),
-                  title: const Text('تضمين صور العمليات',
-                      style: TextStyle(
-                          fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  title: const Text(
+                    'تضمين صور العمليات',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   subtitle: const Text(
-                      'يجعل الملف أكبر لكنه ينقل الإيصالات والشعار معه إلى أي هاتف',
-                      style: TextStyle(fontSize: 11.5)),
+                    'يجعل الملف أكبر لكنه ينقل الإيصالات والشعار معه إلى أي هاتف',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
                   value: _withImages,
                   onChanged: (v) => setState(() => _withImages = v),
                 ),
@@ -528,7 +543,9 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           ),
         ),
         const SizedBox(height: 20),
-        const SectionTitle('المزامنة السحابية (Firebase — رابط ورمز، بلا تسجيل دخول)'),
+        const SectionTitle(
+          'المزامنة السحابية (Firebase — رابط ورمز، بلا تسجيل دخول)',
+        ),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -583,7 +600,9 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                   Text(
                     'آخر نسخة سحابية: ${_cloudStatus!['updatedAt'] ?? ''}  ·  ${_cloudStatus!['sizeKb'] ?? ''}',
                     style: TextStyle(
-                        fontSize: 12, color: AppColors.text3Of(context)),
+                      fontSize: 12,
+                      color: AppColors.text3Of(context),
+                    ),
                   ),
                   const SizedBox(height: 8),
                 ],
@@ -756,7 +775,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     ),
                   ),
                 ],
-                                const SizedBox(height: 12),
+                const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
@@ -781,15 +800,21 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Icon(Icons.phonelink, color: AppColors.primaryOf(context)),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text('نقل الحساب بين الأجهزة',
+                Row(
+                  children: [
+                    Icon(Icons.phonelink, color: AppColors.primaryOf(context)),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'نقل الحساب بين الأجهزة',
                         style: TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 14.5)),
-                  ),
-                ]),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 10),
                 Text(
                   'التطبيق يعمل بلا إنترنت وكل البيانات محفوظة داخل جهازك، '
@@ -803,9 +828,10 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                   'المزامنة اللحظية بين جهازين تحتاج خادمًا واشتراكًا، وهي غير '
                   'مفعّلة في هذا الإصدار.',
                   style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.75,
-                      color: AppColors.text2Of(context)),
+                    fontSize: 12.5,
+                    height: 1.75,
+                    color: AppColors.text2Of(context),
+                  ),
                 ),
               ],
             ),
@@ -845,15 +871,22 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             return Column(
               children: items.map((t) {
                 final created = DateTime.tryParse(
-                    (t['created_at'] ?? '') as String? ?? '');
+                  (t['created_at'] ?? '') as String? ?? '',
+                );
                 return Card(
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
-                    leading: Icon(Icons.restore_from_trash_outlined,
-                        color: AppColors.accentOf(context)),
-                    title: Text('${t['label'] ?? t['store']}',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 14)),
+                    leading: Icon(
+                      Icons.restore_from_trash_outlined,
+                      color: AppColors.accentOf(context),
+                    ),
+                    title: Text(
+                      '${t['label'] ?? t['store']}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
                     subtitle: Text(
                       created == null ? '' : Fmt.dateTime(created),
                       style: const TextStyle(fontSize: 11.5),
@@ -940,25 +973,35 @@ class ActivityScreen extends ConsumerWidget {
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: Text('${a['text']}',
-                            style: const TextStyle(
-                                fontSize: 13.5, fontWeight: FontWeight.w600)),
+                        child: Text(
+                          '${a['text']}',
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text('${a['user_name'] ?? ''}',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.text3Of(context))),
+                          Text(
+                            '${a['user_name'] ?? ''}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.text3Of(context),
+                            ),
+                          ),
                           Text(
                             Fmt.relative(
-                                DateTime.tryParse(
-                                        (a['created_at'] ?? '') as String) ??
-                                    DateTime.now()),
+                              DateTime.tryParse(
+                                    (a['created_at'] ?? '') as String,
+                                  ) ??
+                                  DateTime.now(),
+                            ),
                             style: TextStyle(
-                                fontSize: 10.5,
-                                color: AppColors.text3Of(context)),
+                              fontSize: 10.5,
+                              color: AppColors.text3Of(context),
+                            ),
                           ),
                         ],
                       ),

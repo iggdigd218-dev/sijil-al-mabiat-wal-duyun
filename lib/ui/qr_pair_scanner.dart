@@ -23,7 +23,11 @@ class PairingData {
 Future<PairingData?> scanQrPair(BuildContext context) async {
   if (!Platform.isAndroid && !Platform.isIOS) {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      const SnackBar(content: Text('مسح QR متاح على الهاتف فقط. يمكنك إدخال البيانات يدوياً')),
+      const SnackBar(
+        content: Text(
+          'مسح QR متاح على الهاتف فقط. يمكنك إدخال البيانات يدوياً',
+        ),
+      ),
     );
     return null;
   }
@@ -65,7 +69,8 @@ class _QrPairScannerState extends State<_QrPairScanner> {
       final tok = parsed['tok'] ?? '';
       if (tok.isEmpty || ip.isEmpty) continue;
       _handled = true;
-      Navigator.of(context).pop(PairingData(ws: ws, ip: ip, port: port, tok: tok));
+      Navigator.of(context)
+          .pop(PairingData(ws: ws, ip: ip, port: port, tok: tok));
       return;
     }
   }
@@ -84,17 +89,17 @@ class _QrPairScannerState extends State<_QrPairScanner> {
       ),
       body: Stack(
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-          ),
+          MobileScanner(controller: _controller, onDetect: _onDetect),
           // Overlay مربع مسح.
           Center(
             child: Container(
               width: 260,
               height: 260,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 3),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  width: 3,
+                ),
                 borderRadius: BorderRadius.circular(16),
               ),
             ),

@@ -14,8 +14,6 @@
 //   - pair      : اقتران جهاز ناجح — نمط احتفالي قصير.
 import 'package:flutter/services.dart';
 
-typedef _SfxDelay = Future<void>;
-
 class Sfx {
   static bool _muted = false;
   static bool get muted => _muted;
@@ -28,8 +26,14 @@ class Sfx {
   static void success() {
     if (_muted) return;
     HapticFeedback.mediumImpact();
-    Future.delayed(const Duration(milliseconds: 70), HapticFeedback.lightImpact);
-    Future.delayed(const Duration(milliseconds: 140), HapticFeedback.lightImpact);
+    Future.delayed(
+      const Duration(milliseconds: 70),
+      HapticFeedback.lightImpact,
+    );
+    Future.delayed(
+      const Duration(milliseconds: 140),
+      HapticFeedback.lightImpact,
+    );
     SystemSound.play(SystemSoundType.click);
   }
 
@@ -37,9 +41,18 @@ class Sfx {
   static void payment() {
     if (_muted) return;
     HapticFeedback.mediumImpact();
-    Future.delayed(const Duration(milliseconds: 70), HapticFeedback.lightImpact);
-    Future.delayed(const Duration(milliseconds: 140), HapticFeedback.lightImpact);
-    Future.delayed(const Duration(milliseconds: 220), HapticFeedback.mediumImpact);
+    Future.delayed(
+      const Duration(milliseconds: 70),
+      HapticFeedback.lightImpact,
+    );
+    Future.delayed(
+      const Duration(milliseconds: 140),
+      HapticFeedback.lightImpact,
+    );
+    Future.delayed(
+      const Duration(milliseconds: 220),
+      HapticFeedback.mediumImpact,
+    );
     SystemSound.play(SystemSoundType.click);
   }
 
@@ -54,8 +67,14 @@ class Sfx {
   static void pair() {
     if (_muted) return;
     HapticFeedback.mediumImpact();
-    Future.delayed(const Duration(milliseconds: 90), HapticFeedback.selectionClick);
-    Future.delayed(const Duration(milliseconds: 180), HapticFeedback.mediumImpact);
+    Future.delayed(
+      const Duration(milliseconds: 90),
+      HapticFeedback.selectionClick,
+    );
+    Future.delayed(
+      const Duration(milliseconds: 180),
+      HapticFeedback.mediumImpact,
+    );
     SystemSound.play(SystemSoundType.click);
   }
 
@@ -65,7 +84,10 @@ class Sfx {
   static void warning() {
     if (_muted) return;
     HapticFeedback.lightImpact();
-    Future.delayed(const Duration(milliseconds: 120), HapticFeedback.lightImpact);
+    Future.delayed(
+      const Duration(milliseconds: 120),
+      HapticFeedback.lightImpact,
+    );
   }
 
   // ============ الفشل ============
@@ -74,7 +96,10 @@ class Sfx {
   static void error() {
     if (_muted) return;
     HapticFeedback.heavyImpact();
-    Future.delayed(const Duration(milliseconds: 110), HapticFeedback.lightImpact);
+    Future.delayed(
+      const Duration(milliseconds: 110),
+      HapticFeedback.lightImpact,
+    );
     SystemSound.play(SystemSoundType.alert);
   }
 
@@ -82,7 +107,10 @@ class Sfx {
   static void reject() {
     if (_muted) return;
     HapticFeedback.selectionClick();
-    Future.delayed(const Duration(milliseconds: 80), HapticFeedback.selectionClick);
+    Future.delayed(
+      const Duration(milliseconds: 80),
+      HapticFeedback.selectionClick,
+    );
   }
 
   // ============ الأزرار/التنقل ============
@@ -104,7 +132,10 @@ class Sfx {
   static void delete() {
     if (_muted) return;
     HapticFeedback.mediumImpact();
-    Future.delayed(const Duration(milliseconds: 90), HapticFeedback.heavyImpact);
+    Future.delayed(
+      const Duration(milliseconds: 90),
+      HapticFeedback.heavyImpact,
+    );
   }
 
   // ============ مساعدات ============
@@ -113,8 +144,14 @@ class Sfx {
   static void notify() {
     if (_muted) return;
     HapticFeedback.mediumImpact();
-    Future.delayed(const Duration(milliseconds: 180), HapticFeedback.lightImpact);
-    Future.delayed(const Duration(milliseconds: 360), HapticFeedback.mediumImpact);
+    Future.delayed(
+      const Duration(milliseconds: 180),
+      HapticFeedback.lightImpact,
+    );
+    Future.delayed(
+      const Duration(milliseconds: 360),
+      HapticFeedback.mediumImpact,
+    );
   }
 
   /// يُستخدم في حوارات التأكيد المدمرة (حذف، طرد) ليعطي إحساساً مختلفاً.

@@ -18,8 +18,10 @@ enum EntityKind {
   currency,
   setting;
 
-  static EntityKind from(String s) =>
-      EntityKind.values.firstWhere((e) => e.name == s, orElse: () => EntityKind.tx);
+  static EntityKind from(String s) => EntityKind.values.firstWhere(
+        (e) => e.name == s,
+        orElse: () => EntityKind.tx,
+      );
 }
 
 /// حالات المزامنة لصف في sync_queue.
@@ -27,8 +29,10 @@ enum SyncStatus { pending, syncing, synced, failed }
 
 extension SyncStatusName on SyncStatus {
   String get s => name;
-  static SyncStatus from(String s) =>
-      SyncStatus.values.firstWhere((e) => e.name == s, orElse: () => SyncStatus.pending);
+  static SyncStatus from(String s) => SyncStatus.values.firstWhere(
+        (e) => e.name == s,
+        orElse: () => SyncStatus.pending,
+      );
 }
 
 /// اتجاه/هدف المزامنة (سحابة أو جهاز محدد).

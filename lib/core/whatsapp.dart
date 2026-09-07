@@ -61,8 +61,9 @@ class WhatsApp {
   }
 
   static Future<WaResult> _fallback(String digits, String text) async {
-    final uri =
-        Uri.parse('https://wa.me/$digits?text=${Uri.encodeComponent(text)}');
+    final uri = Uri.parse(
+      'https://wa.me/$digits?text=${Uri.encodeComponent(text)}',
+    );
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     return ok ? WaResult.ok : WaResult.error;
   }
@@ -81,7 +82,10 @@ class WhatsApp {
 /// ويُترك للمستخدم إرفاق الصورة يدوياً إن أراد.
 class SmsSender {
   /// يفتح تطبيق الرسائل على [phone] مع نص [body].
-  static Future<bool> send({required String phone, required String body}) async {
+  static Future<bool> send({
+    required String phone,
+    required String body,
+  }) async {
     final digits = phone.replaceAll(RegExp(r'[^\d+]'), '');
     if (digits.length < 6) return false;
     final uri = Uri(

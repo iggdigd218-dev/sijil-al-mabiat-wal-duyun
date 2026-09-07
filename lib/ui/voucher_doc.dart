@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -38,9 +37,10 @@ class OrgInfo {
             : 'مؤسسة',
         nameEn: s['businessNameEn'] ?? '',
         address: s['address'] ?? '',
-        phone: [s['phone'], s['whatsapp']]
-            .where((e) => e != null && e.trim().isNotEmpty)
-            .join(' — '),
+        phone: [
+          s['phone'],
+          s['whatsapp'],
+        ].where((e) => e != null && e.trim().isNotEmpty).join(' — '),
         email: s['email'] ?? '',
         managerName: s['managerName'] ?? '',
         logoPath: s['logo'] ?? '',
@@ -71,9 +71,11 @@ Future<Uint8List> buildVoucherPdf({
   List<InvoiceLine> items = const [],
 }) async {
   final regular = pw.Font.ttf(
-      await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'));
-  final bold =
-      pw.Font.ttf(await rootBundle.load('assets/fonts/Tajawal-Bold.ttf'));
+    await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'),
+  );
+  final bold = pw.Font.ttf(
+    await rootBundle.load('assets/fonts/Tajawal-Bold.ttf'),
+  );
 
   pw.MemoryImage? logo;
   if (org.logoPath.trim().isNotEmpty) {
@@ -110,12 +112,14 @@ Future<Uint8List> buildVoucherPdf({
           children: [
             pw.SizedBox(
               width: 110,
-              child: pw.Text(k,
-                  style: const pw.TextStyle(fontSize: 10, color: muted)),
+              child: pw.Text(
+                k,
+                style: const pw.TextStyle(fontSize: 10, color: muted),
+              ),
             ),
             pw.Expanded(
-              child: pw.Text(val,
-                  style: pw.TextStyle(fontSize: 11, font: bold)),
+              child:
+                  pw.Text(val, style: pw.TextStyle(fontSize: 11, font: bold)),
             ),
           ],
         ),
@@ -134,8 +138,7 @@ Future<Uint8List> buildVoucherPdf({
               pw.Text(k,
                   style: const pw.TextStyle(fontSize: 8.5, color: muted)),
               pw.SizedBox(height: 3),
-              pw.Text(val,
-                  style: pw.TextStyle(fontSize: 11, font: bold)),
+              pw.Text(val, style: pw.TextStyle(fontSize: 11, font: bold)),
             ],
           ),
         ),
@@ -172,24 +175,34 @@ Future<Uint8List> buildVoucherPdf({
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text(org.name,
-                        style: pw.TextStyle(
-                            fontSize: 20, font: bold, color: teal)),
+                    pw.Text(
+                      org.name,
+                      style: pw.TextStyle(
+                        fontSize: 20,
+                        font: bold,
+                        color: teal,
+                      ),
+                    ),
                     if (org.nameEn.isNotEmpty)
-                      pw.Text(org.nameEn,
-                          style: pw.TextStyle(fontSize: 10, font: bold)),
+                      pw.Text(
+                        org.nameEn,
+                        style: pw.TextStyle(fontSize: 10, font: bold),
+                      ),
                     if (org.address.isNotEmpty)
-                      pw.Text(org.address,
-                          style:
-                              const pw.TextStyle(fontSize: 9, color: muted)),
+                      pw.Text(
+                        org.address,
+                        style: const pw.TextStyle(fontSize: 9, color: muted),
+                      ),
                     if (org.phone.isNotEmpty)
-                      pw.Text(org.phone,
-                          style:
-                              const pw.TextStyle(fontSize: 9, color: muted)),
+                      pw.Text(
+                        org.phone,
+                        style: const pw.TextStyle(fontSize: 9, color: muted),
+                      ),
                     if (org.email.isNotEmpty)
-                      pw.Text(org.email,
-                          style:
-                              const pw.TextStyle(fontSize: 9, color: muted)),
+                      pw.Text(
+                        org.email,
+                        style: const pw.TextStyle(fontSize: 9, color: muted),
+                      ),
                   ],
                 ),
               ),
@@ -204,7 +217,7 @@ Future<Uint8List> buildVoucherPdf({
                     borderRadius: pw.BorderRadius.circular(10),
                   ),
                   alignment: pw.Alignment.center,
-                  child: pw.Image(logo!, fit: pw.BoxFit.contain),
+                  child: pw.Image(logo, fit: pw.BoxFit.contain),
                 ),
                 pw.SizedBox(width: 8),
               ],
@@ -216,8 +229,10 @@ Future<Uint8List> buildVoucherPdf({
                   borderRadius: pw.BorderRadius.circular(10),
                 ),
                 alignment: pw.Alignment.center,
-                child: pw.Text(v.kind.label.split(' ').last,
-                    style: pw.TextStyle(font: bold, fontSize: 12, color: teal)),
+                child: pw.Text(
+                  v.kind.label.split(' ').last,
+                  style: pw.TextStyle(font: bold, fontSize: 12, color: teal),
+                ),
               ),
             ],
           ),
@@ -226,13 +241,15 @@ Future<Uint8List> buildVoucherPdf({
           pw.SizedBox(height: 14),
 
           // شريط المعلومات
-          pw.Row(children: [
-            infoCell('التاريخ', Fmt.date(v.date)),
-            pw.SizedBox(width: 8),
-            infoCell('رقم السند', v.number),
-            pw.SizedBox(width: 8),
-            infoCell('نوع السند', v.kind.label),
-          ]),
+          pw.Row(
+            children: [
+              infoCell('التاريخ', Fmt.date(v.date)),
+              pw.SizedBox(width: 8),
+              infoCell('رقم السند', v.number),
+              pw.SizedBox(width: 8),
+              infoCell('نوع السند', v.kind.label),
+            ],
+          ),
           pw.SizedBox(height: 16),
 
           // تفاصيل الحساب
@@ -242,18 +259,22 @@ Future<Uint8List> buildVoucherPdf({
               border: pw.Border.all(color: border),
               borderRadius: pw.BorderRadius.circular(8),
             ),
-            child: pw.Column(children: [
-              line('اسم الحساب', account?.name ?? '—'),
-              if (account != null && account.phone.isNotEmpty)
-                line('رقم الهاتف', account.phone),
-              line('رقم الحساب', account?.id?.toString() ?? '—'),
-              if (v.statement.isNotEmpty) line('بيان العملية', v.statement),
-              line('العملة', '${currency.name} (${currency.symbol})'),
-            ]),
+            child: pw.Column(
+              children: [
+                line('اسم الحساب', account?.name ?? '—'),
+                if (account != null && account.phone.isNotEmpty)
+                  line('رقم الهاتف', account.phone),
+                line('رقم الحساب', account?.id?.toString() ?? '—'),
+                if (v.statement.isNotEmpty) line('بيان العملية', v.statement),
+                line('العملة', '${currency.name} (${currency.symbol})'),
+              ],
+            ),
           ),
           if (items.isNotEmpty) ...[
-            pw.Text('تفاصيل المشتريات',
-                style: pw.TextStyle(fontSize: 13, font: bold, color: teal)),
+            pw.Text(
+              'تفاصيل المشتريات',
+              style: pw.TextStyle(fontSize: 13, font: bold, color: teal),
+            ),
             pw.SizedBox(height: 8),
             pw.Table(
               border: pw.TableBorder.all(color: border, width: .6),
@@ -274,16 +295,23 @@ Future<Uint8List> buildVoucherPdf({
                   ],
                 ),
                 for (final line in items)
-                  pw.TableRow(children: [
-                    _tableCell(line.name, null),
-                    _tableCell('${_quantity(line.quantity)} ${line.unit}', null),
-                    _tableCell(
+                  pw.TableRow(
+                    children: [
+                      _tableCell(line.name, null),
+                      _tableCell(
+                        '${_quantity(line.quantity)} ${line.unit}',
+                        null,
+                      ),
+                      _tableCell(
                         '${Fmt.money(line.unitPrice, currency.decimal)} ${currency.symbol}',
-                        null),
-                    _tableCell(
+                        null,
+                      ),
+                      _tableCell(
                         '${Fmt.money(line.total, currency.decimal)} ${currency.symbol}',
-                        bold),
-                  ]),
+                        bold,
+                      ),
+                    ],
+                  ),
               ],
             ),
             pw.SizedBox(height: 8),
@@ -305,15 +333,23 @@ Future<Uint8List> buildVoucherPdf({
               color: amtBg,
               borderRadius: pw.BorderRadius.circular(10),
             ),
-            child: pw.Column(children: [
-              pw.Text(
-                '${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}',
-                style: pw.TextStyle(fontSize: 26, font: bold, color: amtColor),
-              ),
-              pw.SizedBox(height: 6),
-              pw.Text('فقط: $words لا غير',
-                  style: pw.TextStyle(fontSize: 11, font: bold)),
-            ]),
+            child: pw.Column(
+              children: [
+                pw.Text(
+                  '${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}',
+                  style: pw.TextStyle(
+                    fontSize: 26,
+                    font: bold,
+                    color: amtColor,
+                  ),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Text(
+                  'فقط: $words لا غير',
+                  style: pw.TextStyle(fontSize: 11, font: bold),
+                ),
+              ],
+            ),
           ),
 
           if (v.notes.isNotEmpty) ...[
@@ -325,21 +361,25 @@ Future<Uint8List> buildVoucherPdf({
                 border: pw.Border.all(color: border),
                 borderRadius: pw.BorderRadius.circular(8),
               ),
-              child: pw.Text('ملاحظات: ${v.notes}',
-                  style: const pw.TextStyle(fontSize: 10)),
+              child: pw.Text(
+                'ملاحظات: ${v.notes}',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
             ),
           ],
 
           pw.Spacer(),
 
           // التواقيع
-          pw.Row(children: [
-            sig('اسم المستلم'),
-            pw.SizedBox(width: 18),
-            sig('توقيع المستلم'),
-            pw.SizedBox(width: 18),
-            sig('توقيع المسؤول: ${org.managerName}'),
-          ]),
+          pw.Row(
+            children: [
+              sig('اسم المستلم'),
+              pw.SizedBox(width: 18),
+              sig('توقيع المستلم'),
+              pw.SizedBox(width: 18),
+              sig('توقيع المسؤول: ${org.managerName}'),
+            ],
+          ),
           pw.SizedBox(height: 16),
           pw.Container(
             width: double.infinity,
@@ -348,18 +388,24 @@ Future<Uint8List> buildVoucherPdf({
               color: const PdfColor.fromInt(0xFFF7F9FC),
               borderRadius: pw.BorderRadius.circular(6),
             ),
-            child: pw.Text(org.footer,
-                textAlign: pw.TextAlign.center,
-                style: const pw.TextStyle(fontSize: 9, color: muted)),
+            child: pw.Text(
+              org.footer,
+              textAlign: pw.TextAlign.center,
+              style: const pw.TextStyle(fontSize: 9, color: muted),
+            ),
           ),
           pw.SizedBox(height: 8),
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Text('تاريخ الإصدار: ${Fmt.dateTime(v.createdAt)}',
-                  style: const pw.TextStyle(fontSize: 8, color: muted)),
-              pw.Text('الحالة: ${v.statusLabel}',
-                  style: const pw.TextStyle(fontSize: 8, color: muted)),
+              pw.Text(
+                'تاريخ الإصدار: ${Fmt.dateTime(v.createdAt)}',
+                style: const pw.TextStyle(fontSize: 8, color: muted),
+              ),
+              pw.Text(
+                'الحالة: ${v.statusLabel}',
+                style: const pw.TextStyle(fontSize: 8, color: muted),
+              ),
             ],
           ),
         ],
@@ -383,7 +429,8 @@ String voucherText({
     ..writeln('التاريخ: ${Fmt.date(v.date)}')
     ..writeln('الحساب: ${account?.name ?? '—'}')
     ..writeln(
-        'المبلغ: ${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}')
+      'المبلغ: ${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}',
+    )
     ..writeln('البيان: ${v.statement.isEmpty ? '—' : v.statement}');
   if (items.isNotEmpty) {
     b.writeln('تفاصيل المشتريات:');
@@ -397,7 +444,8 @@ String voucherText({
     }
     final total = items.fold<double>(0, (sum, line) => sum + line.total);
     b.writeln(
-        'إجمالي المشتريات: ${Fmt.money(total, currency.decimal)} ${currency.symbol}');
+      'إجمالي المشتريات: ${Fmt.money(total, currency.decimal)} ${currency.symbol}',
+    );
   }
   if (orgName.isNotEmpty) b.writeln(orgName);
   return b.toString();

@@ -7,10 +7,7 @@ import '../core/theme.dart';
 /// آلة حاسبة سريعة — تعيد الإجمالي عند الضغط على «موافق».
 ///
 /// تُفتح من الأيقونة المجاورة لمربع المبلغ، ويُنقل الناتج إليه مباشرة.
-Future<double?> openCalculator(
-  BuildContext context, {
-  String initial = '',
-}) =>
+Future<double?> openCalculator(BuildContext context, {String initial = ''}) =>
     showModalBottomSheet<double>(
       context: context,
       isScrollControlled: true,
@@ -101,11 +98,15 @@ class _CalculatorState extends State<_Calculator> {
           children: [
             Row(
               children: [
-                Icon(Icons.calculate_outlined,
-                    color: AppColors.primaryOf(context)),
+                Icon(
+                  Icons.calculate_outlined,
+                  color: AppColors.primaryOf(context),
+                ),
                 const SizedBox(width: 8),
-                Text('آلة حاسبة سريعة',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'آلة حاسبة سريعة',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const Spacer(),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
@@ -130,18 +131,23 @@ class _CalculatorState extends State<_Calculator> {
                     child: Text(
                       _expr.isEmpty ? '0' : _expr,
                       style: const TextStyle(
-                          fontSize: 30, fontWeight: FontWeight.w800),
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   if (_preview.isNotEmpty) ...[
                     const SizedBox(height: 6),
-                    Text('= $_preview',
-                        style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primaryOf(context))),
+                    Text(
+                      '= $_preview',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primaryOf(context),
+                      ),
+                    ),
                   ],
                 ],
               ),

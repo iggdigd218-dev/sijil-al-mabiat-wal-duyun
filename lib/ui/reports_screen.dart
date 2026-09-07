@@ -38,10 +38,8 @@ enum PeriodUnit {
   final String label;
 }
 
-final reportTabProvider =
-    StateProvider<ReportTab>((ref) => ReportTab.summary);
-final periodUnitProvider =
-    StateProvider<PeriodUnit>((ref) => PeriodUnit.month);
+final reportTabProvider = StateProvider<ReportTab>((ref) => ReportTab.summary);
+final periodUnitProvider = StateProvider<PeriodUnit>((ref) => PeriodUnit.month);
 
 /// جدول التقرير الناتج: عناوين وصفوف نصية جاهزة للعرض والتصدير.
 class ReportTable {
@@ -73,15 +71,17 @@ class ReportsScreen extends ConsumerWidget {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             children: ReportTab.values
-                .map((t) => Padding(
-                      padding: const EdgeInsetsDirectional.only(end: 8),
-                      child: ChoiceChip(
-                        selected: tab == t,
-                        onSelected: (_) =>
-                            ref.read(reportTabProvider.notifier).state = t,
-                        label: Text(t.label),
-                      ),
-                    ))
+                .map(
+                  (t) => Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 8),
+                    child: ChoiceChip(
+                      selected: tab == t,
+                      onSelected: (_) =>
+                          ref.read(reportTabProvider.notifier).state = t,
+                      label: Text(t.label),
+                    ),
+                  ),
+                )
                 .toList(),
           ),
         ),
@@ -95,8 +95,8 @@ class ReportsScreen extends ConsumerWidget {
               message: '$e',
             ),
             data: (d) {
-              final currencies =
-                  ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+              final currencies = ref.watch(currenciesProvider).valueOrNull ??
+                  kDefaultCurrencies;
               final unit = ref.watch(periodUnitProvider);
               final table = buildReport(tab, d, currencies, unit);
               return _ReportView(tab: tab, table: table);
@@ -116,8 +116,7 @@ class _ScopeBar extends ConsumerWidget {
     final s = ref.watch(reportScopeProvider);
     final accounts = ref.watch(allAccountsProvider).valueOrNull ?? [];
     final currencies = ref.watch(currenciesProvider).valueOrNull ?? [];
-    void set(ReportScope v) =>
-        ref.read(reportScopeProvider.notifier).state = v;
+    void set(ReportScope v) => ref.read(reportScopeProvider.notifier).state = v;
 
     return Container(
       color: AppColors.surfaceOf(context),
@@ -140,31 +139,48 @@ class _ScopeBar extends ConsumerWidget {
                   initialDateRange: DateTimeRange(start: s.from, end: s.to),
                 );
                 if (r != null) {
-                  set(s.copyWith(
-                    from: DateTime(r.start.year, r.start.month, r.start.day),
-                    to: DateTime(
-                        r.end.year, r.end.month, r.end.day, 23, 59, 59),
-                  ));
+                  set(
+                    s.copyWith(
+                      from: DateTime(r.start.year, r.start.month, r.start.day),
+                      to: DateTime(
+                        r.end.year,
+                        r.end.month,
+                        r.end.day,
+                        23,
+                        59,
+                        59,
+                      ),
+                    ),
+                  );
                 }
               },
             ),
             _quick(context, 'هذا الشهر', () {
               final n = DateTime.now();
-              set(s.copyWith(
+              set(
+                s.copyWith(
                   from: DateTime(n.year, n.month, 1),
-                  to: DateTime(n.year, n.month, n.day, 23, 59, 59)));
+                  to: DateTime(n.year, n.month, n.day, 23, 59, 59),
+                ),
+              );
             }),
             _quick(context, 'آخر ٣٠ يومًا', () {
               final n = DateTime.now();
-              set(s.copyWith(
+              set(
+                s.copyWith(
                   from: n.subtract(const Duration(days: 30)),
-                  to: DateTime(n.year, n.month, n.day, 23, 59, 59)));
+                  to: DateTime(n.year, n.month, n.day, 23, 59, 59),
+                ),
+              );
             }),
             _quick(context, 'هذه السنة', () {
               final n = DateTime.now();
-              set(s.copyWith(
+              set(
+                s.copyWith(
                   from: DateTime(n.year, 1, 1),
-                  to: DateTime(n.year, 12, 31, 23, 59, 59)));
+                  to: DateTime(n.year, 12, 31, 23, 59, 59),
+                ),
+              );
             }),
             _pill(
               context,
@@ -174,23 +190,28 @@ class _ScopeBar extends ConsumerWidget {
                 final v = await showModalBottomSheet<String>(
                   context: context,
                   builder: (_) => SafeArea(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      ListTile(
-                        title: const Text('كل العملات'),
-                        onTap: () => Navigator.pop(context, ''),
-                      ),
-                      for (final c in currencies)
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                         ListTile(
-                          title: Text('${c.symbol}  ${c.name}'),
-                          onTap: () => Navigator.pop(context, c.code),
+                          title: const Text('كل العملات'),
+                          onTap: () => Navigator.pop(context, ''),
                         ),
-                    ]),
+                        for (final c in currencies)
+                          ListTile(
+                            title: Text('${c.symbol}  ${c.name}'),
+                            onTap: () => Navigator.pop(context, c.code),
+                          ),
+                      ],
+                    ),
                   ),
                 );
                 if (v == null) return;
-                set(v.isEmpty
-                    ? s.copyWith(clearCurrency: true)
-                    : s.copyWith(currency: v));
+                set(
+                  v.isEmpty
+                      ? s.copyWith(clearCurrency: true)
+                      : s.copyWith(currency: v),
+                );
               },
             ),
             _pill(
@@ -207,23 +228,28 @@ class _ScopeBar extends ConsumerWidget {
                 final v = await showModalBottomSheet<int>(
                   context: context,
                   builder: (_) => SafeArea(
-                    child: ListView(shrinkWrap: true, children: [
-                      ListTile(
-                        title: const Text('كل الحسابات'),
-                        onTap: () => Navigator.pop(context, -1),
-                      ),
-                      for (final a in accounts)
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
                         ListTile(
-                          title: Text('${a.kind.icon}  ${a.name}'),
-                          onTap: () => Navigator.pop(context, a.id),
+                          title: const Text('كل الحسابات'),
+                          onTap: () => Navigator.pop(context, -1),
                         ),
-                    ]),
+                        for (final a in accounts)
+                          ListTile(
+                            title: Text('${a.kind.icon}  ${a.name}'),
+                            onTap: () => Navigator.pop(context, a.id),
+                          ),
+                      ],
+                    ),
                   ),
                 );
                 if (v == null) return;
-                set(v == -1
-                    ? s.copyWith(clearAccount: true)
-                    : s.copyWith(accountId: v));
+                set(
+                  v == -1
+                      ? s.copyWith(clearAccount: true)
+                      : s.copyWith(accountId: v),
+                );
               },
             ),
           ],
@@ -256,12 +282,16 @@ ReportTable buildReport(
   PeriodUnit unit,
 ) {
   String sym(String code) => currencies
-      .firstWhere((c) => c.code == code,
-          orElse: () => CurrencyDef(code, code, code, 0))
+      .firstWhere(
+        (c) => c.code == code,
+        orElse: () => CurrencyDef(code, code, code, 0),
+      )
       .symbol;
   String cname(String code) => currencies
-      .firstWhere((c) => c.code == code,
-          orElse: () => CurrencyDef(code, code, code, 0))
+      .firstWhere(
+        (c) => c.code == code,
+        orElse: () => CurrencyDef(code, code, code, 0),
+      )
       .name;
 
   switch (tab) {
@@ -311,20 +341,22 @@ ReportTable buildReport(
           'البيان',
           'المبلغ',
           'العملة',
-          'المرجع'
+          'المرجع',
         ],
         rows: sorted
-            .map((t) => [
-                  Fmt.date(t.date),
-                  t.type.label,
-                  t.type == OpType.transfer
-                      ? 'تحويل'
-                      : (byId[t.accountId]?.name ?? '—'),
-                  t.description,
-                  Fmt.money(t.amount),
-                  sym(t.currency),
-                  t.reference,
-                ])
+            .map(
+              (t) => [
+                Fmt.date(t.date),
+                t.type.label,
+                t.type == OpType.transfer
+                    ? 'تحويل'
+                    : (byId[t.accountId]?.name ?? '—'),
+                t.description,
+                Fmt.money(t.amount),
+                sym(t.currency),
+                t.reference,
+              ],
+            )
             .toList(),
       );
 
@@ -339,11 +371,7 @@ ReportTable buildReport(
       return ReportTable(
         headers: const ['التصنيف', 'عدد الحسابات', 'إجمالي الرصيد'],
         rows: cat.entries
-            .map((e) => [
-                  e.key,
-                  '${e.value[0].toInt()}',
-                  Fmt.money(e.value[1]),
-                ])
+            .map((e) => [e.key, '${e.value[0].toInt()}', Fmt.money(e.value[1])])
             .toList(),
       );
 
@@ -353,7 +381,8 @@ ReportTable buildReport(
         final key = switch (unit) {
           PeriodUnit.day => Fmt.date(t.date),
           PeriodUnit.week => Fmt.date(
-              t.date.subtract(Duration(days: t.date.weekday % 7))),
+              t.date.subtract(Duration(days: t.date.weekday % 7)),
+            ),
           PeriodUnit.month =>
             '${t.date.year}/${t.date.month.toString().padLeft(2, '0')}',
           PeriodUnit.year => '${t.date.year}',
@@ -369,15 +398,17 @@ ReportTable buildReport(
           'الفترة',
           'الإيرادات/القبض',
           'المصروفات/الصرف',
-          'الصافي'
+          'الصافي',
         ],
         rows: keys
-            .map((k) => [
-                  k,
-                  Fmt.money(buckets[k]![0]),
-                  Fmt.money(buckets[k]![1]),
-                  Fmt.money(buckets[k]![0] - buckets[k]![1]),
-                ])
+            .map(
+              (k) => [
+                k,
+                Fmt.money(buckets[k]![0]),
+                Fmt.money(buckets[k]![1]),
+                Fmt.money(buckets[k]![0] - buckets[k]![1]),
+              ],
+            )
             .toList(),
       );
 
@@ -385,13 +416,15 @@ ReportTable buildReport(
       return ReportTable(
         headers: const ['الحساب', 'النوع', 'عدد العمليات', 'الرصيد', 'العملة'],
         rows: d.accounts
-            .map((a) => [
-                  '${a.kind.icon} ${a.name}',
-                  a.kind.label,
-                  '${d.txCount[a.id!] ?? 0}',
-                  Fmt.money(d.balances[a.id!] ?? 0),
-                  sym(a.currency),
-                ])
+            .map(
+              (a) => [
+                '${a.kind.icon} ${a.name}',
+                a.kind.label,
+                '${d.txCount[a.id!] ?? 0}',
+                Fmt.money(d.balances[a.id!] ?? 0),
+                sym(a.currency),
+              ],
+            )
             .toList(),
       );
 
@@ -410,16 +443,18 @@ ReportTable buildReport(
           'العمليات',
           'قبض/إيراد',
           'صرف/مصروف',
-          'الصافي'
+          'الصافي',
         ],
         rows: per.entries
-            .map((e) => [
-                  '${cname(e.key)} (${sym(e.key)})',
-                  '${e.value[2].toInt()}',
-                  Fmt.money(e.value[0]),
-                  Fmt.money(e.value[1]),
-                  Fmt.money(e.value[0] - e.value[1]),
-                ])
+            .map(
+              (e) => [
+                '${cname(e.key)} (${sym(e.key)})',
+                '${e.value[2].toInt()}',
+                Fmt.money(e.value[0]),
+                Fmt.money(e.value[1]),
+                Fmt.money(e.value[0] - e.value[1]),
+              ],
+            )
             .toList(),
       );
 
@@ -469,12 +504,14 @@ ReportTable buildReport(
             .toList()
             .asMap()
             .entries
-            .map((e) => [
-                  '${e.key + 1}',
-                  '${e.value.$1.kind.icon} ${e.value.$1.name}',
-                  Fmt.money(e.value.$2),
-                  sym(e.value.$1.currency),
-                ])
+            .map(
+              (e) => [
+                '${e.key + 1}',
+                '${e.value.$1.kind.icon} ${e.value.$1.name}',
+                Fmt.money(e.value.$2),
+                sym(e.value.$1.currency),
+              ],
+            )
             .toList(),
       );
 
@@ -491,12 +528,14 @@ ReportTable buildReport(
             .toList()
             .asMap()
             .entries
-            .map((e) => [
-                  '${e.key + 1}',
-                  '${e.value.$1.kind.icon} ${e.value.$1.name}',
-                  '${e.value.$2}',
-                  Fmt.money(d.balances[e.value.$1.id!] ?? 0),
-                ])
+            .map(
+              (e) => [
+                '${e.key + 1}',
+                '${e.value.$1.kind.icon} ${e.value.$1.name}',
+                '${e.value.$2}',
+                Fmt.money(d.balances[e.value.$1.id!] ?? 0),
+              ],
+            )
             .toList(),
       );
 
@@ -517,13 +556,7 @@ ReportTable buildReport(
         }
       }
       return ReportTable(
-        headers: const [
-          'الحساب',
-          'الرصيد',
-          'حد الائتمان',
-          'التجاوز',
-          'العملة'
-        ],
+        headers: const ['الحساب', 'الرصيد', 'حد الائتمان', 'التجاوز', 'العملة'],
         rows: rows,
       );
   }
@@ -543,16 +576,17 @@ class _ReportView extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
               children: PeriodUnit.values
-                  .map((u) => Padding(
-                        padding: const EdgeInsetsDirectional.only(end: 8),
-                        child: ChoiceChip(
-                          selected: ref.watch(periodUnitProvider) == u,
-                          onSelected: (_) => ref
-                              .read(periodUnitProvider.notifier)
-                              .state = u,
-                          label: Text(u.label),
-                        ),
-                      ))
+                  .map(
+                    (u) => Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 8),
+                      child: ChoiceChip(
+                        selected: ref.watch(periodUnitProvider) == u,
+                        onSelected: (_) =>
+                            ref.read(periodUnitProvider.notifier).state = u,
+                        label: Text(u.label),
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
           ),
@@ -561,20 +595,16 @@ class _ReportView extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 96),
             children: [
               if (table.summary.isNotEmpty) ...[
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  childAspectRatio: 2.1,
-                  mainAxisSpacing: 10,
-                  crossAxisSpacing: 10,
+                StatCardGrid(
                   children: table.summary
-                      .map((e) => StatCard(
-                            title: e.$1,
-                            value: e.$2,
-                            icon: Icons.analytics_outlined,
-                            color: AppColors.primaryOf(context),
-                          ))
+                      .map(
+                        (e) => StatCard(
+                          title: e.$1,
+                          value: e.$2,
+                          icon: Icons.analytics_outlined,
+                          color: AppColors.primaryOf(context),
+                        ),
+                      )
                       .toList(),
                 ),
                 const SizedBox(height: 14),
@@ -594,23 +624,33 @@ class _ReportView extends ConsumerWidget {
                       dataRowMinHeight: 38,
                       dataRowMaxHeight: 48,
                       columns: table.headers
-                          .map((h) => DataColumn(
-                                label: Text(h,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 12.5)),
-                              ))
+                          .map(
+                            (h) => DataColumn(
+                              label: Text(
+                                h,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                          )
                           .toList(),
                       rows: table.rows
-                          .map((r) => DataRow(
-                                cells: r
-                                    .map((c) => DataCell(Text(
-                                          c.isEmpty ? '—' : c,
-                                          style:
-                                              const TextStyle(fontSize: 12.5),
-                                        )))
-                                    .toList(),
-                              ))
+                          .map(
+                            (r) => DataRow(
+                              cells: r
+                                  .map(
+                                    (c) => DataCell(
+                                      Text(
+                                        c.isEmpty ? '—' : c,
+                                        style: const TextStyle(fontSize: 12.5),
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          )
                           .toList(),
                     ),
                   ),
@@ -656,11 +696,16 @@ class _ReportView extends ConsumerWidget {
   }
 
   Future<void> _exportPdf(
-      BuildContext context, ReportTab tab, ReportTable t) async {
+    BuildContext context,
+    ReportTab tab,
+    ReportTable t,
+  ) async {
     final regular = pw.Font.ttf(
-        await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'));
-    final bold =
-        pw.Font.ttf(await rootBundle.load('assets/fonts/Tajawal-Bold.ttf'));
+      await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'),
+    );
+    final bold = pw.Font.ttf(
+      await rootBundle.load('assets/fonts/Tajawal-Bold.ttf'),
+    );
 
     final doc = pw.Document();
     doc.addPage(
@@ -670,36 +715,42 @@ class _ReportView extends ConsumerWidget {
         theme: pw.ThemeData.withFont(base: regular, bold: bold),
         margin: const pw.EdgeInsets.all(28),
         build: (ctx) => [
-          pw.Text(tab.label,
-              style: pw.TextStyle(fontSize: 18, font: bold)),
+          pw.Text(tab.label, style: pw.TextStyle(fontSize: 18, font: bold)),
           pw.SizedBox(height: 4),
-          pw.Text('تاريخ الإصدار: ${Fmt.dateTime(DateTime.now())}',
-              style: const pw.TextStyle(
-                  fontSize: 9, color: PdfColor.fromInt(0xFF5B6B83))),
+          pw.Text(
+            'تاريخ الإصدار: ${Fmt.dateTime(DateTime.now())}',
+            style: const pw.TextStyle(
+              fontSize: 9,
+              color: PdfColor.fromInt(0xFF5B6B83),
+            ),
+          ),
           pw.SizedBox(height: 12),
           if (t.summary.isNotEmpty) ...[
             pw.Wrap(
               spacing: 8,
               runSpacing: 8,
               children: t.summary
-                  .map((e) => pw.Container(
-                        width: 120,
-                        padding: const pw.EdgeInsets.all(8),
-                        decoration: pw.BoxDecoration(
-                          color: const PdfColor.fromInt(0xFFE6F6F3),
-                          borderRadius: pw.BorderRadius.circular(6),
-                        ),
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.start,
-                          children: [
-                            pw.Text(e.$1,
-                                style: const pw.TextStyle(fontSize: 8)),
-                            pw.SizedBox(height: 2),
-                            pw.Text(e.$2,
-                                style: pw.TextStyle(fontSize: 12, font: bold)),
-                          ],
-                        ),
-                      ))
+                  .map(
+                    (e) => pw.Container(
+                      width: 120,
+                      padding: const pw.EdgeInsets.all(8),
+                      decoration: pw.BoxDecoration(
+                        color: const PdfColor.fromInt(0xFFE6F6F3),
+                        borderRadius: pw.BorderRadius.circular(6),
+                      ),
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text(e.$1, style: const pw.TextStyle(fontSize: 8)),
+                          pw.SizedBox(height: 2),
+                          pw.Text(
+                            e.$2,
+                            style: pw.TextStyle(fontSize: 12, font: bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
             pw.SizedBox(height: 14),
@@ -710,10 +761,13 @@ class _ReportView extends ConsumerWidget {
             headerStyle: pw.TextStyle(font: bold, fontSize: 10),
             cellStyle: const pw.TextStyle(fontSize: 9),
             headerDecoration: const pw.BoxDecoration(
-                color: PdfColor.fromInt(0xFFE6F6F3)),
+              color: PdfColor.fromInt(0xFFE6F6F3),
+            ),
             cellAlignment: pw.Alignment.centerRight,
             border: pw.TableBorder.all(
-                color: const PdfColor.fromInt(0xFFE2E8F2), width: .5),
+              color: const PdfColor.fromInt(0xFFE2E8F2),
+              width: .5,
+            ),
           ),
         ],
       ),

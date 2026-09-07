@@ -11,7 +11,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/models.dart';
 import '../core/sfx.dart';
-import '../core/theme.dart';
 import '../data/providers.dart';
 import 'backup_screen.dart';
 import 'devices_screen.dart' show DeviceCard;
@@ -48,12 +47,16 @@ class _State extends ConsumerState<GroupManagementScreen>
     // حارس صلاحيات: المدير فقط.
     final isOwnerAsync = ref.watch(isOwnerProvider);
     return isOwnerAsync.when(
-      loading: () => const Scaffold(
-          body: Center(child: CircularProgressIndicator())),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(
-          appBar: AppBar(title: const Text('إدارة المجموعة')),
-          body: EmptyState(
-              icon: Icons.error_outline, title: 'خطأ', message: '$e')),
+        appBar: AppBar(title: const Text('إدارة المجموعة')),
+        body: EmptyState(
+          icon: Icons.error_outline,
+          title: 'خطأ',
+          message: '$e',
+        ),
+      ),
       data: (isOwner) {
         if (!isOwner) {
           return Scaffold(
@@ -142,16 +145,17 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
             final ownId = own?['id'] as String?;
             final amITheOwner =
                 own != null && ((own['is_owner'] ?? 0) as int) == 1;
-            final hostRow = list
-                .where((r) => ((r['is_owner'] ?? 0) as int) == 1)
-                .toList();
+            final hostRow =
+                list.where((r) => ((r['is_owner'] ?? 0) as int) == 1).toList();
             final hostId =
                 hostRow.isNotEmpty ? hostRow.first['id'] as String : null;
             return RefreshIndicator(
               onRefresh: () async => bump(ref),
               child: ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 children: [
                   for (final d in list)
                     DeviceCard(
@@ -168,10 +172,12 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         bump(ref);
                       },
                       onRename: () async {
-                        final name = await promptDialog(context,
-                            title: 'إعادة تسمية الجهاز',
-                            initial: (d['name'] ?? '') as String,
-                            label: 'اسم الجهاز');
+                        final name = await promptDialog(
+                          context,
+                          title: 'إعادة تسمية الجهاز',
+                          initial: (d['name'] ?? '') as String,
+                          label: 'اسم الجهاز',
+                        );
                         if (name == null || name.trim().isEmpty) return;
                         await ref
                             .read(repoProvider)
@@ -179,12 +185,14 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         bump(ref);
                       },
                       onRevoke: () async {
-                        final ok = await confirmDialog(context,
-                            title: 'حظر الجهاز',
-                            message:
-                                'سيُمنع "${d['name']}" من المزامنة حتى إعادة السماح.',
-                            confirmText: 'حظر',
-                            danger: true);
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'حظر الجهاز',
+                          message:
+                              'سيُمنع "${d['name']}" من المزامنة حتى إعادة السماح.',
+                          confirmText: 'حظر',
+                          danger: true,
+                        );
                         if (ok == true) {
                           await ref
                               .read(repoProvider)
@@ -199,12 +207,14 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         bump(ref);
                       },
                       onExpel: () async {
-                        final ok = await confirmDialog(context,
-                            title: 'طرد الجهاز',
-                            message:
-                                'سيُطرد "${d['name']}" من المجموعة ويمسح بياناته عند أول اتصال.',
-                            confirmText: 'طرد',
-                            danger: true);
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'طرد الجهاز',
+                          message:
+                              'سيُطرد "${d['name']}" من المجموعة ويمسح بياناته عند أول اتصال.',
+                          confirmText: 'طرد',
+                          danger: true,
+                        );
                         if (ok == true) {
                           await ref
                               .read(repoProvider)
@@ -213,12 +223,14 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         }
                       },
                       onTransferOwner: () async {
-                        final ok = await confirmDialog(context,
-                            title: 'تسليم الإدارة',
-                            message:
-                                'سيصبح "${d['name']}" هو المدير وتصبح أنت عضوًا.',
-                            confirmText: 'تسليم',
-                            danger: true);
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'تسليم الإدارة',
+                          message:
+                              'سيصبح "${d['name']}" هو المدير وتصبح أنت عضوًا.',
+                          confirmText: 'تسليم',
+                          danger: true,
+                        );
                         if (ok == true) {
                           try {
                             await ref
@@ -227,8 +239,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                             bump(ref);
                             if (mounted) {
                               showSnack(context, '✅ تم تسليم الإدارة.');
-                              Navigator.of(context)
-                                  .popUntil((r) => r.isFirst);
+                              Navigator.of(context).popUntil((r) => r.isFirst);
                             }
                           } catch (e) {
                             if (mounted) {
@@ -238,12 +249,13 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         }
                       },
                       onResetSecret: () async {
-                        final ok = await confirmDialog(context,
-                            title: 'إعادة تعيين مفتاح الجهاز',
-                            message:
-                                'سيفقد الجهاز الاتصال حتى يعيد الاقتران.',
-                            confirmText: 'إعادة التعيين',
-                            danger: true);
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'إعادة تعيين مفتاح الجهاز',
+                          message: 'سيفقد الجهاز الاتصال حتى يعيد الاقتران.',
+                          confirmText: 'إعادة التعيين',
+                          danger: true,
+                        );
                         if (ok == true) {
                           final s = await ref
                               .read(repoProvider)
@@ -254,14 +266,18 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                               context: context,
                               builder: (c) => AlertDialog(
                                 title: const Text('المفتاح الجديد'),
-                                content: SelectableText(s,
-                                    style: const TextStyle(
-                                        fontFamily: 'monospace',
-                                        fontSize: 12)),
+                                content: SelectableText(
+                                  s,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                  ),
+                                ),
                                 actions: [
                                   TextButton(
-                                      onPressed: () => Navigator.pop(c),
-                                      child: const Text('تم'))
+                                    onPressed: () => Navigator.pop(c),
+                                    child: const Text('تم'),
+                                  ),
                                 ],
                               ),
                             );
@@ -301,29 +317,35 @@ class _UsersTab extends ConsumerWidget {
             mainAxisSpacing: 8,
             crossAxisSpacing: 8,
             children: UserRole.values
-                .map((r) => Card(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(r.icon, style: const TextStyle(fontSize: 22)),
-                          const SizedBox(height: 4),
-                          Text(r.label,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700)),
-                        ],
-                      ),
-                    ))
+                .map(
+                  (r) => Card(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(r.icon, style: const TextStyle(fontSize: 22)),
+                        const SizedBox(height: 4),
+                        Text(
+                          r.label,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
                 .toList(),
           ),
           const SizedBox(height: 18),
           const SectionTitle('المستخدمون'),
           if (list.isEmpty)
             const EmptyState(
-                icon: Icons.people_outline,
-                title: 'لا مستخدمون',
-                message: 'أضف مستخدمًا وحدّد صلاحياته.'),
+              icon: Icons.people_outline,
+              title: 'لا مستخدمون',
+              message: 'أضف مستخدمًا وحدّد صلاحياته.',
+            ),
           for (final u in list)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -349,7 +371,6 @@ class _PairHubSheet extends ConsumerStatefulWidget {
 }
 
 class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
-  Map<String, String?>? _pairInfo;
   DateTime? _pairAt;
   Timer? _tick;
   bool _busy = false;
@@ -367,17 +388,14 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
       final repo = ref.read(repoProvider);
       final info = await repo.createPairingToken();
       setState(() {
-        _pairInfo = info;
         _pairAt = DateTime.now();
       });
       _tick?.cancel();
       _tick = Timer.periodic(const Duration(seconds: 1), (_) {
         if (_pairAt == null) return;
-        final left =
-            300 - DateTime.now().difference(_pairAt!).inSeconds;
+        final left = 300 - DateTime.now().difference(_pairAt!).inSeconds;
         if (left <= 0 && mounted) {
           setState(() {
-            _pairInfo = null;
             _pairAt = null;
           });
           _tick?.cancel();
@@ -387,9 +405,9 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
       // افتح حوار QR الكبير.
       if (!mounted) return;
       Navigator.pop(context);
-      final port = int.tryParse(
-              (await repo.settings())['lanSyncPort'] ?? '43053') ??
-          43053;
+      final port =
+          int.tryParse((await repo.settings())['lanSyncPort'] ?? '43053') ??
+              43053;
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -439,19 +457,26 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
                 width: 44,
                 height: 4,
                 decoration: BoxDecoration(
-                    color: Colors.black26,
-                    borderRadius: BorderRadius.circular(3)),
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(3),
+                ),
               ),
             ),
             const SizedBox(height: 14),
-            Text('ربط جهاز أو حساب جديد',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              'ربط جهاز أو حساب جديد',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 6),
             const Text(
               'اختر طريقة الربط المناسبة. ستنضم الأجهزة الجديدة إلى هذه المجموعة وتستلم نسخة من البيانات.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.6),
+              style: TextStyle(
+                color: Colors.black54,
+                fontSize: 12,
+                height: 1.6,
+              ),
             ),
             const SizedBox(height: 20),
             _HubTile(
@@ -509,7 +534,11 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
               children: [
                 const Text(
                   'أعطِ العميل/العضو البيانات التالية ليدخلها يدوياً في جهازه (صالحة 5 دقائق):',
-                  style: TextStyle(fontSize: 12, color: Colors.black54, height: 1.5),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.black54,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 14),
                 _kv('الرمز', info['token'] ?? ''),
@@ -541,11 +570,14 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
             Expanded(
               child: Directionality(
                 textDirection: TextDirection.ltr,
-                child: SelectableText(v,
-                    style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2)),
+                child: SelectableText(
+                  v,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
               ),
             ),
           ],
@@ -559,12 +591,13 @@ class _HubTile extends StatelessWidget {
   final String title;
   final String subtitle;
   final VoidCallback onTap;
-  const _HubTile(
-      {required this.icon,
-      required this.color,
-      required this.title,
-      required this.subtitle,
-      required this.onTap});
+  const _HubTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -582,7 +615,7 @@ class _HubTile extends StatelessWidget {
                   width: 46,
                   height: 46,
                   decoration: BoxDecoration(
-                    color: color.withOpacity(.15),
+                    color: color.withValues(alpha: .15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(icon, color: color),
@@ -592,15 +625,22 @@ class _HubTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 14)),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
                       const SizedBox(height: 4),
-                      Text(subtitle,
-                          style: const TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.black54,
-                              height: 1.5)),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          color: Colors.black54,
+                          height: 1.5,
+                        ),
+                      ),
                     ],
                   ),
                 ),

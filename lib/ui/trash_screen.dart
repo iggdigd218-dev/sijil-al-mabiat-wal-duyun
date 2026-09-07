@@ -12,8 +12,7 @@ class TrashScreen extends ConsumerWidget {
 
   static const _labels = <String, (String, IconData, Color)>{
     'accounts': ('الحسابات', Icons.people_alt_outlined, AppColors.teal),
-    'transactions':
-        ('العمليات', Icons.receipt_long_outlined, AppColors.info),
+    'transactions': ('العمليات', Icons.receipt_long_outlined, AppColors.info),
     'vouchers': ('السندات', Icons.receipt_outlined, AppColors.violet),
     'items': ('الأصناف', Icons.inventory_2_outlined, AppColors.accent),
   };
@@ -42,34 +41,44 @@ class TrashScreen extends ConsumerWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-              child: Row(children: [
-                Icon(Icons.delete_sweep_outlined,
-                    color: AppColors.dangerOf(context)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('${items.length} عنصر في السلة',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                ),
-                TextButton.icon(
-                  onPressed: () async {
-                    final ok = await confirmDialog(
-                      context,
-                      title: 'تفريغ سلة المهملات',
-                      message:
-                          'سيُحذف ${items.length} عنصرًا نهائيًا ولا يمكن التراجع.',
-                      danger: true,
-                    );
-                    if (!ok) return;
-                    await ref.read(repoProvider).emptyTrash();
-                    bump(ref);
-                    if (context.mounted) showSnack(context, 'أُفرغت السلة');
-                  },
-                  icon: Icon(Icons.delete_forever,
-                      color: AppColors.dangerOf(context)),
-                  label: Text('تفريغ',
-                      style: TextStyle(color: AppColors.dangerOf(context))),
-                ),
-              ]),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.delete_sweep_outlined,
+                    color: AppColors.dangerOf(context),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${items.length} عنصر في السلة',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () async {
+                      final ok = await confirmDialog(
+                        context,
+                        title: 'تفريغ سلة المهملات',
+                        message:
+                            'سيُحذف ${items.length} عنصرًا نهائيًا ولا يمكن التراجع.',
+                        danger: true,
+                      );
+                      if (!ok) return;
+                      await ref.read(repoProvider).emptyTrash();
+                      bump(ref);
+                      if (context.mounted) showSnack(context, 'أُفرغت السلة');
+                    },
+                    icon: Icon(
+                      Icons.delete_forever,
+                      color: AppColors.dangerOf(context),
+                    ),
+                    label: Text(
+                      'تفريغ',
+                      style: TextStyle(color: AppColors.dangerOf(context)),
+                    ),
+                  ),
+                ],
+              ),
             ),
             Expanded(
               child: ListView.builder(
@@ -81,7 +90,8 @@ class TrashScreen extends ConsumerWidget {
                   final meta = _labels[store] ??
                       ('سجل', Icons.description_outlined, AppColors.teal);
                   final created = DateTime.tryParse(
-                      (t['created_at'] ?? '') as String? ?? '');
+                    (t['created_at'] ?? '') as String? ?? '',
+                  );
                   final label = (t['label'] ?? '') as String;
 
                   return Card(
@@ -96,7 +106,9 @@ class TrashScreen extends ConsumerWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 14),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
                       ),
                       subtitle: Text(
                         [
@@ -110,8 +122,10 @@ class TrashScreen extends ConsumerWidget {
                         children: [
                           IconButton(
                             tooltip: 'استرجاع',
-                            icon: Icon(Icons.restore,
-                                color: AppColors.greenOf(context)),
+                            icon: Icon(
+                              Icons.restore,
+                              color: AppColors.greenOf(context),
+                            ),
                             onPressed: () async {
                               await ref
                                   .read(repoProvider)
@@ -124,8 +138,10 @@ class TrashScreen extends ConsumerWidget {
                           ),
                           IconButton(
                             tooltip: 'حذف نهائي',
-                            icon: Icon(Icons.delete_forever_outlined,
-                                color: AppColors.dangerOf(context)),
+                            icon: Icon(
+                              Icons.delete_forever_outlined,
+                              color: AppColors.dangerOf(context),
+                            ),
                             onPressed: () async {
                               final ok = await confirmDialog(
                                 context,

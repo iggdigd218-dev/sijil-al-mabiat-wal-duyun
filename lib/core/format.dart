@@ -44,12 +44,16 @@ class Fmt {
         b.write(fi);
       } else if (ch == '٫') {
         // الفاصلة العربية (فاصل عشري) → نقطة.
-        if (!seenDot) { b.write('.'); seenDot = true; }
-      } else if (ch == ',') {
+        if (seenDot) return null;
+        b.write('.');
+        seenDot = true;
+      } else if (ch == ',' || ch == '٬') {
         // فاصل الآلاف الأوروبي: يُحذف.
         continue;
       } else if (ch == '.') {
-        if (!seenDot) { b.write('.'); seenDot = true; }
+        if (seenDot) return null;
+        b.write('.');
+        seenDot = true;
       } else {
         b.write(ch);
       }

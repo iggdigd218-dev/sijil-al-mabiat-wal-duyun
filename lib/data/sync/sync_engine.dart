@@ -8,7 +8,6 @@ import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
-import '../../core/database.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'conflict_resolver.dart';
@@ -30,11 +29,12 @@ class SyncEngine {
   final List<SyncTransport> _transports = [];
   SyncQueueOps? _queue;
   Timer? _timer;
+  Timer? _maintenanceTimer;
+  int _generation = 0;
   bool _running = false;
   bool _started = false;
   bool get hasStarted => _started;
   String? _cloudUrl;
-  String? _workspaceId;
   CloudFirebaseTransport? _cloudTransport;
   LanSyncService? _lanTransport;
   bool _lanEnabled = false;
@@ -69,7 +69,12 @@ class SyncEngine {
     // تأكد من وجود سجل هذا الجهاز في devices table مع اسم المنصة.
     final ourName = await deviceName(repo);
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query('devices', where: 'id = ?', whereArgs: [ourId], limit: 1);
+    final existing = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [ourId],
+      limit: 1,
+    );
     if (existing.isEmpty) {
       await db.insert('devices', {
         'id': ourId,
@@ -97,8 +102,12 @@ class SyncEngine {
   }
 
   Future<void> reconfigureAll() async {
-    try { await reconfigureCloud(); } catch (_) {}
-    try { await _ensureLanTransport(); } catch (_) {}
+    try {
+      await reconfigureCloud();
+    } catch (_) {}
+    try {
+      await _ensureLanTransport();
+    } catch (_) {}
   }
 
   /// يُعاد تهيئة الـ Cloud transport بعد تغيير الإعدادات.
@@ -109,7 +118,9 @@ class SyncEngine {
       _cloudTransport = null;
       await _ensureCloudTransport();
       if (_cloudTransport != null) {
-        try { await _cloudTransport!.pull(resolver: ConflictResolver()); } catch (_) {}
+        try {
+          await _cloudTransport!.pull(resolver: ConflictResolver());
+        } catch (_) {}
       }
     } catch (_) {}
   }
@@ -128,8 +139,8 @@ class SyncEngine {
     final db = await _db;
     // Workspace الحالي.
     final wsRow = await db.query('workspaces', limit: 1);
-    final wsId = wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
-    _workspaceId = wsId;
+    final wsId =
+        wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
     _cloudTransport = CloudFirebaseTransport.validated(
       repo: repo,
       dbProvider: dbProvider,
@@ -153,25 +164,46 @@ class SyncEngine {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    final generation = ++_generation;
+    _queue ??= SyncQueueOps(await _db);
+    await _queue!.recoverInterrupted();
+    if (!_started || generation != _generation) return;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
     SyncRecorder.onOperationRecorded = notifyNewOperation;
     // أي فشل في تهيئة المزامنة (سواء سحابة أو شبكة محلية) لا يجب أن يمنع
     // التطبيق من الإقلاع أو تعطيل الحفظ المحلي — محلي أولًا دائماً.
-    try { await _ensureCloudTransport(); } catch (_) {}
-    try { await _ensureLanTransport(); } catch (_) {}
-    _timer ??= Timer.periodic(const Duration(seconds: 15), (_) => processQueue());
+    try {
+      await _ensureCloudTransport();
+    } catch (_) {}
+    try {
+      await _ensureLanTransport();
+    } catch (_) {}
+    if (!_started || generation != _generation) {
+      await _lanTransport?.stopServer();
+      return;
+    }
+    _timer ??= Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => processQueue(),
+    );
     Future(() async {
+      if (!_started || generation != _generation) return;
       try {
         await _ensureCloudTransport();
         if (_cloudTransport != null) {
-          try { await _cloudTransport!.pull(resolver: ConflictResolver()); } catch (_) {}
+          try {
+            await _cloudTransport!.pull(resolver: ConflictResolver());
+          } catch (_) {}
         }
       } catch (_) {}
       await _checkExpulsionAndAutoPurge();
       await processQueue();
     });
     // تفقد دوري كل 6 ساعات: هل طرأ طرد لنا، أو هناك أجهزة خاملة لنطرَدها تلقائياً.
-    Timer.periodic(const Duration(hours: 6), (_) => _checkExpulsionAndAutoPurge());
+    _maintenanceTimer ??= Timer.periodic(
+      const Duration(hours: 6),
+      (_) => _checkExpulsionAndAutoPurge(),
+    );
   }
 
   Future<void> _checkExpulsionAndAutoPurge() async {
@@ -187,13 +219,30 @@ class SyncEngine {
   }
 
   void stop() {
-    _timer?.cancel();
-    _timer = null;
     _started = false;
+    _generation++;
+    _timer?.cancel();
+    _maintenanceTimer?.cancel();
+    _immediate?.cancel();
+    _timer = null;
+    _maintenanceTimer = null;
+    _immediate = null;
+    if (SyncRecorder.onOperationRecorded == notifyNewOperation) {
+      SyncRecorder.onOperationRecorded = null;
+    }
+    final lan = _lanTransport;
+    _lanTransport = null;
+    _lanEnabled = false;
+    _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
+    if (lan != null) unawaited(lan.stopServer());
   }
 
-  /// يُستدعى من UI عند طلب "مزامنة الآن".
-  Future<void> forceSyncNow() => processQueue();
+  /// User action also resumes rows that exhausted their automatic retry budget.
+  Future<void> forceSyncNow() async {
+    final q = _queue ??= SyncQueueOps(await _db);
+    await q.retryFailed();
+    await processQueue();
+  }
 
   /// جدولة push فورية (لا تنتظر دورة الـ Timer) — لتسريع Near-Real-Time.
   Timer? _immediate;
@@ -207,7 +256,7 @@ class SyncEngine {
   }
 
   Future<SyncSummary> summary() async {
-    final q = _queue ?? SyncQueueOps(await _db);
+    final q = _queue ??= SyncQueueOps(await _db);
     final pending = await q.countPending();
     final failed = await q.countFailed();
     return SyncSummary(pending: pending, failed: failed);
@@ -218,32 +267,46 @@ class SyncEngine {
     _running = true;
     try {
       final db = await _db;
-      final q = _queue ?? SyncQueueOps(db);
-      for (final t in _transports) {
+      final q = _queue ??= SyncQueueOps(db);
+      for (final t in List<SyncTransport>.of(_transports)) {
         List<Map<String, Object?>> rows;
         try {
-          rows = await q.pickPending(limit: 20, target: t.targetId)
+          rows = await q
+              .pickPending(limit: 20, target: t.targetId)
               .timeout(const Duration(seconds: 10));
-        } catch (_) { continue; }
+        } catch (_) {
+          continue;
+        }
         for (final r in rows) {
           final qid = r['id'] as int;
           final opId = r['operation_id'] as String;
-          try { await q.markSyncing(qid).timeout(const Duration(seconds: 5)); } catch (_) {}
+          try {
+            await q.markSyncing(qid).timeout(const Duration(seconds: 5));
+          } catch (_) {
+            continue; // Do not send without a durable queue state.
+          }
           String? entityTable;
           String? entityId;
           try {
-            final opRows = await db.query('operations',
-                where: 'id = ?', whereArgs: [opId], limit: 1)
+            final opRows = await db
+                .query(
+                  'operations',
+                  where: 'id = ?',
+                  whereArgs: [opId],
+                  limit: 1,
+                )
                 .timeout(const Duration(seconds: 5));
             if (opRows.isEmpty) {
-              try { await q.markSynced(qid).timeout(const Duration(seconds: 3)); } catch (_) {}
+              try {
+                await q.markSynced(qid).timeout(const Duration(seconds: 3));
+              } catch (_) {}
               continue;
             }
             final op = SyncOperation.fromMap(opRows.first);
             entityTable = switch (op.entityType) {
               EntityKind.tx => 'transactions',
               EntityKind.account => 'accounts',
-              EntityKind.item => 'inventory_items',
+              EntityKind.item => 'items',
               EntityKind.itemCategory => 'item_categories',
               EntityKind.stockMove => 'stock_moves',
               EntityKind.voucher => 'vouchers',
@@ -253,21 +316,49 @@ class SyncEngine {
             };
             entityId = op.entityId;
             if (entityTable == 'transactions') {
-              try { await db.update('transactions', {'sync_state': 'syncing'},
-                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'syncing'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
             }
             // مهلة 20 ثانية لكل عملية دفع حتى لا تعلق قائمة الانتظار كلها.
             await t.push(op).timeout(const Duration(seconds: 20));
-            try { await q.markSynced(qid).timeout(const Duration(seconds: 3)); } catch (_) {}
-            if (entityTable == 'transactions' && entityId != null) {
-              try { await db.update('transactions', {'sync_state': 'synced'},
-                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
+            try {
+              await q.markSynced(qid).timeout(const Duration(seconds: 3));
+            } catch (_) {}
+            if (entityTable == 'transactions') {
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'synced'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
             }
           } catch (e) {
-            try { await q.markFailed(qid, e).timeout(const Duration(seconds: 3)); } catch (_) {}
+            try {
+              await q.markFailed(qid, e).timeout(const Duration(seconds: 3));
+            } catch (_) {}
             if (entityTable == 'transactions' && entityId != null) {
-              try { await db.update('transactions', {'sync_state': 'failed'},
-                  where: 'id = ?', whereArgs: [entityId]).timeout(const Duration(seconds: 3)); } catch (_) {}
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'failed'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
             }
           }
         }

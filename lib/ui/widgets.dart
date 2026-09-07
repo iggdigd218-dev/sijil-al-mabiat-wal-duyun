@@ -26,9 +26,14 @@ class Pill extends StatelessWidget {
               Icon(icon, size: 13, color: color),
               const SizedBox(width: 4),
             ],
-            Text(text,
-                style: TextStyle(
-                    fontSize: 11.5, fontWeight: FontWeight.w700, color: color)),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
           ],
         ),
       );
@@ -62,9 +67,14 @@ class BalanceText extends StatelessWidget {
     final nature = zero ? 'متساوٍ' : (value > 0 ? 'عليه' : 'له');
 
     if (hidden) {
-      return Text('••••••',
-          style: TextStyle(
-              fontSize: size, fontWeight: FontWeight.w800, color: color));
+      return Text(
+        '••••••',
+        style: TextStyle(
+          fontSize: size,
+          fontWeight: FontWeight.w800,
+          color: color,
+        ),
+      );
     }
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -74,14 +84,20 @@ class BalanceText extends StatelessWidget {
         Text(
           Fmt.money(value.abs(), currency.decimal),
           style: TextStyle(
-              fontSize: size, fontWeight: FontWeight.w800, color: color),
+            fontSize: size,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
         ),
         const SizedBox(width: 4),
-        Text(currency.symbol,
-            style: TextStyle(
-                fontSize: size * 0.68,
-                fontWeight: FontWeight.w600,
-                color: color)),
+        Text(
+          currency.symbol,
+          style: TextStyle(
+            fontSize: size * 0.68,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
+        ),
         if (showNature && !zero) ...[
           const SizedBox(width: 6),
           Pill(nature, color: color),
@@ -132,11 +148,14 @@ class StatCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 9),
                     Expanded(
-                      child: Text(title,
-                          style: TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w700,
-                              color: Theme.of(context).hintColor)),
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).hintColor,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -144,19 +163,25 @@ class StatCard extends StatelessWidget {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerRight,
-                  child: Text(value,
-                      style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          color: color)),
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
                 ),
                 if (sub != null) ...[
                   const SizedBox(height: 3),
-                  Text(sub!,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).hintColor)),
+                  Text(
+                    sub!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).hintColor,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -189,25 +214,44 @@ class EmptyState extends StatelessWidget {
             children: [
               Icon(icon, size: 54, color: Theme.of(context).disabledColor),
               const SizedBox(height: 14),
-              Text(title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 15.5, fontWeight: FontWeight.w700)),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 15.5, fontWeight: FontWeight.w700),
+              ),
               if (message != null) ...[
                 const SizedBox(height: 6),
-                Text(message!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13, color: Theme.of(context).hintColor)),
+                Text(
+                  message!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).hintColor,
+                  ),
+                ),
               ],
-              if (action != null) ...[
-                const SizedBox(height: 18),
-                action!,
-              ],
+              if (action != null) ...[const SizedBox(height: 18), action!],
             ],
           ),
         ),
       );
+}
+
+/// Two responsive columns with intrinsic height: long Arabic labels and large
+/// text never have to fit into a fixed aspect-ratio cell.
+class StatCardGrid extends StatelessWidget {
+  final List<Widget> children;
+  const StatCardGrid({super.key, required this.children});
+  @override
+  Widget build(BuildContext context) =>
+      LayoutBuilder(builder: (context, constraints) {
+        final columns = constraints.maxWidth < 280 ? 1 : 2;
+        final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
+        return Wrap(spacing: 10, runSpacing: 10, children: [
+          for (final child in children) SizedBox(width: width, child: child),
+        ]);
+      });
 }
 
 /// عنوان قسم مع إجراء اختياري.
@@ -216,27 +260,30 @@ class SectionTitle extends StatelessWidget {
   final String? actionLabel;
   final VoidCallback? onAction;
 
-  const SectionTitle(this.title,
-      {super.key, this.actionLabel, this.onAction});
+  const SectionTitle(this.title, {super.key, this.actionLabel, this.onAction});
 
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(4, 6, 4, 10),
         child: Row(
           children: [
-            Text(title,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w800)),
-            const Spacer(),
+            Expanded(
+              child: Text(
+                title,
+                style:
+                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+              ),
+            ),
             if (actionLabel != null)
               TextButton(
                 onPressed: onAction,
                 style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: Text(actionLabel!,
-                    style: const TextStyle(fontSize: 12.5)),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child:
+                    Text(actionLabel!, style: const TextStyle(fontSize: 12.5)),
               ),
           ],
         ),
@@ -263,8 +310,7 @@ Future<String?> promptDialog(
         decoration: InputDecoration(labelText: label.isEmpty ? title : label),
       ),
       actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(c), child: Text(cancelText)),
+        TextButton(onPressed: () => Navigator.pop(c), child: Text(cancelText)),
         FilledButton(
           onPressed: () => Navigator.pop(c, ctrl.text),
           child: Text(confirmText),
@@ -290,11 +336,12 @@ Future<bool> confirmDialog(
       content: Text(message, style: const TextStyle(height: 1.6)),
       actions: [
         TextButton(
-            onPressed: () {
-              Sfx.click();
-              Navigator.pop(c, false);
-            },
-            child: const Text('إلغاء')),
+          onPressed: () {
+            Sfx.click();
+            Navigator.pop(c, false);
+          },
+          child: const Text('إلغاء'),
+        ),
         FilledButton(
           onPressed: () {
             if (danger) {
@@ -315,7 +362,12 @@ Future<bool> confirmDialog(
   return r ?? false;
 }
 
-void showSnack(BuildContext context, String message, {bool error = false, bool silent = false}) {
+void showSnack(
+  BuildContext context,
+  String message, {
+  bool error = false,
+  bool silent = false,
+}) {
   // ردود فعل صوتية/اهتزازية تلقائية لجميع الرسائل ما لم يُطلب الصمت صراحة.
   if (!silent) {
     if (error) {
@@ -343,9 +395,11 @@ void showSnack(BuildContext context, String message, {bool error = false, bool s
   }
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: error ? AppColors.red : null,
-      duration: Duration(seconds: error ? 4 : 3),
-    ));
+    ..showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: error ? AppColors.red : null,
+        duration: Duration(seconds: error ? 4 : 3),
+      ),
+    );
 }

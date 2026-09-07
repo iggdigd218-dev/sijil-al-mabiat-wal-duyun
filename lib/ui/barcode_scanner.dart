@@ -14,9 +14,8 @@ Future<String?> scanBarcode(BuildContext context) async {
     );
     return null;
   }
-  return Navigator.of(context).push<String>(
-    MaterialPageRoute(builder: (_) => const _BarcodeScanner()),
-  );
+  return Navigator.of(context)
+      .push<String>(MaterialPageRoute(builder: (_) => const _BarcodeScanner()));
 }
 
 class _BarcodeScanner extends StatefulWidget {

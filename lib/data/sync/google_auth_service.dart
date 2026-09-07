@@ -67,7 +67,9 @@ class GoogleAuthService {
       displayName: r['display_name'] as String?,
       photoUrl: r['photo_url'] as String?,
       idToken: r['id_token'] as String?,
-      signedInAt: signedStr != null ? DateTime.tryParse(signedStr) ?? DateTime.now() : DateTime.now(),
+      signedInAt: signedStr != null
+          ? DateTime.tryParse(signedStr) ?? DateTime.now()
+          : DateTime.now(),
     );
   }
 
@@ -78,7 +80,9 @@ class GoogleAuthService {
     if (gs == null) {
       // سطح المكتب لا يدعم GoogleSignIn.
       if (cached != null) return GoogleAuthResult.ok(cached);
-      return const GoogleAuthResult.fail('تسجيل الدخول بـ Google غير متاح على هذه المنصة حاليًا');
+      return const GoogleAuthResult.fail(
+        'تسجيل الدخول بـ Google غير متاح على هذه المنصة حاليًا',
+      );
     }
     try {
       final a = gs.currentUser;
@@ -104,22 +108,27 @@ class GoogleAuthService {
     final gs = _ensureSignIn();
     if (gs == null) {
       return const GoogleAuthResult.fail(
-          'تسجيل الدخول بـ Google غير متاح على هذه المنصة.\n'
-          'يمكنك استخدام التطبيق محليًا بدون حساب Google، وسيُتاح تسجيل الدخول في نسخة الأندرويد.');
+        'تسجيل الدخول بـ Google غير متاح على هذه المنصة.\n'
+        'يمكنك استخدام التطبيق محليًا بدون حساب Google، وسيُتاح تسجيل الدخول في نسخة الأندرويد.',
+      );
     }
     try {
       final a = await gs.signIn();
-      if (a == null) return const GoogleAuthResult.fail('تم إلغاء تسجيل الدخول');
+      if (a == null)
+        return const GoogleAuthResult.fail('تم إلغاء تسجيل الدخول');
       final auth = await a.authentication;
       final u = _mapAccount(a, auth.idToken);
       await _persist(u);
       return GoogleAuthResult.ok(u);
     } catch (e) {
       final s = '$e';
-      if (s.contains('sign_in_failed') || s.contains('DEVELOPER_ERROR') || s.contains('10:')) {
+      if (s.contains('sign_in_failed') ||
+          s.contains('DEVELOPER_ERROR') ||
+          s.contains('10:')) {
         return const GoogleAuthResult.fail(
-            'تعذّر تسجيل الدخول عبر Google على هذه المنصة.\n'
-            'هذا طبيعي على ويندوز/لينكس ويعمل على الأندرويد.');
+          'تعذّر تسجيل الدخول عبر Google على هذه المنصة.\n'
+          'هذا طبيعي على ويندوز/لينكس ويعمل على الأندرويد.',
+        );
       }
       return GoogleAuthResult.fail('تعذّر تسجيل الدخول: $e');
     }
@@ -146,30 +155,35 @@ class GoogleAuthService {
   }
 
   Future<void> _persist(GoogleUser u) async {
-    await db.insert('google_auth', {
-      'id': 1,
-      'google_id': u.id,
-      'email': u.email,
-      'display_name': u.displayName ?? '',
-      'photo_url': u.photoUrl ?? '',
-      'id_token': u.idToken ?? '',
-      'signed_in_at': u.signedInAt.toIso8601String(),
-      'updated_at': DateTime.now().toIso8601String(),
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+        'google_auth',
+        {
+          'id': 1,
+          'google_id': u.id,
+          'email': u.email,
+          'display_name': u.displayName ?? '',
+          'photo_url': u.photoUrl ?? '',
+          'id_token': u.idToken ?? '',
+          'signed_in_at': u.signedInAt.toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> _clear() async {
-    await db.update('google_auth', {
-      'google_id': '',
-      'email': '',
-      'display_name': '',
-      'photo_url': '',
-      'id_token': '',
-      'signed_in_at': '',
-      'updated_at': DateTime.now().toIso8601String(),
-    }, where: 'id = 1');
+    await db.update(
+        'google_auth',
+        {
+          'google_id': '',
+          'email': '',
+          'display_name': '',
+          'photo_url': '',
+          'id_token': '',
+          'signed_in_at': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = 1');
   }
 }
 
-bool isPlatformSupportingGoogleSignIn() =>
-    Platform.isAndroid || Platform.isIOS;
+bool isPlatformSupportingGoogleSignIn() => Platform.isAndroid || Platform.isIOS;

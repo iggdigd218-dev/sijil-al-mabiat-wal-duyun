@@ -46,8 +46,10 @@ class ChatScreen extends ConsumerWidget {
                   backgroundColor: AppColors.primarySoftOf(context),
                   child: Text(a.kind.icon),
                 ),
-                title: Text(a.name,
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                title: Text(
+                  a.name,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
                 subtitle: Text(
                   a.contactNumber.isEmpty
                       ? a.kind.label
@@ -58,7 +60,8 @@ class ChatScreen extends ConsumerWidget {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => ChatThreadScreen(account: a)),
+                    builder: (_) => ChatThreadScreen(account: a),
+                  ),
                 ),
               ),
             );
@@ -89,8 +92,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   }
 
   Future<void> _open() async {
-    final id =
-        await ref.read(repoProvider).conversationFor(widget.account);
+    final id = await ref.read(repoProvider).conversationFor(widget.account);
     if (mounted) setState(() => _convId = id);
   }
 
@@ -103,13 +105,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
 
   Future<void> _send(String body, {String kind = 'text'}) async {
     if (body.trim().isEmpty || _convId == null) return;
-    await ref.read(repoProvider).sendMessage(ChatMessage(
-          conversationId: _convId!,
-          sender: 'me',
-          body: body.trim(),
-          kind: kind,
-          createdAt: DateTime.now(),
-        ));
+    await ref.read(repoProvider).sendMessage(
+          ChatMessage(
+            conversationId: _convId!,
+            sender: 'me',
+            body: body.trim(),
+            kind: kind,
+            createdAt: DateTime.now(),
+          ),
+        );
     _input.clear();
     bump(ref);
     await Future<void>.delayed(const Duration(milliseconds: 120));
@@ -148,7 +152,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     final text = 'مرحبًا ${widget.account.name}\n'
         'الرصيد الحالي: ${Fmt.money(bal.abs())} ($label)';
     final uri = Uri.parse(
-        'https://wa.me/$number?text=${Uri.encodeComponent(text)}');
+      'https://wa.me/$number?text=${Uri.encodeComponent(text)}',
+    );
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
@@ -162,9 +167,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(a.name, style: const TextStyle(fontSize: 16)),
-            Text(a.kind.label,
-                style: TextStyle(
-                    fontSize: 11, color: AppColors.text3Of(context))),
+            Text(
+              a.kind.label,
+              style: TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+            ),
           ],
         ),
         actions: [
@@ -194,8 +200,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                             return const EmptyState(
                               icon: Icons.chat_bubble_outline,
                               title: 'ابدأ المحادثة',
-                              message:
-                                  'اكتب رسالة أو أرسل كشف الحساب مباشرة.',
+                              message: 'اكتب رسالة أو أرسل كشف الحساب مباشرة.',
                             );
                           }
                           return ListView.builder(
@@ -258,7 +263,8 @@ class _Bubble extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * .76),
+          maxWidth: MediaQuery.of(context).size.width * .76,
+        ),
         decoration: BoxDecoration(
           color: isStatement || isVoucher
               ? AppColors.infoSoftOf(context)
@@ -295,13 +301,14 @@ class _Bubble extends StatelessWidget {
                 ),
               ),
             if (message.body.trim().isNotEmpty)
-              Text(message.body,
-                  style: const TextStyle(fontSize: 13.5, height: 1.5)),
+              Text(
+                message.body,
+                style: const TextStyle(fontSize: 13.5, height: 1.5),
+              ),
             const SizedBox(height: 4),
             Text(
               Fmt.dateTime(message.createdAt),
-              style:
-                  TextStyle(fontSize: 10, color: AppColors.text3Of(context)),
+              style: TextStyle(fontSize: 10, color: AppColors.text3Of(context)),
             ),
           ],
         ),

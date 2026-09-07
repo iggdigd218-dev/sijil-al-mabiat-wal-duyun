@@ -34,20 +34,25 @@ class UsersScreen extends ConsumerWidget {
             mainAxisSpacing: 8,
             crossAxisSpacing: 8,
             children: UserRole.values
-                .map((r) => Card(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(r.icon, style: const TextStyle(fontSize: 24)),
-                          const SizedBox(height: 4),
-                          Text(r.label,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700)),
-                        ],
-                      ),
-                    ))
+                .map(
+                  (r) => Card(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(r.icon, style: const TextStyle(fontSize: 24)),
+                        const SizedBox(height: 4),
+                        Text(
+                          r.label,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
                 .toList(),
           ),
           const SizedBox(height: 18),
@@ -100,8 +105,10 @@ class UserCard extends ConsumerWidget {
               CircleAvatar(
                 radius: 22,
                 backgroundColor: roleColor.withValues(alpha: .14),
-                child: Text(user.role.icon,
-                    style: const TextStyle(fontSize: 18)),
+                child: Text(
+                  user.role.icon,
+                  style: const TextStyle(fontSize: 18),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -111,11 +118,14 @@ class UserCard extends ConsumerWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(user.name,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 14.5)),
+                          child: Text(
+                            user.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14.5,
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 6),
                         if (user.isMe)
@@ -127,15 +137,20 @@ class UserCard extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: 3),
-                    Pill('${user.role.icon} ${user.role.label}',
-                        color: roleColor),
+                    Pill(
+                      '${user.role.icon} ${user.role.label}',
+                      color: roleColor,
+                    ),
                     const SizedBox(height: 5),
-                    Text(user.permSummary,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color: AppColors.text3Of(context))),
+                    Text(
+                      user.permSummary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.text3Of(context),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -159,9 +174,11 @@ class UserCard extends ConsumerWidget {
                       bump(ref);
                     } catch (e) {
                       if (context.mounted) {
-                        showSnack(context,
-                            e is StateError ? e.message : 'تعذّر التنفيذ: $e',
-                            error: true);
+                        showSnack(
+                          context,
+                          e is StateError ? e.message : 'تعذّر التنفيذ: $e',
+                          error: true,
+                        );
                       }
                     }
                   } else if (v == 'delete' && user.id != null) {
@@ -177,9 +194,11 @@ class UserCard extends ConsumerWidget {
                         bump(ref);
                       } catch (e) {
                         if (context.mounted) {
-                          showSnack(context,
-                              e is StateError ? e.message : 'تعذّر الحذف: $e',
-                              error: true);
+                          showSnack(
+                            context,
+                            e is StateError ? e.message : 'تعذّر الحذف: $e',
+                            error: true,
+                          );
                         }
                       }
                     }
@@ -189,17 +208,20 @@ class UserCard extends ConsumerWidget {
                   if (!user.isMe)
                     PopupMenuItem(
                       value: 'me',
-                      child: Row(children: [
-                        const Text('تعيين كمستخدم حالي'),
-                        if (user.locked) ...[
-                          const SizedBox(width: 6),
-                          const Icon(Icons.lock_outline, size: 15),
+                      child: Row(
+                        children: [
+                          const Text('تعيين كمستخدم حالي'),
+                          if (user.locked) ...[
+                            const SizedBox(width: 6),
+                            const Icon(Icons.lock_outline, size: 15),
+                          ],
                         ],
-                      ]),
+                      ),
                     ),
                   PopupMenuItem(
-                      value: 'toggle',
-                      child: Text(user.active ? 'تعطيل' : 'تفعيل')),
+                    value: 'toggle',
+                    child: Text(user.active ? 'تعطيل' : 'تفعيل'),
+                  ),
                   const PopupMenuItem(value: 'delete', child: Text('حذف')),
                 ],
               ),
@@ -281,8 +303,10 @@ class _UserFormState extends ConsumerState<_UserForm> {
       builder: (context, scroll) => Column(
         children: [
           const SizedBox(height: 12),
-          Text(widget.existing == null ? 'مستخدم جديد' : 'تعديل المستخدم',
-              style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            widget.existing == null ? 'مستخدم جديد' : 'تعديل المستخدم',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 10),
           const Divider(height: 1),
           Expanded(
@@ -305,8 +329,12 @@ class _UserFormState extends ConsumerState<_UserForm> {
                     prefixIcon: Icon(Icons.badge_outlined),
                   ),
                   items: UserRole.values
-                      .map((r) => DropdownMenuItem(
-                          value: r, child: Text('${r.icon}  ${r.label}')))
+                      .map(
+                        (r) => DropdownMenuItem(
+                          value: r,
+                          child: Text('${r.icon}  ${r.label}'),
+                        ),
+                      )
                       .toList(),
                   // تغيير الدور يعيد ضبط الصلاحيات لافتراضياته.
                   // أول مستخدم يبقى مديراً (البذرة) ولا يمكن خفض دوره هنا.
@@ -320,20 +348,26 @@ class _UserFormState extends ConsumerState<_UserForm> {
                 if (_isFirstUser)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: Row(children: [
-                      Icon(Icons.verified_user_outlined,
-                          size: 16, color: AppColors.accentOf(context)),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          'لا يوجد مدير بعد — سيكون هذا المستخدم مدير النظام بكامل الصلاحيات.',
-                          style: TextStyle(
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.verified_user_outlined,
+                          size: 16,
+                          color: AppColors.accentOf(context),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'لا يوجد مدير بعد — سيكون هذا المستخدم مدير النظام بكامل الصلاحيات.',
+                            style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.accentOf(context)),
+                              color: AppColors.accentOf(context),
+                            ),
+                          ),
                         ),
-                      ),
-                    ]),
+                      ],
+                    ),
                   ),
                 const SizedBox(height: 14),
                 TextField(
@@ -355,9 +389,11 @@ class _UserFormState extends ConsumerState<_UserForm> {
                         : 'تُطلب عند التبديل إلى هذا المستخدم',
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
-                      icon: Icon(_obscure
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined),
+                      icon: Icon(
+                        _obscure
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
                       onPressed: () => setState(() => _obscure = !_obscure),
                     ),
                   ),
@@ -371,9 +407,11 @@ class _UserFormState extends ConsumerState<_UserForm> {
                         _password.clear();
                       }),
                       icon: const Icon(Icons.lock_open_outlined, size: 18),
-                      label: Text(_clearPassword
-                          ? 'ستُزال الحماية عند الحفظ'
-                          : 'إزالة كلمة المرور'),
+                      label: Text(
+                        _clearPassword
+                            ? 'ستُزال الحماية عند الحفظ'
+                            : 'إزالة كلمة المرور',
+                      ),
                     ),
                   ),
                 const SizedBox(height: 6),
@@ -392,18 +430,26 @@ class _UserFormState extends ConsumerState<_UserForm> {
                       color: AppColors.accentSoftOf(context),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Row(children: [
-                      Icon(Icons.info_outline,
-                          size: 18, color: AppColors.accentOf(context)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text('مدير النظام يملك جميع الصلاحيات دائمًا.',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 18,
+                          color: AppColors.accentOf(context),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'مدير النظام يملك جميع الصلاحيات دائمًا.',
                             style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.accentOf(context))),
-                      ),
-                    ]),
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.accentOf(context),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   )
                 else
                   for (final p in kPerms)
@@ -411,8 +457,10 @@ class _UserFormState extends ConsumerState<_UserForm> {
                       value: _perms[p.key] ?? false,
                       onChanged: (v) =>
                           setState(() => _perms[p.key] = v ?? false),
-                      title: Text(p.label,
-                          style: const TextStyle(fontSize: 13.5)),
+                      title: Text(
+                        p.label,
+                        style: const TextStyle(fontSize: 13.5),
+                      ),
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
@@ -425,7 +473,10 @@ class _UserFormState extends ConsumerState<_UserForm> {
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
                       : const Icon(Icons.save_outlined),
                   label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ'),
                 ),
@@ -444,38 +495,38 @@ class _UserFormState extends ConsumerState<_UserForm> {
     }
     setState(() => _saving = true);
     try {
-    final now = DateTime.now();
-    // كلمة جديدة ← تُجزَّأ؛ فارغة ← تبقى القديمة إلا إذا طُلبت الإزالة.
-    final typed = _password.text.trim();
-    final newHash = _clearPassword
-        ? ''
-        : (typed.isEmpty
-            ? (widget.existing?.password ?? '')
-            : Security.hash(typed));
+      final now = DateTime.now();
+      // كلمة جديدة ← تُجزَّأ؛ فارغة ← تبقى القديمة إلا إذا طُلبت الإزالة.
+      final typed = _password.text.trim();
+      final newHash = _clearPassword
+          ? ''
+          : (typed.isEmpty
+              ? (widget.existing?.password ?? '')
+              : Security.hash(typed));
 
-    final u = widget.existing?.copyWith(
-          name: _name.text.trim(),
-          role: _role,
-          pin: _pin.text.trim(),
-          password: newHash,
-          permissions: _perms,
-          active: _active,
-        ) ??
-        AppUser(
-          name: _name.text.trim(),
-          role: _role,
-          pin: _pin.text.trim(),
-          password: newHash,
-          permissions: _perms,
-          active: _active,
-          createdAt: now,
-          updatedAt: now,
-        );
-    await ref.read(repoProvider).saveUser(u);
-    bump(ref);
-    if (!mounted) return;
-    Navigator.pop(context);
-    showSnack(context, 'تم حفظ المستخدم ✅');
+      final u = widget.existing?.copyWith(
+            name: _name.text.trim(),
+            role: _role,
+            pin: _pin.text.trim(),
+            password: newHash,
+            permissions: _perms,
+            active: _active,
+          ) ??
+          AppUser(
+            name: _name.text.trim(),
+            role: _role,
+            pin: _pin.text.trim(),
+            password: newHash,
+            permissions: _perms,
+            active: _active,
+            createdAt: now,
+            updatedAt: now,
+          );
+      await ref.read(repoProvider).saveUser(u);
+      bump(ref);
+      if (!mounted) return;
+      Navigator.pop(context);
+      showSnack(context, 'تم حفظ المستخدم ✅');
     } catch (e) {
       if (!mounted) return;
       showSnack(
@@ -506,22 +557,29 @@ Future<bool> askPassword(BuildContext context, AppUser user) async {
           decoration: InputDecoration(
             labelText: 'كلمة المرور',
             suffixIcon: IconButton(
-              icon: Icon(obscure
-                  ? Icons.visibility_outlined
-                  : Icons.visibility_off_outlined),
+              icon: Icon(
+                obscure
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
               onPressed: () => setState(() => obscure = !obscure),
             ),
           ),
           onSubmitted: (_) => Navigator.pop(
-              ctx, Security.verify(ctrl.text.trim(), user.password)),
+            ctx,
+            Security.verify(ctrl.text.trim(), user.password),
+          ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(
-                ctx, Security.verify(ctrl.text.trim(), user.password)),
+              ctx,
+              Security.verify(ctrl.text.trim(), user.password),
+            ),
             child: const Text('تأكيد'),
           ),
         ],

@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../core/app_version.dart';
 import '../core/receipt_image.dart';
 import '../core/security.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'sync_settings_section.dart';
+import 'update_section.dart';
 import 'widgets.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
@@ -26,13 +28,28 @@ const _orgFields = <(String, String, IconData, TextInputType?, int)>[
   ('address', 'العنوان', Icons.location_on_outlined, null, 2),
   ('phone', 'الهاتف', Icons.phone_outlined, TextInputType.phone, 1),
   ('whatsapp', 'واتساب', Icons.chat_outlined, TextInputType.phone, 1),
-  ('email', 'البريد الإلكتروني', Icons.email_outlined,
-      TextInputType.emailAddress, 1),
-  ('managerName', 'اسم المسؤول (يظهر على السندات)', Icons.badge_outlined, null,
-      1),
+  (
+    'email',
+    'البريد الإلكتروني',
+    Icons.email_outlined,
+    TextInputType.emailAddress,
+    1,
+  ),
+  (
+    'managerName',
+    'اسم المسؤول (يظهر على السندات)',
+    Icons.badge_outlined,
+    null,
+    1,
+  ),
   ('voucherFooter', 'تذييل السند', Icons.notes_outlined, null, 2),
-  ('defaultVoucherNotes', 'ملاحظات وشروط افتراضية في السند', Icons.rule_outlined,
-      null, 2),
+  (
+    'defaultVoucherNotes',
+    'ملاحظات وشروط افتراضية في السند',
+    Icons.rule_outlined,
+    null,
+    2,
+  ),
 ];
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
@@ -54,7 +71,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _checkBiometrics() async {
     final ok = await Security.biometricsAvailable();
     final label = await Security.availableLabel();
-    if (mounted) setState(() { _bioSupported = ok; _bioLabel = label; });
+    if (mounted)
+      setState(() {
+        _bioSupported = ok;
+        _bioLabel = label;
+      });
   }
 
   /// نملأ الحقول مرة واحدة فقط حتى لا يُمحى ما يكتبه المستخدم عند التحديث.
@@ -64,10 +85,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     for (final f in _orgFields) {
       _ctrls[f.$1] = TextEditingController(text: st[f.$1] ?? '');
     }
-    _ctrls['labelOweUs'] =
-        TextEditingController(text: st['labelOweUs'] ?? 'عليه');
-    _ctrls['labelOweThem'] =
-        TextEditingController(text: st['labelOweThem'] ?? 'له');
+    _ctrls['labelOweUs'] = TextEditingController(
+      text: st['labelOweUs'] ?? 'عليه',
+    );
+    _ctrls['labelOweThem'] = TextEditingController(
+      text: st['labelOweThem'] ?? 'له',
+    );
     for (final c in _ctrls.values) {
       c.addListener(() {
         if (!_dirty && mounted) setState(() => _dirty = true);
@@ -176,30 +199,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final mode = ref.watch(themeModeProvider);
 
     return settings.when(
-      loading: () => const Center(child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 12),
-          Text('جارٍ تحميل الإعدادات…'),
-        ]),
-      )),
+      loading: () => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 12),
+              Text('جارٍ تحميل الإعدادات…'),
+            ],
+          ),
+        ),
+      ),
       error: (e, _) => Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            EmptyState(
-              icon: Icons.error_outline,
-              title: 'تعذّر تحميل الإعدادات',
-              message: '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: () => bump(ref),
-              icon: const Icon(Icons.refresh),
-              label: const Text('إعادة المحاولة'),
-            ),
-          ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              EmptyState(
+                icon: Icons.error_outline,
+                title: 'تعذّر تحميل الإعدادات',
+                message:
+                    '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => bump(ref),
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
         ),
       ),
       data: (st) {
@@ -218,92 +250,106 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(14),
-                        child: Column(children: [
-                      for (final f in _orgFields)
-                        _Field(
-                          controller: _ctrls[f.$1]!,
-                          label: f.$2,
-                          icon: f.$3,
-                          keyboard: f.$4,
-                          maxLines: f.$5,
-                        ),
-                      const Divider(height: 24),
-                      Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: Text(
-                          'شعار المؤسسة',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                      ),
-                      if (_hasLogo) ...[
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: Image.file(
-                              File(_logoPath),
-                              width: 96,
-                              height: 96,
-                              fit: BoxFit.contain,
-                              errorBuilder: (_, __, ___) => Container(
-                                width: 96,
-                                height: 96,
-                                color: AppColors.surface2Of(context),
-                                alignment: Alignment.center,
-                                child: Icon(Icons.broken_image_outlined,
-                                    color: AppColors.text3Of(context)),
+                        child: Column(
+                          children: [
+                            for (final f in _orgFields)
+                              _Field(
+                                controller: _ctrls[f.$1]!,
+                                label: f.$2,
+                                icon: f.$3,
+                                keyboard: f.$4,
+                                maxLines: f.$5,
+                              ),
+                            const Divider(height: 24),
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Text(
+                                'شعار المؤسسة',
+                                style: Theme.of(context).textTheme.titleSmall,
                               ),
                             ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _logoBusy ? null : _pickLogo,
-                              icon: _logoBusy
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.image_outlined),
-                              label: Text(_hasLogo ? 'استبدال الشعار' : 'اختيار صورة'),
+                            if (_hasLogo) ...[
+                              const SizedBox(height: 10),
+                              Align(
+                                alignment: AlignmentDirectional.centerStart,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.file(
+                                    File(_logoPath),
+                                    width: 96,
+                                    height: 96,
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (_, __, ___) => Container(
+                                      width: 96,
+                                      height: 96,
+                                      color: AppColors.surface2Of(context),
+                                      alignment: Alignment.center,
+                                      child: Icon(
+                                        Icons.broken_image_outlined,
+                                        color: AppColors.text3Of(context),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _logoBusy ? null : _pickLogo,
+                                    icon: _logoBusy
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(Icons.image_outlined),
+                                    label: Text(
+                                      _hasLogo
+                                          ? 'استبدال الشعار'
+                                          : 'اختيار صورة',
+                                    ),
+                                  ),
+                                ),
+                                if (_hasLogo) ...[
+                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    tooltip: 'حذف الشعار',
+                                    onPressed: _logoBusy ? null : _removeLogo,
+                                    icon: Icon(
+                                      Icons.delete_outline,
+                                      color: AppColors.dangerOf(context),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
-                          ),
-                          if (_hasLogo) ...[
-                            const SizedBox(width: 8),
-                            IconButton(
-                              tooltip: 'حذف الشعار',
-                              onPressed: _logoBusy ? null : _removeLogo,
-                              icon: Icon(
-                                Icons.delete_outline,
-                                color: AppColors.dangerOf(context),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed: _saving ? null : _saveAll,
+                                icon: _saving
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.save_outlined),
+                                label: Text(
+                                  _saving ? 'جارٍ الحفظ…' : 'حفظ البيانات',
+                                ),
                               ),
                             ),
                           ],
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _saving ? null : _saveAll,
-                          icon: _saving
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white))
-                              : const Icon(Icons.save_outlined),
-                          label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ البيانات'),
                         ),
-                      ),
-                        ]),
                       ),
                     ),
                   ],
@@ -311,65 +357,70 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(height: 18),
                 const SectionTitle('المظهر'),
                 Card(
-                  child: Column(children: [
-                    ListTile(
-                      leading: const Icon(Icons.brightness_6_outlined),
-                      title: const Text('السمة'),
-                      subtitle: Text(switch (mode) {
-                        ThemeMode.light => 'فاتح',
-                        ThemeMode.dark => 'داكن',
-                        ThemeMode.system => 'حسب النظام',
-                      }),
-                      trailing: SegmentedButton<ThemeMode>(
-                        segments: const [
-                          ButtonSegment(
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.brightness_6_outlined),
+                        title: const Text('السمة'),
+                        subtitle: Text(switch (mode) {
+                          ThemeMode.light => 'فاتح',
+                          ThemeMode.dark => 'داكن',
+                          ThemeMode.system => 'حسب النظام',
+                        }),
+                        trailing: SegmentedButton<ThemeMode>(
+                          segments: const [
+                            ButtonSegment(
                               value: ThemeMode.light,
-                              icon: Icon(Icons.light_mode_outlined)),
-                          ButtonSegment(
+                              icon: Icon(Icons.light_mode_outlined),
+                            ),
+                            ButtonSegment(
                               value: ThemeMode.system,
-                              icon: Icon(Icons.brightness_auto_outlined)),
-                          ButtonSegment(
+                              icon: Icon(Icons.brightness_auto_outlined),
+                            ),
+                            ButtonSegment(
                               value: ThemeMode.dark,
-                              icon: Icon(Icons.dark_mode_outlined)),
-                        ],
-                        selected: {mode},
-                        showSelectedIcon: false,
-                        onSelectionChanged: (s) async {
-                          final v = s.first;
-                          ref.read(themeModeProvider.notifier).state = v;
+                              icon: Icon(Icons.dark_mode_outlined),
+                            ),
+                          ],
+                          selected: {mode},
+                          showSelectedIcon: false,
+                          onSelectionChanged: (s) async {
+                            final v = s.first;
+                            ref.read(themeModeProvider.notifier).state = v;
+                            await ref
+                                .read(repoProvider)
+                                .setSetting('theme', v.name);
+                          },
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        secondary: const Icon(Icons.visibility_off_outlined),
+                        title: const Text('إخفاء الأرصدة افتراضيًا'),
+                        subtitle: const Text('تظهر الأرصدة كنقاط حتى تكشفها'),
+                        value: ref.watch(hideBalancesProvider),
+                        onChanged: (v) async {
+                          ref.read(hideBalancesProvider.notifier).state = v;
                           await ref
                               .read(repoProvider)
-                              .setSetting('theme', v.name);
+                              .setSetting('hideBalances', v ? '1' : '0');
                         },
                       ),
-                    ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      secondary: const Icon(Icons.visibility_off_outlined),
-                      title: const Text('إخفاء الأرصدة افتراضيًا'),
-                      subtitle: const Text('تظهر الأرصدة كنقاط حتى تكشفها'),
-                      value: ref.watch(hideBalancesProvider),
-                      onChanged: (v) async {
-                        ref.read(hideBalancesProvider.notifier).state = v;
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('hideBalances', v ? '1' : '0');
-                      },
-                    ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      secondary: const Icon(Icons.format_size),
-                      title: const Text('خط أكبر في لوحة التحكم'),
-                      subtitle: const Text('تكبير الأرقام والعناوين'),
-                      value: (st['bigText'] ?? '1') == '1',
-                      onChanged: (v) async {
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('bigText', v ? '1' : '0');
-                        bump(ref);
-                      },
-                    ),
-                  ]),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        secondary: const Icon(Icons.format_size),
+                        title: const Text('خط أكبر في لوحة التحكم'),
+                        subtitle: const Text('تكبير الأرقام والعناوين'),
+                        value: (st['bigText'] ?? '1') == '1',
+                        onChanged: (v) async {
+                          await ref
+                              .read(repoProvider)
+                              .setSetting('bigText', v ? '1' : '0');
+                          bump(ref);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 18),
                 _Collapsible(
@@ -386,13 +437,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         final v = await showModalBottomSheet<String>(
                           context: context,
                           builder: (_) => SafeArea(
-                            child: ListView(shrinkWrap: true, children: [
-                              for (final c in currencies)
-                                ListTile(
-                                  title: Text('${c.symbol}  ${c.name}'),
-                                  onTap: () => Navigator.pop(context, c.code),
-                                ),
-                            ]),
+                            child: ListView(
+                              shrinkWrap: true,
+                              children: [
+                                for (final c in currencies)
+                                  ListTile(
+                                    title: Text('${c.symbol}  ${c.name}'),
+                                    onTap: () => Navigator.pop(context, c.code),
+                                  ),
+                              ],
+                            ),
                           ),
                         );
                         if (v != null) {
@@ -406,17 +460,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     const Divider(height: 1),
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Row(children: [
-                        const Icon(Icons.numbers, color: AppColors.primary),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'ترقيم تلقائي رقمي بحت لكل العمليات والسندات (١، ٢، ٣…) بدون أحرف، يُزاد آلياً.',
-                            style: TextStyle(
-                                fontSize: 13, height: 1.6, fontWeight: FontWeight.w600),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.numbers, color: AppColors.primary),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'ترقيم تلقائي رقمي بحت لكل العمليات والسندات (١، ٢، ٣…) بدون أحرف، يُزاد آلياً.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.6,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
-                      ]),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -430,7 +489,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       leading: Icon(Icons.info_outline),
                       title: Text('طريقة إرسال الإشعار'),
                       subtitle: Text(
-                          'لكل عميل قناة إشعار خاصة به تُحدد عند إنشاء الحساب أو تعديله: واتساب، رسالة نصية، أو بدون إشعار. اختر القناة من شاشة بيانات العميل.'),
+                        'لكل عميل قناة إشعار خاصة به تُحدد عند إنشاء الحساب أو تعديله: واتساب، رسالة نصية، أو بدون إشعار. اختر القناة من شاشة بيانات العميل.',
+                      ),
                     ),
                   ],
                 ),
@@ -443,21 +503,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.swap_horiz),
                       title: const Text('نوع العملية الافتراضي'),
-                      subtitle: const Text('يُختار تلقائياً عند فتح شاشة إضافة عملية'),
+                      subtitle: const Text(
+                        'يُختار تلقائياً عند فتح شاشة إضافة عملية',
+                      ),
                       trailing: DropdownButton<String>(
                         value: st['defaultOp'] ?? 'inflow',
                         underline: const SizedBox.shrink(),
                         items: const [
-                          DropdownMenuItem(value: 'inflow', child: Text('قبض (مبيعة/دفعة)')),
-                          DropdownMenuItem(value: 'debit', child: Text('عليه (دين آجل)')),
-                          DropdownMenuItem(value: 'outflow', child: Text('صرف')),
-                          DropdownMenuItem(value: 'credit', child: Text('له (دائن)')),
-                          DropdownMenuItem(value: 'revenue', child: Text('إيراد')),
-                          DropdownMenuItem(value: 'expense', child: Text('مصروف')),
+                          DropdownMenuItem(
+                            value: 'inflow',
+                            child: Text('قبض (مبيعة/دفعة)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'debit',
+                            child: Text('عليه (دين آجل)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'outflow',
+                            child: Text('صرف'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'credit',
+                            child: Text('له (دائن)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'revenue',
+                            child: Text('إيراد'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'expense',
+                            child: Text('مصروف'),
+                          ),
                         ],
                         onChanged: (v) async {
                           if (v == null) return;
-                          await ref.read(repoProvider).setSetting('defaultOp', v);
+                          await ref
+                              .read(repoProvider)
+                              .setSetting('defaultOp', v);
                           bump(ref);
                         },
                       ),
@@ -467,7 +549,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       contentPadding: EdgeInsets.zero,
                       secondary: const Icon(Icons.inventory_2_outlined),
                       title: const Text('تنبيه انخفاض المخزون'),
-                      subtitle: const Text('تحذير عند بيع صنف وصل لحد إعادة الطلب'),
+                      subtitle: const Text(
+                        'تحذير عند بيع صنف وصل لحد إعادة الطلب',
+                      ),
                       value: (st['warnLowStock'] ?? '1') == '1',
                       onChanged: (v) async {
                         await ref
@@ -486,16 +570,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       contentPadding: EdgeInsets.zero,
                       secondary: const Icon(Icons.fingerprint),
                       title: const Text('فتح التطبيق بالبصمة'),
-                      subtitle: Text(_bioSupported
-                          ? 'الوسائل المتاحة: $_bioLabel'
-                          : 'غير متاحة — فعّل بصمة في إعدادات الجهاز'),
+                      subtitle: Text(
+                        _bioSupported
+                            ? 'الوسائل المتاحة: $_bioLabel'
+                            : 'غير متاحة — فعّل بصمة في إعدادات الجهاز',
+                      ),
                       value: _bioSupported && (st['biometric'] ?? '0') == '1',
                       onChanged: !_bioSupported
                           ? null
                           : (v) async {
                               if (v) {
                                 final ok = await Security.authenticate(
-                                    reason: 'أكّد بصمتك لتفعيل القفل');
+                                  reason: 'أكّد بصمتك لتفعيل القفل',
+                                );
                                 if (!ok) {
                                   if (context.mounted) {
                                     showSnack(context, 'لم يتم التحقق');
@@ -530,26 +617,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(height: 18),
                 const SyncSettingsSection(),
                 const SizedBox(height: 18),
+                const UpdateSection(),
+                const SizedBox(height: 18),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Column(children: [
-                      Text('إدارة البيانات',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 4),
-                      Text('الإصدار 3.1.0 — تطبيق أصلي بالكامل',
+                    child: Column(
+                      children: [
+                        Text(
+                          'إدارة البيانات',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '$appVersionLabel — تطبيق أصلي بالكامل',
                           style: TextStyle(
-                              fontSize: 12, color: AppColors.text3Of(context))),
-                      const SizedBox(height: 8),
-                      Text(
-                        'موجب (+) = مستحق لنا «عليه»  ·  سالب (−) = مستحق منا «له»',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.text3Of(context),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'موجب (+) = مستحق لنا «عليه»  ·  سالب (−) = مستحق منا «له»',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
                             fontSize: 11.5,
                             height: 1.6,
-                            color: AppColors.text3Of(context)),
-                      ),
-                    ]),
+                            color: AppColors.text3Of(context),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -569,21 +667,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     onTap: _saving ? null : _saveAll,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 14),
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
                       child: Row(
                         children: [
                           const Icon(Icons.save_outlined, color: Colors.white),
                           const SizedBox(width: 10),
                           const Expanded(
-                            child: Text('لديك تعديلات غير محفوظة',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700)),
+                            child: Text(
+                              'لديك تعديلات غير محفوظة',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
-                          Text(_saving ? 'جارٍ الحفظ…' : 'حفظ الآن',
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800)),
+                          Text(
+                            _saving ? 'جارٍ الحفظ…' : 'حفظ الآن',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -610,10 +716,9 @@ class _Field extends StatelessWidget {
     required this.controller,
     required this.label,
     required this.icon,
-    this.hint,
     this.maxLines = 1,
     this.keyboard,
-  });
+  }) : hint = null;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -661,8 +766,10 @@ class _Collapsible extends StatelessWidget {
           shape: const RoundedRectangleBorder(),
           collapsedShape: const RoundedRectangleBorder(),
           leading: Icon(icon, color: AppColors.primaryOf(context)),
-          title: Text(title,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+          title: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+          ),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           children: children,
         ),

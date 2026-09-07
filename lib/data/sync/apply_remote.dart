@@ -1,128 +1,153 @@
-// منطق تطبيق عملية قادمة من جهاز/سحابة على قاعدة البيانات المحلية.
-import 'dart:convert';
-
+// Apply an incoming operation using the actual primary key of each table.
 import 'package:sqflite/sqflite.dart';
 
-import '../../core/models.dart';
 import '../repository.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
 
 extension ApplyRemoteOp on Repo {
-  /// يطبّق عملية قادمة من الخارج (Cloud/LAN).
-  /// يعيد true إذا طُبقت، false إذا تجاهل/تعارض.
+  /// Returns false for replay/ignored/conflicting operations. The caller owns
+  /// the transaction, so entity data and the operation receipt commit together.
   Future<bool> applyRemoteOperation(
     DatabaseExecutor txn,
     SyncOperation op,
     ConflictResolver resolver,
   ) async {
     final table = _tableFor(op.entityType);
-    if (table == null) return false;
+    final primaryKey = switch (op.entityType) {
+      EntityKind.setting => 'key',
+      EntityKind.currency => 'code',
+      _ => 'id',
+    };
+    if (op.opType == OpKind.settings && op.entityType != EntityKind.setting) {
+      throw const FormatException('Invalid settings operation');
+    }
+    final seen = await txn.query('operations',
+        columns: ['id'], where: 'id = ?', whereArgs: [op.id], limit: 1);
+    if (seen.isNotEmpty) return false;
 
-    // 1) هل الكيان موجود محليًا؟
     final existing = await txn.query(table,
-        where: 'id = ?', whereArgs: [op.entityId], limit: 1);
-    final exists = existing.isNotEmpty;
-
-    // 2) أعلى version محلي للكيان + آخر عملية مسجلة.
-    final vRow = await txn.rawQuery(
-        'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
-        [op.entityType.name, op.entityId]);
-    final localVersion = (vRow.first['v'] as int?) ?? 0;
-    final latestRows = await txn.query('operations',
+        where: '$primaryKey = ?', whereArgs: [op.entityId], limit: 1);
+    final latest = await txn.query('operations',
         where: 'entity_type = ? AND entity_id = ?',
         whereArgs: [op.entityType.name, op.entityId],
         orderBy: 'version DESC, timestamp DESC',
         limit: 1);
-    SyncOperation? localLatest;
-    if (latestRows.isNotEmpty) {
-      try {
-        localLatest = SyncOperation.fromMap(latestRows.first);
-      } catch (_) {}
-    }
-
-    // 3) القرار.
+    final localLatest =
+        latest.isEmpty ? null : SyncOperation.fromMap(latest.first);
     final decision = resolver.decide(
       incoming: op,
-      exists: exists,
-      localVersion: localVersion,
+      exists: existing.isNotEmpty,
+      localVersion: localLatest?.version ?? 0,
       localLatest: localLatest,
     );
-
     if (decision.conflict) {
-      // سجّل التعارض في notifications ولا تطبّق (المستخدم يراجعه لاحقًا).
       await txn.insert('notifications', {
-        'title': 'تعـارض في المزامنة',
+        'title': 'تعارض في المزامنة',
         'body': '${op.entityType.name}:${op.entityId} (device ${op.deviceId})',
         'kind': 'warning',
         'seen': 0,
         'created_at': DateTime.now().toIso8601String(),
       });
-      // نسجل العملية في السجل مع synced=1 حتى لا تتكرر، لكن لا نُطبّقها.
-      await txn.insert('operations', op.toMap(),
+      await txn.insert('operations', op.toMap()..['synced'] = 1,
           conflictAlgorithm: ConflictAlgorithm.ignore);
       return false;
     }
-
     if (!decision.apply) return false;
 
-    // 4) التطبيق حسب النوع.
-    final row = _tableRow(op.payload);
-    if (row == null) return false;
-    final now = DateTime.now().toIso8601String();
-    final norm = Map<String, Object?>.from(row);
-    norm.remove('id'); // نستخدم entityId كـ id.
-    norm['workspace_id'] = op.workspaceId;
-    norm['updated_at'] = now;
+    // سطور الفاتورة تُنقل داخل حمولة العملية المالية (ليست كيانًا مستقلًا).
+    final rawLines = op.payload['items'];
+    final lines = rawLines is List
+        ? rawLines.whereType<Map>().map(Map<String, Object?>.from).toList()
+        : null;
 
+    final columns = (await txn.rawQuery('PRAGMA table_info($table)'))
+        .map((c) => c['name'] as String)
+        .toSet();
+    final now = DateTime.now().toIso8601String();
+    final row = <String, Object?>{
+      for (final entry in op.payload.entries)
+        if (entry.key != 'items' &&
+            columns.contains(entry.key) &&
+            entry.key != primaryKey)
+          entry.key: entry.value,
+      if (columns.contains('workspace_id')) 'workspace_id': op.workspaceId,
+      if (columns.contains('updated_at')) 'updated_at': now,
+    };
     switch (op.opType) {
       case OpKind.create:
       case OpKind.update:
-        if (exists) {
-          await txn.update(table, norm, where: 'id = ?', whereArgs: [op.entityId]);
+      case OpKind.settings:
+        if (existing.isNotEmpty) {
+          if (row.isNotEmpty) {
+            await txn.update(table, row,
+                where: '$primaryKey = ?', whereArgs: [op.entityId]);
+          }
         } else {
-          await txn.insert(table, {...norm, 'id': op.entityId},
-              conflictAlgorithm: ConflictAlgorithm.replace);
+          await txn.insert(table, {...row, primaryKey: op.entityId});
+        }
+        if (op.entityType == EntityKind.tx && lines != null) {
+          await _replaceInvoiceLines(txn, op, lines);
         }
         break;
       case OpKind.delete_:
-        // soft-delete إن كان الجدول يدعمها.
-        if (await _hasColumn(txn, table, 'deleted_at')) {
-          await txn.update(table, {
-            'deleted_at': op.deviceTime,
-            'updated_at': now,
-          }, where: 'id = ?', whereArgs: [op.entityId]);
+        if (columns.contains('deleted_at')) {
+          await txn.update(
+              table,
+              {
+                'deleted_at': op.deviceTime,
+                if (columns.contains('updated_at')) 'updated_at': now,
+              },
+              where: '$primaryKey = ?',
+              whereArgs: [op.entityId]);
         } else {
-          await txn.delete(table, where: 'id = ?', whereArgs: [op.entityId]);
+          await txn.delete(table,
+              where: '$primaryKey = ?', whereArgs: [op.entityId]);
         }
         break;
       case OpKind.restore:
-        if (await _hasColumn(txn, table, 'deleted_at')) {
-          await txn.update(table, {
-            'deleted_at': '',
-            'restore_op_id': op.id,
-            'updated_at': now,
-          }, where: 'id = ?', whereArgs: [op.entityId]);
-        }
-        break;
-      case OpKind.settings:
-        final key = op.payload['key'] as String?;
-        final value = op.payload['value'] as String?;
-        if (key != null && value != null) {
-          await txn.insert('settings', {'key': key, 'value': value},
-              conflictAlgorithm: ConflictAlgorithm.replace);
+        if (columns.contains('deleted_at')) {
+          await txn.update(
+              table,
+              {
+                'deleted_at': '',
+                if (columns.contains('restore_op_id')) 'restore_op_id': op.id,
+                if (columns.contains('updated_at')) 'updated_at': now,
+              },
+              where: '$primaryKey = ?',
+              whereArgs: [op.entityId]);
         }
         break;
     }
-
-    // 5) سجلّ العملية محليًا كـ synced (لا نضيفها مرة أخرى للطابور).
     await txn.insert('operations', op.toMap()..['synced'] = 1,
         conflictAlgorithm: ConflictAlgorithm.ignore);
-
     return true;
   }
 
-  String? _tableFor(EntityKind k) => switch (k) {
+  Future<void> _replaceInvoiceLines(
+    DatabaseExecutor txn,
+    SyncOperation op,
+    List<Map<String, Object?>> lines,
+  ) async {
+    final cols = (await txn.rawQuery('PRAGMA table_info(transaction_items)'))
+        .map((c) => c['name'] as String)
+        .toSet();
+    final txId = int.tryParse(op.entityId) ?? op.entityId;
+    await txn
+        .delete('transaction_items', where: 'tx_id = ?', whereArgs: [txId]);
+    for (final line in lines) {
+      final row = <String, Object?>{
+        for (final e in line.entries)
+          if (cols.contains(e.key)) e.key: e.value,
+        'tx_id': txId,
+        if (cols.contains('workspace_id')) 'workspace_id': op.workspaceId,
+      };
+      await txn.insert('transaction_items', row,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+  }
+
+  String _tableFor(EntityKind kind) => switch (kind) {
         EntityKind.account => 'accounts',
         EntityKind.tx => 'transactions',
         EntityKind.item => 'items',
@@ -133,14 +158,4 @@ extension ApplyRemoteOp on Repo {
         EntityKind.currency => 'currencies',
         EntityKind.setting => 'settings',
       };
-
-  Map<String, Object?>? _tableRow(Map<String, Object?> payload) {
-    // payload هو snapshot كامل للكيان.
-    return payload;
-  }
-
-  Future<bool> _hasColumn(DatabaseExecutor txn, String table, String col) async {
-    final cols = await txn.rawQuery('PRAGMA table_info($table)');
-    return cols.any((c) => c['name'] == col);
-  }
 }

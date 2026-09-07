@@ -5,11 +5,11 @@ import 'sync_engine.dart';
 import 'sync_queue.dart';
 
 enum SyncState {
-  synced,       // 🟢 لا توجد عمليات معلقة
-  syncing,      // 🟡 توجد عملية في حالة syncing
-  pending,      // 🟠 توجد عمليات في الانتظار
-  failed,       // 🔴 توجد عمليات فشلت بعد عدة محاولات
-  offline,      // ⚪ غير مُهيّأ للعمل
+  synced, // 🟢 لا توجد عمليات معلقة
+  syncing, // 🟡 توجد عملية في حالة syncing
+  pending, // 🟠 توجد عمليات في الانتظار
+  failed, // 🔴 توجد عمليات فشلت بعد عدة محاولات
+  offline, // ⚪ غير مُهيّأ للعمل
 }
 
 class SyncStatusInfo {
@@ -45,16 +45,20 @@ class SyncService {
     final pending = await q.countPending();
     final failed = await q.countFailed();
     final s = await db.rawQuery(
-        "SELECT COUNT(*) c FROM sync_queue WHERE status = ?",
-        [SyncStatus.syncing.name]);
+      "SELECT COUNT(*) c FROM sync_queue WHERE status = ?",
+      [SyncStatus.syncing.name],
+    );
     final syncing = (s.first['c'] as int?) ?? 0;
     final st = await repo.settings();
     final lastCloud = st['lastCloudSync'];
     final lastLan = st['lastLanSync'];
-    final lastSync = (lastCloud?.isNotEmpty == true && (lastLan == null || lastCloud!.compareTo(lastLan) > 0))
-        ? lastCloud : (lastLan?.isNotEmpty == true ? lastLan : lastCloud);
+    final lastSync = (lastCloud?.isNotEmpty == true &&
+            (lastLan == null || lastCloud!.compareTo(lastLan) > 0))
+        ? lastCloud
+        : (lastLan?.isNotEmpty == true ? lastLan : lastCloud);
     final cloudUrl = (st['cloudBackendUrl'] ?? '').trim();
-    final cloudConfigured = cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
+    final cloudConfigured =
+        cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
     final lanConfigured = (st['lanSyncEnabled'] ?? '0') == '1';
     final mode = await repo.workspaceMode();
     final anyChannel = cloudConfigured || lanConfigured;
@@ -79,7 +83,9 @@ class SyncService {
 
     return SyncStatusInfo(
       state: state,
-      pending: state == SyncState.pending || state == SyncState.syncing ? pending : 0,
+      pending: state == SyncState.pending || state == SyncState.syncing
+          ? pending
+          : 0,
       failed: state == SyncState.failed ? failed : 0,
       lastSyncAt: (lastSync?.isNotEmpty == true) ? lastSync : null,
       cloudUrl: cloudConfigured ? cloudUrl : null,

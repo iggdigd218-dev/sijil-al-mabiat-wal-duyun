@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' as io;
+
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
@@ -102,12 +103,7 @@ class GoogleDriveService {
     try {
       _signInCached = GoogleSignIn(
         serverClientId: _serverClientId,
-        scopes: [
-          _driveScope,
-          _driveAppDataScope,
-          'email',
-          'profile',
-        ],
+        scopes: [_driveScope, _driveAppDataScope, 'email', 'profile'],
       );
     } catch (_) {
       _signInCached = null;
@@ -134,13 +130,16 @@ class GoogleDriveService {
       final signIn = _signIn;
       if (signIn == null) {
         throw const GoogleDriveException(
-            'تسجيل الدخول إلى Google غير متاح على هذا الجهاز (سطح المكتب). استخدم خيار الرفع عبر تطبيق Drive.');
+          'تسجيل الدخول إلى Google غير متاح على هذا الجهاز (سطح المكتب). استخدم خيار الرفع عبر تطبيق Drive.',
+        );
       }
       final account = signIn.currentUser ?? await signIn.signIn();
       return account == null ? null : _toAccountInfo(account);
     } catch (e) {
       final str = e.toString();
-      if (str.contains('10') || str.contains('DEVELOPER_ERROR') || str.contains('sign_in_failed')) {
+      if (str.contains('10') ||
+          str.contains('DEVELOPER_ERROR') ||
+          str.contains('sign_in_failed')) {
         throw const GoogleDriveException(
           'تعذّر تسجيل الدخول التلقائي عبر Google Sign-In المباشر. يمكنك استخدام خيار "رفع إلى Google Drive عبر تطبيق Drive" في الأسفل.',
         );
@@ -240,7 +239,9 @@ class GoogleDriveService {
       );
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(response.body);
-        if (decoded is Map && decoded['files'] is List && (decoded['files'] as List).isNotEmpty) {
+        if (decoded is Map &&
+            decoded['files'] is List &&
+            (decoded['files'] as List).isNotEmpty) {
           final first = (decoded['files'] as List).first;
           if (first is Map && first['id'] is String) {
             return _driveFileFromJson(first);
@@ -262,7 +263,9 @@ class GoogleDriveService {
       );
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(response.body);
-        if (decoded is Map && decoded['files'] is List && (decoded['files'] as List).isNotEmpty) {
+        if (decoded is Map &&
+            decoded['files'] is List &&
+            (decoded['files'] as List).isNotEmpty) {
           final first = (decoded['files'] as List).first;
           if (first is Map && first['id'] is String) {
             return _driveFileFromJson(first);
@@ -293,11 +296,11 @@ class GoogleDriveService {
       // إنشاء بدون تحديد مجلد خاص
       response = await client.post(
         _fileUri('/files', {'fields': _fileFields}),
-        headers: {...headers, 'Content-Type': 'application/json; charset=utf-8'},
-        body: jsonEncode({
-          'name': backupFileName,
-          'mimeType': _mimeType,
-        }),
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: jsonEncode({'name': backupFileName, 'mimeType': _mimeType}),
       );
     }
 
@@ -312,10 +315,13 @@ class GoogleDriveService {
     List<int> bytes,
   ) async {
     final response = await client.patch(
-      _fileUri('/files/${Uri.encodeComponent(file.id)}', {
-        'uploadType': 'media',
-        'fields': _fileFields,
-      }, true),
+      _fileUri(
+          '/files/${Uri.encodeComponent(file.id)}',
+          {
+            'uploadType': 'media',
+            'fields': _fileFields,
+          },
+          true),
       headers: {...headers, 'Content-Type': _mimeType},
       body: bytes,
     );
@@ -342,29 +348,25 @@ class GoogleDriveService {
     return _DriveFile(
       id: id,
       name: json['name'] is String ? json['name'] as String : backupFileName,
-      modifiedTime: modified is String
-          ? DateTime.tryParse(modified)?.toLocal()
-          : null,
+      modifiedTime:
+          modified is String ? DateTime.tryParse(modified)?.toLocal() : null,
       sizeBytes: int.tryParse('${json['size'] ?? ''}'),
     );
   }
 
   Future<T> _withDrive<T>(
     Future<T> Function(http.Client client, Map<String, String> headers)
-    operation,
+        operation,
   ) async {
     final signIn = _signIn;
     GoogleSignInAccount? account = signIn?.currentUser;
     account ??= await signIn?.signInSilently(suppressErrors: true);
     if (account == null) {
-      throw const GoogleDriveException('تسجيل الدخول إلى Google غير متاح على هذا الجهاز.');
-    }
-    final signedIn = account;
-    if (signedIn == null) {
       throw const GoogleDriveException(
-        'اربط حساب Google أولًا لاستخدام النسخ السحابي.',
+        'تسجيل الدخول إلى Google غير متاح على هذا الجهاز.',
       );
     }
+    final signedIn = account;
     final headers = await signedIn.authHeaders;
     final client = http.Client();
     try {

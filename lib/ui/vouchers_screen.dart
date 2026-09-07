@@ -105,20 +105,38 @@ class _VoucherFilterBarState extends ConsumerState<_VoucherFilterBar> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _chip('كل الأنواع', f.kind == null,
-                    () => set(f.copyWith(clearKind: true))),
+                _chip(
+                  'كل الأنواع',
+                  f.kind == null,
+                  () => set(f.copyWith(clearKind: true)),
+                ),
                 for (final k in VoucherKind.values)
-                  _chip('${k.icon} ${k.label}', f.kind == k,
-                      () => set(f.copyWith(kind: k))),
+                  _chip(
+                    '${k.icon} ${k.label}',
+                    f.kind == k,
+                    () => set(f.copyWith(kind: k)),
+                  ),
                 const SizedBox(width: 6),
-                _chip('الكل', f.status == null,
-                    () => set(f.copyWith(clearStatus: true))),
-                _chip('معتمد', f.status == 'approved',
-                    () => set(f.copyWith(status: 'approved'))),
-                _chip('مسودة', f.status == 'draft',
-                    () => set(f.copyWith(status: 'draft'))),
-                _chip('ملغى', f.status == 'cancelled',
-                    () => set(f.copyWith(status: 'cancelled'))),
+                _chip(
+                  'الكل',
+                  f.status == null,
+                  () => set(f.copyWith(clearStatus: true)),
+                ),
+                _chip(
+                  'معتمد',
+                  f.status == 'approved',
+                  () => set(f.copyWith(status: 'approved')),
+                ),
+                _chip(
+                  'مسودة',
+                  f.status == 'draft',
+                  () => set(f.copyWith(status: 'draft')),
+                ),
+                _chip(
+                  'ملغى',
+                  f.status == 'cancelled',
+                  () => set(f.copyWith(status: 'cancelled')),
+                ),
               ],
             ),
           ),
@@ -166,8 +184,10 @@ class _VoucherCard extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 alignment: Alignment.center,
-                child:
-                    Text(voucher.kind.icon, style: const TextStyle(fontSize: 20)),
+                child: Text(
+                  voucher.kind.icon,
+                  style: const TextStyle(fontSize: 20),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -176,9 +196,13 @@ class _VoucherCard extends ConsumerWidget {
                   children: [
                     Row(
                       children: [
-                        Text(voucher.number,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800, fontSize: 15)),
+                        Text(
+                          voucher.number,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         Pill(voucher.statusLabel, color: statusColor),
                       ],
@@ -189,16 +213,21 @@ class _VoucherCard extends ConsumerWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          fontSize: 12.5, color: AppColors.text2Of(context)),
+                        fontSize: 12.5,
+                        color: AppColors.text2Of(context),
+                      ),
                     ),
                     if (voucher.statement.isNotEmpty) ...[
                       const SizedBox(height: 2),
-                      Text(voucher.statement,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              color: AppColors.text3Of(context))),
+                      Text(
+                        voucher.statement,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: AppColors.text3Of(context),
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -206,14 +235,21 @@ class _VoucherCard extends ConsumerWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(Fmt.money(voucher.amount),
-                      style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                          color: AppColors.primaryOf(context))),
-                  Text(Fmt.date(voucher.date),
-                      style: TextStyle(
-                          fontSize: 10.5, color: AppColors.text3Of(context))),
+                  Text(
+                    Fmt.money(voucher.amount),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      color: AppColors.primaryOf(context),
+                    ),
+                  ),
+                  Text(
+                    Fmt.date(voucher.date),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      color: AppColors.text3Of(context),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -254,8 +290,10 @@ Future<void> openVoucherPreview(
       builder: (context, scroll) => Column(
         children: [
           const SizedBox(height: 10),
-          Text('معاينة السند ${v.number}',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'معاينة السند ${v.number}',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           const Divider(height: 1),
           Expanded(
@@ -285,7 +323,8 @@ Future<void> openVoucherPreview(
                       child: FilledButton.icon(
                         onPressed: () async {
                           await repo.saveVoucher(
-                              v.copyWith(status: 'approved'));
+                            v.copyWith(status: 'approved'),
+                          );
                           bump(ref);
                           if (context.mounted) {
                             Navigator.pop(context);
@@ -301,10 +340,14 @@ Future<void> openVoucherPreview(
                     child: OutlinedButton.icon(
                       onPressed: () async {
                         final number = Fmt.waNumber(
-                            account?.contactNumber ?? '');
+                          account?.contactNumber ?? '',
+                        );
                         if (number.isEmpty) {
-                          showSnack(context, 'لا يوجد رقم واتساب للحساب',
-                              error: true);
+                          showSnack(
+                            context,
+                            'لا يوجد رقم واتساب للحساب',
+                            error: true,
+                          );
                           return;
                         }
                         final text = voucherText(
@@ -315,9 +358,12 @@ Future<void> openVoucherPreview(
                           items: items,
                         );
                         final uri = Uri.parse(
-                            'https://wa.me/$number?text=${Uri.encodeComponent(text)}');
-                        await launchUrl(uri,
-                            mode: LaunchMode.externalApplication);
+                          'https://wa.me/$number?text=${Uri.encodeComponent(text)}',
+                        );
+                        await launchUrl(
+                          uri,
+                          mode: LaunchMode.externalApplication,
+                        );
                       },
                       icon: const Icon(Icons.chat_outlined),
                       label: const Text('واتساب'),
@@ -339,8 +385,10 @@ Future<void> openVoucherPreview(
                         if (context.mounted) Navigator.pop(context);
                       }
                     },
-                    icon: Icon(Icons.delete_outline,
-                        color: AppColors.dangerOf(context)),
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: AppColors.dangerOf(context),
+                    ),
                   ),
                 ],
               ),
@@ -425,33 +473,35 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
     }
     setState(() => _saving = true);
     try {
-    final repo = ref.read(repoProvider);
-    final number = await repo.nextVoucherNumber(_kind);
-    final now = DateTime.now();
-    final v = Voucher(
-      number: number,
-      kind: _kind,
-      accountId: _accountId,
-      amount: amount,
-      currency: _currency,
-      statement: _statement.text.trim(),
-      notes: _notes.text.trim(),
-      status: 'draft',
-      date: _date,
-      createdAt: now,
-      updatedAt: now,
-    );
-    final id = await repo.saveVoucher(v);
-    bump(ref);
-    if (!mounted) return;
-    Navigator.pop(context);
-    showSnack(context, 'تم إنشاء السند $number ✅');
-    await openVoucherPreview(context, ref, v.copyWith(id: id));
+      final repo = ref.read(repoProvider);
+      final number = await repo.nextVoucherNumber(_kind);
+      final now = DateTime.now();
+      final v = Voucher(
+        number: number,
+        kind: _kind,
+        accountId: _accountId,
+        amount: amount,
+        currency: _currency,
+        statement: _statement.text.trim(),
+        notes: _notes.text.trim(),
+        status: 'draft',
+        date: _date,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final id = await repo.saveVoucher(v);
+      bump(ref);
+      if (!mounted) return;
+      Navigator.pop(context);
+      showSnack(context, 'تم إنشاء السند $number ✅');
+      await openVoucherPreview(context, ref, v.copyWith(id: id));
     } catch (e) {
       if (mounted) {
-        showSnack(context,
-            e is StateError ? e.message : 'تعذّر حفظ السند: $e',
-            error: true);
+        showSnack(
+          context,
+          e is StateError ? e.message : 'تعذّر حفظ السند: $e',
+          error: true,
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -462,7 +512,9 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const SizedBox(
-          height: 240, child: Center(child: CircularProgressIndicator()));
+        height: 240,
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
     if (_accounts.isEmpty) {
       return const Padding(
@@ -481,8 +533,7 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
       builder: (context, scroll) => Column(
         children: [
           const SizedBox(height: 12),
-          Text('🧾 سند جديد',
-              style: Theme.of(context).textTheme.titleLarge),
+          Text('🧾 سند جديد', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 10),
           const Divider(height: 1),
           Expanded(
@@ -497,12 +548,14 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                     spacing: 8,
                     runSpacing: 8,
                     children: VoucherKind.values
-                        .map((k) => ChoiceChip(
-                              selected: _kind == k,
-                              onSelected: (_) => setState(() => _kind = k),
-                              avatar: Text(k.icon),
-                              label: Text(k.label),
-                            ))
+                        .map(
+                          (k) => ChoiceChip(
+                            selected: _kind == k,
+                            onSelected: (_) => setState(() => _kind = k),
+                            avatar: Text(k.icon),
+                            label: Text(k.label),
+                          ),
+                        )
                         .toList(),
                   ),
                   const SizedBox(height: 16),
@@ -514,52 +567,70 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                       prefixIcon: Icon(Icons.person_outline),
                     ),
                     items: _accounts
-                        .map((a) => DropdownMenuItem(
+                        .map(
+                          (a) => DropdownMenuItem(
                             value: a.id,
-                            child: Text('${a.kind.icon}  ${a.name}',
-                                overflow: TextOverflow.ellipsis)))
+                            child: Text(
+                              '${a.kind.icon}  ${a.name}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
                         .toList(),
                     onChanged: (v) => setState(() => _accountId = v),
                     validator: (v) => v == null ? 'اختر الحساب' : null,
                   ),
                   const SizedBox(height: 14),
-                  Row(children: [
-                    Expanded(
-                      flex: 3,
-                      child: TextFormField(
-                        controller: _amount,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'المبلغ *',
-                          prefixIcon: Icon(Icons.payments_outlined),
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextFormField(
+                          controller: _amount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'المبلغ *',
+                            prefixIcon: Icon(Icons.payments_outlined),
+                          ),
+                          validator: (v) {
+                            final n = Fmt.parseAmount(v ?? '');
+                            return (n == null || n <= 0)
+                                ? 'مبلغ غير صالح'
+                                : null;
+                          },
                         ),
-                        validator: (v) {
-                          final n = Fmt.parseAmount(v ?? '');
-                          return (n == null || n <= 0) ? 'مبلغ غير صالح' : null;
-                        },
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _currencies.any((c) => c.code == _currency)
-                            ? _currency
-                            : _currencies.first.code,
-                        isExpanded: true,
-                        decoration: const InputDecoration(labelText: 'العملة'),
-                        items: _currencies
-                            .map((c) => DropdownMenuItem(
-                                value: c.code,
-                                child: Text(c.symbol,
-                                    overflow: TextOverflow.ellipsis)))
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _currency = v ?? _currency),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<String>(
+                          initialValue:
+                              _currencies.any((c) => c.code == _currency)
+                                  ? _currency
+                                  : _currencies.first.code,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'العملة',
+                          ),
+                          items: _currencies
+                              .map(
+                                (c) => DropdownMenuItem(
+                                  value: c.code,
+                                  child: Text(
+                                    c.symbol,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => _currency = v ?? _currency),
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                   const SizedBox(height: 14),
                   InkWell(
                     borderRadius: BorderRadius.circular(12),
@@ -578,9 +649,10 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                         labelText: 'التاريخ',
                         prefixIcon: Icon(Icons.event_outlined),
                       ),
-                      child: Text(Fmt.date(_date),
-                          style:
-                              const TextStyle(fontWeight: FontWeight.w700)),
+                      child: Text(
+                        Fmt.date(_date),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),

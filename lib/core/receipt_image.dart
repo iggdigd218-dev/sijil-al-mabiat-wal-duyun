@@ -141,10 +141,14 @@ Future<String> buildReceiptImage(ReceiptData d) async {
     );
     canvas.drawRRect(logoBox, Paint()..color = Colors.white);
     final source = Rect.fromLTWH(
-        0, 0, logo!.width.toDouble(), logo!.height.toDouble());
+      0,
+      0,
+      logo.width.toDouble(),
+      logo.height.toDouble(),
+    );
     final target = logoBox.outerRect.deflate(7);
     canvas.drawImageRect(
-      logo!,
+      logo,
       source,
       target,
       Paint()..filterQuality = ui.FilterQuality.high,
@@ -152,11 +156,27 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   }
 
   var y = pad / 2 + 30.0;
-  _text(canvas, d.orgName.isEmpty ? 'إدارة البيانات' : d.orgName,
-      w / 2, y, 34, Colors.white, bold: true, center: true);
+  _text(
+    canvas,
+    d.orgName.isEmpty ? 'إدارة البيانات' : d.orgName,
+    w / 2,
+    y,
+    34,
+    Colors.white,
+    bold: true,
+    center: true,
+  );
   y += 46;
-  _text(canvas, d.title, w / 2, y, 26, Colors.white70,
-      bold: true, center: true);
+  _text(
+    canvas,
+    d.title,
+    w / 2,
+    y,
+    26,
+    Colors.white70,
+    bold: true,
+    center: true,
+  );
 
   y = pad / 2 + 170;
 
@@ -195,17 +215,41 @@ Future<String> buildReceiptImage(ReceiptData d) async {
 
   // الأسطر
   for (final l in body) {
-    _text(canvas, l.$1, w - pad - 12, y, 22, const Color(0xFF8A97AB),
-        alignEnd: true);
-    _text(canvas, l.$2, pad + 12, y, 24, const Color(0xFF12223A),
-        bold: true, alignStart: true, maxWidth: w * .55);
+    _text(
+      canvas,
+      l.$1,
+      w - pad - 12,
+      y,
+      22,
+      const Color(0xFF8A97AB),
+      alignEnd: true,
+    );
+    _text(
+      canvas,
+      l.$2,
+      pad + 12,
+      y,
+      24,
+      const Color(0xFF12223A),
+      bold: true,
+      alignStart: true,
+      maxWidth: w * .55,
+    );
     y += 52;
   }
 
   if (d.footer.isNotEmpty) {
     y += 8;
-    _text(canvas, d.footer, w / 2, y, 19, const Color(0xFF8A97AB),
-        center: true, maxWidth: w - pad * 2);
+    _text(
+      canvas,
+      d.footer,
+      w / 2,
+      y,
+      19,
+      const Color(0xFF8A97AB),
+      center: true,
+      maxWidth: w - pad * 2,
+    );
   }
 
   final picture = recorder.endRecording();
@@ -251,8 +295,10 @@ List<(String, String)> _lines(ReceiptData d) {
   if (d.balanceAfter != null) {
     final b = d.balanceAfter!;
     final label = b > 0 ? 'عليه' : (b < 0 ? 'له' : 'متساوٍ');
-    out.add(('الرصيد بعد العملية',
-        '${Fmt.money(b.abs(), d.currency.decimal)} ($label)'));
+    out.add((
+      'الرصيد بعد العملية',
+      '${Fmt.money(b.abs(), d.currency.decimal)} ($label)',
+    ));
   }
   if (d.orgPhone.isNotEmpty) out.add(('للتواصل', d.orgPhone));
   return out;
@@ -303,7 +349,8 @@ Future<String> saveImageBytes(Uint8List bytes, {String prefix = 'img'}) async {
   final dir = await getApplicationDocumentsDirectory();
   final folder = Directory('${dir.path}/images')..createSync(recursive: true);
   final f = File(
-      '${folder.path}/$prefix-${DateTime.now().millisecondsSinceEpoch}.png');
+    '${folder.path}/$prefix-${DateTime.now().millisecondsSinceEpoch}.png',
+  );
   await f.writeAsBytes(bytes, flush: true);
   return f.path;
 }

@@ -3,7 +3,6 @@
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
-pubspec.lock
 android/local.properties
 android/key.properties
 android/.gradle/
@@ -11,3 +10,14 @@ android/app/src/main/java/io/flutter/plugins/
 *.jks
 *.keystore
 *.apk
+
+# Generated QA preview libraries (recreated by qa/prepare_preview.sh)
+qa/preview/core
+qa/preview/vendor
+
+# QA evidence logs (سجلات ضخمة تُولَّد محلياً، لا داعي لتتبعها)
+qa/evidence/
+qa/*.patch
+pubspec.lock.bak
+nexora_app.iml
+.idea/

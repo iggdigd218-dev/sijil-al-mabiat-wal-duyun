@@ -55,8 +55,7 @@ class PermissionRationale {
     icon: Icons.sd_storage_rounded,
     iconColor: Color(0xFF9C27B0),
     title: 'الوصول إلى التخزين',
-    message:
-        'نحتاج التخزين لحفظ النسخ الاحتياطية (ملف .sijil) وقراءتها عند '
+    message: 'نحتاج التخزين لحفظ النسخ الاحتياطية (ملف .sijil) وقراءتها عند '
         'الاستعادة أو مشاركتها.',
   );
 }
@@ -117,18 +116,23 @@ class _PermissionDialog extends StatelessWidget {
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        rationale.iconColor.withOpacity(.25),
-                        rationale.iconColor.withOpacity(.08),
+                        rationale.iconColor.withValues(alpha: .25),
+                        rationale.iconColor.withValues(alpha: .08),
                       ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     shape: BoxShape.circle,
                     border: Border.all(
-                        color: rationale.iconColor.withOpacity(.45), width: 2),
+                      color: rationale.iconColor.withValues(alpha: .45),
+                      width: 2,
+                    ),
                   ),
-                  child: Icon(rationale.icon,
-                      size: 46, color: rationale.iconColor),
+                  child: Icon(
+                    rationale.icon,
+                    size: 46,
+                    color: rationale.iconColor,
+                  ),
                 ),
                 const SizedBox(height: 18),
                 Text(
@@ -170,7 +174,9 @@ class _PermissionDialog extends StatelessWidget {
                     child: Text(
                       rationale.grantLabel,
                       style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),

@@ -22,12 +22,17 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
     _c = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1400))
-      ..forward();
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..forward();
     _scale = CurvedAnimation(
-        parent: _c, curve: const Interval(0, 0.7, curve: Curves.easeOutBack));
+      parent: _c,
+      curve: const Interval(0, 0.7, curve: Curves.easeOutBack),
+    );
     _fade = CurvedAnimation(
-        parent: _c, curve: const Interval(0.35, 1, curve: Curves.easeIn));
+      parent: _c,
+      curve: const Interval(0.35, 1, curve: Curves.easeIn),
+    );
     _go();
   }
 
@@ -78,8 +83,10 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(28),
-                    child: Image.asset('assets/images/logo.png',
-                        fit: BoxFit.contain),
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.contain,
+                    ),
                   ),
                 ),
               ),
@@ -109,7 +116,9 @@ class _SplashScreenState extends State<SplashScreen>
               width: 26,
               height: 26,
               child: CircularProgressIndicator(
-                  strokeWidth: 2.4, color: Colors.white),
+                strokeWidth: 2.4,
+                color: Colors.white,
+              ),
             ),
           ],
         ),

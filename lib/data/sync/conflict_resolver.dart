@@ -54,10 +54,14 @@ class ConflictResolver {
       //   2) إذا التساوي، deviceId lexicographically الأصغر يفوز (ثابت عبر الأجهزة).
       // النتيجة ستكون نفسها على جميع الأجهزة.
       if (localLatest != null) {
-        final tIn = DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ?? 0;
-        final tLocal = DateTime.tryParse(localLatest.timestamp)?.millisecondsSinceEpoch ?? 0;
+        final tIn =
+            DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ?? 0;
+        final tLocal =
+            DateTime.tryParse(localLatest.timestamp)?.millisecondsSinceEpoch ??
+                0;
         if (tIn > tLocal) return ConflictDecision.apply();
-        if (tIn < tLocal) return ConflictDecision.ignore(reason: 'older-timestamp-tie');
+        if (tIn < tLocal)
+          return ConflictDecision.ignore(reason: 'older-timestamp-tie');
         // نفس اللحظة: deviceId الأصغر يفوز.
         if (incoming.deviceId.compareTo(localLatest.deviceId) < 0) {
           return ConflictDecision.apply();
@@ -76,7 +80,8 @@ class ConflictDecision {
   final bool conflict;
   final String? reason;
   const ConflictDecision._(this.apply, this.conflict, this.reason);
-  factory ConflictDecision.apply() => const ConflictDecision._(true, false, null);
+  factory ConflictDecision.apply() =>
+      const ConflictDecision._(true, false, null);
   factory ConflictDecision.ignore({required String reason}) =>
       ConflictDecision._(false, false, reason);
   factory ConflictDecision.conflict({required String reason}) =>

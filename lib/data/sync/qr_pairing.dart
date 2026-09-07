@@ -4,8 +4,6 @@ import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
 
-import 'device_id.dart';
-
 const _chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 String _generateToken([int len = 8]) {
@@ -17,7 +15,11 @@ class PairingInfo {
   final String token;
   final String qrContent; // nexora://pair?...
   final DateTime expiresAt;
-  const PairingInfo({required this.token, required this.qrContent, required this.expiresAt});
+  const PairingInfo({
+    required this.token,
+    required this.qrContent,
+    required this.expiresAt,
+  });
 }
 
 class QrPairingService {
@@ -35,16 +37,24 @@ class QrPairingService {
     final token = _generateToken();
     final expires = DateTime.now().add(const Duration(minutes: 5));
     final now = DateTime.now().toIso8601String();
-    await db.update('devices',
+    await db.update(
+      'devices',
       {'pair_token': '', 'pair_token_exp': ''},
-      where: 'id = ? AND pair_token <> ?', whereArgs: [ourDeviceId, '']);
-    await db.update('devices', {
-      'pair_token': token,
-      'pair_token_exp': expires.toIso8601String(),
-      'port': port,
-      if (ipAddress != null) 'ip_address': ipAddress,
-      'updated_at': now,
-    }, where: 'id = ?', whereArgs: [ourDeviceId]);
+      where: 'id = ? AND pair_token <> ?',
+      whereArgs: [ourDeviceId, ''],
+    );
+    await db.update(
+      'devices',
+      {
+        'pair_token': token,
+        'pair_token_exp': expires.toIso8601String(),
+        'port': port,
+        if (ipAddress != null) 'ip_address': ipAddress,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [ourDeviceId],
+    );
 
     // QR content: nexora://pair?ws=<workspace>&ip=<ip>&port=<port>&tok=<token>
     final params = <String, String>{
@@ -53,7 +63,11 @@ class QrPairingService {
       'port': '$port',
       'tok': token,
     };
-    final qr = Uri(scheme: 'nexora', host: 'pair', queryParameters: params).toString();
+    final qr = Uri(
+      scheme: 'nexora',
+      host: 'pair',
+      queryParameters: params,
+    ).toString();
     return PairingInfo(token: token, qrContent: qr, expiresAt: expires);
   }
 
@@ -67,6 +81,8 @@ class QrPairingService {
         'port': uri.queryParameters['port'] ?? '43053',
         'tok': uri.queryParameters['tok'] ?? '',
       };
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
 }

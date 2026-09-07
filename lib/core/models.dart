@@ -240,17 +240,20 @@ class Tx {
     String? status,
     String? syncState,
     DateTime? date,
+    bool clearAccountId = false,
+    bool clearFromId = false,
+    bool clearToId = false,
   }) =>
       Tx(
         id: id ?? this.id,
-        accountId: accountId ?? this.accountId,
+        accountId: clearAccountId ? null : (accountId ?? this.accountId),
         accountKind: accountKind ?? this.accountKind,
         type: type ?? this.type,
         amount: amount ?? this.amount,
         currency: currency ?? this.currency,
         sign: sign ?? this.sign,
-        fromId: fromId ?? this.fromId,
-        toId: toId ?? this.toId,
+        fromId: clearFromId ? null : (fromId ?? this.fromId),
+        toId: clearToId ? null : (toId ?? this.toId),
         rate: rate ?? this.rate,
         description: description ?? this.description,
         reference: reference ?? this.reference,
@@ -292,8 +295,9 @@ class Tx {
   factory Tx.fromMap(Map<String, Object?> m) => Tx(
         id: m['id'] as int?,
         accountId: m['account_id'] as int?,
-        accountKind:
-            AccountKind.fromCode((m['account_kind'] ?? 'customer') as String),
+        accountKind: AccountKind.fromCode(
+          (m['account_kind'] ?? 'customer') as String,
+        ),
         type: OpType.fromCode((m['type'] ?? 'debit') as String),
         amount: ((m['amount'] ?? 0) as num).toDouble(),
         currency: (m['currency'] ?? 'YER') as String,
@@ -396,8 +400,10 @@ enum VoucherKind {
   final String code;
   final String prefix;
 
-  static VoucherKind fromCode(String c) => VoucherKind.values
-      .firstWhere((e) => e.code == c, orElse: () => VoucherKind.receipt);
+  static VoucherKind fromCode(String c) => VoucherKind.values.firstWhere(
+        (e) => e.code == c,
+        orElse: () => VoucherKind.receipt,
+      );
 }
 
 class Voucher {
@@ -517,8 +523,14 @@ enum UserRole {
   final String icon;
   final String code;
 
-  static UserRole fromCode(String c) => UserRole.values
-      .firstWhere((e) => e.code == c, orElse: () => UserRole.viewer);
+  static UserRole fromCode(String c) {
+    // توافق خلفي: البذرة القديمة كانت تستخدم 'manager' بدل 'admin'
+    if (c == 'manager') return UserRole.admin;
+    return UserRole.values.firstWhere(
+      (e) => e.code == c,
+      orElse: () => UserRole.viewer,
+    );
+  }
 }
 
 /// الصلاحيات — نقل حرفي من `PERMS`.
@@ -743,8 +755,10 @@ enum StockKind {
   final String label;
   const StockKind(this.code, this.label);
 
-  static StockKind fromCode(String c) => StockKind.values
-      .firstWhere((e) => e.code == c, orElse: () => StockKind.purchase);
+  static StockKind fromCode(String c) => StockKind.values.firstWhere(
+        (e) => e.code == c,
+        orElse: () => StockKind.purchase,
+      );
 
   /// إشارة تأثير الحركة على الكمية المتبقية.
   int get qtySign => switch (this) {
@@ -771,11 +785,7 @@ class ItemCategory {
     required this.updatedAt,
   });
 
-  ItemCategory copyWith({
-    int? id,
-    String? name,
-    DateTime? updatedAt,
-  }) =>
+  ItemCategory copyWith({int? id, String? name, DateTime? updatedAt}) =>
       ItemCategory(
         id: id ?? this.id,
         name: name ?? this.name,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
@@ -85,7 +86,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
   double get _netTotal => (_subtotal - _discount).clamp(0.0, double.infinity);
 
-  int get _itemCount => _cart.values.fold<int>(0, (sum, e) => sum + e.quantity.toInt());
+  int get _itemCount =>
+      _cart.values.fold<int>(0, (sum, e) => sum + e.quantity.toInt());
 
   void _addItem(Item item) {
     setState(() {
@@ -136,10 +138,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [
-          _buildPosSaleTab(),
-          const _PosHistoryTab(),
-        ],
+        children: [_buildPosSaleTab(), const _PosHistoryTab()],
       ),
       bottomNavigationBar: _tabController.index == 0 && _cart.isNotEmpty
           ? _buildCartBottomBar()
@@ -150,11 +149,13 @@ class _PosScreenState extends ConsumerState<PosScreen>
   Widget _buildPosSaleTab() {
     final categories = ref.watch(itemCategoriesProvider).valueOrNull ?? [];
     final allItems = ref.watch(itemsProvider).valueOrNull ?? [];
-    final currencies = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final currencies =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final cur = currencies.first;
 
     final filteredItems = allItems.where((item) {
-      if (_selectedCategoryId != null && item.categoryId != _selectedCategoryId) {
+      if (_selectedCategoryId != null &&
+          item.categoryId != _selectedCategoryId) {
         return false;
       }
       if (_searchQuery.isNotEmpty) {
@@ -227,7 +228,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   child: FilterChip(
                     label: Text(cat.name),
                     selected: _selectedCategoryId == cat.id,
-                    onSelected: (_) => setState(() => _selectedCategoryId = cat.id),
+                    onSelected: (_) =>
+                        setState(() => _selectedCategoryId = cat.id),
                   ),
                 ),
             ],
@@ -256,8 +258,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   itemBuilder: (context, i) {
                     final item = filteredItems[i];
                     final inCart = _cart[item.id]?.quantity ?? 0.0;
-                    final price = item.sellPrice > 0 ? item.sellPrice : item.buyPrice;
-                    final isLow = item.minQuantity > 0 && item.quantity <= item.minQuantity;
+                    final price =
+                        item.sellPrice > 0 ? item.sellPrice : item.buyPrice;
+                    final isLow = item.minQuantity > 0 &&
+                        item.quantity <= item.minQuantity;
                     final isOut = item.quantity <= 0;
 
                     return Card(
@@ -267,7 +271,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                         side: BorderSide(
                           color: inCart > 0
                               ? AppColors.primaryOf(context)
-                              : Theme.of(context).dividerColor.withValues(alpha: 0.1),
+                              : Theme.of(context)
+                                  .dividerColor
+                                  .withValues(alpha: 0.1),
                           width: inCart > 0 ? 2 : 1,
                         ),
                       ),
@@ -297,7 +303,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   if (inCart > 0)
                                     CircleAvatar(
                                       radius: 12,
-                                      backgroundColor: AppColors.primaryOf(context),
+                                      backgroundColor: AppColors.primaryOf(
+                                        context,
+                                      ),
                                       child: Text(
                                         '${inCart.toInt()}',
                                         style: const TextStyle(
@@ -310,7 +318,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                 ],
                               ),
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
                                     '${Fmt.money(price)} ${cur.symbol}',
@@ -322,11 +331,15 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   ),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2),
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: (isOut
                                               ? AppColors.red
-                                              : (isLow ? Colors.orange : AppColors.green))
+                                              : (isLow
+                                                  ? Colors.orange
+                                                  : AppColors.green))
                                           .withValues(alpha: 0.12),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
@@ -337,7 +350,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                         fontWeight: FontWeight.w600,
                                         color: isOut
                                             ? AppColors.red
-                                            : (isLow ? Colors.orange : AppColors.green),
+                                            : (isLow
+                                                ? Colors.orange
+                                                : AppColors.green),
                                       ),
                                     ),
                                   ),
@@ -356,7 +371,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
   }
 
   Widget _buildCartBottomBar() {
-    final currencies = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final currencies =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final cur = currencies.first;
 
     return Container(
@@ -398,7 +414,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
             const Spacer(),
             IconButton.outlined(
               tooltip: 'إفراغ السلة',
-              icon: const Icon(Icons.delete_sweep_outlined, color: AppColors.red),
+              icon: const Icon(
+                Icons.delete_sweep_outlined,
+                color: AppColors.red,
+              ),
               onPressed: _clearCart,
             ),
             const SizedBox(width: 8),
@@ -423,13 +442,22 @@ class _PosScreenState extends ConsumerState<PosScreen>
       ),
       builder: (ctx) {
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          ),
           child: StatefulBuilder(
             builder: (context, setSheetState) {
               final accounts = ref.watch(allAccountsProvider).valueOrNull ?? [];
-              final currencies = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+              final currencies = ref.watch(currenciesProvider).valueOrNull ??
+                  kDefaultCurrencies;
               final cur = currencies.first;
-              final customers = accounts.where((a) => a.kind == AccountKind.customer || a.kind == AccountKind.general).toList();
+              final customers = accounts
+                  .where(
+                    (a) =>
+                        a.kind == AccountKind.customer ||
+                        a.kind == AccountKind.general,
+                  )
+                  .toList();
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -441,7 +469,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       children: [
                         const Text(
                           'تفاصيل فاتورة المبيعات 🛒',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.close),
@@ -452,7 +483,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     const Divider(),
 
                     // قائمة أصناف السلة
-                    const Text('الأصناف المختارة:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text(
+                      'الأصناف المختارة:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 8),
                     for (final entry in _cart.values) ...[
                       Row(
@@ -461,10 +495,18 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(entry.item.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                Text(
+                                  entry.item.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                                 Text(
                                   '${Fmt.money(entry.unitPrice)} ${cur.symbol} / ${entry.item.unit}',
-                                  style: TextStyle(fontSize: 12, color: AppColors.text2Of(context)),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.text2Of(context),
+                                  ),
                                 ),
                               ],
                             ),
@@ -473,7 +515,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.remove_circle_outline, size: 20),
+                                icon: const Icon(
+                                  Icons.remove_circle_outline,
+                                  size: 20,
+                                ),
                                 onPressed: () {
                                   setSheetState(() {
                                     if (entry.quantity > 1) {
@@ -485,9 +530,17 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   setState(() {});
                                 },
                               ),
-                              Text('${entry.quantity.toInt()}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                              Text(
+                                '${entry.quantity.toInt()}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               IconButton(
-                                icon: const Icon(Icons.add_circle_outline, size: 20),
+                                icon: const Icon(
+                                  Icons.add_circle_outline,
+                                  size: 20,
+                                ),
                                 onPressed: () {
                                   setSheetState(() {
                                     entry.quantity += 1;
@@ -502,7 +555,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             child: Text(
                               '${Fmt.money(entry.total)} ${cur.symbol}',
                               textAlign: TextAlign.end,
-                              style: const TextStyle(fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ],
@@ -513,10 +568,13 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     const SizedBox(height: 12),
 
                     // اختيار العميل
-                    const Text('العميل:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text(
+                      'العميل:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 6),
                     DropdownButtonFormField<int?>(
-                      value: _selectedCustomerId,
+                      initialValue: _selectedCustomerId,
                       decoration: const InputDecoration(
                         isDense: true,
                         prefixIcon: Icon(Icons.person_outline),
@@ -529,7 +587,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                         for (final c in customers)
                           DropdownMenuItem<int?>(
                             value: c.id,
-                            child: Text('${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})'),
+                            child: Text(
+                              '${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})',
+                            ),
                           ),
                       ],
                       onChanged: (val) {
@@ -541,11 +601,17 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     const SizedBox(height: 16),
 
                     // نوع السداد
-                    const Text('طريقة الدفع:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text(
+                      'طريقة الدفع:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 6),
                     SegmentedButton<_PosPayment>(
                       segments: _PosPayment.values
-                          .map((p) => ButtonSegment(value: p, label: Text(p.label)))
+                          .map(
+                            (p) =>
+                                ButtonSegment(value: p, label: Text(p.label)),
+                          )
                           .toList(),
                       selected: {_payment},
                       onSelectionChanged: (set) {
@@ -611,9 +677,14 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text('الخصم:', style: TextStyle(color: AppColors.red)),
-                                Text('-${Fmt.money(_discount)} ${cur.symbol}',
-                                    style: const TextStyle(color: AppColors.red)),
+                                const Text(
+                                  'الخصم:',
+                                  style: TextStyle(color: AppColors.red),
+                                ),
+                                Text(
+                                  '-${Fmt.money(_discount)} ${cur.symbol}',
+                                  style: const TextStyle(color: AppColors.red),
+                                ),
                               ],
                             ),
                           ],
@@ -621,8 +692,13 @@ class _PosScreenState extends ConsumerState<PosScreen>
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text('الصافي الإجمالي:',
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              const Text(
+                                'الصافي الإجمالي:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
                               Text(
                                 '${Fmt.money(_netTotal)} ${cur.symbol}',
                                 style: TextStyle(
@@ -650,11 +726,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
                               )
                             : const Icon(Icons.check_circle_outline),
-                        label: Text(_saving ? 'جارٍ الحفظ…' : 'تأكيد وإصدار الفاتورة',
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        label: Text(
+                          _saving ? 'جارٍ الحفظ…' : 'تأكيد وإصدار الفاتورة',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -673,7 +757,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
     if ((_payment == _PosPayment.credit || _payment == _PosPayment.partial) &&
         _selectedCustomerId == null) {
       Sfx.reject();
-      showSnack(context, 'البيع الآجل أو الجزئي يتطلب اختيار حساب العميل.', error: true, silent: true);
+      showSnack(
+        context,
+        'البيع الآجل أو الجزئي يتطلب اختيار حساب العميل.',
+        error: true,
+        silent: true,
+      );
       return;
     }
 
@@ -705,7 +794,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
       if (_payment == _PosPayment.cash) {
         // مبيعات نقدية: إيراد
         final tx = Tx(
-          accountId: _selectedCustomerId ?? 0,
+          accountId: _selectedCustomerId,
           amount: _netTotal,
           currency: cur.code,
           type: OpType.revenue,
@@ -744,9 +833,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
           currency: cur.code,
           type: OpType.debit,
           date: now,
-          description: 'فاتورة مبيعات جزئية رقم #$refNum (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
+          description:
+              'فاتورة مبيعات جزئية رقم #$refNum (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
           reference: refNum,
-          notes: 'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}',
+          notes:
+              'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}',
           createdAt: now,
           updatedAt: now,
         );
@@ -760,7 +851,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
             currency: cur.code,
             type: OpType.inflow,
             date: now,
-            description: 'دفعة مقدمة من فاتورة #$refNum (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
+            description:
+                'دفعة مقدمة من فاتورة #$refNum (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
             reference: '',
             createdAt: now,
             updatedAt: now,
@@ -773,14 +865,16 @@ class _PosScreenState extends ConsumerState<PosScreen>
       for (final line in lines) {
         if (line.itemId != null) {
           try {
-            await repo.addStockMove(StockMove(
-              itemId: line.itemId!,
-              quantity: line.quantity,
-              kind: StockKind.sale,
-              date: now,
-              createdAt: now,
-              notes: 'مبيع نقطة بيع #$refNum',
-            ));
+            await repo.addStockMove(
+              StockMove(
+                itemId: line.itemId!,
+                quantity: line.quantity,
+                kind: StockKind.sale,
+                date: now,
+                createdAt: now,
+                notes: 'مبيع نقطة بيع #$refNum',
+              ),
+            );
           } catch (e) {
             debugPrint('Failed to reduce stock for ${line.name}: $e');
           }
@@ -794,13 +888,22 @@ class _PosScreenState extends ConsumerState<PosScreen>
         for (final line in lines) {
           if (line.itemId == null) continue;
           final it = await repo.item(line.itemId!);
-          if (it != null && it.minQuantity > 0 && it.quantity <= it.minQuantity) {
-            low.add('${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})');
+          if (it != null &&
+              it.minQuantity > 0 &&
+              it.quantity <= it.minQuantity) {
+            low.add(
+              '${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})',
+            );
           }
         }
         if (low.isNotEmpty && mounted) {
           Sfx.warning();
-          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب: ${low.join('، ')}', error: true, silent: true);
+          showSnack(
+            context,
+            '⚠️ أصناف وصلت حد إعادة الطلب: ${low.join('، ')}',
+            error: true,
+            silent: true,
+          );
         }
       }
 
@@ -812,13 +915,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
           if (it != null &&
               it.minQuantity > 0 &&
               it.quantity <= it.minQuantity) {
-            low.add('${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})');
+            low.add(
+              '${it.name} (${it.quantity.toStringAsFixed(0)} ${it.unit})',
+            );
           }
         }
         if (low.isNotEmpty && mounted) {
           Sfx.warning();
-          showSnack(context, '⚠️ أصناف وصلت حد إعادة الطلب:\n${low.join('، ')}',
-              error: true, silent: true);
+          showSnack(
+            context,
+            '⚠️ أصناف وصلت حد إعادة الطلب:\n${low.join('، ')}',
+            error: true,
+            silent: true,
+          );
         }
       }
 
@@ -831,7 +940,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
     } catch (e) {
       if (mounted) {
         Sfx.error();
-        showSnack(context, 'تعذّر إتمام الفاتورة: $e', error: true, silent: true);
+        showSnack(
+          context,
+          'تعذّر إتمام الفاتورة: $e',
+          error: true,
+          silent: true,
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -858,7 +972,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
               Text('رقم الفاتورة: $refNum'),
               Text('عدد الأصناف: ${lines.length}'),
               const SizedBox(height: 12),
-              const Text('يمكنك طباعة الإيصال الحراري أو مشاركة الفاتورة عبر واتساب مباشرة:'),
+              const Text(
+                'يمكنك طباعة الإيصال الحراري أو مشاركة الفاتورة عبر واتساب مباشرة:',
+              ),
             ],
           ),
           actions: [
@@ -884,15 +1000,14 @@ class _PosScreenState extends ConsumerState<PosScreen>
                 final accs = await repo.accounts(includeArchived: true);
                 final acc = accs.where((a) => a.id == tx.accountId).firstOrNull;
                 if (acc == null || acc.phone.isEmpty) {
-                  showSnack(context, 'لا يوجد رقم هاتف مسجل للعميل', error: true);
+                  showSnack(
+                    context,
+                    'لا يوجد رقم هاتف مسجل للعميل',
+                    error: true,
+                  );
                   return;
                 }
-                await TxShare.sendNow(
-                  context,
-                  ref,
-                  tx: tx,
-                  account: acc,
-                );
+                await TxShare.sendNow(context, ref, tx: tx, account: acc);
               },
             ),
             TextButton(
@@ -930,14 +1045,26 @@ class _PosScreenState extends ConsumerState<PosScreen>
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.center,
               children: [
-                pw.Text(orgName, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                pw.Text(
+                  orgName,
+                  style: pw.TextStyle(
+                    fontSize: 16,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
                 if (orgPhone.isNotEmpty)
-                  pw.Text('هاتف: $orgPhone', style: const pw.TextStyle(fontSize: 10)),
+                  pw.Text(
+                    'هاتف: $orgPhone',
+                    style: const pw.TextStyle(fontSize: 10),
+                  ),
                 pw.Divider(thickness: 1),
                 pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
-                    pw.Text('فاتورة مبيعات', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.Text(
+                      'فاتورة مبيعات',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                    ),
                     pw.Text('#${tx.reference}'),
                   ],
                 ),
@@ -958,7 +1085,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                     children: [
-                      pw.Expanded(child: pw.Text(item.name, style: const pw.TextStyle(fontSize: 10))),
+                      pw.Expanded(
+                        child: pw.Text(
+                          item.name,
+                          style: const pw.TextStyle(fontSize: 10),
+                        ),
+                      ),
                       pw.Text(
                         '${item.quantity} × ${Fmt.money(item.unitPrice)} = ${Fmt.money(item.total)}',
                         style: const pw.TextStyle(fontSize: 10),
@@ -970,13 +1102,25 @@ class _PosScreenState extends ConsumerState<PosScreen>
                 pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
-                    pw.Text('الإجمالي المطلوب:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                    pw.Text('${Fmt.money(tx.amount)} ${tx.currency}',
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13)),
+                    pw.Text(
+                      'الإجمالي المطلوب:',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                    ),
+                    pw.Text(
+                      '${Fmt.money(tx.amount)} ${tx.currency}',
+                      style: pw.TextStyle(
+                        fontWeight: pw.FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
                   ],
                 ),
                 pw.SizedBox(height: 8),
-                pw.Text(footer, style: const pw.TextStyle(fontSize: 9), textAlign: pw.TextAlign.center),
+                pw.Text(
+                  footer,
+                  style: const pw.TextStyle(fontSize: 9),
+                  textAlign: pw.TextAlign.center,
+                ),
               ],
             ),
           );
@@ -1009,10 +1153,12 @@ class _PosHistoryTab extends ConsumerWidget {
       data: (page) {
         // تصفية فواتير المبيعات فقط (وصفها فاتورة، نستثني الدفعات المقدمة)
         final posTxs = page.items
-            .where((t) =>
-                (t.description.contains('فاتورة') &&
-                    !t.description.startsWith('دفعة مقدمة')) ||
-                t.type == OpType.revenue)
+            .where(
+              (t) =>
+                  (t.description.contains('فاتورة') &&
+                      !t.description.startsWith('دفعة مقدمة')) ||
+                  t.type == OpType.revenue,
+            )
             .toList();
 
         if (posTxs.isEmpty) {
@@ -1038,12 +1184,17 @@ class _PosHistoryTab extends ConsumerWidget {
                   child: const Icon(Icons.receipt, color: AppColors.teal),
                 ),
                 title: Text(
-                  tx.reference.isNotEmpty ? 'فاتورة #${tx.reference}' : tx.description,
+                  tx.reference.isNotEmpty
+                      ? 'فاتورة #${tx.reference}'
+                      : tx.description,
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 subtitle: Text(
                   '${account?.name ?? 'عميل نقدي'} • ${Fmt.date(tx.date)}',
-                  style: TextStyle(fontSize: 12, color: AppColors.text2Of(context)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.text2Of(context),
+                  ),
                 ),
                 trailing: Text(
                   '${Fmt.money(tx.amount)} ${tx.currency}',
@@ -1072,7 +1223,9 @@ class _PosHistoryTab extends ConsumerWidget {
                                     final it = items[idx];
                                     return ListTile(
                                       title: Text(it.name),
-                                      trailing: Text('${it.quantity} × ${Fmt.money(it.unitPrice)} = ${Fmt.money(it.total)}'),
+                                      trailing: Text(
+                                        '${it.quantity} × ${Fmt.money(it.unitPrice)} = ${Fmt.money(it.total)}',
+                                      ),
                                     );
                                   },
                                 ),

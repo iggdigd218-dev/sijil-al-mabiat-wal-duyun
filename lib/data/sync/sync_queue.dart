@@ -36,13 +36,18 @@ class SyncQueueOps {
   final Database db;
   SyncQueueOps(this.db);
 
-  Future<int> enqueue(String operationId, {String target = SyncTarget.cloud}) async {
+  Future<int> enqueue(
+    String operationId, {
+    String target = SyncTarget.cloud,
+  }) async {
     final now = DateTime.now().toIso8601String();
     // idempotent: إن كان الصف موجودًا للعملية والهدف فلا تكرره.
-    final existing = await db.query('sync_queue',
-        where: 'operation_id = ? AND target = ?',
-        whereArgs: [operationId, target],
-        limit: 1);
+    final existing = await db.query(
+      'sync_queue',
+      where: 'operation_id = ? AND target = ?',
+      whereArgs: [operationId, target],
+      limit: 1,
+    );
     if (existing.isNotEmpty) return existing.first['id'] as int;
     return db.insert('sync_queue', {
       'operation_id': operationId,
@@ -70,8 +75,12 @@ class SyncQueueOps {
   }
 
   Future<int> _incAttempts(int id) async {
-    final rows = await db
-        .query('sync_queue', columns: ['attempts'], where: 'id = ?', whereArgs: [id]);
+    final rows = await db.query(
+      'sync_queue',
+      columns: ['attempts'],
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     if (rows.isEmpty) return 1;
     return (rows.first['attempts'] as int? ?? 0) + 1;
   }
@@ -80,7 +89,12 @@ class SyncQueueOps {
     final now = DateTime.now().toIso8601String();
     await db.update(
       'sync_queue',
-      {'status': SyncStatus.synced.name, 'last_error': '', 'next_try_at': '', 'updated_at': now},
+      {
+        'status': SyncStatus.synced.name,
+        'last_error': '',
+        'next_try_at': '',
+        'updated_at': now,
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -88,19 +102,23 @@ class SyncQueueOps {
 
   Future<void> markFailed(int id, Object error, {int maxAttempts = 12}) async {
     final now = DateTime.now();
-    final rows = await db
-        .query('sync_queue', columns: ['attempts'], where: 'id = ?', whereArgs: [id]);
-    final attempts = rows.isEmpty ? 1 : ((rows.first['attempts'] as int?) ?? 0) + 1;
+    final rows = await db.query(
+      'sync_queue',
+      columns: ['attempts'],
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    final attempts =
+        rows.isEmpty ? 1 : max(1, (rows.first['attempts'] as int?) ?? 0);
     final tooMany = attempts >= maxAttempts;
-    final next = tooMany
-        ? null
-        : now.add(_backoffFor(attempts));
+    final next = tooMany ? null : now.add(_backoffFor(attempts));
     await db.update(
       'sync_queue',
       {
         'status': tooMany ? SyncStatus.failed.name : SyncStatus.pending.name,
         'attempts': attempts,
-        'last_error': '$error'.length > 500 ? '${'$error'.substring(0, 500)}…' : '$error',
+        'last_error':
+            '$error'.length > 500 ? '${'$error'.substring(0, 500)}…' : '$error',
         'next_try_at': next?.toIso8601String() ?? '',
         'updated_at': now.toIso8601String(),
       },
@@ -109,13 +127,19 @@ class SyncQueueOps {
     );
   }
 
-  /// يعيد قائمة الصفوف الجاهزة للإرسال (pending / failed مع انتهاء وقت إعادة المحاولة).
-  Future<List<Map<String, Object?>>> pickPending({int limit = 20, String? target}) async {
+  /// Only scheduled pending rows are automatic retries; failed is terminal.
+  Future<List<Map<String, Object?>>> pickPending({
+    int limit = 20,
+    String? target,
+  }) async {
     final now = DateTime.now().toIso8601String();
     final where = StringBuffer(
-      "status IN (?, ?) AND (next_try_at = '' OR next_try_at <= ?)",
+      "status = ? AND (next_try_at = '' OR next_try_at <= ?)",
     );
-    final args = <Object?>[SyncStatus.pending.name, SyncStatus.failed.name, now];
+    final args = <Object?>[
+      SyncStatus.pending.name,
+      now,
+    ];
     if (target != null) {
       where.write(' AND target = ?');
       args.add(target);
@@ -129,16 +153,49 @@ class SyncQueueOps {
     );
   }
 
+  /// A process can terminate after marking a row syncing but before an ack.
+  Future<void> recoverInterrupted() async {
+    await db.update(
+        'sync_queue',
+        {
+          'status': SyncStatus.pending.name,
+          'next_try_at': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'status = ?',
+        whereArgs: [SyncStatus.syncing.name]);
+  }
+
+  /// Explicit user retry, not a background infinite retry loop.
+  Future<void> retryFailed() async {
+    await db.update(
+        'sync_queue',
+        {
+          'status': SyncStatus.pending.name,
+          'attempts': 0,
+          'next_try_at': '',
+          'last_error': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'status = ?',
+        whereArgs: [SyncStatus.failed.name]);
+    await db.update('sync_queue', {'next_try_at': ''},
+        where: 'status = ?', whereArgs: [SyncStatus.pending.name]);
+  }
+
   Future<int> countPending() async {
     final r = await db.rawQuery(
-        "SELECT COUNT(*) AS c FROM sync_queue WHERE status IN (?, ?)",
-        [SyncStatus.pending.name, SyncStatus.syncing.name]);
+      "SELECT COUNT(*) AS c FROM sync_queue WHERE status IN (?, ?)",
+      [SyncStatus.pending.name, SyncStatus.syncing.name],
+    );
     return (r.first['c'] as int?) ?? 0;
   }
 
   Future<int> countFailed() async {
     final r = await db.rawQuery(
-        "SELECT COUNT(*) AS c FROM sync_queue WHERE status = ?", [SyncStatus.failed.name]);
+      "SELECT COUNT(*) AS c FROM sync_queue WHERE status = ?",
+      [SyncStatus.failed.name],
+    );
     return (r.first['c'] as int?) ?? 0;
   }
 

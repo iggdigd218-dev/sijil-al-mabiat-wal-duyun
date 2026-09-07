@@ -10,8 +10,11 @@ import '../data/providers.dart';
 import 'widgets.dart';
 
 /// فتح نموذج إضافة/تعديل حساب.
-Future<bool> openAccountForm(BuildContext context, WidgetRef ref,
-    {Account? existing}) async {
+Future<bool> openAccountForm(
+  BuildContext context,
+  WidgetRef ref, {
+  Account? existing,
+}) async {
   final r = await Navigator.push<bool>(
     context,
     MaterialPageRoute(builder: (_) => AccountFormScreen(existing: existing)),
@@ -40,9 +43,6 @@ class _State extends ConsumerState<AccountFormScreen> {
 
   late AccountKind _kind;
   late String _currency;
-
-  /// طبيعة الرصيد الافتتاحي: debit = عليه (موجب)، credit = له (سالب).
-  late String _nature;
   late bool _archived;
 
   /// قناة إرسال إشعار السند لهذا الحساب.
@@ -58,19 +58,22 @@ class _State extends ConsumerState<AccountFormScreen> {
     final a = widget.existing;
     _name = TextEditingController(text: a?.name ?? '');
     _opening = TextEditingController(
-        text: a == null || a.openingBalance == 0
-            ? ''
-            : Fmt.money(a.openingBalance.abs(), 2));
-    _phone = TextEditingController(text: a?.whatsapp?.isNotEmpty == true ? a!.whatsapp : (a?.phone ?? ''));
+      text: a == null || a.openingBalance == 0
+          ? ''
+          : Fmt.money(a.openingBalance, 2),
+    );
+    _phone = TextEditingController(
+      text: a?.whatsapp.isNotEmpty == true ? a!.whatsapp : (a?.phone ?? ''),
+    );
     _address = TextEditingController(text: a?.address ?? '');
     _notes = TextEditingController(text: a?.notes ?? '');
     _category = TextEditingController(text: a?.category ?? '');
     _limit = TextEditingController(
-        text: a?.creditLimit == null ? '' : Fmt.money(a!.creditLimit!, 2));
+      text: a?.creditLimit == null ? '' : Fmt.money(a!.creditLimit!, 2),
+    );
     _tags = TextEditingController(text: a?.tags.join('، ') ?? '');
     _kind = a?.kind ?? AccountKind.customer;
     _currency = a?.currency ?? 'YER';
-    _nature = (a?.openingBalance ?? 0) < 0 ? 'credit' : 'debit';
     _archived = a?.archived ?? false;
     _notifyChannel = a?.notifyChannel ?? 'whatsapp';
   }
@@ -85,7 +88,7 @@ class _State extends ConsumerState<AccountFormScreen> {
       _notes,
       _category,
       _limit,
-      _tags
+      _tags,
     ]) {
       c.dispose();
     }
@@ -93,6 +96,7 @@ class _State extends ConsumerState<AccountFormScreen> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
@@ -160,7 +164,8 @@ class _State extends ConsumerState<AccountFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final curs = ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final curs =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
 
     return Scaffold(
       appBar: AppBar(title: Text(_isEdit ? 'تعديل حساب' : 'حساب جديد')),
@@ -168,42 +173,59 @@ class _State extends ConsumerState<AccountFormScreen> {
         key: _formKey,
         child: ListView(
           padding: EdgeInsets.fromLTRB(
-              16, 12, 16, 100 + MediaQuery.of(context).viewInsets.bottom),
+            16,
+            12,
+            16,
+            100 + MediaQuery.of(context).viewInsets.bottom,
+          ),
           children: [
             TextFormField(
               controller: _name,
-              decoration: const InputDecoration(
-                labelText: 'اسم الحساب *',
-              ),
+              decoration: const InputDecoration(labelText: 'اسم الحساب *'),
               textInputAction: TextInputAction.next,
-              validator: (v) =>
-                  (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
+              validator: (v) => (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
             ),
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.35),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  const Text('نوع الحساب:',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  const Text(
+                    'نوع الحساب:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey,
+                    ),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Wrap(
                       spacing: 5,
                       children: AccountKind.values
-                          .map((k) => ChoiceChip(
-                                label: Text('${k.icon} ${k.label}',
-                                    style: const TextStyle(fontSize: 11)),
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                                selected: _kind == k,
-                                showCheckmark: false,
-                                onSelected: (_) => setState(() => _kind = k),
-                              ))
+                          .map(
+                            (k) => ChoiceChip(
+                              label: Text(
+                                '${k.icon} ${k.label}',
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 0,
+                              ),
+                              selected: _kind == k,
+                              showCheckmark: false,
+                              onSelected: (_) => setState(() => _kind = k),
+                            ),
+                          )
                           .toList(),
                     ),
                   ),
@@ -216,10 +238,11 @@ class _State extends ConsumerState<AccountFormScreen> {
               decoration: InputDecoration(
                 labelText: 'الرصيد الافتتاحي (اختياري)',
                 hintText: '0.00',
-
               ),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true, signed: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
               validator: (v) {
                 if ((v ?? '').trim().isEmpty) return null;
                 return Fmt.parseAmount(v!) == null ? 'مبلغ غير صالح' : null;
@@ -227,11 +250,16 @@ class _State extends ConsumerState<AccountFormScreen> {
             ),
             const SizedBox(height: 13),
             DropdownButtonFormField<String>(
-              initialValue: curs.any((c) => c.code == _currency) ? _currency : null,
+              initialValue:
+                  curs.any((c) => c.code == _currency) ? _currency : null,
               decoration: const InputDecoration(labelText: 'العملة'),
               items: curs
-                  .map((c) => DropdownMenuItem(
-                      value: c.code, child: Text('${c.name} (${c.symbol})')))
+                  .map(
+                    (c) => DropdownMenuItem(
+                      value: c.code,
+                      child: Text('${c.name} (${c.symbol})'),
+                    ),
+                  )
                   .toList(),
               onChanged: (v) => setState(() => _currency = v ?? 'YER'),
             ),
@@ -265,8 +293,6 @@ class _State extends ConsumerState<AccountFormScreen> {
                 ),
               ),
             ),
-
-
             const SizedBox(height: 13),
             TextFormField(
               controller: _address,
@@ -279,8 +305,9 @@ class _State extends ConsumerState<AccountFormScreen> {
                 labelText: 'حد ائتماني (اختياري)',
                 hintText: '0.00',
               ),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
             ),
             const SizedBox(height: 13),
             TextFormField(
@@ -296,7 +323,6 @@ class _State extends ConsumerState<AccountFormScreen> {
               decoration: const InputDecoration(labelText: 'ملاحظات'),
               maxLines: 3,
             ),
-
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: _saving ? null : _save,
@@ -305,7 +331,10 @@ class _State extends ConsumerState<AccountFormScreen> {
                       width: 16,
                       height: 16,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
                   : const Icon(Icons.check),
               label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
             ),
@@ -314,13 +343,4 @@ class _State extends ConsumerState<AccountFormScreen> {
       ),
     );
   }
-}
-
-class _Label extends StatelessWidget {
-  final String text;
-  const _Label(this.text);
-  @override
-  Widget build(BuildContext context) => Text(text,
-      style: TextStyle(
-          fontSize: 13, color: Theme.of(context).hintColor));
 }

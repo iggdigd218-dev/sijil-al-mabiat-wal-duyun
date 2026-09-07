@@ -33,9 +33,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     // لا نستطيع قراءة WiFi IP بدون صلاحيات إضافية؛ يُترك IP فارغاً ويدخله
     // المستخدم يدوياً عند الاقتران (الرمز والمنفذ كافيان للمزامنة السحابية).
     try {
-      final info = await ref
-          .read(repoProvider)
-          .createPairingToken();
+      final info = await ref.read(repoProvider).createPairingToken();
       setState(() {
         _pairInfo = info;
         _pairAt = DateTime.now();
@@ -43,8 +41,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       _tick?.cancel();
       _tick = Timer.periodic(const Duration(seconds: 1), (_) {
         if (_pairAt == null) return;
-        final left =
-            300 - DateTime.now().difference(_pairAt!).inSeconds;
+        final left = 300 - DateTime.now().difference(_pairAt!).inSeconds;
         if (left <= 0 && mounted) {
           setState(() {
             _pairInfo = null;
@@ -56,7 +53,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         }
       });
     } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر توليد رمز الاقتران: $e', error: true);
+      if (mounted)
+        showSnack(context, 'تعذّر توليد رمز الاقتران: $e', error: true);
     }
   }
 
@@ -84,11 +82,13 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('إلغاء')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('حفظ')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('حفظ'),
+          ),
         ],
       ),
     );
@@ -113,19 +113,27 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  const Icon(Icons.devices, size: 22),
-                  const SizedBox(width: 8),
-                  const Text('إدارة الأجهزة المرتبطة',
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Icon(Icons.devices, size: 22),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'إدارة الأجهزة المرتبطة',
                       style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  FilledButton.icon(
-                    onPressed: _startPairing,
-                    icon: const Icon(Icons.add),
-                    label: const Text('ربط جهاز جديد'),
-                  ),
-                ]),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _startPairing,
+                      icon: const Icon(Icons.add),
+                      label: const Text('ربط جهاز جديد'),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 const Text(
                   'بصفتك مديراً يمكنك ربط أجهزة أخرى بهذه المساحة وتحديد صلاحيات كل جهاز (عبر تعيين مستخدم له). إلغاء الاقتران يمنع الجهاز من المزامنة فوراً.',
@@ -139,8 +147,10 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         const SizedBox(height: 12),
         const SectionTitle('الأجهزة'),
         devicesAsync.when(
-          loading: () =>
-              const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+          loading: () => const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          ),
           error: (e, _) => EmptyState(
             icon: Icons.error_outline,
             title: 'تعذّر تحميل الأجهزة',
@@ -159,27 +169,37 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               builder: (ctx, snap) {
                 final own = snap.data;
                 final ownId = own?['id'] as String?;
-                final amITheOwner = own != null && ((own['is_owner'] ?? 0) as int) == 1;
-                final hostRow = list.where((r) => ((r['is_owner'] ?? 0) as int) == 1).toList();
-                final hostId = hostRow.isNotEmpty ? hostRow.first['id'] as String : null;
+                final amITheOwner =
+                    own != null && ((own['is_owner'] ?? 0) as int) == 1;
+                final hostRow = list
+                    .where((r) => ((r['is_owner'] ?? 0) as int) == 1)
+                    .toList();
+                final hostId =
+                    hostRow.isNotEmpty ? hostRow.first['id'] as String : null;
                 return Column(
                   children: [
                     for (final d in list)
                       DeviceCard(
                         data: d,
-                        users: (usersAsync.valueOrNull ?? const <AppUser>[]).cast<AppUser>(),
+                        users: (usersAsync.valueOrNull ?? const <AppUser>[])
+                            .cast<AppUser>(),
                         isSelf: d['id'] == ownId,
                         isOwnerDevice: d['id'] == hostId,
                         amITheOwner: amITheOwner,
                         onAssign: (uid) => _assign(uid, d['id'] as String),
-                        onRename: () => _rename(d['id'] as String, (d['name'] ?? '') as String),
+                        onRename: () => _rename(
+                          d['id'] as String,
+                          (d['name'] ?? '') as String,
+                        ),
                         onRevoke: () async {
-                          final ok = await confirmDialog(context,
-                              title: 'حظر الجهاز مؤقتاً',
-                              message:
-                                  'سيتم منع "${d['name']}" من المزامنة حتى تُعيد السماح له. البيانات لن تُمسح ويمكن إعادة السماح في أي وقت.',
-                              confirmText: 'حظر',
-                              danger: true);
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'حظر الجهاز مؤقتاً',
+                            message:
+                                'سيتم منع "${d['name']}" من المزامنة حتى تُعيد السماح له. البيانات لن تُمسح ويمكن إعادة السماح في أي وقت.',
+                            confirmText: 'حظر',
+                            danger: true,
+                          );
                           if (ok == true) {
                             await ref
                                 .read(repoProvider)
@@ -194,64 +214,77 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                           bump(ref);
                         },
                         onExpel: () async {
-                          final ok = await confirmDialog(context,
-                              title: 'طرد الجهاز من المجموعة',
-                              message:
-                                  'سيتم طرد "${d['name']}" من المجموعة. عند أول اتصال للجهاز، ستُحذف جميع بيانات المجموعة منه ويعود إلى الوضع المستقل بحساب مدير جديد.\n\nلا يمكن التراجع عن ذلك إلا بإعادة ربط الجهاز من جديد.',
-                              confirmText: 'تأكيد الطرد',
-                              danger: true);
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'طرد الجهاز من المجموعة',
+                            message:
+                                'سيتم طرد "${d['name']}" من المجموعة. عند أول اتصال للجهاز، ستُحذف جميع بيانات المجموعة منه ويعود إلى الوضع المستقل بحساب مدير جديد.\n\nلا يمكن التراجع عن ذلك إلا بإعادة ربط الجهاز من جديد.',
+                            confirmText: 'تأكيد الطرد',
+                            danger: true,
+                          );
                           if (ok == true) {
                             await ref
                                 .read(repoProvider)
                                 .expelDevice(d['id'] as String);
                             bump(ref);
                             if (mounted) {
-                              showSnack(context,
-                                  '✅ تم طرد الجهاز من المجموعة. سيمسح بياناته عند أول اتصال.');
+                              showSnack(
+                                context,
+                                '✅ تم طرد الجهاز من المجموعة. سيمسح بياناته عند أول اتصال.',
+                              );
                             }
                           }
                         },
                         onTransferOwner: () async {
                           final targetName = d['name'] as String? ?? 'الجهاز';
-                          final ok = await confirmDialog(context,
-                              title: 'تسليم الإدارة لهذا الجهاز',
-                              message:
-                                  'سيتم نقل ملكية المجموعة إلى "$targetName".\n'
-                                  'سيصبح هو المدير الوحيد، وستصبح أنت عضوًا عاديًا بدور "عرض فقط" (يمكنك اختيار دور مختلف من القائمة لاحقاً).\n\n'
-                                  'لا يمكن التراجع عن هذا إلا إذا قام المالك الجديد بتسليمك الإدارة مرة أخرى.\n\n'
-                                  'هل تريد المتابعة؟',
-                              confirmText: 'تأكيد تسليم الإدارة',
-                              danger: true);
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'تسليم الإدارة لهذا الجهاز',
+                            message:
+                                'سيتم نقل ملكية المجموعة إلى "$targetName".\n'
+                                'سيصبح هو المدير الوحيد، وستصبح أنت عضوًا عاديًا بدور "عرض فقط" (يمكنك اختيار دور مختلف من القائمة لاحقاً).\n\n'
+                                'لا يمكن التراجع عن هذا إلا إذا قام المالك الجديد بتسليمك الإدارة مرة أخرى.\n\n'
+                                'هل تريد المتابعة؟',
+                            confirmText: 'تأكيد تسليم الإدارة',
+                            danger: true,
+                          );
                           if (ok == true) {
                             try {
-                              await ref
-                                  .read(repoProvider)
-                                  .transferOwnership(d['id'] as String,
-                                      newUserRoleForMe: 'viewer');
+                              await ref.read(repoProvider).transferOwnership(
+                                    d['id'] as String,
+                                    newUserRoleForMe: 'viewer',
+                                  );
                               bump(ref);
                               if (mounted) {
-                                showSnack(context,
-                                    '✅ تم تسليم الإدارة. أنت الآن عضو بدور "عرض فقط".');
-                                Navigator.of(context).popUntil((r) => r.isFirst);
+                                showSnack(
+                                  context,
+                                  '✅ تم تسليم الإدارة. أنت الآن عضو بدور "عرض فقط".',
+                                );
+                                Navigator.of(context)
+                                    .popUntil((r) => r.isFirst);
                               }
                             } catch (e) {
                               if (mounted) {
-                                showSnack(context,
-                                    'تعذّر تسليم الإدارة: $e',
-                                    error: true);
+                                showSnack(
+                                  context,
+                                  'تعذّر تسليم الإدارة: $e',
+                                  error: true,
+                                );
                               }
                             }
                           }
                         },
                         onResetSecret: () async {
                           final targetName = d['name'] as String? ?? 'الجهاز';
-                          final ok = await confirmDialog(context,
-                              title: 'إعادة تعيين رمز/مفتاح الجهاز',
-                              message:
-                                  'سيتم توليد مفتاح مصادقة جديد لجهاز "$targetName" وسيفقد الجهاز إمكانية المزامنة فوراً إلى أن يعيد المستخدم إدخال الرمز الجديد.\n\n'
-                                  'استخدم هذا الإجراء إذا اشتبهت بتسريب البيانات أو أردت التحكم عن بُعد.',
-                              confirmText: 'إعادة التعيين',
-                              danger: true);
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'إعادة تعيين رمز/مفتاح الجهاز',
+                            message:
+                                'سيتم توليد مفتاح مصادقة جديد لجهاز "$targetName" وسيفقد الجهاز إمكانية المزامنة فوراً إلى أن يعيد المستخدم إدخال الرمز الجديد.\n\n'
+                                'استخدم هذا الإجراء إذا اشتبهت بتسريب البيانات أو أردت التحكم عن بُعد.',
+                            confirmText: 'إعادة التعيين',
+                            danger: true,
+                          );
                           if (ok == true) {
                             try {
                               final secret = await ref
@@ -267,12 +300,15 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                       'المفتاح الجديد للجهاز "$targetName":\n\n$secret\n\n'
                                       'على المستخدم إعادة الاقتران أو إدخال المفتاح في إعدادات جهازه.',
                                       style: const TextStyle(
-                                          fontFamily: 'monospace', fontSize: 12),
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                      ),
                                     ),
                                     actions: [
                                       TextButton(
-                                          onPressed: () => Navigator.pop(ctx),
-                                          child: const Text('حسنًا')),
+                                        onPressed: () => Navigator.pop(ctx),
+                                        child: const Text('حسنًا'),
+                                      ),
                                     ],
                                   ),
                                 );
@@ -289,7 +325,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 );
               },
             );
-          }
+          },
         ),
       ],
     );
@@ -314,25 +350,28 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                const Icon(Icons.qr_code_2, size: 22),
-                const SizedBox(width: 8),
-                const Text('رمز اقتران جديد (صالح 5 دقائق)',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                const Spacer(),
-                _chip('${secondsLeft}s', Icons.timer_outlined),
-                const SizedBox(width: 6),
-                IconButton(
-                  tooltip: 'إغلاق',
-                  onPressed: () => setState(() {
-                    _pairInfo = null;
-                    _pairAt = null;
-                    _tick?.cancel();
-                  }),
-                  icon: const Icon(Icons.close),
-                ),
-              ]),
+              Row(
+                children: [
+                  const Icon(Icons.qr_code_2, size: 22),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'رمز اقتران جديد (صالح 5 دقائق)',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  const Spacer(),
+                  _chip('${secondsLeft}s', Icons.timer_outlined),
+                  const SizedBox(width: 6),
+                  IconButton(
+                    tooltip: 'إغلاق',
+                    onPressed: () => setState(() {
+                      _pairInfo = null;
+                      _pairAt = null;
+                      _tick?.cancel();
+                    }),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               const Text(
                 'على الجهاز الآخر افتح التطبيق ← الإعدادات ← ربط بجهاز آخر، وأدخل المعلومات التالية:',
@@ -359,15 +398,19 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         children: [
           SizedBox(
             width: 120,
-            child: Text(label,
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700)),
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
           ),
           Expanded(
             child: SelectableText(
               value,
               style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 13, height: 1.3),
+                fontFamily: 'monospace',
+                fontSize: 13,
+                height: 1.3,
+              ),
             ),
           ),
           IconButton(
@@ -407,13 +450,16 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.primary.withOpacity(.3)),
+          border: Border.all(color: AppColors.primary.withValues(alpha: .3)),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 12),
-          const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 11)),
-        ]),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(fontSize: 11)),
+          ],
+        ),
       );
 }
 
@@ -450,7 +496,8 @@ class DeviceCard extends StatelessWidget {
     final name = (data['name'] ?? 'جهاز') as String;
     final platform = (data['platform'] ?? '') as String;
     final expelled = ((data['expelled_at'] ?? '') as String).isNotEmpty;
-    final revoked = ((data['revoked_at'] ?? '') as String).isNotEmpty && !expelled;
+    final revoked =
+        ((data['revoked_at'] ?? '') as String).isNotEmpty && !expelled;
     final inactive = expelled || revoked;
     final lastSeen = (data['last_seen_at'] ?? '') as String;
     final userName = data['user_name'] as String?;
@@ -471,71 +518,97 @@ class DeviceCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                Icon(_iconFor(platform), size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(name,
+              Row(
+                children: [
+                  Icon(_iconFor(platform), size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      name,
                       style: const TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 14)),
-                ),
-                if (expelled)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade900.withOpacity(.15),
-                      borderRadius: BorderRadius.circular(20),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
                     ),
-                    child: const Text('مطرود',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.red,
-                            fontWeight: FontWeight.w700)),
-                  )
-                else if (revoked)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(.12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text('محظور',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.deepOrange,
-                            fontWeight: FontWeight.w700)),
-                  )
-                else if (staleForMonth)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(.08),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text('خامل ⚠️',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.redAccent,
-                            fontWeight: FontWeight.w700)),
-                  )
-                else
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(.12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text('نشط',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.green,
-                            fontWeight: FontWeight.w700)),
                   ),
-              ]),
+                  if (expelled)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade900.withValues(alpha: .15),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'مطرود',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.red,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  else if (revoked)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'محظور',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.deepOrange,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  else if (staleForMonth)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: .08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'خامل ⚠️',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'نشط',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.green,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 10,
@@ -544,92 +617,117 @@ class DeviceCard extends StatelessWidget {
                   _smallLabel('المنصة', platform.isEmpty ? '—' : platform),
                   _smallLabel('المستخدم', userName ?? 'غير معيّن'),
                   _smallLabel(
-                      'الدور',
-                      userRole == 'admin'
-                          ? 'مدير'
-                          : userRole == 'accountant'
-                              ? 'محاسب'
-                              : userRole == 'data_entry'
-                                  ? 'إدخال'
-                                  : userRole == 'viewer'
-                                      ? 'عرض'
-                                      : '—'),
+                    'الدور',
+                    userRole == 'admin'
+                        ? 'مدير'
+                        : userRole == 'accountant'
+                            ? 'محاسب'
+                            : userRole == 'data_entry'
+                                ? 'إدخال'
+                                : userRole == 'viewer'
+                                    ? 'عرض'
+                                    : '—',
+                  ),
                   if (ip.isNotEmpty) _smallLabel('IP', ip),
                   if (lastSeen.isNotEmpty)
                     _smallLabel(
-                        'آخر ظهور',
-                        DateTime.tryParse(lastSeen) == null
-                            ? lastSeen
-                            : Fmt.relative(DateTime.parse(lastSeen))),
+                      'آخر ظهور',
+                      DateTime.tryParse(lastSeen) == null
+                          ? lastSeen
+                          : Fmt.relative(DateTime.parse(lastSeen)),
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
-              Row(children: [
-                Expanded(
-                  child: DropdownButtonFormField<int?>(
-                    value: currentUserId,
-                    decoration: const InputDecoration(
-                      labelText: 'الصلاحيات (المستخدم المرتبط)',
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                          value: null, child: Text('— بدون صلاحيات —')),
-                      ...users.map((u) => DropdownMenuItem<int?>(
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<int?>(
+                      initialValue: currentUserId,
+                      decoration: const InputDecoration(
+                        labelText: 'الصلاحيات (المستخدم المرتبط)',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('— بدون صلاحيات —'),
+                        ),
+                        ...users.map(
+                          (u) => DropdownMenuItem<int?>(
                             value: u.id,
                             child: Text('${u.name} (${u.role.label})'),
-                          )),
-                    ],
-                    onChanged: inactive ? null : onAssign,
+                          ),
+                        ),
+                      ],
+                      onChanged: inactive ? null : onAssign,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                IconButton(
-                  tooltip: 'إعادة التسمية',
-                  onPressed: isSelf || inactive ? null : onRename,
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                ),
-                if (expelled)
-                  const SizedBox.shrink() // أجهزة مطرودة لا إجراء عليها.
-                else if (revoked)
+                  const SizedBox(width: 6),
                   IconButton(
-                    tooltip: 'إعادة السماح (إلغاء الحظر)',
-                    onPressed: isSelf ? null : onRestore,
-                    icon: const Icon(Icons.verified_user_outlined,
-                        size: 20, color: Colors.green),
-                  )
-                else
-                  IconButton(
-                    tooltip: 'حظر مؤقت',
-                    onPressed: isSelf ? null : onRevoke,
-                    icon: const Icon(Icons.block,
-                        size: 20, color: Colors.orange),
+                    tooltip: 'إعادة التسمية',
+                    onPressed: isSelf || inactive ? null : onRename,
+                    icon: const Icon(Icons.edit_outlined, size: 20),
                   ),
-                if (!expelled && !isSelf && amITheOwner)
-                  IconButton(
-                    tooltip: 'إعادة تعيين رمز الجهاز (يُلزم إعادة الاقتران)',
-                    onPressed: onResetSecret,
-                    icon: const Icon(Icons.lock_reset,
-                        size: 20, color: Colors.blueAccent),
-                  ),
-                if (!expelled && !isSelf && !isOwnerDevice && amITheOwner)
-                  IconButton(
-                    tooltip: 'تسليم الإدارة (نقل الملكية) لهذا الجهاز',
-                    onPressed: onTransferOwner,
-                    icon: const Icon(Icons.swap_horiz,
-                        size: 20, color: Colors.purple),
-                  ),
-                if (!expelled && !isSelf && !isOwnerDevice)
-                  IconButton(
-                    tooltip: 'طرد من المجموعة',
-                    onPressed: onExpel,
-                    icon: const Icon(Icons.person_remove,
-                        size: 20, color: Colors.red),
-                  ),
-              ]),
+                  if (expelled)
+                    const SizedBox.shrink() // أجهزة مطرودة لا إجراء عليها.
+                  else if (revoked)
+                    IconButton(
+                      tooltip: 'إعادة السماح (إلغاء الحظر)',
+                      onPressed: isSelf ? null : onRestore,
+                      icon: const Icon(
+                        Icons.verified_user_outlined,
+                        size: 20,
+                        color: Colors.green,
+                      ),
+                    )
+                  else
+                    IconButton(
+                      tooltip: 'حظر مؤقت',
+                      onPressed: isSelf ? null : onRevoke,
+                      icon: const Icon(
+                        Icons.block,
+                        size: 20,
+                        color: Colors.orange,
+                      ),
+                    ),
+                  if (!expelled && !isSelf && amITheOwner)
+                    IconButton(
+                      tooltip: 'إعادة تعيين رمز الجهاز (يُلزم إعادة الاقتران)',
+                      onPressed: onResetSecret,
+                      icon: const Icon(
+                        Icons.lock_reset,
+                        size: 20,
+                        color: Colors.blueAccent,
+                      ),
+                    ),
+                  if (!expelled && !isSelf && !isOwnerDevice && amITheOwner)
+                    IconButton(
+                      tooltip: 'تسليم الإدارة (نقل الملكية) لهذا الجهاز',
+                      onPressed: onTransferOwner,
+                      icon: const Icon(
+                        Icons.swap_horiz,
+                        size: 20,
+                        color: Colors.purple,
+                      ),
+                    ),
+                  if (!expelled && !isSelf && !isOwnerDevice)
+                    IconButton(
+                      tooltip: 'طرد من المجموعة',
+                      onPressed: onExpel,
+                      icon: const Icon(
+                        Icons.person_remove,
+                        size: 20,
+                        color: Colors.red,
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ),
@@ -647,11 +745,13 @@ class DeviceCard extends StatelessWidget {
 
   Widget _smallLabel(String k, String v) => RichText(
         text: TextSpan(
-          style: const TextStyle(fontSize: 11, color: Colors.black54, height: 1.4),
+          style:
+              const TextStyle(fontSize: 11, color: Colors.black54, height: 1.4),
           children: [
             TextSpan(
-                text: '$k: ',
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+              text: '$k: ',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             TextSpan(text: v),
           ],
         ),

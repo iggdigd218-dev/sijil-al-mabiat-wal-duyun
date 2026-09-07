@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 15;
+  static const int _version = 16;
 
   static int get schemaVersion => _version;
 
@@ -167,7 +167,8 @@ class AppDatabase {
     // ---------- فئات المخزون ----------
     await db.execute(createItemCategoriesSql);
     await db.execute(
-        'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)');
+      'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
+    );
 
     // ---------- المستخدمون والصلاحيات ----------
     await db.execute('''
@@ -175,7 +176,7 @@ class AppDatabase {
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name        TEXT NOT NULL,
-        role        TEXT NOT NULL DEFAULT 'manager',
+        role        TEXT NOT NULL DEFAULT 'viewer',
         pin         TEXT DEFAULT '',
         password    TEXT DEFAULT '',
         permissions TEXT DEFAULT '',
@@ -259,7 +260,9 @@ class AppDatabase {
     await db.execute(createStockSql);
     await db.execute('CREATE INDEX idx_stock_item ON stock_moves(item_id)');
     await db.execute(createTransactionItemsSql);
-    await db.execute('CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)');
+    await db.execute(
+      'CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)',
+    );
 
     // ---------- الإعدادات ----------
     await db.execute('''
@@ -430,8 +433,11 @@ class AppDatabase {
   /// ترقية المخطط مع الحفاظ على كل البيانات القائمة.
   /// ينشئ جداول المزامنة المفقودة بأمان (للدفاع ضد قواعد قديمة ناقصة).
   static Future<void> _ensureCoreSyncTables(Database db) async {
-    await _tryCreateTable(db, 'sync_meta',
-        'CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    await _tryCreateTable(
+      db,
+      'sync_meta',
+      'CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    );
     await _tryCreateTable(db, 'workspaces', '''
         CREATE TABLE IF NOT EXISTS workspaces (
           id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
@@ -475,26 +481,50 @@ class AppDatabase {
           id_token TEXT DEFAULT '', signed_in_at TEXT DEFAULT '', updated_at TEXT DEFAULT ''
         )''');
     // تأكد من وجود Workspace افتراضي.
-    final wsExists = await db.rawQuery('SELECT id FROM workspaces WHERE id = ?', [defaultWorkspaceIdConst]);
+    final wsExists = await db.rawQuery(
+      'SELECT id FROM workspaces WHERE id = ?',
+      [defaultWorkspaceIdConst],
+    );
     if (wsExists.isEmpty) {
       final now = DateTime.now().toIso8601String();
       await db.insert('workspaces', {
         'id': defaultWorkspaceIdConst,
         'name': 'متجري',
-        'owner_google_id': '', 'owner_email': '', 'owner_name': '',
-        'created_at': now, 'updated_at': now,
+        'owner_google_id': '',
+        'owner_email': '',
+        'owner_name': '',
+        'created_at': now,
+        'updated_at': now,
       });
     }
     // تأكد من وجود صف schemaVersion.
-    final sv = await db.rawQuery('SELECT value FROM sync_meta WHERE key = ?', ['schemaVersion']);
+    final sv = await db.rawQuery('SELECT value FROM sync_meta WHERE key = ?', [
+      'schemaVersion',
+    ]);
     if (sv.isEmpty) {
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '$_version'});
+      await db.insert('sync_meta', {
+        'key': 'schemaVersion',
+        'value': '$_version',
+      });
     }
+    // إصلاح هجرة قديمة: تحويل أي مستخدم role='manager' إلى 'admin' (كان يسبب viewer بدون صلاحيات)
+    try {
+      await db.execute("UPDATE users SET role='admin' WHERE role='manager'");
+      await db.execute(
+        "UPDATE users SET permissions='add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers' WHERE role='admin' AND (permissions IS NULL OR TRIM(permissions)='')",
+      );
+    } catch (_) {}
   }
 
-  static Future<void> _tryCreateTable(Database db, String name, String sql) async {
+  static Future<void> _tryCreateTable(
+    Database db,
+    String name,
+    String sql,
+  ) async {
     final rows = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", [name]);
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+      [name],
+    );
     if (rows.isEmpty) await db.execute(sql);
   }
 
@@ -512,12 +542,15 @@ class AppDatabase {
     }
     if (from < 3) {
       await db.execute(createTransactionItemsSql);
-      await db.execute('CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)');
+      await db.execute(
+        'CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)',
+      );
     }
     if (from < 4) {
       await db.execute(createItemCategoriesSql);
       await db.execute(
-          'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)');
+        'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
+      );
       await _addColumn(db, 'items', 'category_id', 'INTEGER');
       final now = DateTime.now().toIso8601String();
       await db.execute('''
@@ -550,16 +583,27 @@ class AppDatabase {
     }
     // ====== v8: فهارس إضافية لتحسين أداء sync_queue + operations ======
     if (from < 8) {
-      await _tryCreateIndex(db, 'idx_queue_target_status',
-          'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)');
-      await _tryCreateIndex(db, 'idx_ops_ws_time',
-          'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)');
+      await _tryCreateIndex(
+        db,
+        'idx_queue_target_status',
+        'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)',
+      );
+      await _tryCreateIndex(
+        db,
+        'idx_ops_ws_time',
+        'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)',
+      );
     }
     // ====== v9: حقل last_synced_op في sync_meta للمزامنة التزايدية ======
     if (from < 9) {
       // لا شيء — sync_meta موجود بالفعل، ونستخدمه كـ key-value عادي.
       await _ensureCoreSyncTables(db);
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '9'},
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '9',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v10: حماية دفاعية للتأكد من وجود sync_meta وجداول المزامنة (إصلاح عاجل). ======
@@ -569,18 +613,38 @@ class AppDatabase {
       await _addColumn(db, 'devices', 'auth_secret', "TEXT DEFAULT ''");
       await _addColumn(db, 'devices', 'revoked_at', "TEXT DEFAULT ''");
       // تأكد من وجود فهارس v8.
-      await _tryCreateIndex(db, 'idx_queue_target_status',
-          'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)');
-      await _tryCreateIndex(db, 'idx_ops_ws_time',
-          'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)');
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '10'},
+      await _tryCreateIndex(
+        db,
+        'idx_queue_target_status',
+        'CREATE INDEX IF NOT EXISTS idx_queue_target_status ON sync_queue(target, status, next_try_at)',
+      );
+      await _tryCreateIndex(
+        db,
+        'idx_ops_ws_time',
+        'CREATE INDEX IF NOT EXISTS idx_ops_ws_time ON operations(workspace_id, timestamp)',
+      );
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '10',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v11: عمود قناة الإشعار لكل حساب (واتساب/رسالة نصية/بدون). ======
     if (from < 11) {
-      await _addColumn(db, 'accounts', 'notify_channel',
-          "TEXT NOT NULL DEFAULT 'whatsapp'");
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '11'},
+      await _addColumn(
+        db,
+        'accounts',
+        'notify_channel',
+        "TEXT NOT NULL DEFAULT 'whatsapp'",
+      );
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '11',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v12: إدارة الأجهزة: ربط كل جهاز بمستخدم + من قام بمنح الصلاحية. ======
@@ -589,58 +653,115 @@ class AppDatabase {
       await _addColumn(db, 'devices', 'paired_by', 'INTEGER');
       // الجهاز الحالي (هذا الهاتف) يُربط بالمستخدم 'أنا' (المدير افتراضياً).
       try {
-        final me = await db.query('users',
-            where: 'is_me = 1 AND COALESCE(deleted_at, "") = ""',
-            limit: 1);
+        final me = await db.query(
+          'users',
+          where: 'is_me = 1 AND COALESCE(deleted_at, "") = ""',
+          limit: 1,
+        );
         if (me.isNotEmpty) {
           final myUid = me.first['id'];
-          await db.update('devices',
-              {'user_id': myUid, 'paired_by': myUid, 'is_paired': 1},
+          await db.update(
+              'devices',
+              {
+                'user_id': myUid,
+                'paired_by': myUid,
+                'is_paired': 1,
+              },
               where: "auth_secret <> '' AND revoked_at = ''");
         }
       } catch (_) {}
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '12'},
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '12',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v13: وضع المساحة (مستقل/مرتبط) + is_owner للجهاز المالك ======
     if (from < 13) {
-      await _addColumn(db, 'devices', 'is_owner',
-          "INTEGER NOT NULL DEFAULT 0");
+      await _addColumn(db, 'devices', 'is_owner', "INTEGER NOT NULL DEFAULT 0");
       // في الوضع المستقل (قبل أي اقتران)، الجهاز المحلي هو المالك.
-      final localDev = await db.query('devices',
-          where: "auth_secret <> '' AND COALESCE(revoked_at,'') = ''",
-          orderBy: 'created_at ASC',
-          limit: 1);
+      final localDev = await db.query(
+        'devices',
+        where: "auth_secret <> '' AND COALESCE(revoked_at,'') = ''",
+        orderBy: 'created_at ASC',
+        limit: 1,
+      );
       if (localDev.isNotEmpty) {
         final ownerDeviceId = localDev.first['id'];
-        final anyPeer = await db.query('devices',
-            where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
-            whereArgs: [ownerDeviceId],
-            limit: 1);
+        final anyPeer = await db.query(
+          'devices',
+          where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
+          whereArgs: [ownerDeviceId],
+          limit: 1,
+        );
         // إذا لا يوجد جهاز آخر فهذا الجهاز هو المالك (وضع مستقل).
         if (anyPeer.isEmpty) {
-          await db.update('devices', {'is_owner': 1},
-              where: 'id = ?', whereArgs: [ownerDeviceId]);
-          await db.insert('sync_meta',
-              {'key': 'workspaceMode', 'value': 'standalone'},
+          await db.update(
+            'devices',
+            {'is_owner': 1},
+            where: 'id = ?',
+            whereArgs: [ownerDeviceId],
+          );
+          await db.insert(
+              'sync_meta',
+              {
+                'key': 'workspaceMode',
+                'value': 'standalone',
+              },
               conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '13'},
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '13',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v14: الطرد التلقائي + عدم قدرة العضو على الخروج بنفسه ======
     if (from < 14) {
-      await _addColumn(db, 'devices', 'expelled_at',
-          "TEXT DEFAULT ''");
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '14'},
+      await _addColumn(db, 'devices', 'expelled_at', "TEXT DEFAULT ''");
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '14',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     // ====== v15: حالة مزامنة مستقلة لكل عملية (بجانب status الأصلية). ======
     if (from < 15) {
-      await _addColumn(db, 'transactions', 'sync_state',
-          "TEXT NOT NULL DEFAULT 'local'");
-      await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '15'},
+      await _addColumn(
+        db,
+        'transactions',
+        'sync_state',
+        "TEXT NOT NULL DEFAULT 'local'",
+      );
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '15',
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    // ====== v16: إصلاح بذرة المستخدم — تحويل manager→admin وإعطاء كل الصلاحيات ======
+    if (from < 16) {
+      try {
+        await db.execute("UPDATE users SET role='admin' WHERE role='manager'");
+        await db.execute(
+          "UPDATE users SET permissions='add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers' WHERE role='admin' AND (permissions IS NULL OR TRIM(permissions)='')",
+        );
+      } catch (_) {}
+      await db.insert(
+          'sync_meta',
+          {
+            'key': 'schemaVersion',
+            'value': '16',
+          },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
@@ -679,8 +800,17 @@ class AppDatabase {
       'activity',
     ];
     for (final t in entityTables) {
-      await _addColumn(db, t, 'workspace_id', "TEXT NOT NULL DEFAULT 'default'");
-      if (t != 'activity' && t != 'conversations' && t != 'messages' && t != 'categories' && t != 'transaction_items') {
+      await _addColumn(
+        db,
+        t,
+        'workspace_id',
+        "TEXT NOT NULL DEFAULT 'default'",
+      );
+      if (t != 'activity' &&
+          t != 'conversations' &&
+          t != 'messages' &&
+          t != 'categories' &&
+          t != 'transaction_items') {
         await _addColumn(db, t, 'deleted_at', "TEXT DEFAULT ''");
         await _addColumn(db, t, 'deleted_by', "INTEGER");
         await _addColumn(db, t, 'restore_op_id', "TEXT DEFAULT ''");
@@ -689,25 +819,56 @@ class AppDatabase {
     // transaction_items & conversations/messages/activity لا تحتاج soft-delete مستقل (تتبع والديها).
 
     // 4) فهارس إضافية للأعمدة الجديدة.
-    for (final t in ['accounts', 'transactions', 'vouchers', 'items', 'stock_moves', 'users', 'currencies']) {
-      await _tryCreateIndex(db, 'idx_${t}_ws', 'CREATE INDEX IF NOT EXISTS idx_${t}_ws ON $t(workspace_id)');
-      await _tryCreateIndex(db, 'idx_${t}_del', 'CREATE INDEX IF NOT EXISTS idx_${t}_del ON $t(deleted_at)');
+    for (final t in [
+      'accounts',
+      'transactions',
+      'vouchers',
+      'items',
+      'stock_moves',
+      'users',
+      'currencies',
+    ]) {
+      await _tryCreateIndex(
+        db,
+        'idx_${t}_ws',
+        'CREATE INDEX IF NOT EXISTS idx_${t}_ws ON $t(workspace_id)',
+      );
+      await _tryCreateIndex(
+        db,
+        'idx_${t}_del',
+        'CREATE INDEX IF NOT EXISTS idx_${t}_del ON $t(deleted_at)',
+      );
     }
 
     // 5) إدراج sync_meta مبدئي.
-    await db.insert('sync_meta', {'key': 'schemaVersion', 'value': '5'},
+    await db.insert(
+        'sync_meta',
+        {
+          'key': 'schemaVersion',
+          'value': '5',
+        },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  static Future<void> _tryCreateIndex(Database db, String name, String sql) async {
+  static Future<void> _tryCreateIndex(
+    Database db,
+    String name,
+    String sql,
+  ) async {
     // IF NOT EXISTS يجعل العملية آمنة.
-    final safe = sql.contains('IF NOT EXISTS') ? sql : sql.replaceFirst('CREATE INDEX', 'CREATE INDEX IF NOT EXISTS');
+    final safe = sql.contains('IF NOT EXISTS')
+        ? sql
+        : sql.replaceFirst('CREATE INDEX', 'CREATE INDEX IF NOT EXISTS');
     await db.execute(safe);
   }
 
   /// إضافة عمود إن لم يكن موجودًا — آمنة للتكرار.
   static Future<void> _addColumn(
-      Database db, String table, String column, String type) async {
+    Database db,
+    String table,
+    String column,
+    String type,
+  ) async {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == column)) return;
     await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
@@ -729,9 +890,13 @@ class AppDatabase {
         'rate': 1.0,
       });
     }
+    // إصلاح حرج: role كان 'manager' غير موجود في UserRole enum → يتحول لـ viewer ويمنع الحفظ.
+    // الآن نستخدم 'admin' مع كل الصلاحيات.
     await db.insert('users', {
       'name': 'المدير',
-      'role': 'manager',
+      'role': 'admin',
+      'permissions':
+          'add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers',
       'is_me': 1,
       'active': 1,
       'created_at': now,
