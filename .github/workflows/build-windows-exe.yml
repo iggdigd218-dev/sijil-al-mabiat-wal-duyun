@@ -58,8 +58,8 @@ jobs:
         shell: pwsh
         run: |
           $src = "build\windows\x64\runner\Release"
-          $zip = "nexora-windows-v${{ github.run_number }}.zip"
-          Compress-Archive -Path "$src\*" -DestinationPath $zip
+          $zip = "nexora-windows.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $zip -Force
           echo "ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload EXE Artifact
@@ -68,21 +68,6 @@ jobs:
           name: nexora-windows
           path: build/windows/x64/runner/Release/*
           retention-days: 30
-
-      - name: Create Windows Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: windows-v1.0.${{ github.run_number }}
-          name: إصدار ويندوز (Nexora Windows v1.0.${{ github.run_number }})
-          body: |
-            ## 🖥️ نسخة ويندوز الأصلية
-            برنامج سطح مكتب ويندوز (نسخة مطبوعة جاهزة).
-            **طريقة التشغيل:** حمّل ملف ZIP، استخرج محتواه في مجلد، ثم شغّل `nexora_app.exe`.
-            تاريخ البناء: ${{ github.event.head_commit.timestamp }}
-          files: ${{ env.ZIP }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update unified latest release (Windows)
         uses: softprops/action-gh-release@v2
@@ -96,7 +81,7 @@ jobs:
             **هذا هو الإصدار الرسمي الأحدث من التطبيق.**
 
             ### 🖥️ لويندوز
-            - حمّل ملف `nexora-windows-v${{ github.run_number }}.zip` بالأسفل.
+            - حمّل ملف `nexora-windows.zip` بالأسفل.
             - فك الضغط في أي مجلد ثم شغّل `nexora_app.exe`.
 
             ### 📱 للأندرويد (APK)
