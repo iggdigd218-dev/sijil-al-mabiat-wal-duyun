@@ -6,36 +6,49 @@ import '../core/format.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
+import 'home_shell.dart' show AppScreen;
 
-/// لوحة التحكم — الملخّص المالي وآخر العمليات والتنبيهات.
+/// لوحة التحكم الرئيسية — تصميم مبسّط:
+///  - بطاقة ملخّص الحساب أعلى الشاشة مع سحب أفقي بين العملات.
+///  - ٦ أيقونات رئيسية كبيرة وواضحة.
+///  - قسم «أقسام أخرى» لبقية الميزات حتى لا يُخفى شيء.
+///  - التنبيهات وآخر العمليات.
+/// كل الأرقام تُقرأ من بيانات التطبيق الفعلية (لا قيم ثابتة).
 class DashboardScreen extends ConsumerWidget {
-  final void Function(int tab)? onNavigate;
-  const DashboardScreen({super.key, this.onNavigate});
+  final void Function(AppScreen)? onOpen;
+  const DashboardScreen({super.key, this.onOpen});
+
+  /// الأيقونات الست الرئيسية (كما في التصميم المرجعي).
+  static const _mainTiles = <_Tile>[
+    _Tile('المبيعات', '🛒', Color(0xFF22B559), Color(0xFF0E8F45), AppScreen.pos),
+    _Tile('العملاء', '👥', Color(0xFF3B82F6), Color(0xFF1D55C8),
+        AppScreen.accounts),
+    _Tile('الديون', '💳', Color(0xFFFBA528), Color(0xFFEF8A0D),
+        AppScreen.vouchers),
+    _Tile('المخزون', '📦', Color(0xFF8B5CF6), Color(0xFF6D35E0),
+        AppScreen.inventory),
+    _Tile('المعاملات', '🧾', Color(0xFF22C3DD), Color(0xFF0A93B4),
+        AppScreen.transactions),
+    _Tile('التقارير', '📊', Color(0xFF6366F1), Color(0xFF4740C9),
+        AppScreen.reports),
+  ];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = ref.watch(summaryProvider);
     final currencies = ref.watch(currenciesProvider);
     final hidden = ref.watch(hideBalancesProvider);
+    final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
 
     return RefreshIndicator(
       onRefresh: () async => bump(ref),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 90),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 96),
         children: [
           summary.when(
             loading: () => const Padding(
-              padding: EdgeInsets.symmetric(vertical: 80),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 12),
-                    Text('جارٍ تحميل البيانات…'),
-                  ],
-                ),
-              ),
+              padding: EdgeInsets.symmetric(vertical: 90),
+              child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, _) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 40),
@@ -59,37 +72,79 @@ class DashboardScreen extends ConsumerWidget {
             data: (s) {
               final curs = currencies.valueOrNull ?? kDefaultCurrencies;
               return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SectionTitle('الملخّص المالي'),
-                  _CurrencyTotals(
-                    title: 'مستحق لنا',
-                    totals: s.owedToUs,
+                  _CurrencyCard(
                     currencies: curs,
-                    color: AppColors.green,
-                    icon: Icons.trending_up,
+                    net: s.net,
+                    owedToUs: s.owedToUs,
+                    owedByUs: s.owedByUs,
                     hidden: hidden,
                   ),
+                  const SizedBox(height: 18),
+                  GridView.count(
+                    crossAxisCount: 3,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.82,
+                    children: [
+                      for (final t in _mainTiles)
+                        _FeatureTile(
+                          tile: t,
+                          big: true,
+                          onTap: () => onOpen?.call(t.target),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 22),
+                  const SectionTitle('أقسام أخرى'),
                   const SizedBox(height: 10),
-                  _CurrencyTotals(
-                    title: 'مستحق علينا',
-                    totals: s.owedByUs,
-                    currencies: curs,
-                    color: AppColors.red,
-                    icon: Icons.trending_down,
-                    hidden: hidden,
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _ChipSection(
+                        label: 'العملات',
+                        icon: Icons.currency_exchange_rounded,
+                        color: AppColors.info,
+                        onTap: () => onOpen?.call(AppScreen.currencies),
+                      ),
+                      _ChipSection(
+                        label: 'الدردشة',
+                        icon: Icons.forum_rounded,
+                        color: AppColors.primary,
+                        onTap: () => onOpen?.call(AppScreen.chat),
+                      ),
+                      if (isOwner)
+                        _ChipSection(
+                          label: 'إدارة المجموعة',
+                          icon: Icons.groups_rounded,
+                          color: AppColors.violet,
+                          onTap: () => onOpen?.call(AppScreen.group),
+                        ),
+                      _ChipSection(
+                        label: 'سجل النشاط',
+                        icon: Icons.history_rounded,
+                        color: AppColors.text2,
+                        onTap: () => onOpen?.call(AppScreen.activity),
+                      ),
+                      _ChipSection(
+                        label: 'سلة المهملات',
+                        icon: Icons.delete_outline_rounded,
+                        color: AppColors.danger,
+                        onTap: () => onOpen?.call(AppScreen.trash),
+                      ),
+                      _ChipSection(
+                        label: 'الإعدادات',
+                        icon: Icons.settings_rounded,
+                        color: AppColors.text3,
+                        onTap: () => onOpen?.call(AppScreen.settings),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                  _CurrencyTotals(
-                    title: 'صافي الرصيد',
-                    totals: s.net,
-                    currencies: curs,
-                    color: AppColors.teal,
-                    icon: Icons.account_balance_wallet_outlined,
-                    hidden: hidden,
-                    signed: true,
-                  ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 22),
                   Row(
                     children: [
                       Expanded(
@@ -98,7 +153,7 @@ class DashboardScreen extends ConsumerWidget {
                           value: '${s.accountsCount}',
                           icon: Icons.people_alt_outlined,
                           color: AppColors.info,
-                          onTap: () => onNavigate?.call(1),
+                          onTap: () => onOpen?.call(AppScreen.accounts),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -108,7 +163,7 @@ class DashboardScreen extends ConsumerWidget {
                           value: '${s.txCount}',
                           icon: Icons.receipt_long_outlined,
                           color: AppColors.violet,
-                          onTap: () => onNavigate?.call(2),
+                          onTap: () => onOpen?.call(AppScreen.transactions),
                         ),
                       ),
                     ],
@@ -142,117 +197,413 @@ class DashboardScreen extends ConsumerWidget {
           const SizedBox(height: 18),
           const _Alerts(),
           const SizedBox(height: 8),
-          _Recent(onNavigate: onNavigate),
+          _Recent(onOpen: onOpen),
         ],
       ),
     );
   }
 }
 
-/// إجماليات مفصولة لكل عملة — لا تُخلط العملات أبدًا.
-class _CurrencyTotals extends StatelessWidget {
-  final String title;
-  final Map<String, double> totals;
-  final List<CurrencyDef> currencies;
-  final Color color;
-  final IconData icon;
-  final bool hidden;
-  final bool signed;
+// ===========================================================================
+// بطاقة العملات — سحب أفقي بين العملات داخل نفس البطاقة.
+// ===========================================================================
 
-  const _CurrencyTotals({
-    required this.title,
-    required this.totals,
+class _CurrencyCard extends StatefulWidget {
+  final List<CurrencyDef> currencies;
+  final Map<String, double> net;
+  final Map<String, double> owedToUs; // مستحق لنا (عليه)
+  final Map<String, double> owedByUs; // مستحق علينا (له)
+  final bool hidden;
+  const _CurrencyCard({
     required this.currencies,
-    required this.color,
-    required this.icon,
+    required this.net,
+    required this.owedToUs,
+    required this.owedByUs,
     required this.hidden,
-    this.signed = false,
+  });
+
+  @override
+  State<_CurrencyCard> createState() => _CurrencyCardState();
+}
+
+class _CurrencyCardState extends State<_CurrencyCard> {
+  final _controller = PageController();
+  int _page = 0;
+
+  // لوحة مميّزة لكل عملة (المحلية أخضر، الباقي أزرق/بنفسجي).
+  (Color, Color, Color, Color) _palette(String code) {
+    switch (code) {
+      case 'SAR':
+        return (
+          const Color(0xFF1660C4),
+          const Color(0xFFE8F3FF),
+          const Color(0xFFDCEAFF),
+          const Color(0xFFCFE3FF),
+        );
+      case 'USD':
+        return (
+          const Color(0xFF5B4BD6),
+          const Color(0xFFF1ECFF),
+          const Color(0xFFE8E2FF),
+          const Color(0xFFDDD5FF),
+        );
+      default:
+        return (
+          const Color(0xFF0B7A43),
+          const Color(0xFFE9F9F0),
+          const Color(0xFFDCF4E6),
+          const Color(0xFFCDEED9),
+        );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final curs = widget.currencies.isEmpty ? kDefaultCurrencies : widget.currencies;
+    return Column(
+      children: [
+        SizedBox(
+          height: 188,
+          child: PageView.builder(
+            controller: _controller,
+            onPageChanged: (i) => setState(() => _page = i),
+            itemCount: curs.length,
+            itemBuilder: (context, i) {
+              final c = curs[i];
+              final (fg, g1, g2, badgeBg) = _palette(c.code);
+              final netV = widget.net[c.code] ?? 0;
+              final toUs = widget.owedToUs[c.code] ?? 0;
+              final byUs = widget.owedByUs[c.code] ?? 0;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topRight,
+                      end: Alignment.bottomLeft,
+                      colors: [g1, g2],
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: fg.withValues(alpha: .12)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: badgeBg,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.account_balance_wallet_rounded,
+                                color: fg, size: 20),
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Text(
+                              'ملخّص الحساب · ${c.name}',
+                              style: TextStyle(
+                                color: fg,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      // المبلغ البارز (صافي الرصيد لهذه العملة).
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            widget.hidden ? '••••••' : Fmt.money(netV, c.decimal),
+                            style: const TextStyle(
+                              fontSize: 34,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.text,
+                              letterSpacing: .5,
+                            ),
+                          ),
+                          const SizedBox(width: 7),
+                          Text(
+                            c.symbol,
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              color: fg,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _AmountPill(
+                              label: 'لك',
+                              arrow: Icons.arrow_upward_rounded,
+                              value: toUs,
+                              currency: c,
+                              hidden: widget.hidden,
+                              positive: true,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _AmountPill(
+                              label: 'عليك',
+                              arrow: Icons.arrow_downward_rounded,
+                              value: byUs,
+                              currency: c,
+                              hidden: widget.hidden,
+                              positive: false,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (var i = 0; i < curs.length; i++)
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: i == _page ? 20 : 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: i == _page ? AppColors.primary : const Color(0xFFC6D0E2),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'اسحب البطاقة يميناً أو يساراً للتنقل بين العملات',
+          style: TextStyle(fontSize: 11, color: AppColors.text3),
+        ),
+      ],
+    );
+  }
+}
+
+class _AmountPill extends StatelessWidget {
+  final String label;
+  final IconData arrow;
+  final double value;
+  final CurrencyDef currency;
+  final bool hidden;
+  final bool positive;
+  const _AmountPill({
+    required this.label,
+    required this.arrow,
+    required this.value,
+    required this.currency,
+    required this.hidden,
+    required this.positive,
   });
 
   @override
   Widget build(BuildContext context) {
-    final entries = totals.entries.where((e) => e.value.abs() > 0.005).toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Icon(icon, size: 17, color: color),
-                ),
-                const SizedBox(width: 9),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
+    final color = positive ? AppColors.green : AppColors.red;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? AppColors.dSurface
+            : Colors.white,
+        borderRadius: BorderRadius.circular(13),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF14285A).withValues(alpha: .05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .14),
+              borderRadius: BorderRadius.circular(9),
             ),
-            const SizedBox(height: 10),
-            if (entries.isEmpty)
+            child: Icon(arrow, size: 15, color: color),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: TextStyle(fontSize: 11, color: AppColors.text3, fontWeight: FontWeight.w700)),
               Text(
-                'لا يوجد',
+                hidden
+                    ? '••••'
+                    : '${Fmt.money(value, currency.decimal)} ${currency.symbol}',
                 style: TextStyle(
-                  fontSize: 14.5,
-                  color: Theme.of(context).hintColor,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.text,
                 ),
-              )
-            else
-              ...entries.map((e) {
-                final c = currencies.firstWhere(
-                  (x) => x.code == e.key,
-                  orElse: () => CurrencyDef(e.key, e.key, e.key, 0),
-                );
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: [
-                      Text(
-                        c.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (signed)
-                        BalanceText(
-                          value: e.value,
-                          currency: c,
-                          hidden: hidden,
-                          size: 15,
-                        )
-                      else
-                        Text(
-                          hidden
-                              ? '••••••'
-                              : '${Fmt.money(e.value, c.decimal)} ${c.symbol}',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: color,
-                          ),
-                        ),
-                    ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// عناصر الأيقونات
+// ===========================================================================
+
+class _Tile {
+  final String label;
+  final String emoji;
+  final Color g1;
+  final Color g2;
+  final AppScreen target;
+  const _Tile(this.label, this.emoji, this.g1, this.g2, this.target);
+}
+
+class _FeatureTile extends StatelessWidget {
+  final _Tile tile;
+  final bool big;
+  final VoidCallback onTap;
+  const _FeatureTile({required this.tile, required this.onTap, this.big = true});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: dark ? AppColors.dSurface : Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.borderOf(context)),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: big ? 52 : 46,
+                height: big ? 52 : 46,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [tile.g1, tile.g2],
                   ),
-                );
-              }),
-          ],
+                  borderRadius: BorderRadius.circular(big ? 18 : 14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: tile.g2.withValues(alpha: .35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Text(tile.emoji, style: TextStyle(fontSize: big ? 25 : 21)),
+              ),
+              const SizedBox(height: 7),
+              Text(
+                tile.label,
+                style: TextStyle(
+                  fontSize: big ? 13 : 12.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textOf(context),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
+
+class _ChipSection extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _ChipSection({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: dark ? AppColors.dSurface : Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.borderOf(context)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textOf(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// التنبيهات
+// ===========================================================================
 
 class _Alerts extends ConsumerWidget {
   const _Alerts();
@@ -311,8 +662,8 @@ class _Alerts extends ConsumerWidget {
 }
 
 class _Recent extends ConsumerWidget {
-  final void Function(int tab)? onNavigate;
-  const _Recent({this.onNavigate});
+  final void Function(AppScreen)? onOpen;
+  const _Recent({this.onOpen});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -327,7 +678,7 @@ class _Recent extends ConsumerWidget {
         SectionTitle(
           'آخر العمليات',
           actionLabel: txs.isEmpty ? null : 'عرض الكل',
-          onAction: () => onNavigate?.call(2),
+          onAction: () => onOpen?.call(AppScreen.transactions),
         ),
         if (txs.isEmpty)
           Card(

@@ -4,6 +4,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
+import '../core/words.dart';
 
 /// شارة ملوّنة صغيرة.
 class Pill extends StatelessWidget {
@@ -402,4 +403,65 @@ void showSnack(
         duration: Duration(seconds: error ? 4 : 3),
       ),
     );
+}
+
+/// عرض المبلغ بالحروف العربية تحت حقول إدخال المبالغ.
+///
+/// يتتبّع حقل النص ويعرض تفقيطًا مباشرًا للقيمة (مثال: 450000 ← «أربعمائة
+/// وخمسون ألف»). يختفي تلقائيًا عندما يكون الحقل فارغًا أو القيمة صفرًا.
+/// لا يحفظ أي بيانات ولا يؤثر على المنطق — عرض مساعد فقط.
+class AmountWords extends StatefulWidget {
+  final TextEditingController controller;
+
+  /// عدد الكسور العشرية المتوقعة (0 للريال اليمني مثلًا).
+  final int decimals;
+  const AmountWords({super.key, required this.controller, this.decimals = 0});
+
+  @override
+  State<AmountWords> createState() => _AmountWordsState();
+}
+
+class _AmountWordsState extends State<AmountWords> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onChange);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onChange);
+    super.dispose();
+  }
+
+  void _onChange() => setState(() {});
+
+  @override
+  Widget build(BuildContext context) {
+    final v = Fmt.parseAmount(widget.controller.text);
+    if (v == null || v == 0) return const SizedBox.shrink();
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(start: 12, top: 6, end: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.spellcheck_rounded,
+              size: 15, color: AppColors.primaryOf(context)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              numberToWords(v),
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.5,
+                fontWeight: FontWeight.w700,
+                color: dark ? AppColors.dText2 : AppColors.primary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

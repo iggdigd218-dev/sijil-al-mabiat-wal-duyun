@@ -454,6 +454,8 @@ class _TxFormState extends ConsumerState<TxForm> {
                       _accountPickers(),
                       const SizedBox(height: 14),
                       _amountRow(),
+                      const SizedBox(height: 6),
+                      AmountWords(controller: _amount),
                       if (_hasInvoiceDetails) ...[
                         const SizedBox(height: 8),
                         _invoiceShortcut(),

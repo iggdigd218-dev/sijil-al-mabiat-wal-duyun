@@ -223,6 +223,25 @@ final alertsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
       .toList();
 });
 
+/// الإشعارات الداخلية (الأحدث أولًا).
+final notificationsProvider =
+    FutureProvider<List<Map<String, Object?>>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .notifications()
+      .timeout(const Duration(seconds: 8), onTimeout: () => const []);
+});
+
+/// عدد الإشعارات غير المقروءة (للشارة في الشريط العلوي).
+final unreadCountProvider = FutureProvider<int>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .unreadNotifications()
+      .timeout(const Duration(seconds: 8), onTimeout: () => 0);
+});
+
 /// سجل النشاط.
 final activityProvider = FutureProvider<List<Map<String, Object?>>>((
   ref,

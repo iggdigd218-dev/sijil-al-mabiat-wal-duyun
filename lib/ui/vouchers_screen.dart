@@ -631,6 +631,7 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                       ),
                     ],
                   ),
+                  AmountWords(controller: _amount),
                   const SizedBox(height: 14),
                   InkWell(
                     borderRadius: BorderRadius.circular(12),

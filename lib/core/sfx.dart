@@ -15,9 +15,21 @@
 import 'package:flutter/services.dart';
 
 class Sfx {
-  static bool _muted = false;
+  static bool _muted = false; // كتم شامل (يستخدمه وضع الاختبار).
+  static bool _soundOn = true; // الأصوات (SystemSound).
+  static bool _hapticOn = true; // الاهتزاز (HapticFeedback).
+
   static bool get muted => _muted;
   static void setMuted(bool v) => _muted = v;
+
+  /// تحدّث حالتي الصوت والاهتزاز من إعدادات المستخدم.
+  static void applySettings({required bool sound, required bool haptic}) {
+    _soundOn = sound;
+    _hapticOn = haptic;
+  }
+
+  static bool get _soundEnabled => !_muted && _soundOn;
+  static bool get _hapticEnabled => !_muted && _hapticOn;
 
   // ============ النجاح ============
 
@@ -25,57 +37,61 @@ class Sfx {
   /// يُستخدم بعد حفظ العمليات، إضافة/تعديل السجلات، إلخ.
   static void success() {
     if (_muted) return;
-    HapticFeedback.mediumImpact();
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 70),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 140),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
-    SystemSound.play(SystemSoundType.click);
+    if (s) SystemSound.play(SystemSoundType.click);
   }
 
   /// صوت إتمام فاتورة/دفع (نمط أطول قليلاً من success).
   static void payment() {
     if (_muted) return;
-    HapticFeedback.mediumImpact();
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 70),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 140),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 220),
-      HapticFeedback.mediumImpact,
+      h ? () => HapticFeedback.mediumImpact : null,
     );
-    SystemSound.play(SystemSoundType.click);
+    if (s) SystemSound.play(SystemSoundType.click);
   }
 
   /// نجاح مسح باركود (نقرة سريعة واحدة).
   static void scan() {
     if (_muted) return;
-    HapticFeedback.lightImpact();
-    SystemSound.play(SystemSoundType.click);
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.lightImpact();
+    if (s) SystemSound.play(SystemSoundType.click);
   }
 
   /// نجاح اقتران/اتصال جهاز (نمط احتفالي خفيف).
   static void pair() {
     if (_muted) return;
-    HapticFeedback.mediumImpact();
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 90),
-      HapticFeedback.selectionClick,
+      h ? () => HapticFeedback.selectionClick : null,
     );
     Future.delayed(
       const Duration(milliseconds: 180),
-      HapticFeedback.mediumImpact,
+      h ? () => HapticFeedback.mediumImpact : null,
     );
-    SystemSound.play(SystemSoundType.click);
+    if (s) SystemSound.play(SystemSoundType.click);
   }
 
   // ============ التحذيرات ============
@@ -83,10 +99,11 @@ class Sfx {
   /// تنبيه متوسط (مثل: مخزون منخفض، رسالة غير فادحة).
   static void warning() {
     if (_muted) return;
-    HapticFeedback.lightImpact();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.lightImpact();
     Future.delayed(
       const Duration(milliseconds: 120),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
   }
 
@@ -95,21 +112,23 @@ class Sfx {
   /// صوت فشل/خطأ جسيم (اهتزاز قوي + صوت تنبيه نظام).
   static void error() {
     if (_muted) return;
-    HapticFeedback.heavyImpact();
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.heavyImpact();
     Future.delayed(
       const Duration(milliseconds: 110),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
-    SystemSound.play(SystemSoundType.alert);
+    if (s) SystemSound.play(SystemSoundType.alert);
   }
 
   /// فشل بسيط/رفض (مدخلات غير صالحة) — اهتزاز خفيف مزدوج.
   static void reject() {
     if (_muted) return;
-    HapticFeedback.selectionClick();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.selectionClick();
     Future.delayed(
       const Duration(milliseconds: 80),
-      HapticFeedback.selectionClick,
+      h ? () => HapticFeedback.selectionClick : null,
     );
   }
 
@@ -118,23 +137,26 @@ class Sfx {
   /// نقرة خفيفة عامة للأزرار والتبديل بين التبويبات.
   static void click() {
     if (_muted) return;
-    HapticFeedback.selectionClick();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.selectionClick();
   }
 
   /// اهتزاز خفيف لفتح/إغلاق النوافذ أو العمليات الكبيرة.
   static void pop() {
     if (_muted) return;
-    HapticFeedback.lightImpact();
-    SystemSound.play(SystemSoundType.click);
+    final h = _hapticEnabled; final s = _soundEnabled;
+    if (h) HapticFeedback.lightImpact();
+    if (s) SystemSound.play(SystemSoundType.click);
   }
 
   /// اهتزاز للحذف (ثقيل قصير — ليعطي إحساساً تحذيرياً قبل الحذف النهائي).
   static void delete() {
     if (_muted) return;
-    HapticFeedback.mediumImpact();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 90),
-      HapticFeedback.heavyImpact,
+      h ? () => HapticFeedback.heavyImpact : null,
     );
   }
 
@@ -143,20 +165,22 @@ class Sfx {
   /// اهتزاز طويل نسبيًا لإشعار يمكن ملاحظته في الجيب (إشعار/تنبيه خارجي).
   static void notify() {
     if (_muted) return;
-    HapticFeedback.mediumImpact();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 180),
-      HapticFeedback.lightImpact,
+      h ? () => HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 360),
-      HapticFeedback.mediumImpact,
+      h ? () => HapticFeedback.mediumImpact : null,
     );
   }
 
   /// يُستخدم في حوارات التأكيد المدمرة (حذف، طرد) ليعطي إحساساً مختلفاً.
   static void dangerConfirm() {
     if (_muted) return;
-    HapticFeedback.heavyImpact();
+    final h = _hapticEnabled;
+    if (h) HapticFeedback.heavyImpact();
   }
 }

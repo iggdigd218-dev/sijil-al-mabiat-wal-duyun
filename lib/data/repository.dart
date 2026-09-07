@@ -2509,6 +2509,9 @@ class Repo {
   Future<int> addStockMove(StockMove m) async {
     final db = await _db;
     late final int id;
+    String? lowName;
+    var lowQty = 0.0;
+    var lowMin = 0.0;
     await db.transaction((txn) async {
       id = await txn.insert('stock_moves', m.toMap()..['id'] = newGlobalId());
       final r = await txn.query(
@@ -2552,8 +2555,20 @@ class Repo {
           'stock',
           '$id',
         );
+        lowName = it.name;
+        lowQty = it.quantity + delta;
+        lowMin = it.minQuantity;
       }
     });
+    // تنبيه داخلي عند انخفاض المخزون عن حد التنبيه (بعد التزام العملية).
+    if (lowName != null && lowMin > 0 && lowQty <= lowMin) {
+      await notify(
+        title: 'مخزون منخفض: $lowName',
+        body: 'الكمية المتبقية ${lowQty.toStringAsFixed(0)} '
+            'وصلت حد التنبيه ${lowMin.toStringAsFixed(0)}',
+        kind: 'warning',
+      );
+    }
     return id;
   }
 
@@ -2635,6 +2650,46 @@ class Repo {
       'sales': sales,
       'low': low,
     };
+  }
+
+  // ==================== الإشعارات الداخلية ====================
+
+  /// يضيف إشعارًا داخليًا جديدًا (تنبيه مخزون، اكتمال نسخة، فشل مزامنة…).
+  Future<void> notify({
+    required String title,
+    String body = '',
+    String kind = 'info',
+  }) async {
+    final db = await _db;
+    await db.insert('notifications', {
+      'title': title,
+      'body': body,
+      'kind': kind,
+      'seen': 0,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// آخر الإشعارات الداخلية (الأحدث أولًا).
+  Future<List<Map<String, Object?>>> notifications({int limit = 50}) async {
+    final db = await _db;
+    return db.query('notifications', orderBy: 'id DESC', limit: limit);
+  }
+
+  /// عدد الإشعارات غير المقروءة.
+  Future<int> unreadNotifications() async {
+    final db = await _db;
+    return Sqflite.firstIntValue(
+          await db.rawQuery(
+              'SELECT COUNT(*) FROM notifications WHERE seen = 0'),
+        ) ??
+        0;
+  }
+
+  /// تعليم كل الإشعارات كمقروءة.
+  Future<void> markAllNotificationsSeen() async {
+    final db = await _db;
+    await db.update('notifications', {'seen': 1});
   }
 
   // ==================== الإحصاءات ====================

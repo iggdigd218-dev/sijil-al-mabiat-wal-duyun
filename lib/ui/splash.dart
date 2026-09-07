@@ -95,7 +95,7 @@ class _SplashScreenState extends State<SplashScreen>
             FadeTransition(
               opacity: _fade,
               child: const Text(
-                'سجل المبيعات والديون',
+                'مدير الحسابات',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,
@@ -107,7 +107,7 @@ class _SplashScreenState extends State<SplashScreen>
             FadeTransition(
               opacity: _fade,
               child: const Text(
-                'إدارة البيانات',
+                'سجل المبيعات والديون',
                 style: TextStyle(color: Colors.white70, fontSize: 14),
               ),
             ),

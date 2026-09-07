@@ -361,6 +361,7 @@ class _ConverterState extends ConsumerState<_Converter> {
               decoration: const InputDecoration(labelText: 'المبلغ'),
               onChanged: (_) => setState(() {}),
             ),
+            AmountWords(controller: _amount, decimals: 2),
             const SizedBox(height: 12),
             Row(
               children: [

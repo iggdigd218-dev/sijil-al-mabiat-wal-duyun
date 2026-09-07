@@ -108,7 +108,7 @@ class _LockGateState extends ConsumerState<LockGate>
               ),
               const SizedBox(height: 12),
               Text(
-                'إدارة البيانات',
+                'مدير الحسابات',
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w800,

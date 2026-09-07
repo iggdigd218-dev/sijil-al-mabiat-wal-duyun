@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../core/app_version.dart';
 import '../core/receipt_image.dart';
 import '../core/security.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'sync_settings_section.dart';
@@ -419,6 +420,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           bump(ref);
                         },
                       ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        secondary: const Icon(Icons.volume_up_outlined),
+                        title: const Text('الأصوات'),
+                        subtitle: const Text('نغمات النجاح والخطأ والأزرار'),
+                        value: (st['sfxSound'] ?? '1') == '1',
+                        onChanged: (v) async {
+                          await ref
+                              .read(repoProvider)
+                              .setSetting('sfxSound', v ? '1' : '0');
+                          Sfx.applySettings(
+                              sound: v,
+                              haptic:
+                                  (st['sfxHaptic'] ?? '1') == '1');
+                          if (v) Sfx.pop();
+                          bump(ref);
+                        },
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        secondary: const Icon(Icons.vibration_outlined),
+                        title: const Text('الاهتزاز'),
+                        subtitle: const Text('ردود اهتزازية عند الحفظ والدفع'),
+                        value: (st['sfxHaptic'] ?? '1') == '1',
+                        onChanged: (v) async {
+                          await ref
+                              .read(repoProvider)
+                              .setSetting('sfxHaptic', v ? '1' : '0');
+                          Sfx.applySettings(
+                              sound: (st['sfxSound'] ?? '1') == '1',
+                              haptic: v);
+                          if (v) Sfx.success();
+                          bump(ref);
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -625,7 +661,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     child: Column(
                       children: [
                         Text(
-                          'إدارة البيانات',
+                          'مدير الحسابات',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 4),

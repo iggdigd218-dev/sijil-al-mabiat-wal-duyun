@@ -7,6 +7,7 @@ import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/db_init.dart';
 import 'core/database.dart';
+import 'core/sfx.dart';
 import 'core/theme.dart';
 import 'data/providers.dart';
 import 'data/repository.dart';
@@ -65,6 +66,10 @@ Future<void> main() async {
       _ => ThemeMode.system,
     };
     hideBalances = initialSettings['hideBalances'] == '1';
+    Sfx.applySettings(
+      sound: (initialSettings['sfxSound'] ?? '1') == '1',
+      haptic: (initialSettings['sfxHaptic'] ?? '1') == '1',
+    );
   } catch (e) {
     debugPrint('initial settings failed: $e');
   }
@@ -88,7 +93,7 @@ class NexoraApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
-      title: 'إدارة البيانات',
+      title: 'مدير الحسابات',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),

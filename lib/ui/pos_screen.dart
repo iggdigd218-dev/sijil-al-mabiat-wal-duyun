@@ -635,6 +635,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                           setState(() {});
                         },
                       ),
+                      AmountWords(controller: _paidCtrl),
                     ],
 
                     const SizedBox(height: 12),
@@ -653,6 +654,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                         setState(() {});
                       },
                     ),
+                    AmountWords(controller: _discountCtrl),
 
                     const SizedBox(height: 16),
 

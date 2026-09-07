@@ -201,6 +201,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
               ? 'تم إنشاء النسخة ✅ (تتضمّن $n صورة)'
               : 'تم إنشاء النسخة الاحتياطية ✅',
         );
+        await ref.read(repoProvider).notify(
+              title: 'تم إنشاء نسخة احتياطية',
+              body: n > 0 ? 'ملف النسخة يتضمّن $n صورة' : 'اكتمل تصدير بياناتك بنجاح',
+              kind: 'success',
+            );
       }
     } catch (e) {
       if (mounted) showSnack(context, 'تعذّر إنشاء النسخة: $e', error: true);
@@ -246,7 +251,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       title: '⚠️ استعادة نسخة احتياطية',
       message:
           'سيتم استبدال كل البيانات الحالية بمحتوى الملف. لا يمكن التراجع.\n\n'
-          'يقبل التطبيق ملفات نكسورا (‎.nexora‎) وملفات JSON من مدير الملفات '
+          'يقبل التطبيق ملفات مدير الحسابات (‎.nexora‎) وملفات JSON من مدير الملفات '
           'ومزوّدي التخزين السحابي. الاستعادة ذرّية: إذا كان أي صف أو مرجع '
           'غير صالح فستظهر رسالة خطأ ولن تُطبّق استعادة جزئية.\n\nهل تريد المتابعة؟',
       confirmText: 'استعادة',

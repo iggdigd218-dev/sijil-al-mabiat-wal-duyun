@@ -247,7 +247,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         SnackBar(content: Text('✅ تم حفظ النسخة الاحتياطية في:\n${f.path}')),
       );
       // Share option
-      Share.shareXFiles([XFile(f.path)], text: 'نسخة نكسورا الاحتياطية');
+      Share.shareXFiles([XFile(f.path)], text: 'نسخة مدير الحسابات الاحتياطية');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -390,7 +390,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         await db.insert('devices', {
           'id': ourId,
           'workspace_id': wsId,
-          'name': 'جهاز نكسورا',
+          'name': 'جهاز مدير الحسابات',
           'platform': Platform.operatingSystem,
           'port': port,
           'is_paired': 1,

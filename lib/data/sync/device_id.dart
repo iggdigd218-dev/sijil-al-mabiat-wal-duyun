@@ -40,5 +40,5 @@ Future<String> deviceName(Repo repo) async {
   final n = st[_deviceNameKey];
   if (n != null && n.trim().isNotEmpty) return n;
   // اسم افتراضي بناء على المنصة.
-  return 'جهاز نكسورا';
+  return 'جهاز مدير الحسابات';
 }

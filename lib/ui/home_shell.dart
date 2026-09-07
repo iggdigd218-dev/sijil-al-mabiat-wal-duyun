@@ -27,6 +27,7 @@ import 'sync_status_indicator.dart';
 import '../data/sync/sync_service.dart';
 
 import 'group_management_screen.dart';
+import 'notifications_sheet.dart';
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -120,22 +121,21 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     });
   }
 
-  /// الشاشات الخمس في الشريط السفلي؛ الباقي من القائمة الجانبية.
-  static const _tabs = [
+  /// الشاشات الثلاث في الشريط السفلي؛ الوجهة الرابعة «المزيد» تفتح القائمة
+  /// الجانبية التي تضم كل الشاشات الأخرى (لا يُخفى أي قسم).
+  static const _bottomTabs = [
     AppScreen.dashboard,
+    AppScreen.pos,
     AppScreen.accounts,
-    AppScreen.transactions,
-    AppScreen.vouchers,
-    AppScreen.reports,
   ];
+
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   void _go(AppScreen s) => setState(() => _screen = s);
 
   Widget _body() => switch (_screen) {
         AppScreen.pos => const PosScreen(),
-        AppScreen.dashboard => DashboardScreen(
-            onNavigate: (i) => _go(_tabs[i.clamp(0, _tabs.length - 1)]),
-          ),
+        AppScreen.dashboard => DashboardScreen(onOpen: _go),
         AppScreen.accounts => const AccountsScreen(),
         AppScreen.transactions => const TransactionsScreen(),
         AppScreen.vouchers => const VouchersScreen(),
@@ -186,11 +186,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final hidden = ref.watch(hideBalancesProvider);
-    final tabIndex = _tabs.indexOf(_screen);
+    final tabIndex = _bottomTabs.indexOf(_screen);
 
     return Scaffold(
+      key: _scaffoldKey,
       appBar: AppBar(
-        title: Text(_screen.title),
+        title: Text(_screen == AppScreen.dashboard ? 'مدير الحسابات' : _screen.title),
         actions: [
           // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
           Consumer(
@@ -272,6 +273,21 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               );
             },
           ),
+          // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
+          Consumer(
+            builder: (ctx, rref, _) {
+              final unread = rref.watch(unreadCountProvider).valueOrNull ?? 0;
+              return IconButton(
+                tooltip: 'الإشعارات',
+                icon: Badge(
+                  isLabelVisible: unread > 0,
+                  label: Text('$unread'),
+                  child: const Icon(Icons.notifications_outlined),
+                ),
+                onPressed: () => openNotifications(context, ref),
+              );
+            },
+          ),
           IconButton(
             tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
             icon: Icon(
@@ -289,16 +305,36 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       floatingActionButton: _fab(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tabIndex < 0 ? 0 : tabIndex,
-        onDestinationSelected: (i) => _go(_tabs[i]),
-        destinations: _tabs
-            .map(
-              (s) => NavigationDestination(
-                icon: Icon(s.icon),
-                selectedIcon: Icon(s.activeIcon),
-                label: s == AppScreen.dashboard ? 'الرئيسية' : s.title,
-              ),
-            )
-            .toList(),
+        onDestinationSelected: (i) {
+          if (i < _bottomTabs.length) {
+            _go(_bottomTabs[i]);
+          } else {
+            // وجهة «المزيد» — تفتح القائمة الجانبية بكل الأقسام.
+            _scaffoldKey.currentState?.openDrawer();
+          }
+        },
+        destinations: [
+          NavigationDestination(
+            icon: const Icon(Icons.home_outlined),
+            selectedIcon: const Icon(Icons.home_rounded),
+            label: 'الرئيسية',
+          ),
+          NavigationDestination(
+            icon: Icon(AppScreen.pos.icon),
+            selectedIcon: Icon(AppScreen.pos.activeIcon),
+            label: 'المبيعات',
+          ),
+          NavigationDestination(
+            icon: Icon(AppScreen.accounts.icon),
+            selectedIcon: Icon(AppScreen.accounts.activeIcon),
+            label: 'الحسابات',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.apps_rounded),
+            selectedIcon: Icon(Icons.grid_view_rounded),
+            label: 'المزيد',
+          ),
+        ],
       ),
     );
   }
@@ -342,7 +378,7 @@ class _Drawer extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'إدارة البيانات',
+                              'مدير الحسابات',
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
@@ -351,7 +387,7 @@ class _Drawer extends ConsumerWidget {
                             ),
                             Text(
                               user == null
-                                  ? 'النظام المحاسبي'
+                                  ? 'سجل المبيعات والديون'
                                   : '${user.role.icon} ${user.name}',
                               style: TextStyle(
                                 fontSize: 12,
@@ -424,7 +460,7 @@ class _Drawer extends ConsumerWidget {
 class _DrawerItems {
   static List<AppScreen> of({AppUser? user, required bool isOwner}) =>
       AppScreen.values
-          .where((s) => !_HomeShellState._tabs.contains(s))
+          .where((s) => !_HomeShellState._bottomTabs.contains(s))
           .where((s) {
         if (s == AppScreen.group) return isOwner;
         return true;

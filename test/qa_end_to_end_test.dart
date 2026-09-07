@@ -77,10 +77,17 @@ void main() {
             home: const HomeShell(),
           )));
       await _drain(tester);
-      await tester.tap(find.descendant(
-          of: find.byType(NavigationBar), matching: find.text('العمليات')));
+      // في الواجهة الجديدة شاشة العمليات تُفتح من أيقونة «المعاملات» على لوحة
+      // التحكم (ولم يعد «العمليات» عنصراً في الشريط السفلي).
+      final txTile = find.text('المعاملات');
+      await tester.ensureVisible(txTile);
+      await tester.pumpAndSettle();
+      await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
-      await tester.tap(find.text('تسجيل عملية'));
+      final fab = find.text('تسجيل عملية');
+      await tester.ensureVisible(fab);
+      await tester.pumpAndSettle();
+      await tester.tap(fab, warnIfMissed: false);
       await _drain(tester);
       await tester.tap(find.text('عليه'));
       await tester.enterText(

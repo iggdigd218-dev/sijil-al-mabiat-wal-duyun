@@ -1036,6 +1036,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                       controller: _buy,
                       label: 'سعر الشراء',
                       icon: Icons.shopping_cart_outlined,
+                      words: true,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1044,6 +1045,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                       controller: _sell,
                       label: 'سعر البيع',
                       icon: Icons.sell_outlined,
+                      words: true,
                     ),
                   ),
                 ],
@@ -1128,35 +1130,45 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   }
 }
 
-/// حقل مبلغ مع آلة حاسبة سريعة.
+/// حقل مبلغ مع آلة حاسبة سريعة. عند تفعيل [words] يظهر المبلغ بالحروف تحته.
 class _AmountField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
   final IconData icon;
+  final bool words;
   const _AmountField({
     required this.controller,
     required this.label,
     required this.icon,
+    this.words = false,
   });
 
   @override
-  Widget build(BuildContext context) => TextField(
-        controller: controller,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon),
-          suffixIcon: IconButton(
-            tooltip: 'آلة حاسبة',
-            icon: const Icon(Icons.calculate_outlined),
-            onPressed: () async {
-              final v = await openCalculator(context, initial: controller.text);
-              if (v != null) {
-                controller.text =
-                    v == v.roundToDouble() ? '${v.toInt()}' : '$v';
-              }
-            },
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: label,
+              prefixIcon: Icon(icon),
+              suffixIcon: IconButton(
+                tooltip: 'آلة حاسبة',
+                icon: const Icon(Icons.calculate_outlined),
+                onPressed: () async {
+                  final v =
+                      await openCalculator(context, initial: controller.text);
+                  if (v != null) {
+                    controller.text =
+                        v == v.roundToDouble() ? '${v.toInt()}' : '$v';
+                  }
+                },
+              ),
+            ),
           ),
-        ),
+          if (words) AmountWords(controller: controller),
+        ],
       );
 }

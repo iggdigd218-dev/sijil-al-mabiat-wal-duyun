@@ -179,11 +179,36 @@ class _State extends ConsumerState<AccountFormScreen> {
             100 + MediaQuery.of(context).viewInsets.bottom,
           ),
           children: [
-            TextFormField(
-              controller: _name,
-              decoration: const InputDecoration(labelText: 'اسم الحساب *'),
-              textInputAction: TextInputAction.next,
-              validator: (v) => (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
+            // زر اتصال بجانب الاسم: يفتح تطبيق الهاتف مباشرة على الرقم
+            // (ولا يقرأ/يحمّل جهات الاتصال داخل التطبيق إطلاقًا).
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _name,
+                    decoration:
+                        const InputDecoration(labelText: 'اسم الحساب *'),
+                    textInputAction: TextInputAction.next,
+                    validator: (v) =>
+                        (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: IconButton.filledTonal(
+                    tooltip: 'اتصال بالعميل',
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.green.withValues(alpha: 0.12),
+                      foregroundColor: Colors.green.shade700,
+                      minimumSize: const Size(48, 48),
+                    ),
+                    icon: const Icon(Icons.call),
+                    onPressed: () => _launch('tel:'),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Container(
@@ -248,6 +273,7 @@ class _State extends ConsumerState<AccountFormScreen> {
                 return Fmt.parseAmount(v!) == null ? 'مبلغ غير صالح' : null;
               },
             ),
+            AmountWords(controller: _opening, decimals: 2),
             const SizedBox(height: 13),
             DropdownButtonFormField<String>(
               initialValue:
@@ -309,6 +335,7 @@ class _State extends ConsumerState<AccountFormScreen> {
                 decimal: true,
               ),
             ),
+            AmountWords(controller: _limit, decimals: 2),
             const SizedBox(height: 13),
             TextFormField(
               controller: _tags,
