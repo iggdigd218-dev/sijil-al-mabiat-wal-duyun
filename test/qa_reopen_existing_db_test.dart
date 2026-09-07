@@ -78,4 +78,49 @@ void main() {
     await AppDatabase.execSchemaScript(db, oldStyle);
     await db.close();
   });
+
+  test('انحدار ويندوز: ensureFullSchema يُصلح قاعدة فيها workspaces فقط',
+      () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (d, v) async {
+          // قاعدة تالفة: جدول المزامنة موجود فقط (شاشات الأعمال تفشل).
+          await d.execute(
+              'CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT "", created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+        },
+      ),
+    );
+    // تشغيل شبكة الأمان (كما في onOpen) يجب ألا يرمي وأن يُنشئ كل الجداول.
+    await AppDatabase.ensureFullSchema(db);
+    final tables = (await db
+            .rawQuery("SELECT name FROM sqlite_master WHERE type='table'"))
+        .map((e) => e['name'] as String)
+        .toSet();
+    expect(
+        tables,
+        containsAll(<String>[
+          'workspaces',
+          'accounts',
+          'items',
+          'transactions',
+          'settings',
+          'currencies',
+          'users',
+          'devices',
+          'operations',
+          'sync_queue',
+        ]));
+    // البذرة الدنيا: العملات موجودة ولا تُكرَّر عند التشغيل ثانية.
+    final c1 = (await db.rawQuery('SELECT COUNT(*) c FROM currencies'))
+        .first['c'] as int;
+    expect(c1, greaterThanOrEqualTo(3));
+    await AppDatabase.ensureFullSchema(db);
+    final c2 = (await db.rawQuery('SELECT COUNT(*) c FROM currencies'))
+        .first['c'] as int;
+    expect(c2, c1, reason: 'البذرة idempotent — لا تضاعف العملات');
+    await db.close();
+  });
 }

@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 16;
+  static const int _version = 17;
 
   static int get schemaVersion => _version;
 
@@ -32,8 +32,10 @@ class AppDatabase {
       onCreate: (db, v) async => createSchema(db),
       onUpgrade: (db, from, to) async => _migrate(db, from, to),
       onOpen: (db) async {
-        // حماية إضافية: حتى لو لم يعمل onUpgrade في حالة غريبة نضمن وجود الجداول.
-        await _ensureCoreSyncTables(db);
+        // شبكة أمان عند كل فتح: نضمن وجود كل الجداول الأساسية والمزامنة
+        // وبذرّ البيانات الدنيا — حتى لو كانت قاعدة قديمة ناقصة أو فشلت
+        // هجرة سابقة في منتصفها (يصلح خطأ "تعذّر تحميل الفئات/الإعدادات").
+        await ensureFullSchema(db);
       },
     );
     return _db!;
@@ -272,6 +274,23 @@ class AppDatabase {
       )''');
 
     await _seed(db);
+  }
+
+  /// شبكة أمان تُستدعى عند كل فتح قاعدة بيانات: تضمن وجود جداول المزامنة
+  /// الأساسية + Workspace افتراضي + كل جداول الأعمال + بذرة دنيا.
+  /// كل خطواتها idempotent (IF NOT EXISTS / ConflictAlgorithm.ignore)
+  /// فآمنة للتكرار في كل إقلاع، وأي خطأ غير متوقع يُبتلع حتى لا يُسقط
+  /// التطبيق عند الفتح (لا يُفترض أن يحدث، لكنه خط دفاع أخير).
+  static Future<void> ensureFullSchema(Database db) async {
+    try {
+      await _ensureCoreSyncTables(db);
+    } catch (_) {}
+    try {
+      // ينشئ جداول الأعمال الناقصة (idempotent) ويتجاوز تعارض الجداول.
+      await createSchema(db);
+    } catch (_) {
+      // حتى لو فشل السكربت متعدد الجُمل، لا تنهار الباقي.
+    }
   }
 
   /// جداول المزامنة الجديدة (v5).
@@ -831,14 +850,18 @@ class AppDatabase {
           "UPDATE users SET permissions='add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers' WHERE role='admin' AND (permissions IS NULL OR TRIM(permissions)='')",
         );
       } catch (_) {}
-      await db.insert(
-          'sync_meta',
-          {
-            'key': 'schemaVersion',
-            'value': '16',
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace);
     }
+    // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
+    // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا
+    // خطأ "table workspaces already exists" و"تعذّر تحميل الفئات/الإعدادات".
+    await ensureFullSchema(db);
+    await db.insert(
+        'sync_meta',
+        {
+          'key': 'schemaVersion',
+          'value': '17',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   /// Migration v4 → v5: إضافة جداول المزامنة + أعمدة workspace/deleted للجداول القديمة.
@@ -950,6 +973,7 @@ class AppDatabase {
   }
 
   /// البيانات الأولية: العملات الثلاث ومستخدم المدير.
+  /// idempotent بالكامل — يمكن استدعاؤها عند كل فتح بأمان (تتجاهل الموجود).
   static Future<void> _seed(Database db) async {
     final now = DateTime.now().toIso8601String();
     for (final c in const [
@@ -957,25 +981,49 @@ class AppDatabase {
       ['USD', 'الدولار الأمريكي', r'$', 2],
       ['SAR', 'الريال السعودي', 'ر.س', 2],
     ]) {
-      await db.insert('currencies', {
-        'code': c[0],
-        'name': c[1],
-        'symbol': c[2],
-        'decimal': c[3],
-        'rate': 1.0,
-      });
+      await db.insert(
+        'currencies',
+        {
+          'code': c[0],
+          'name': c[1],
+          'symbol': c[2],
+          'decimal': c[3],
+          'rate': 1.0,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
     }
-    // إصلاح حرج: role كان 'manager' غير موجود في UserRole enum → يتحول لـ viewer ويمنع الحفظ.
-    // الآن نستخدم 'admin' مع كل الصلاحيات.
-    await db.insert('users', {
-      'name': 'المدير',
-      'role': 'admin',
-      'permissions':
-          'add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers',
-      'is_me': 1,
-      'active': 1,
-      'created_at': now,
-      'updated_at': now,
-    });
+    // المدير الافتراضي: أنشئه فقط إن لم يوجد أي مستخدم إطلاقًا
+    // (حتى لا نُكرّر المستخدم في قواعد قائمة أو نكتب فوق مستخدم حقيقي).
+    final users = await db.rawQuery('SELECT COUNT(*) AS c FROM users');
+    final count = (users.isNotEmpty ? users.first['c'] as int? : null) ?? 0;
+    if (count == 0) {
+      // إصلاح حرج: role كان 'manager' غير موجود في UserRole enum → viewer ويمنع الحفظ.
+      // الآن نستخدم 'admin' مع كل الصلاحيات.
+      await db.insert('users', {
+        'name': 'المدير',
+        'role': 'admin',
+        'permissions':
+            'add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers',
+        'is_me': 1,
+        'active': 1,
+        'created_at': now,
+        'updated_at': now,
+      });
+    } else {
+      // قاعدة قائمة: تأكد أن هناك مستخدمًا "أنا" (is_me=1)؛ الأول admin إن وُجد.
+      final me = await db.rawQuery(
+        "SELECT id FROM users WHERE is_me = 1 AND COALESCE(deleted_at,'') = '' LIMIT 1",
+      );
+      if (me.isEmpty) {
+        final admin = await db.rawQuery(
+          "SELECT id FROM users WHERE role = 'admin' AND COALESCE(deleted_at,'') = '' ORDER BY id LIMIT 1",
+        );
+        if (admin.isNotEmpty) {
+          await db.update('users', {'is_me': 1},
+              where: 'id = ?', whereArgs: [admin.first['id']]);
+        }
+      }
+    }
   }
 }
