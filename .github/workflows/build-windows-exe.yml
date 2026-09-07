@@ -113,7 +113,9 @@ jobs:
           $manifest = @'
           <?xml version="1.0" encoding="utf-8"?>
           <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+                   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+                   IgnorableNamespaces="uap rescap">
             <Identity Name="Nexora.MudirAlHesabat" Version="1.0.0.0"
                       Publisher="CN=Nexora" ProcessorArchitecture="x64"/>
             <Properties>
@@ -136,20 +138,21 @@ jobs:
                                     Square44x44Logo="Assets\Square44x44Logo.png"/>
               </Application>
             </Applications>
+            <Capabilities>
+              <rescap:Capability Name="runFullTrust"/>
+            </Capabilities>
           </Package>
           '@
           Set-Content -Path "$staging\AppxManifest.xml" -Value $manifest -Encoding UTF8
           # بناء MSIX اختياري: أي فشل لا يُفشل سير العمل (النسخة المحمولة هي الأساس).
-          try {
-            $makeappx = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*\x64\*" } | Select-Object -First 1).FullName
-            if ($makeappx) {
-              & $makeappx pack /d $staging /p nexora-windows.msix /o
-              Write-Host "MSIX built OK"
-            } else {
-              Write-Host "makeappx غير موجود — تم تخطي MSIX"
-            }
-          } catch {
-            Write-Host "تخطّي MSIX (غير حرج): $_"
+          $ErrorActionPreference = 'Continue'
+          $makeappx = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*\x64\*" } | Select-Object -First 1).FullName
+          if ($makeappx) {
+            & $makeappx pack /d $staging /p nexora-windows.msix /o 2>&1 | Out-Host
+            if (Test-Path nexora-windows.msix) { Write-Host "MSIX built OK" }
+            else { Write-Host "تخطّي MSIX: فشل makeappx (النسخة المحمولة جاهزة)" }
+          } else {
+            Write-Host "makeappx غير موجود — تم تخطي MSIX"
           }
 
       - name: Write install/readme file
