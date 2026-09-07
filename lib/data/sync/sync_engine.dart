@@ -110,6 +110,36 @@ class SyncEngine {
     } catch (_) {}
   }
 
+  /// يضمن تشغيل خادم LAN على [port] ويُعيد ما إذا كان يستمع فعلًا.
+  /// تُستخدم قبل إنشاء رمز الاقتران حتى لا يُعلَن منفذ لا يستمع عليه خادم.
+  Future<bool> ensureLanHost(int port) async {
+    try {
+      await repo.setSetting('lanSyncEnabled', '1');
+      await repo.setSetting('lanSyncPort', '$port');
+      if (_lanEnabled && _lanTransport?.isRunning == true &&
+          _lanTransport?.port == port) {
+        return true;
+      }
+      await _lanTransport?.stopServer();
+      _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
+      final ourId = await ensureDeviceId(repo);
+      final svc = LanSyncService(
+        repo: repo,
+        dbProvider: dbProvider,
+        ourDeviceId: ourId,
+        port: port,
+      );
+      await svc.startServer();
+      if (!svc.isRunning) return false;
+      _lanTransport = svc;
+      registerTransport(svc);
+      _lanEnabled = true;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// يُعاد تهيئة الـ Cloud transport بعد تغيير الإعدادات.
   Future<void> reconfigureCloud() async {
     try {

@@ -376,6 +376,27 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       final db = await repo.database;
       final wsId = (await repo.settings())['sync.workspaceId'] ?? 'default';
       final port = int.tryParse(_lanPortCtrl.text.trim()) ?? 43053;
+      // تأكّد من أن خادم المزامنة يستمع فعلًا على هذا المنفذ قبل الإعلان عنه
+      // في الرمز — وإلا سيحصل الجهاز الآخر على "Connection refused".
+      final engine = ref.read(syncEngineProvider);
+      if (engine.hasStarted) engine.start();
+      final hostUp = await engine.ensureLanHost(port);
+      if (!hostUp) {
+        Sfx.error();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'تعذّر تشغيل خادم المزامنة على المنفذ $port.\n'
+                'تأكد أن المنفذ غير مستخدم من برنامج آخر، واسمح للتطبيق '
+                'بالاتصال في جدار حماية ويندوز، ثم أعد المحاولة.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
       final ip = await _localIp();
       final ourId = await ensureDeviceId(repo);
       // تأكد من وجود سجل الجهاز في devices (لضمان وجود port/auth_secret).

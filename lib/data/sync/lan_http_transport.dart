@@ -717,6 +717,20 @@ class LanSyncService implements SyncTransport {
         remoteDeviceId: devId.isEmpty ? null : devId,
         snapshot: snapshot,
       );
+    } on SocketException {
+      return const LanPairResult(
+        ok: false,
+        error:
+            'تعذّر الوصول إلى الجهاز المضيف.\n'
+            'تأكد أن: كلا الجهازين على نفس شبكة الواي فاي، خادم المزامنة يعمل '
+            'على الجهاز الآخر، وعنوان IP ورقم المنفذ صحيحان، وأن جدار الحماية '
+            'يسمح للتطبيق بالاتصال.',
+      );
+    } on TimeoutException {
+      return const LanPairResult(
+        ok: false,
+        error: 'انتهت مهلة الاتصال بالجهاز المضيف. تأكد من الشبكة وأن الخادم يعمل.',
+      );
     } catch (e) {
       return LanPairResult(ok: false, error: '$e');
     }
