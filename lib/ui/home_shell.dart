@@ -104,7 +104,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             'lastUpdatePrompt', DateTime.now().toIso8601String());
       }
       if (!mounted) return;
-      await showUpdateDialog(context, info);
+      await showUpdateDialog(context, ref, info);
     } catch (_) {
       // الفحص الصامت لا يجب أن يعطّل الإقلاع أبدًا.
     }

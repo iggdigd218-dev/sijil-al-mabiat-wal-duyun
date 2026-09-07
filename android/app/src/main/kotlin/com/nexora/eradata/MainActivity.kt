@@ -16,6 +16,7 @@ import java.io.File
  */
 class MainActivity : FlutterFragmentActivity() {
     private val waChannel = "nexora/whatsapp"
+    private val updateChannel = "nexora/updates"
     private val waPackages = listOf("com.whatsapp", "com.whatsapp.w4b")
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -35,6 +36,55 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // قناة التحديث بنقرة واحدة: تفتح شاشة تثبيت النظام لملف APK منزَّل.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, updateChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // هل سمح المستخدم لهذا التطبيق بتثبيت الحزم؟ (أندرويد 8+)
+                    "canInstall" -> result.success(
+                        if (android.os.Build.VERSION.SDK_INT >= 26)
+                            packageManager.canRequestPackageInstalls()
+                        else true
+                    )
+                    // يفتح إعدادات «تثبيت التطبيقات غير المعروفة» لهذا التطبيق.
+                    "openInstallSettings" -> {
+                        result.success(
+                            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                launch(
+                                    Intent(
+                                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:$packageName"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            } else true
+                        )
+                    }
+                    // يطلق شاشة تثبيت النظام لملف الـ APK المحدد.
+                    "installApk" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        result.success(installApk(path))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /** يفتح شاشة تثبيت النظام لملف APK عبر FileProvider (لا تثبيت صامت). */
+    private fun installApk(path: String): String {
+        val file = File(path)
+        if (!file.exists() || file.length() == 0L) return "file_missing"
+        val uri: Uri = try {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        } catch (e: Exception) {
+            return "uri_failed"
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return if (launch(intent)) "ok" else "launch_failed"
     }
 
     private fun installedPackages(): List<String> =

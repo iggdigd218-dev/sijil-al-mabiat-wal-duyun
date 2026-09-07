@@ -1,11 +1,16 @@
 // قسم التحديثات في الإعدادات + الفحص التلقائي عند بدء التشغيل.
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/app_version.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/update_installer.dart';
 import '../data/update_service.dart';
 import 'widgets.dart';
 
@@ -18,7 +23,11 @@ final updateCheckProvider = FutureProvider.autoDispose<UpdateInfo>((ref) async {
   return ref.read(updateServiceProvider).check();
 });
 
-/// يفتح صفحة التنزيل المناسبة.
+/// مثبّت التحديثات (قابل للاستبدال في الاختبارات).
+final updateInstallerProvider =
+    Provider<UpdateInstaller>((ref) => UpdateInstaller());
+
+/// يفتح صفحة التنزيل المناسبة (المسار الاحتياطي: المتصفح).
 Future<bool> openUpdateLink(UpdateInfo info) async {
   final target = info.downloadUrl ?? info.releaseUrl;
   if (target == null) return false;
@@ -28,6 +37,132 @@ Future<bool> openUpdateLink(UpdateInfo info) async {
     return await launchUrl(uri, mode: LaunchMode.externalApplication);
   } catch (_) {
     return false;
+  }
+}
+
+/// يبدأ التحديث بنقرة واحدة: تنزيل مباشر داخل التطبيق ثم شاشة تثبيت النظام.
+/// على غير أندرويد (أو بلا رابط مباشر) يتراجع تلقائياً لفتح المتصفح.
+Future<void> startOneClickUpdate(
+  BuildContext context,
+  WidgetRef ref,
+  UpdateInfo info,
+) async {
+  final url = info.downloadUrl;
+  if (!Platform.isAndroid || url == null) {
+    final ok = await openUpdateLink(info);
+    if (!ok && context.mounted) showSnack(context, 'تعذّر فتح رابط التحديث');
+    return;
+  }
+  final installer = ref.read(updateInstallerProvider);
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _OneClickUpdateDialog(installer: installer, url: url),
+  );
+}
+
+/// حوار التنزيل التلقائي: شريط تقدم ثم إطلاق شاشة تثبيت النظام.
+class _OneClickUpdateDialog extends StatefulWidget {
+  final UpdateInstaller installer;
+  final String url;
+  const _OneClickUpdateDialog({required this.installer, required this.url});
+
+  @override
+  State<_OneClickUpdateDialog> createState() => _OneClickUpdateDialogState();
+}
+
+class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
+  InstallProgress _state = const InstallProgress(InstallPhase.idle);
+  StreamSubscription<InstallProgress>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  void _start() {
+    _sub?.cancel();
+    setState(() => _state = const InstallProgress(InstallPhase.downloading));
+    _sub = widget.installer.downloadAndInstall(widget.url).listen(
+      (p) {
+        if (!mounted) return;
+        setState(() => _state = p);
+        if (p.phase == InstallPhase.done) {
+          Sfx.success();
+          // شاشة تثبيت النظام انفتحت — نغلق الحوار بعد لحظة.
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted) Navigator.of(context).pop();
+          });
+        } else if (p.phase == InstallPhase.failed) {
+          Sfx.error();
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final (title, subtitle) = switch (_state.phase) {
+      InstallPhase.awaitingPermission => (
+          'إذن مطلوب لمرة واحدة',
+          'فعّل «السماح من هذا المصدر» في الشاشة التي فُتحت، ثم عد إلى التطبيق '
+              'وسيتابع التحديث تلقائياً.',
+        ),
+      InstallPhase.downloading => (
+          'جارٍ تنزيل التحديث…',
+          _state.progress != null
+              ? '${(_state.progress! * 100).round()}٪ — لا تغلق التطبيق'
+              : 'لا تغلق التطبيق',
+        ),
+      InstallPhase.launchingInstaller || InstallPhase.done => (
+          'اكتمل التنزيل ✅',
+          'اضغط «تثبيت» في شاشة النظام لإتمام التحديث. بياناتك محفوظة.',
+        ),
+      InstallPhase.failed => ('تعذّر التحديث', _state.error ?? ''),
+      InstallPhase.idle => ('لحظة…', ''),
+    };
+    final failed = _state.phase == InstallPhase.failed;
+    return PopScope(
+      canPop: failed,
+      child: AlertDialog(
+        icon: failed
+            ? Icon(Icons.error_outline, color: AppColors.dangerOf(context))
+            : const Icon(Icons.system_update_alt),
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(subtitle, style: const TextStyle(height: 1.6)),
+            if (_state.phase == InstallPhase.downloading) ...[
+              const SizedBox(height: 14),
+              LinearProgressIndicator(value: _state.progress),
+            ],
+          ],
+        ),
+        actions: [
+          if (failed) ...[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('إغلاق'),
+            ),
+            FilledButton.icon(
+              onPressed: _start,
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة'),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -84,12 +219,12 @@ class UpdateSection extends ConsumerWidget {
   }
 }
 
-class _UpdateBody extends StatelessWidget {
+class _UpdateBody extends ConsumerWidget {
   final UpdateInfo info;
   const _UpdateBody({required this.info});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final (icon, color) = switch (info.status) {
       UpdateStatus.upToDate => (
           Icons.verified_outlined,
@@ -138,14 +273,9 @@ class _UpdateBody extends StatelessWidget {
         if (info.hasUpdate) ...[
           const SizedBox(height: 10),
           FilledButton.icon(
-            onPressed: () async {
-              final ok = await openUpdateLink(info);
-              if (!ok && context.mounted) {
-                showSnack(context, 'تعذّر فتح رابط التحديث');
-              }
-            },
+            onPressed: () => startOneClickUpdate(context, ref, info),
             icon: const Icon(Icons.download_outlined),
-            label: const Text('تنزيل التحديث'),
+            label: const Text('تحديث الآن'),
           ),
         ],
       ],
@@ -176,7 +306,11 @@ class _StatusRow extends StatelessWidget {
 }
 
 /// حوار التحديث الذي يظهر تلقائيًا. الإلزامي لا يمكن إغلاقه.
-Future<void> showUpdateDialog(BuildContext context, UpdateInfo info) {
+Future<void> showUpdateDialog(
+  BuildContext context,
+  WidgetRef ref,
+  UpdateInfo info,
+) {
   return showDialog<void>(
     context: context,
     barrierDismissible: !info.isMandatory,
@@ -219,14 +353,11 @@ Future<void> showUpdateDialog(BuildContext context, UpdateInfo info) {
             ),
           FilledButton.icon(
             onPressed: () async {
-              final ok = await openUpdateLink(info);
-              if (!info.isMandatory && ctx.mounted) Navigator.pop(ctx);
-              if (!ok && ctx.mounted) {
-                showSnack(ctx, 'تعذّر فتح رابط التحديث');
-              }
+              if (!info.isMandatory) Navigator.pop(ctx);
+              await startOneClickUpdate(context, ref, info);
             },
             icon: const Icon(Icons.download_outlined),
-            label: const Text('تنزيل الآن'),
+            label: const Text('تحديث الآن'),
           ),
         ],
       ),

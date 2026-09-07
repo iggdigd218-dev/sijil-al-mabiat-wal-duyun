@@ -20,6 +20,10 @@
     <!-- الاهتزاز: التفاعلات اللمسية (HapticFeedback) عند الحفظ/الدفع/الحذف/الأخطاء -->
     <uses-permission android:name="android.permission.VIBRATE"/>
 
+    <!-- التحديث بنقرة واحدة: يسمح بفتح شاشة تثبيت النظام لملف APK المنزَّل داخلياً.
+         التثبيت النهائي يظل بيد المستخدم (شاشة النظام) — لا تثبيت صامت. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
     <!-- جهات الاتصال: لا حاجة لإذن READ_CONTACTS — يُستخدم منتقي النظام
          (openExternalPick) الذي يفتح تطبيق جهات الاتصال ويعيد جهة واحدة فقط -->
 
