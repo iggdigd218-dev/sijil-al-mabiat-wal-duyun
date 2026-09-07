@@ -87,6 +87,17 @@ jobs:
           path: nexora-arm64.apk
           retention-days: 30
 
+      - name: Preserve other-platform assets (windows)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # لا نحذف ملف ويندوز الموجود مسبقًا: ننزّله ليعاد رفعه مع ملفات الأندرويد.
+          for f in nexora-windows.zip; do
+            code=$(curl -sL -o "$f" -w "%{http_code}" \
+              "https://github.com/${{ github.repository }}/releases/download/latest/$f" || true)
+            if [ "$code" != "200" ]; then echo "لا يوجد $f بعد — سيتخطاه الرفع"; rm -f "$f"; fi
+          done
+          ls -lh nexora-windows.zip 2>/dev/null || true
+
       - name: Update unified latest release (APK + version.json)
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
@@ -110,6 +121,8 @@ jobs:
           files: |
             nexora-arm64.apk
             version.json
+            nexora-windows.zip
+          fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
         env:
