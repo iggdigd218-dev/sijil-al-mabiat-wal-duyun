@@ -120,6 +120,128 @@ class _DevicesTab extends ConsumerStatefulWidget {
 }
 
 class _DevicesTabState extends ConsumerState<_DevicesTab> {
+  Future<void> _editDevicePermissions(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, Object?> device,
+  ) async {
+    final users = ref.read(usersProvider).valueOrNull ?? const <AppUser>[];
+    final uid = device['user_id'] as int?;
+    AppUser? current;
+    if (uid != null) {
+      try {
+        current = users.firstWhere((u) => u.id == uid);
+      } catch (_) {
+        current = null;
+      }
+    }
+    var role = current?.role ?? UserRole.viewer;
+    var perms = <String>{
+      ...kPerms
+          .where((p) => (current?.permissions[p.key] ?? false))
+          .map((p) => p.key)
+    };
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          void setRole(UserRole r) {
+            setDlg(() {
+              role = r;
+              if (r == UserRole.admin) {
+                perms = kPerms.map((p) => p.key).toSet();
+              } else {
+                perms = defaultPerms(r)
+                    .entries
+                    .where((e) => e.value)
+                    .map((e) => e.key)
+                    .toSet();
+              }
+            });
+          }
+
+          final isAdmin = role == UserRole.admin;
+          return AlertDialog(
+            title: Text('صلاحيات: ${device['name'] ?? 'الجهاز'}'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('الدور',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final r in UserRole.values)
+                        ChoiceChip(
+                          label: Text(r.label),
+                          selected: role == r,
+                          onSelected: (_) => setRole(r),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('الصلاحيات التفصيلية',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  if (isAdmin)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('المدير يملك كل الصلاحيات تلقائيًا.',
+                          style: TextStyle(color: Colors.teal)),
+                    )
+                  else
+                    for (final p in kPerms)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        value: perms.contains(p.key),
+                        title: Text(p.label),
+                        onChanged: (v) => setDlg(() {
+                          if (v == true) {
+                            perms.add(p.key);
+                          } else {
+                            perms.remove(p.key);
+                          }
+                        }),
+                      ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  try {
+                    await ref
+                        .read(repoProvider)
+                        .setDevicePermissions(
+                            device['id'] as String, role, perms);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    Sfx.success();
+                  } catch (e) {
+                    Sfx.error();
+                    if (ctx.mounted) {
+                      showSnack(ctx, 'تعذّر حفظ الصلاحيات: $e', error: true);
+                    }
+                  }
+                },
+                child: const Text('حفظ الصلاحيات'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final devicesAsync = ref.watch(devicesProvider);
@@ -169,6 +291,10 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         await ref
                             .read(repoProvider)
                             .assignDeviceUser(d['id'] as String, uid);
+                        bump(ref);
+                      },
+                      onPermissions: () async {
+                        await _editDevicePermissions(context, ref, d);
                         bump(ref);
                       },
                       onRename: () async {

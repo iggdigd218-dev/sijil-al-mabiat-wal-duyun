@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../core/app_version.dart';
@@ -477,6 +478,58 @@ class _Drawer extends ConsumerWidget {
               ),
             ),
             const Divider(height: 1),
+            // ---------- خدمة العملاء (واتساب) ----------
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Material(
+                color: const Color(0xFFE7F7EE),
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () async {
+                    final uri = Uri.parse(
+                      'https://wa.me/967774190040?text=${Uri.encodeComponent('السلام عليكم، أحتاج الدعم الفني لتطبيق مدير الحسابات.')}',
+                    );
+                    final ok = await canLaunchUrl(uri);
+                    if (ok) {
+                      await launchUrl(uri,
+                          mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF25D366),
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: const Icon(Icons.support_agent_rounded,
+                              color: Colors.white, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'خدمة العملاء',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
+                              color: Color(0xFF128C4B),
+                            ),
+                          ),
+                        ),
+                        const Icon(Icons.chat_bubble_outline_rounded,
+                            color: Color(0xFF128C4B), size: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
             // ---------- تسجيل الخروج ----------
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

@@ -1097,12 +1097,37 @@ class Repo {
 
   Future<AppUser?> currentUser() async {
     final mode = await workspaceMode();
+    // المالك (is_owner=1) يملك كل الصلاحيات دائمًا في أي وضع — هذا يضمن أن
+    // المنقولة له الملكية يصبح مديرًا فعليًا فور وصول علامة is_owner، وأن
+    // فقدان ربط المستخدم لا يحرم المالك من إدارة مجموعته.
+    if (await isWorkspaceOwner()) {
+      final all = await users();
+      final admin = all.where((u) => u.role == UserRole.admin).toList();
+      if (admin.isNotEmpty) {
+        return admin.first.copyWith(
+          active: true,
+          permissions: defaultPerms(UserRole.admin),
+        );
+      }
+      // لا يوجد مستخدم مدير بعد (عضو رُقّي للملكية) — نرجع هوية مدير افتراضية.
+      final now = DateTime.now();
+      return AppUser(
+        id: null,
+        name: 'المدير',
+        role: UserRole.admin,
+        permissions: defaultPerms(UserRole.admin),
+        active: true,
+        isMe: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+    }
     if (mode == 'member') {
       // في وضع العضو: المستخدم الفعّال هو المُعيّن لهذا الجهاز من قِبل المدير.
       // إن لم يُعيَّن بعد = لا صلاحيات على الإطلاق.
       return deviceAssignedUser();
     }
-    // وضع مستقل / مُضيف (مالك): المستخدم "أنا" (is_me=1) أو المدير.
+    // وضع مستقل: المستخدم "أنا" (is_me=1) أو المدير.
     final all = await users();
     if (all.isEmpty) return null;
     return all.firstWhere(
@@ -1282,6 +1307,83 @@ class Repo {
       where: 'id = ?',
       whereArgs: [deviceId],
     );
+  }
+
+  /// يضبط صلاحيات جهاز عضو بدقة: يُنشئ/يحدّث المستخدم المرتبط بالجهاز بالدور
+  /// ومجموعة الصلاحيات المحددة، ثم يزامن التغيير لبقية الأجهزة.
+  /// للمدير (owner) فقط.
+  Future<void> setDevicePermissions(
+    String deviceId,
+    UserRole role,
+    Set<String> perms,
+  ) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final dev = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [deviceId],
+      limit: 1,
+    );
+    if (dev.isEmpty) throw StateError('الجهاز غير موجود.');
+    final devName =
+        (dev.first['name'] as String?)?.trim().isNotEmpty == true
+            ? (dev.first['name'] as String)
+            : 'جهاز';
+    int? uid = dev.first['user_id'] as int?;
+    final now = DateTime.now().toIso8601String();
+    // المدير يأخذ كل الصلاحيات دائمًا.
+    final effectivePerms = role == UserRole.admin
+        ? kPerms.map((p) => p.key).toSet()
+        : perms;
+    final permStr = effectivePerms.join(',');
+
+    await db.transaction((txn) async {
+      final userMap = <String, Object?>{
+        'name': devName,
+        'role': role.code,
+        'pin': '',
+        'password': '',
+        'permissions': permStr,
+        'is_me': 0,
+        'active': 1,
+        'workspace_id': requireWorkspaceId,
+        'deleted_at': '',
+        'updated_at': now,
+      };
+      if (uid == null) {
+        uid = newGlobalId();
+        userMap['id'] = uid;
+        userMap['created_at'] = now;
+        await txn.insert('users', userMap);
+      } else {
+        final ex = await txn.query('users',
+            where: 'id = ?', whereArgs: [uid], limit: 1);
+        if (ex.isEmpty) {
+          userMap['id'] = uid;
+          userMap['created_at'] = now;
+          await txn.insert('users', userMap);
+        } else {
+          await txn.update('users', userMap,
+              where: 'id = ?', whereArgs: [uid]);
+        }
+      }
+      await txn.update('devices',
+          {'user_id': uid, 'updated_at': now, 'is_paired': 1},
+          where: 'id = ?', whereArgs: [deviceId]);
+    });
+
+    // مزامنة المستخدم المحدّث لبقية الأجهزة.
+    final urow = await db.query('users',
+        where: 'id = ?', whereArgs: [uid], limit: 1);
+    if (urow.isNotEmpty) {
+      await queueOperation(
+        entityType: EntityKind.user,
+        entityId: '$uid',
+        opType: OpKind.update,
+        payload: Map<String, Object?>.from(urow.first),
+      );
+    }
   }
 
   /// تحديث اسم جهاز (ليتعرّف المدير عليه).
@@ -1472,7 +1574,7 @@ class Repo {
     final peer = await db.query(
       'devices',
       where:
-          'id = ? AND COALESCE(revoked_at,"") = "" AND COALESCE(expelled_at,"") = ""',
+          "id = ? AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
       whereArgs: [newOwnerDeviceId],
       limit: 1,
     );
@@ -1485,11 +1587,54 @@ class Repo {
       // 1) إلغاء is_owner عن كل الأجهزة.
       await txn.update('devices', {'is_owner': 0});
 
-      // 2) تعيين الجهاز الجديد كمالك.
+      // 2) تعيين الجهاز الجديد كمالك، وضمان وجود مستخدم مدير فعلي مربوط به.
       int? newOwnerUserId = peer.first['user_id'] as int?;
+      String newOwnerName =
+          (peer.first['name'] as String?)?.trim().isNotEmpty == true
+              ? peer.first['name'] as String
+              : 'المدير';
+      if (newOwnerUserId != null) {
+        // ارفع المستخدم المربوط إلى مدير إن لم يكن.
+        final urows = await txn.query('users',
+            where: 'id = ?', whereArgs: [newOwnerUserId], limit: 1);
+        if (urows.isNotEmpty) {
+          final u = AppUser.fromMap(urows.first);
+          if (u.role != UserRole.admin) {
+            final perms = defaultPerms(UserRole.admin);
+            final permStr =
+                perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+            await txn.update('users',
+                {'role': 'admin', 'permissions': permStr, 'active': 1,
+                 'deleted_at': '', 'updated_at': now},
+                where: 'id = ?', whereArgs: [newOwnerUserId]);
+          }
+        } else {
+          newOwnerUserId = null;
+        }
+      }
       if (newOwnerUserId == null) {
-        // إن لم يكن معيّناً له مستخدم، أنشئ/ابحث عن مستخدم مدير واربطه.
-        // (لتبسيط الأمر: نُبقي user_id كما هو ونجعل المدير عليه أن يُكمل التعيين).
+        // أنشئ مستخدم مدير جديدًا خاصًا بالمالك الجديد.
+        final adminPerms = defaultPerms(UserRole.admin);
+        final permStr = adminPerms.entries
+            .where((e) => e.value)
+            .map((e) => e.key)
+            .join(',');
+        final id = newGlobalId();
+        await txn.insert('users', {
+          'id': id,
+          'name': newOwnerName,
+          'role': 'admin',
+          'pin': '',
+          'password': '',
+          'permissions': permStr,
+          'is_me': 0,
+          'active': 1,
+          'workspace_id': requireWorkspaceId,
+          'deleted_at': '',
+          'created_at': now,
+          'updated_at': now,
+        });
+        newOwnerUserId = id;
       }
       await txn.update(
         'devices',
@@ -1497,43 +1642,46 @@ class Repo {
           'is_owner': 1,
           'user_id': newOwnerUserId,
           'paired_by': _currentUserId,
+          'revoked_at': '',
+          'expelled_at': '',
+          'is_paired': 1,
           'updated_at': now,
         },
         where: 'id = ?',
         whereArgs: [newOwnerDeviceId],
       );
 
-      // 3) جهازي الحالي: أُصبح عضواً عادياً بالدور المطلوب أو viewer.
-      //    نُنشئ مستخدماً بدور محدود لي إن لم أكن موجوداً في جدول المستخدمين كعضو غير مدير.
+      // 3) جهازي الحالي: أُصبح عضواً عادياً بالدور المطلوب (viewer افتراضيًا).
+      final demoteRole = newUserRoleForMe ?? 'viewer';
+      final demotePerms = defaultPerms(UserRole.fromCode(demoteRole));
+      final demoteStr =
+          demotePerms.entries.where((e) => e.value).map((e) => e.key).join(',');
       final myUser = await txn.query(
         'users',
         where: 'id = ?',
         whereArgs: [_currentUserId],
         limit: 1,
       );
-      if (myUser.isNotEmpty) {
-        final targetRole = newUserRoleForMe ?? 'viewer';
-        final perms = defaultPerms(UserRole.fromCode(targetRole));
-        final permStr =
-            perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+      if (myUser.isNotEmpty && _currentUserId != newOwnerUserId) {
         await txn.update(
           'users',
           {
-            'role': targetRole,
-            'permissions': permStr,
+            'role': demoteRole,
+            'permissions': demoteStr,
             'is_me': 1, // نظل أنا المستخدم الفعال على جهازنا.
+            'active': 1,
             'updated_at': now,
           },
           where: 'id = ?',
           whereArgs: [_currentUserId],
         );
-        await txn.update(
-          'devices',
-          {'is_owner': 0, 'user_id': _currentUserId, 'updated_at': now},
-          where: 'id = ?',
-          whereArgs: [_deviceId],
-        );
       }
+      await txn.update(
+        'devices',
+        {'is_owner': 0, 'user_id': _currentUserId, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [_deviceId],
+      );
 
       await txn.insert(
         'sync_meta',
@@ -1541,6 +1689,27 @@ class Repo {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
+
+    // مزامنة تغييرات الأدوار (users) مع الأعضاء الآخرين عبر العمليات.
+    try {
+      final usersRows = await db.query('users');
+      for (final u in usersRows) {
+        await queueOperation(
+          entityType: EntityKind.user,
+          entityId: '${u['id']}',
+          opType: OpKind.update,
+          payload: Map<String, Object?>.from(u),
+        );
+      }
+      // علِّمة تغيير ملكية تدفع الأعضاء لسحب لقطة منعشة عند المزامنة التالية.
+      await setSetting('ownershipEpoch', now);
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipEpoch',
+        opType: OpKind.settings,
+        payload: {'key': 'ownershipEpoch', 'value': now},
+      );
+    } catch (_) {}
   }
 
   /// يُعيد الجهاز إلى الوضع المستقل بعد الطرد من قِبل المدير.

@@ -473,6 +473,7 @@ class DeviceCard extends StatelessWidget {
   final VoidCallback onExpel;
   final VoidCallback onTransferOwner;
   final VoidCallback onResetSecret;
+  final VoidCallback? onPermissions;
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
@@ -486,6 +487,7 @@ class DeviceCard extends StatelessWidget {
     required this.onExpel,
     required this.onTransferOwner,
     required this.onResetSecret,
+    this.onPermissions,
     required this.isSelf,
     required this.isOwnerDevice,
     required this.amITheOwner,
@@ -669,6 +671,13 @@ class DeviceCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 6),
+                  if (!expelled && !isSelf && amITheOwner && onPermissions != null)
+                    IconButton(
+                      tooltip: 'إدارة صلاحيات الجهاز',
+                      onPressed: inactive ? null : onPermissions,
+                      icon: const Icon(Icons.verified_user_outlined,
+                          size: 20, color: Colors.teal),
+                    ),
                   IconButton(
                     tooltip: 'إعادة التسمية',
                     onPressed: isSelf || inactive ? null : onRename,

@@ -133,6 +133,10 @@ class LanSyncService implements SyncTransport {
         await _handleSnapshot(req, cors);
         return;
       }
+      if (path == '/roster' && req.method == 'GET') {
+        await _handleRoster(req, cors);
+        return;
+      }
       cors.statusCode = HttpStatus.notFound;
       await cors.close();
     } catch (e) {
@@ -399,6 +403,70 @@ class LanSyncService implements SyncTransport {
     }
   }
 
+  /// قائمة الأجهزة والأدوار الحالية (للمصالحة الدورية بين الأعضاء والمالك).
+  /// تتيح للعضو اكتشاف نقل الملكية إليه أو طرده أو تغيّر أقرانه دون لقطة كاملة.
+  Future<void> _handleRoster(HttpRequest req, HttpResponse resp) async {
+    final auth = req.headers.value('Authorization') ?? '';
+    final secret =
+        auth.startsWith('Bearer ') ? auth.substring(7).trim() : auth;
+    resp.headers.contentType = ContentType.json;
+    if (secret.isEmpty) {
+      resp.statusCode = HttpStatus.unauthorized;
+      resp.write(jsonEncode({'ok': false, 'error': 'auth-required'}));
+      await resp.close();
+      return;
+    }
+    try {
+      final db = await dbProvider();
+      final dev = await db.query(
+        'devices',
+        where:
+            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [secret],
+        limit: 1,
+      );
+      if (dev.isEmpty) {
+        resp.statusCode = HttpStatus.forbidden;
+        resp.write(jsonEncode({'ok': false, 'error': 'unknown-device'}));
+        await resp.close();
+        return;
+      }
+      final selfId = dev.first['id'] as String;
+      final devices = await db.query('devices');
+      final roster = devices.map((d) {
+        final isSelf = d['id'] == selfId;
+        final m = Map<String, Object?>.from(d);
+        m.remove('auth_secret');
+        m['pair_token'] = '';
+        m['pair_token_exp'] = '';
+        // السر لا يُوزَّع لغير سجلنا.
+        if (!isSelf) m['auth_secret'] = '';
+        return m;
+      }).toList();
+      // أدوار المستخدمين (للمصالحة) دون أسرار.
+      final users = (await db.query('users')).map((u) {
+        final m = Map<String, Object?>.from(u);
+        m['pin'] = '';
+        m['password'] = '';
+        return m;
+      }).toList();
+      final modeRows = await db.query('sync_meta',
+          where: 'key = ?', whereArgs: ['workspaceMode'], limit: 1);
+      resp.write(jsonEncode({
+        'ok': true,
+        'hostDeviceId': ourDeviceId,
+        'selfId': selfId,
+        'workspaceMode': modeRows.isEmpty ? 'managed' : modeRows.first['value'],
+        'devices': roster,
+        'users': users,
+      }));
+    } catch (e) {
+      resp.statusCode = HttpStatus.internalServerError;
+      resp.write(jsonEncode({'ok': false, 'error': '$e'}));
+    }
+    await resp.close();
+  }
+
   Future<void> _handleOps(HttpRequest req, HttpResponse resp) async {
     int applied = 0;
     String? error;
@@ -544,7 +612,146 @@ class LanSyncService implements SyncTransport {
     return _client ??= HttpClient()..connectionTimeout = kLanRequestTimeout;
   }
 
-  @override
+  /// يسحب قائمة الأجهزة والأدوار من الأقران ويصالح الحالة المحلية:
+  /// - يحدّث is_owner لجهازنا (اكتشاف نقل الملكية فورًا).
+  /// - يحدّث عناوين/منافذ وأدوار الأجهزة والمستخدمين.
+  /// - يرجع true إذا تغيّرت ملكيتنا (لإعادة بناء الواجهة).
+  Future<bool> reconcileRoster() async {
+    final db = await dbProvider();
+    final ownRows = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+    if (ownRows.isEmpty) return false;
+    final own = ownRows.first;
+    final secret = (own['auth_secret'] as String?) ?? '';
+    final wasOwner = (own['is_owner'] as int? ?? 0) == 1;
+    if (secret.isEmpty) return false;
+
+    final peers = await db.query(
+      'devices',
+      where:
+          "is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' AND ip_address <> '' AND id <> ?",
+      whereArgs: [ourDeviceId],
+    );
+    for (final peer in peers) {
+      final ip = peer['ip_address'] as String?;
+      final p = peer['port'] as int?;
+      if (ip == null || ip.isEmpty || p == null) continue;
+      try {
+        final req = await _httpClient
+            .getUrl(Uri.parse('http://$ip:$p/roster'))
+            .timeout(const Duration(seconds: 6));
+        req.headers.set('Authorization', 'Bearer $secret');
+        final resp =
+            await req.close().timeout(const Duration(seconds: 6));
+        final body = await resp
+            .timeout(const Duration(seconds: 4))
+            .transform(utf8.decoder)
+            .join();
+        if (resp.statusCode == HttpStatus.gone) {
+          try {
+            await repo.resetToStandaloneAfterExpulsion();
+          } catch (_) {}
+          return true;
+        }
+        if (resp.statusCode != 200) continue;
+        final m = jsonDecode(body) as Map;
+        if (m['ok'] != true) continue;
+        await _applyRoster(db, Map<String, Object?>.from(m));
+        // تكفي مصالحة ناجحة من نظير واحد (المالك).
+        break;
+      } catch (_) {
+        // جرّب القرين التالي.
+      }
+    }
+    final after = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+    final nowOwner =
+        after.isNotEmpty && ((after.first['is_owner'] as int? ?? 0) == 1);
+    return nowOwner != wasOwner;
+  }
+
+  Future<void> _applyRoster(Database db, Map<String, Object?> roster) async {
+    final devices = (roster['devices'] as List?) ?? const [];
+    final users = (roster['users'] as List?) ?? const [];
+    final mode = (roster['workspaceMode'] as String?) ?? 'managed';
+    await db.transaction((txn) async {
+      final now = DateTime.now().toIso8601String();
+      // حدّث/أدرج سجلات الأجهزة (مع الحفاظ على سرّنا المحلي).
+      for (final raw in devices) {
+        final d = Map<String, Object?>.from(raw as Map);
+        final id = d['id'] as String?;
+        if (id == null) continue;
+        final existing = await txn
+            .query('devices', where: 'id = ?', whereArgs: [id], limit: 1);
+        final isSelf = id == ourDeviceId;
+        final map = <String, Object?>{
+          'workspace_id': d['workspace_id'] ?? defaultWorkspaceId,
+          'name': d['name'] ?? 'جهاز',
+          'platform': d['platform'] ?? 'lan',
+          'ip_address': d['ip_address'] ?? '',
+          'port': d['port'] ?? kDefaultLanPort,
+          'is_owner': isSelf
+              ? (d['is_owner'] ?? 0)
+              : (d['is_owner'] ??
+                  (existing.isNotEmpty ? existing.first['is_owner'] : 0)),
+          'is_paired': 1,
+          'user_id': d['user_id'],
+          'revoked_at': d['revoked_at'] ?? '',
+          'expelled_at': d['expelled_at'] ?? '',
+          'last_seen_at': now,
+          'updated_at': now,
+        };
+        if (existing.isNotEmpty) {
+          // لا نكتب سرّنا من بيانات واردة.
+          await txn.update('devices', map,
+              where: 'id = ?', whereArgs: [id]);
+        } else {
+          map['id'] = id;
+          map['auth_secret'] = isSelf
+              ? (d['auth_secret'] ?? '')
+              : '';
+          map['created_at'] = now;
+          await txn.insert('devices', map,
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      // أدوار المستخدمين (مزامنة الصلاحيات) دون المساس بـ is_me/كلمات السر.
+      for (final raw in users) {
+        final u = Map<String, Object?>.from(raw as Map);
+        final uid = u['id'];
+        if (uid == null) continue;
+        final existing = await txn
+            .query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
+        final map = <String, Object?>{
+          'name': u['name'] ?? 'مستخدم',
+          'role': u['role'] ?? 'viewer',
+          'permissions': u['permissions'] ?? '',
+          'active': u['active'] ?? 1,
+          'deleted_at': u['deleted_at'] ?? '',
+          'workspace_id': u['workspace_id'] ?? defaultWorkspaceId,
+          'updated_at': now,
+        };
+        if (existing.isNotEmpty) {
+          await txn.update('users', map,
+              where: 'id = ?', whereArgs: [uid]);
+        } else {
+          map['id'] = uid;
+          map['is_me'] = 0;
+          map['pin'] = '';
+          map['password'] = '';
+          map['created_at'] = now;
+          await txn.insert('users', map,
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      await txn.insert(
+        'sync_meta',
+        {'key': 'workspaceMode', 'value': mode},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+  }
+
   Future<void> push(SyncOperation op) async {
     final db = await dbProvider();
     final own = await db.query('devices',

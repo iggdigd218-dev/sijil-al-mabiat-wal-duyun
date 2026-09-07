@@ -655,7 +655,7 @@ class AppDatabase {
       try {
         final me = await db.query(
           'users',
-          where: 'is_me = 1 AND COALESCE(deleted_at, "") = ""',
+          where: "is_me = 1 AND COALESCE(deleted_at,'') = ''",
           limit: 1,
         );
         if (me.isNotEmpty) {
@@ -692,7 +692,7 @@ class AppDatabase {
         final ownerDeviceId = localDev.first['id'];
         final anyPeer = await db.query(
           'devices',
-          where: 'id <> ? AND is_paired = 1 AND COALESCE(revoked_at,"") = ""',
+          where: "id <> ? AND is_paired = 1 AND COALESCE(revoked_at,'') = ''",
           whereArgs: [ownerDeviceId],
           limit: 1,
         );

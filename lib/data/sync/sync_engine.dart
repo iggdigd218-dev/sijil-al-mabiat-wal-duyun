@@ -30,6 +30,7 @@ class SyncEngine {
   SyncQueueOps? _queue;
   Timer? _timer;
   Timer? _maintenanceTimer;
+  Timer? _rosterTimer;
   int _generation = 0;
   bool _running = false;
   bool _started = false;
@@ -234,6 +235,24 @@ class SyncEngine {
       const Duration(hours: 6),
       (_) => _checkExpulsionAndAutoPurge(),
     );
+    // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
+    // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
+    _rosterTimer ??= Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _reconcileRoster(),
+    );
+  }
+
+  Future<void> _reconcileRoster() async {
+    try {
+      if (!_started) return;
+      await _ensureLanTransport();
+      final changed = await _lanTransport?.reconcileRoster();
+      if (changed == true) {
+        // تغيرت ملكيتنا → أعد معالجة الطابور لتطبيق أي عمليات معلّقة.
+        await processQueue();
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkExpulsionAndAutoPurge() async {
@@ -253,9 +272,11 @@ class SyncEngine {
     _generation++;
     _timer?.cancel();
     _maintenanceTimer?.cancel();
+    _rosterTimer?.cancel();
     _immediate?.cancel();
     _timer = null;
     _maintenanceTimer = null;
+    _rosterTimer = null;
     _immediate = null;
     if (SyncRecorder.onOperationRecorded == notifyNewOperation) {
       SyncRecorder.onOperationRecorded = null;
