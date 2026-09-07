@@ -60,6 +60,26 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk nexora-arm64.apk
           ls -lh nexora-arm64.apk
 
+      - name: Generate version manifest (version.json)
+        run: |
+          VER=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
+          NAME="${VER%%+*}"; BUILD="${VER##*+}"
+          echo "إصدار البناء: $NAME (build $BUILD)"
+          cat > version.json <<EOF
+          {
+            "version": "$NAME+$BUILD",
+            "minSupported": "3.13.0",
+            "releaseUrl": "https://github.com/${{ github.repository }}/releases/tag/latest",
+            "downloads": {
+              "android": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-arm64.apk",
+              "windows": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-windows.zip"
+            },
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "notes": "نسخة محدّثة: إصلاح نظام التحديث والتثبيت، وتوحيد توقيع التطبيق بحيث تُثبَّت التحديثات القادمة مباشرةً فوق الحالية دون حذف. إذا كانت النسخة المثبّتة لديك قديمة جدًا وموقّعة بمفتاح مختلف، يلزم إلغاء تثبيتها مرة واحدة فقط ثم تثبيت هذه النسخة."
+          }
+          EOF
+          cat version.json
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -67,26 +87,7 @@ jobs:
           path: nexora-arm64.apk
           retention-days: 30
 
-      - name: Create GitHub Release with APK
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: flutter-v3.7.${{ github.run_number }}
-          name: Nexora Flutter Native v3.7 (arm64)
-          body: |
-            ## 📱 تطبيق الأندرويد الأصلي — نسخة 64 بت (arm64)
-            - **الملف**: `nexora-arm64.apk` — ملف واحد يعمل على أغلب الأجهزة الحديثة.
-            - موقّع بمفتاح release ثابت؛ التحديثات القادمة تُثبَّت فوقه مباشرةً بدون حذف.
-            - حجم صغير (~16MB) بعد حصر المعمارية وضغط المكتبات وإزالة الحزم غير المستخدمة.
-            - يتضمن كامل إعدادات النسخة الخفيفة (نوع الواتساب، العملية الافتراضية، ملاحظات السند، تنبيه المخزون).
-            - تاريخ الإصدار: ${{ github.event.head_commit.timestamp }}
-          files: nexora-arm64.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update unified latest release (APK)
+      - name: Update unified latest release (APK + version.json)
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
@@ -106,7 +107,9 @@ jobs:
             - فك ضغط الملف ثم شغّل `nexora.exe`.
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
-          files: nexora-arm64.apk
+          files: |
+            nexora-arm64.apk
+            version.json
           prerelease: false
           make_latest: true
         env:

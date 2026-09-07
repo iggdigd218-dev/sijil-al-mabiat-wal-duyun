@@ -6,10 +6,10 @@
 library;
 
 /// إصدار التطبيق المعروض (يطابق pubspec.yaml).
-const String kAppVersion = '3.12.3';
+const String kAppVersion = '3.13.0';
 
 /// رقم البناء (ما بعد + في pubspec.yaml).
-const int kAppBuild = 20;
+const int kAppBuild = 21;
 
 /// النص المعروض للمستخدم.
 String get appVersionLabel => 'الإصدار $kAppVersion';
@@ -41,7 +41,7 @@ class AppSemVer implements Comparable<AppSemVer> {
 
   /// إصدار التطبيق الحالي.
   static const AppSemVer current =
-      AppSemVer(3, 12, 3, kAppBuild); // يطابق kAppVersion
+      AppSemVer(3, 13, 0, kAppBuild); // يطابق kAppVersion
 
   @override
   int compareTo(AppSemVer o) {

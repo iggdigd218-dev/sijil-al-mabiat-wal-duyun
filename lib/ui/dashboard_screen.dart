@@ -18,19 +18,20 @@ class DashboardScreen extends ConsumerWidget {
   final void Function(AppScreen)? onOpen;
   const DashboardScreen({super.key, this.onOpen});
 
-  /// الأيقونات الست الرئيسية (كما في التصميم المرجعي).
+  /// الأيقونات الست الرئيسية (كما في التصميم المرجعي): دوائر متدرجة بأيقونات بيضاء.
   static const _mainTiles = <_Tile>[
-    _Tile('المبيعات', '🛒', Color(0xFF22B559), Color(0xFF0E8F45), AppScreen.pos),
-    _Tile('العملاء', '👥', Color(0xFF3B82F6), Color(0xFF1D55C8),
-        AppScreen.accounts),
-    _Tile('الديون', '💳', Color(0xFFFBA528), Color(0xFFEF8A0D),
-        AppScreen.vouchers),
-    _Tile('المخزون', '📦', Color(0xFF8B5CF6), Color(0xFF6D35E0),
-        AppScreen.inventory),
-    _Tile('المعاملات', '🧾', Color(0xFF22C3DD), Color(0xFF0A93B4),
-        AppScreen.transactions),
-    _Tile('التقارير', '📊', Color(0xFF6366F1), Color(0xFF4740C9),
-        AppScreen.reports),
+    _Tile('المبيعات', Icons.shopping_cart_rounded, Color(0xFF2FC86B),
+        Color(0xFF129A4E), AppScreen.pos),
+    _Tile('العملاء', Icons.groups_rounded, Color(0xFF4F8DF7),
+        Color(0xFF2563D6), AppScreen.accounts),
+    _Tile('الديون', Icons.credit_card_rounded, Color(0xFFFFB03A),
+        Color(0xFFF58A0A), AppScreen.vouchers),
+    _Tile('المخزون', Icons.inventory_2_rounded, Color(0xFFA78BFA),
+        Color(0xFF7C45E0), AppScreen.inventory),
+    _Tile('المعاملات', Icons.description_rounded, Color(0xFF39C6E8),
+        Color(0xFF0E9BC0), AppScreen.transactions),
+    _Tile('التقارير', Icons.bar_chart_rounded, Color(0xFF6D7BF5),
+        Color(0xFF4A47C9), AppScreen.reports),
   ];
 
   @override
@@ -483,11 +484,11 @@ class _AmountPill extends StatelessWidget {
 
 class _Tile {
   final String label;
-  final String emoji;
+  final IconData icon;
   final Color g1;
   final Color g2;
   final AppScreen target;
-  const _Tile(this.label, this.emoji, this.g1, this.g2, this.target);
+  const _Tile(this.label, this.icon, this.g1, this.g2, this.target);
 }
 
 class _FeatureTile extends StatelessWidget {
@@ -516,25 +517,31 @@ class _FeatureTile extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: big ? 52 : 46,
-                height: big ? 52 : 46,
+                width: big ? 56 : 48,
+                height: big ? 56 : 48,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [tile.g1, tile.g2],
                   ),
-                  borderRadius: BorderRadius.circular(big ? 18 : 14),
+                  shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: tile.g2.withValues(alpha: .35),
+                      color: tile.g2.withValues(alpha: .38),
                       blurRadius: 14,
                       offset: const Offset(0, 7),
                     ),
                   ],
                 ),
                 alignment: Alignment.center,
-                child: Text(tile.emoji, style: TextStyle(fontSize: big ? 25 : 21)),
+                child: Icon(tile.icon,
+                    color: Colors.white,
+                    size: big ? 28 : 24,
+                    shadows: const [
+                      Shadow(color: Colors.black26, blurRadius: 3,
+                          offset: Offset(0, 1))
+                    ]),
               ),
               const SizedBox(height: 7),
               Text(
