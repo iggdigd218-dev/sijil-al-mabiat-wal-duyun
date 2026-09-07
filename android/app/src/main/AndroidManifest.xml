@@ -1,8 +1,39 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- الشبكة: المزامنة السحابية، مزامنة LAN، تسجيل دخول Google، التحديثات -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+
+    <!-- البصمة: قفل التطبيق (USE_FINGERPRINT للأجهزة الأقدم من أندرويد 9) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+
+    <!-- الكاميرا: مسح الباركود/QR وتصوير سندات العمليات -->
     <uses-permission android:name="android.permission.CAMERA"/>
+
+    <!-- الميكروفون: التسجيل الصوتي (ملاحظات/رسائل صوتية مستقبلاً) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
+    <!-- الإشعارات: أندرويد 13+ يتطلب إذن صريح لعرض الإشعارات -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- الاهتزاز: التفاعلات اللمسية (HapticFeedback) عند الحفظ/الدفع/الحذف/الأخطاء -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!-- جهات الاتصال: لا حاجة لإذن READ_CONTACTS — يُستخدم منتقي النظام
+         (openExternalPick) الذي يفتح تطبيق جهات الاتصال ويعيد جهة واحدة فقط -->
+
+    <!-- الصور والتخزين: اختيار صور من المعرض + حفظ/قراءة النسخ الاحتياطية -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"/>
+
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+    <uses-feature android:name="android.hardware.fingerprint" android:required="false"/>
+    <uses-feature android:name="android.hardware.wifi" android:required="false"/>
 
     <application
         android:label="مدير الحسابات"
@@ -49,19 +80,60 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- فتح الروابط في المتصفح الخارجي -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>
         </intent>
         <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="http"/>
+        </intent>
+        <!-- فتح تطبيق الهاتف للاتصال برقم العميل -->
+        <intent>
             <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
         </intent>
         <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!-- إرسال بريد إلكتروني عبر تطبيق البريد الخارجي -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="mailto"/>
+        </intent>
+        <!-- إرسال رسالة نصية SMS عبر تطبيق الرسائل الخارجي -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="smsto"/>
+        </intent>
+        <!-- مشاركة الملفات والسندات مع أي تطبيق خارجي -->
+        <intent>
             <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="*/*"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND_MULTIPLE"/>
+            <data android:mimeType="*/*"/>
+        </intent>
+        <!-- فتح منتقي جهات الاتصال الخارجي (بلا إذن قراءة) على أندرويد 11+ -->
+        <intent>
+            <action android:name="android.intent.action.PICK"/>
+            <data android:mimeType="vnd.android.cursor.dir/contact"/>
+        </intent>
+        <!-- اختيار ملفات/صور من التطبيقات الخارجية (منتقي الملفات والمعرض) -->
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT"/>
+            <data android:mimeType="*/*"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT"/>
             <data android:mimeType="*/*"/>
         </intent>
         <package android:name="com.whatsapp"/>
         <package android:name="com.whatsapp.w4b"/>
+        <package android:name="com.android.contacts"/>
+        <package android:name="com.google.android.contacts"/>
     </queries>
 </manifest>

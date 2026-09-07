@@ -41,11 +41,11 @@ class Sfx {
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 70),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 140),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     if (s) SystemSound.play(SystemSoundType.click);
   }
@@ -57,15 +57,15 @@ class Sfx {
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 70),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 140),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 220),
-      h ? () => HapticFeedback.mediumImpact : null,
+      h ? HapticFeedback.mediumImpact : null,
     );
     if (s) SystemSound.play(SystemSoundType.click);
   }
@@ -85,11 +85,11 @@ class Sfx {
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 90),
-      h ? () => HapticFeedback.selectionClick : null,
+      h ? HapticFeedback.selectionClick : null,
     );
     Future.delayed(
       const Duration(milliseconds: 180),
-      h ? () => HapticFeedback.mediumImpact : null,
+      h ? HapticFeedback.mediumImpact : null,
     );
     if (s) SystemSound.play(SystemSoundType.click);
   }
@@ -103,7 +103,7 @@ class Sfx {
     if (h) HapticFeedback.lightImpact();
     Future.delayed(
       const Duration(milliseconds: 120),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
   }
 
@@ -116,7 +116,7 @@ class Sfx {
     if (h) HapticFeedback.heavyImpact();
     Future.delayed(
       const Duration(milliseconds: 110),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     if (s) SystemSound.play(SystemSoundType.alert);
   }
@@ -128,7 +128,7 @@ class Sfx {
     if (h) HapticFeedback.selectionClick();
     Future.delayed(
       const Duration(milliseconds: 80),
-      h ? () => HapticFeedback.selectionClick : null,
+      h ? HapticFeedback.selectionClick : null,
     );
   }
 
@@ -156,7 +156,7 @@ class Sfx {
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 90),
-      h ? () => HapticFeedback.heavyImpact : null,
+      h ? HapticFeedback.heavyImpact : null,
     );
   }
 
@@ -169,11 +169,11 @@ class Sfx {
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 180),
-      h ? () => HapticFeedback.lightImpact : null,
+      h ? HapticFeedback.lightImpact : null,
     );
     Future.delayed(
       const Duration(milliseconds: 360),
-      h ? () => HapticFeedback.mediumImpact : null,
+      h ? HapticFeedback.mediumImpact : null,
     );
   }
 
