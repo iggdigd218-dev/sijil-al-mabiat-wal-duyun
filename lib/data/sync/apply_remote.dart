@@ -61,9 +61,8 @@ extension ApplyRemoteOp on Repo {
         ? rawLines.whereType<Map>().map(Map<String, Object?>.from).toList()
         : null;
 
-    final columns = (await txn.rawQuery('PRAGMA table_info($table)'))
-        .map((c) => c['name'] as String)
-        .toSet();
+    final tableInfo = await txn.rawQuery('PRAGMA table_info($table)');
+    final columns = tableInfo.map((c) => c['name'] as String).toSet();
     final now = DateTime.now().toIso8601String();
     final row = <String, Object?>{
       for (final entry in op.payload.entries)
@@ -84,7 +83,30 @@ extension ApplyRemoteOp on Repo {
                 where: '$primaryKey = ?', whereArgs: [op.entityId]);
           }
         } else {
-          await txn.insert(table, {...row, primaryKey: op.entityId});
+          // إدراج كيان غير موجود محليًا: حمولة "تعديل" جزئية (مثل تعديل كمية
+          // صنف فقط) لا تكفي لإنشاء صف صالح — كانت تكسر قيد NOT NULL فيعود
+          // للجهاز المرسل خطأ 'internal' وتعلق قائمة المزامنة كلها في إعادة
+          // محاولة أبدية. نُكمل الأعمدة الإلزامية الناقصة بقيم افتراضية آمنة
+          // (النصوص فارغة، الأرقام صفر، التواريخ الآن) بدل الانفجار.
+          final insertRow = {...row, primaryKey: op.entityId};
+          for (final col in tableInfo) {
+            final name = col['name'] as String;
+            if (insertRow.containsKey(name)) continue;
+            final notNull = (col['notnull'] as int? ?? 0) == 1;
+            final hasDefault = col['dflt_value'] != null;
+            final isPk = (col['pk'] as int? ?? 0) > 0;
+            if (!notNull || hasDefault || isPk) continue;
+            final type = ((col['type'] as String?) ?? '').toUpperCase();
+            insertRow[name] = switch (name) {
+              'created_at' || 'updated_at' || 'date' => now,
+              _ => type.contains('INT') ||
+                      type.contains('REAL') ||
+                      type.contains('NUM')
+                  ? 0
+                  : '',
+            };
+          }
+          await txn.insert(table, insertRow);
         }
         if (op.entityType == EntityKind.tx && lines != null) {
           await _replaceInvoiceLines(txn, op, lines);

@@ -26,6 +26,21 @@ const int kDefaultLanPort = 43053;
 const int kMaxLanPayloadBytes = 1024 * 1024; // 1 MB
 const Duration kLanRequestTimeout = Duration(seconds: 5);
 
+/// يحوّل استثناء تطبيق عملية واردة إلى نص قصير آمن للإرسال في رد HTTP:
+/// سطر واحد، بلا مسارات ملفات أو Stack traces، بحد أقصى 140 حرفًا.
+String sanitizeSyncError(Object e) {
+  var s = '$e'.split('\n').first.trim();
+  // إزالة أسماء الأصناف الشائعة الطويلة للحفاظ على الإيجاز.
+  s = s
+      .replaceFirst('SqfliteFfiException', 'db')
+      .replaceFirst('DatabaseException', 'db')
+      .replaceFirst('FormatException:', 'format:')
+      .replaceFirst('Bad state:', '');
+  s = s.trim();
+  if (s.isEmpty) return 'internal';
+  return s.length > 140 ? s.substring(0, 140) : s;
+}
+
 class LanDevice {
   final String deviceId;
   final String ipAddress;
@@ -686,7 +701,10 @@ class LanSyncService implements SyncTransport {
       error = e.message;
       statusCode = HttpStatus.requestEntityTooLarge;
     } catch (e) {
-      error = 'internal';
+      // نُعيد السبب الحقيقي (مُنظّفًا ومُقتضبًا) بدل كلمة 'internal' الغامضة،
+      // حتى يظهر لدى المُرسِل سبب الفشل الفعلي (قيد قاعدة بيانات، عمود ناقص…)
+      // ويمكن تشخيصه من شاشة العمليات المتزامنة مباشرة.
+      error = sanitizeSyncError(e);
       statusCode = HttpStatus.internalServerError;
     } finally {
       resp.statusCode = statusCode;
