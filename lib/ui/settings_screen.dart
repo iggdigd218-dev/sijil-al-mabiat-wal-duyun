@@ -247,6 +247,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _Collapsible(
                   title: 'بيانات المؤسسة',
                   icon: Icons.business_outlined,
+                  color: const Color(0xFF2563EB),
                   children: [
                     Card(
                       child: Padding(
@@ -462,6 +463,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _Collapsible(
                   title: 'العملة والترقيم',
                   icon: Icons.currency_exchange,
+                  color: const Color(0xFF0D9488),
                   children: [
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -518,6 +520,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _Collapsible(
                   title: 'المشاركة والإشعارات',
                   icon: Icons.send,
+                  color: const Color(0xFFF59E0B),
                   initiallyExpanded: true,
                   children: [
                     const ListTile(
@@ -533,6 +536,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _Collapsible(
                   title: 'المبيعات والسندات',
                   icon: Icons.receipt_long_outlined,
+                  color: const Color(0xFF0EA5E9),
                   initiallyExpanded: true,
                   children: [
                     ListTile(
@@ -601,6 +605,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _Collapsible(
                   title: 'الأمان والخصوصية',
                   icon: Icons.lock_outline,
+                  color: const Color(0xFFE11D48),
                   children: [
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
@@ -777,23 +782,33 @@ class _Field extends StatelessWidget {
 class _Collapsible extends StatelessWidget {
   final String title;
   final IconData icon;
+  final Color? color;
   final List<Widget> children;
   final bool initiallyExpanded;
   const _Collapsible({
     required this.title,
     required this.icon,
+    this.color,
     required this.children,
     this.initiallyExpanded = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final c = color ?? AppColors.primaryOf(context);
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: AppColors.surfaceOf(context),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.borderOf(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: .03),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
@@ -801,7 +816,15 @@ class _Collapsible extends StatelessWidget {
           initiallyExpanded: initiallyExpanded,
           shape: const RoundedRectangleBorder(),
           collapsedShape: const RoundedRectangleBorder(),
-          leading: Icon(icon, color: AppColors.primaryOf(context)),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: c.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: c, size: 22),
+          ),
           title: Text(
             title,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),

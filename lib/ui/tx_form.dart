@@ -420,24 +420,46 @@ class _TxFormState extends ConsumerState<TxForm> {
                 borderRadius: BorderRadius.circular(4),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 8, 6),
+            // ترويسة ملوّنة بنفس طابع التصميم المرجعي.
+            Container(
+              margin: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topRight,
+                  end: Alignment.bottomLeft,
+                  colors: [Color(0xFF1E3A5F), Color(0xFF0F766E)],
+                ),
+                borderRadius: BorderRadius.circular(16),
+              ),
               child: Row(
                 children: [
+                  const Icon(Icons.edit_note_rounded,
+                      color: Colors.white, size: 26),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       title,
-                      style: Theme.of(context).textTheme.titleLarge,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
                     ),
                   ),
-                  IconButton(
-                    onPressed: _saving ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
+                  InkWell(
+                    onTap:
+                        _saving ? null : () => Navigator.pop(context),
+                    borderRadius: BorderRadius.circular(20),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(Icons.close, color: Colors.white, size: 22),
+                    ),
                   ),
                 ],
               ),
             ),
-            const Divider(height: 1),
             Flexible(
               child: Form(
                 key: _formKey,
@@ -513,44 +535,49 @@ class _TxFormState extends ConsumerState<TxForm> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 18),
                       if (_saveSlow)
                         const Padding(
                           padding: EdgeInsets.only(bottom: 10),
                           child: Text(
                               'الحفظ أبطأ من المعتاد. ننتظر نتيجة قاعدة البيانات؛ لا تُكرر العملية.',
+                              textAlign: TextAlign.center,
                               style: TextStyle(color: Colors.orange)),
                         ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed:
-                                  _saving ? null : () => Navigator.pop(context),
-                              child: const Text('إلغاء'),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            flex: 2,
-                            child: FilledButton.icon(
-                              onPressed: _saving ? null : _save,
-                              icon: _saving
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Icon(Icons.save_outlined),
-                              label: Text(
-                                _saving ? 'جارٍ الحفظ...' : 'حفظ العملية',
-                              ),
-                            ),
+                          onPressed: _saving ? null : _save,
+                          icon: _saving
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.save_outlined, size: 22),
+                          label: Text(
+                            _saving ? 'جارٍ الحفظ...' : 'حفظ العملية',
                           ),
-                        ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      TextButton(
+                        onPressed:
+                            _saving ? null : () => Navigator.pop(context),
+                        child: const Text('إلغاء'),
                       ),
                     ],
                   ),

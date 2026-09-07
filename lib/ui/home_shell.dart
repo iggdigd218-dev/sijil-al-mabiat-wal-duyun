@@ -345,32 +345,65 @@ class _Drawer extends ConsumerWidget {
   final void Function(AppScreen) onSelect;
   const _Drawer({required this.current, required this.onSelect});
 
+  /// لون مميز لكل قسم (كما في التصميم المرجعي).
+  Color _colorOf(AppScreen s) => switch (s) {
+        AppScreen.dashboard => const Color(0xFF2563EB),
+        AppScreen.transactions => const Color(0xFF0EA5E9),
+        AppScreen.accounts => const Color(0xFF2563EB),
+        AppScreen.reports => const Color(0xFF6366F1),
+        AppScreen.settings => const Color(0xFF64748B),
+        AppScreen.inventory => const Color(0xFF8B5CF6),
+        AppScreen.currencies => const Color(0xFF0D9488),
+        AppScreen.vouchers => const Color(0xFFF59E0B),
+        AppScreen.pos => const Color(0xFF16A34A),
+        AppScreen.chat => const Color(0xFF22C55E),
+        AppScreen.group => const Color(0xFF8B5CF6),
+        AppScreen.trash => const Color(0xFFE11D48),
+        AppScreen.activity => const Color(0xFF64748B),
+      };
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider).valueOrNull;
     final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
+    final items = _DrawerItems.of(user: user, isOwner: isOwner);
+    final dark = Theme.of(context).brightness == Brightness.dark;
 
     return Drawer(
+      backgroundColor: AppColors.surfaceOf(context),
       child: SafeArea(
         child: Column(
           children: [
+            // ---------- ترويسة الملف الشخصي ----------
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              color: AppColors.primarySoftOf(context),
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF1E3A5F), Color(0xFF0F766E)],
+                ),
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(22),
+                  bottomRight: Radius.circular(22),
+                ),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          width: 52,
-                          height: 52,
-                          fit: BoxFit.cover,
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white38, width: 2),
                         ),
+                        child: const Icon(Icons.person,
+                            color: Colors.white, size: 30),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -378,20 +411,27 @@ class _Drawer extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'مدير الحسابات',
-                              style: TextStyle(
+                              user?.name ?? 'مدير الحسابات',
+                              style: const TextStyle(
+                                color: Colors.white,
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
-                                color: AppColors.primaryOf(context),
                               ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            Text(
-                              user == null
-                                  ? 'سجل المبيعات والديون'
-                                  : '${user.role.icon} ${user.name}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.text2Of(context),
+                            const SizedBox(height: 2),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: .18),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                user == null ? 'المدير' : '${user.role.icon} ${user.role.label}',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 11),
                               ),
                             ),
                           ],
@@ -402,53 +442,141 @@ class _Drawer extends ConsumerWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+            // ---------- عناصر القائمة ----------
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: _DrawerItems.of(user: user, isOwner: isOwner).map((
-                  s,
-                ) {
-                  final active = s == current;
-                  return ListTile(
-                    leading: Icon(
-                      active ? s.activeIcon : s.icon,
-                      color: active
-                          ? AppColors.primaryOf(context)
-                          : AppColors.text2Of(context),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                children: [
+                  // اختصار الرئيسية دائمًا في الأعلى (كما الصورة).
+                  if (!items.contains(AppScreen.dashboard))
+                    _DrawerTile(
+                      screen: AppScreen.dashboard,
+                      active: current == AppScreen.dashboard,
+                      color: _colorOf(AppScreen.dashboard),
+                      dark: dark,
+                      onTap: () {
+                        Navigator.pop(context);
+                        scheduleMicrotask(
+                            () => onSelect(AppScreen.dashboard));
+                      },
                     ),
-                    title: Text(
-                      s.title,
-                      style: TextStyle(
-                        fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                        fontSize: 14,
-                        color: active
-                            ? AppColors.primaryOf(context)
-                            : AppColors.textOf(context),
-                      ),
+                  for (final s in items)
+                    _DrawerTile(
+                      screen: s,
+                      active: current == s,
+                      color: _colorOf(s),
+                      dark: dark,
+                      onTap: () {
+                        Navigator.pop(context);
+                        scheduleMicrotask(() => onSelect(s));
+                      },
                     ),
-                    selected: active,
-                    selectedTileColor: AppColors.primarySoftOf(context),
-                    onTap: () {
-                      Navigator.pop(context);
-                      // نؤجّل التبديل حتى يُغلق الدرج فلا تهتزّ الواجهة.
-                      scheduleMicrotask(() => onSelect(s));
-                    },
-                  );
-                }).toList(),
+                ],
               ),
             ),
             const Divider(height: 1),
+            // ---------- تسجيل الخروج ----------
             Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                appVersionLabel,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: AppColors.text3Of(context),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Material(
+                color: AppColors.dangerSoftOf(context),
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () => Navigator.pop(context),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.logout_rounded,
+                            color: AppColors.dangerOf(context), size: 22),
+                        const SizedBox(width: 12),
+                        Text(
+                          'تسجيل الخروج',
+                          style: TextStyle(
+                            color: AppColors.dangerOf(context),
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(appVersionLabel,
+                  style: TextStyle(
+                      fontSize: 10.5, color: AppColors.text3Of(context))),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// صف عنصر في القائمة الجانبية بتصميم البطاقة النشطة.
+class _DrawerTile extends StatelessWidget {
+  final AppScreen screen;
+  final bool active;
+  final Color color;
+  final bool dark;
+  final VoidCallback onTap;
+  const _DrawerTile({
+    required this.screen,
+    required this.active,
+    required this.color,
+    required this.dark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Material(
+        color: active
+            ? AppColors.infoSoftOf(context)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: active
+                  ? Border.all(color: AppColors.infoOf(context), width: 1.4)
+                  : null,
+            ),
+            child: Row(
+              children: [
+                Icon(active ? screen.activeIcon : screen.icon,
+                    color: active ? AppColors.infoOf(context) : color,
+                    size: 22),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    screen.title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: active ? FontWeight.w800 : FontWeight.w700,
+                      color: active
+                          ? AppColors.infoOf(context)
+                          : AppColors.textOf(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
