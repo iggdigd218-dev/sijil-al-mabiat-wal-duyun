@@ -403,44 +403,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         }
                       },
                     ),
-                    const Divider(height: 1),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.numbers, color: AppColors.primary),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Text(
-                              'ترقيم تلقائي رقمي بحت لكل العمليات والسندات (١، ٢، ٣…) بدون أحرف، يُزاد آلياً.',
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.6,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                 ),
-                _Collapsible(
-                  title: 'المشاركة والإشعارات',
-                  icon: Icons.send,
-                  color: const Color(0xFFF59E0B),
-                  initiallyExpanded: true,
-                  children: [
-                    const ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.info_outline),
-                      title: Text('طريقة إرسال الإشعار'),
-                      subtitle: Text(
-                        'لكل عميل قناة إشعار خاصة به تُحدد عند إنشاء الحساب أو تعديله: واتساب، رسالة نصية، أو بدون إشعار. اختر القناة من شاشة بيانات العميل.',
-                      ),
-                    ),
-                  ],
-                ),
+                const SizedBox(height: 18),
                 _Collapsible(
                   title: 'المبيعات والسندات',
                   icon: Icons.receipt_long_outlined,
