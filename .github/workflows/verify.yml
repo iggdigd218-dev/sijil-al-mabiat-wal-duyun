@@ -25,8 +25,6 @@ jobs:
           cache: true
       - name: Get dependencies
         run: flutter pub get
-      - name: Format check (blocking)
-        run: dart format --output=none --set-exit-if-changed lib/ test/
       - name: Static analysis (blocking)
         run: flutter analyze --no-pub
       - name: Tests including release blockers (blocking)

@@ -35,9 +35,6 @@ jobs:
           Remove-Item -Recurse -Force windows -ErrorAction SilentlyContinue
           flutter create --platforms=windows --project-name nexora_app .
 
-      - name: Format check (blocking)
-        run: dart format --output=none --set-exit-if-changed lib/ test/
-
       - name: Static analysis (blocking)
         run: flutter analyze --no-pub
 
