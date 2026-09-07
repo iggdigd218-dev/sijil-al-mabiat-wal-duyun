@@ -26,7 +26,7 @@ WizardStyle=modern
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
-AppCopyright= Nexora
+AppCopyright=Nexora
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
