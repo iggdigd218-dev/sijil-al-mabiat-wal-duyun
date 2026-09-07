@@ -48,7 +48,7 @@ class AppDatabase {
   /// إنشاء كل الجداول — مستقل ليُستخدم في الاختبارات أيضًا.
   static Future<void> createSchema(Database db) async {
     // ---------- البنية الجديدة للمزامنة ----------
-    await db.execute(createSyncSchemaSql);
+    await execSchemaScript(db, createSyncSchemaSql);
 
     // ---------- الحسابات ----------
     await db.execute('''
@@ -528,6 +528,81 @@ class AppDatabase {
     if (rows.isEmpty) await db.execute(sql);
   }
 
+  /// ينفّذ نصًا قد يحتوي عدة جُمل CREATE (سكربت مخطط) بشكل متين:
+  /// - يقسّمه على الفواصل المنقوطة وينفّذ كل جملة على حدة.
+  /// - إذا فشلت جملة لأن الجدول/الفهرس موجود مسبقًا (خطأ حصل في بناءات
+  ///   ويندوز القديمة التي استخدمت CREATE TABLE بدون IF NOT EXISTS) يتجاوزها
+  ///   بدل أن تنهار الهجرة بالكامل وتُظهر "table workspaces already exists".
+  static Future<void> execSchemaScript(Database db, String script) async {
+    // أولاً جرّب التنفيذ المباشر (الأسرع، يدعم المحرك الجُمل المتعددة).
+    try {
+      await db.execute(script);
+      return;
+    } catch (e) {
+      if (!_isAlreadyExistsError('$e')) rethrow;
+    }
+    // مسار التحوّط: نفّذ كل جملة مفردة وتجاوز "already exists".
+    final statements = _splitStatements(script);
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } catch (e) {
+        if (_isAlreadyExistsError('$e')) continue;
+        // أخطاء أخرى (مثل نقص عمود في جدول قديم) لا تُبتلع هنا في الإنشاء.
+        rethrow;
+      }
+    }
+  }
+
+  static bool _isAlreadyExistsError(String msg) {
+    final m = msg.toLowerCase();
+    return m.contains('already exists') ||
+        m.contains('duplicate column') ||
+        m.contains('error code 1)');
+  }
+
+  /// يقسّم سكربت SQL إلى جُمل على الفواصل المنقوطة خارج الأقواس/النصوص.
+  static List<String> _splitStatements(String script) {
+    final out = <String>[];
+    final buf = StringBuffer();
+    bool inStr = false;
+    String? strCh;
+    for (var i = 0; i < script.length; i++) {
+      final ch = script[i];
+      if (inStr) {
+        buf.write(ch);
+        if (ch == strCh) {
+          // تجاوز الفاصلة المزدوجة (هروب).
+          if (i + 1 < script.length && script[i + 1] == strCh) {
+            buf.write(script[i + 1]);
+            i++;
+          } else {
+            inStr = false;
+          }
+        }
+        continue;
+      }
+      if (ch == "'" || ch == '"') {
+        inStr = true;
+        strCh = ch;
+        buf.write(ch);
+        continue;
+      }
+      if (ch == ';') {
+        final s = buf.toString().trim();
+        if (s.isNotEmpty) out.add(s);
+        buf.clear();
+        continue;
+      }
+      buf.write(ch);
+    }
+    final s = buf.toString().trim();
+    if (s.isNotEmpty) out.add(s);
+    return out;
+  }
+
   static Future<void> _migrate(Database db, int from, int to) async {
     // هذا يُصلح الحالات التي كانت فيها قواعد البيانات القديمة مفقودة لبعض الجداول
     // (مثل sync_meta) بسبب نسخ سابقة من التطبيق.
@@ -769,7 +844,7 @@ class AppDatabase {
   /// Migration v4 → v5: إضافة جداول المزامنة + أعمدة workspace/deleted للجداول القديمة.
   static Future<void> _migrate4to5(Database db) async {
     // 1) إنشاء الجداول الجديدة (workspaces, devices, operations, sync_queue, sync_meta, google_auth).
-    await db.execute(createSyncSchemaSql);
+    await execSchemaScript(db, createSyncSchemaSql);
 
     // 2) Workspace افتراضي.
     final now = DateTime.now().toIso8601String();

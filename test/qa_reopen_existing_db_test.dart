@@ -1,6 +1,9 @@
 // انحدار: قاعدة بيانات ويندوز قديمة تحتوي جدول workspaces (وجداول مزامنة)
 // لكن دون كل الجداول الأساسية يجب أن تُفتح دون خطأ
 // "table workspaces already exists".
+//
+// يحاكي أيضًا سكربت المزامنة القديم (CREATE TABLE بدون IF NOT EXISTS) ويتحقق
+// أن الطبقة المحصّنة execSchemaScript تتجاوز "already exists" ولا تنهار.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -45,5 +48,34 @@ void main() {
         containsAll(<String>['workspaces', 'accounts', 'settings', 'devices']));
     await reopened.close();
     await dir.delete(recursive: true);
+  });
+
+  test('انحدار ويندوز: سكربت CREATE غير محمي على جدول موجود لا ينهار', () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (d, v) async {
+          // جدول موجود مسبقًا بنفس الاسم.
+          await d.execute(
+              'CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT)');
+        },
+      ),
+    );
+    // سكربت على نمط البناء القديم (بدون IF NOT EXISTS).
+    const oldStyle = '''
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '');
+      CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE INDEX idx_x ON sync_meta(key);
+    ''';
+    // يجب ألا يرمي: الطبقة المحصّنة تتجاوز "already exists".
+    await AppDatabase.execSchemaScript(db, oldStyle);
+    final tables =
+        await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
+    expect(tables.map((e) => e['name']), contains('sync_meta'));
+    // تشغيله مرة ثانية (idempotent) آمن أيضًا.
+    await AppDatabase.execSchemaScript(db, oldStyle);
+    await db.close();
   });
 }

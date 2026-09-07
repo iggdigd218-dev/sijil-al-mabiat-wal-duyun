@@ -25,3 +25,5 @@ nexora_app.iml
 windows_installer/staging/
 windows_installer/output/
 NexoraSetup.exe
+linux/
+build/linux/
