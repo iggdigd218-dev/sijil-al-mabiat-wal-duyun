@@ -83,82 +83,58 @@ jobs:
           Compress-Archive -Path "nexora-windows\*" -DestinationPath $zip -Force
           echo "ZIP=$zip" >> $env:GITHUB_ENV
 
-      - name: Build MSIX installer (true installed app)
+      - name: Build Inno Setup installer (NexoraSetup.exe)
         shell: pwsh
         run: |
           $rel = "build\windows\x64\runner\Release"
-          # هيّئ محتوى الحزمة: مجلد التطبيق الجاهز كمحتوى رئيسي للحزمة.
-          $staging = "msix-pkg"
+          # جهّز مجلد staging الذي يقرأه سكربت Inno Setup.
+          $staging = "windows_installer\staging"
           Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path "$staging\app" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$staging\Assets" | Out-Null
-          Copy-Item -Path "$rel\*" -Destination "$staging\app" -Recurse -Force
-          # ولّد شعار PNG صالحًا بسيطًا (مربع ملوّن) لاجتياز makeappx.
-          Add-Type -AssemblyName System.Drawing
-          function New-Logo($path,$size){
-            $bmp = New-Object System.Drawing.Bitmap($size,$size)
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.Clear([System.Drawing.Color]::FromArgb(15,118,110))
-            $f = New-Object System.Drawing.Font("Arial",($size/2),[System.Drawing.FontStyle]::Bold)
-            $br = [System.Drawing.Brushes]::White
-            $sf = New-Object System.Drawing.StringFormat; $sf.Alignment="Center"; $sf.LineAlignment="Center"
-            $g.DrawString("م",$f,$br,(New-Object System.Drawing.RectangleF(0,0,$size,$size)),$sf)
-            $bmp.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)
-            $g.Dispose(); $bmp.Dispose()
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item -Path "$rel\*" -Destination $staging -Recurse -Force
+          # حدّد مسار ISCC (مُثبّت Inno Setup 6 متوفر على windows-latest).
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "Inno Setup غير موجود — جارٍ التثبيت عبر choco"
+            choco install innosetup -y --no-progress 2>&1 | Out-Host
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           }
-          New-Logo "$staging\Assets\StoreLogo.png" 50
-          New-Logo "$staging\Assets\Square44x44Logo.png" 44
-          New-Logo "$staging\Assets\Square150x150Logo.png" 150
-          # بيانات الحزمة (تعمل بدون توقيع لتثبيت محلي بشهادة مطوّر).
-          $manifest = @'
-          <?xml version="1.0" encoding="utf-8"?>
-          <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-                   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-                   IgnorableNamespaces="uap rescap">
-            <Identity Name="Nexora.MudirAlHesabat" Version="1.0.0.0"
-                      Publisher="CN=Nexora" ProcessorArchitecture="x64"/>
-            <Properties>
-              <DisplayName>مدير الحسابات</DisplayName>
-              <PublisherDisplayName>Nexora</PublisherDisplayName>
-              <Logo>Assets\StoreLogo.png</Logo>
-            </Properties>
-            <Dependencies>
-              <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
-                                  MaxVersionTested="10.0.22621.0"/>
-            </Dependencies>
-            <Resources><Resource Language="ar"/></Resources>
-            <Applications>
-              <Application Id="App" Executable="app\nexora_app.exe"
-                           EntryPoint="Windows.FullTrustApplication">
-                <uap:VisualElements DisplayName="مدير الحسابات"
-                                    Description="مدير الحسابات"
-                                    BackgroundColor="transparent"
-                                    Square150x150Logo="Assets\Square150x150Logo.png"
-                                    Square44x44Logo="Assets\Square44x44Logo.png"/>
-              </Application>
-            </Applications>
-            <Capabilities>
-              <rescap:Capability Name="runFullTrust"/>
-            </Capabilities>
-          </Package>
-          '@
-          Set-Content -Path "$staging\AppxManifest.xml" -Value $manifest -Encoding UTF8
-          # بناء MSIX اختياري: أي فشل لا يُفشل سير العمل (النسخة المحمولة هي الأساس).
-          $ErrorActionPreference = 'Continue'
-          $makeappx = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*\x64\*" } | Select-Object -First 1).FullName
-          if ($makeappx) {
-            & $makeappx pack /d $staging /p nexora-windows.msix /o 2>&1 | Out-Host
-            if (Test-Path nexora-windows.msix) { Write-Host "MSIX built OK" }
-            else { Write-Host "تخطّي MSIX: فشل makeappx (النسخة المحمولة جاهزة)" }
+          if (Test-Path $iscc) {
+            Push-Location "windows_installer"
+            & $iscc "nexora.iss"
+            Pop-Location
+            if (Test-Path "windows_installer\output\NexoraSetup.exe") {
+              Copy-Item "windows_installer\output\NexoraSetup.exe" "NexoraSetup.exe" -Force
+              Write-Host "Installer built: NexoraSetup.exe"
+            } else {
+              Write-Host "تنبيه: لم يُنتج المُثبّت (النسخة المحمولة تظل متاحة)."
+            }
           } else {
-            Write-Host "makeappx غير موجود — تم تخطي MSIX"
+            Write-Host "تعذّر تجهيز Inno Setup — سيُكتفى بالنسخة المحمولة."
           }
 
       - name: Write install/readme file
         shell: pwsh
         run: |
-          $help = "مدير الحسابات — نسخة ويندوز`r`n`r`nالأسهل (نسخة محمولة، لا تحتاج تثبيت):`r`n1) استخرج nexora-windows.zip بالكامل إلى مجلد (لا تفرّق الملفات).`r`n2) انقر مرتين على Run.bat، أو افتح مجلد App وشغّل nexora_app.exe.`r`nملاحظة: لا تنقل nexora_app.exe خارج مجلد App (يحتاج ملفات data وDLL مجاورة).`r`nأول تشغيل قد يحذّرك SmartScreen: اضغط (مزيد من المعلومات) ثم (تشغيل على أي حال)."
+          $help = @'
+مدير الحسابات — نسخة ويندوز
+================================
+
+الطريقة الموصى بها (تثبيت حقيقي):
+1) حمّل ملف NexoraSetup.exe.
+2) انقر نقرًا مزدوجًا عليه واتبع معالج التثبيت (التالي ← التالي ← تثبيت).
+3) سيظهر التطبيق في قائمة ابدأ وعلى سطح المكتب.
+   - أول تشغيل قد يحذّرك SmartScreen: اضغط "More info / مزيد من المعلومات"
+     ثم "Run anyway / تشغيل على أي حال" (لأن المُثبّت غير موقّع بشهادة تجارية).
+   - إن طلب ويندوز صلاحية مسؤول فاسمح بها (ليُثبّت في Program Files).
+
+النسخة المحمولة (بدون تثبيت):
+1) استخرج nexora-windows.zip بالكامل إلى مجلد (لا تفرّق الملفات).
+2) انقر مرتين على Run.bat، أو افتح مجلد App وشغّل nexora_app.exe.
+'@
           Set-Content -Path "README-install.txt" -Value $help -Encoding UTF8
 
       - name: Upload EXE Artifact
@@ -180,6 +156,20 @@ jobs:
           done
           ls -lh nexora-arm64.apk version.json 2>/dev/null || true
 
+      - name: Remove stale/broken MSIX asset
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          # احذف ملف MSIX غير الموقّع القديم (لا يمكن تثبيته) إن وجد.
+          id=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((a['id'] for a in d.get('assets',[]) if a['name']=='nexora-windows.msix'),''))" || true)
+          if [ -n "$id" ]; then
+            curl -s -X DELETE -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$id" \
+              && echo "تم حذف nexora-windows.msix القديم"
+          fi
+
       - name: Update unified latest release (Windows)
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
@@ -192,8 +182,9 @@ jobs:
             **هذا هو الإصدار الرسمي الأحدث من التطبيق.**
 
             ### 🖥️ لويندوز
-            - حمّل ملف `nexora-windows.zip` بالأسفل.
-            - فك الضغط في أي مجلد ثم شغّل `nexora_app.exe`.
+            - **الأسهل:** حمّل `NexoraSetup.exe` وثبّته كأي برنامج (قائمة ابدأ + سطح المكتب).
+            - أو النسخة المحمولة `nexora-windows.zip`: فك الضغط ثم شغّل `Run.bat`.
+            - أول تشغيل قد يحذّر SmartScreen: «مزيد من المعلومات» ثم «تشغيل على أي حال».
 
             ### 📱 للأندرويد (APK)
             - يُرفع ملف الأندرويد تلقائيًا هنا بعد انتهاء بناء APK (قد يتأخر بضع دقائق).
@@ -201,8 +192,8 @@ jobs:
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
           files: |
+            NexoraSetup.exe
             nexora-windows.zip
-            nexora-windows.msix
             README-install.txt
             nexora-arm64.apk
             version.json

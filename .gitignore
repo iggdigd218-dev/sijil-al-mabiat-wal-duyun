@@ -21,3 +21,7 @@ qa/*.patch
 pubspec.lock.bak
 nexora_app.iml
 .idea/
+
+windows_installer/staging/
+windows_installer/output/
+NexoraSetup.exe
