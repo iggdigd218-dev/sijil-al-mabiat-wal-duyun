@@ -54,13 +54,86 @@ jobs:
           flutter pub get
           flutter build windows --release
 
+      - name: Package portable app (folder + EXE + launcher)
+        shell: pwsh
+        run: |
+          $rel = "build\windows\x64\runner\Release"
+          $pkg = "nexora-windows\مدير الحسابات"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          # انسخ كل ملفات التطبيق (exe + dll + data) داخل مجلد التطبيق.
+          Copy-Item -Path "$rel\*" -Destination $pkg -Recurse -Force
+          # ملف تشغيل بسيط للمستخدم في جذر المجلد.
+          $launcher = "nexora-windows\تشغيل-مدير-الحسابات.bat"
+          Set-Content -Path $launcher -Value "@echo off`r`nstart \"\" \"%~dp0مدير الحسابات\nexora_app.exe\"" -Encoding Default
+          $readme = "nexora-windows\تعليمات التشغيل.txt"
+          Set-Content -Path $readme -Value "مدير الحسابات — نسخة ويندوز`r`n`r`nطريقة التشغيل:`r`n1) استخرج محتويات الملف المضغوط بالكامل إلى مجلد.`r`n2) افتح مجلد (مدير الحسابات) وشغّل nexora_app.exe، أو استخدم (تشغيل-مدير-الحسابات.bat).`r`n`r`nملاحظة: لا تنقل nexora_app.exe وحده خارج المجلد؛ فهو يحتاج ملفات data و dll المجاورة.`r`nأول تشغيل قد يطلب ويندوز سماحاً (SmartScreen) — اختر: مزيد من المعلومات ثم تشغيل على أي حال." -Encoding UTF8
+          # أعطِ ملف التشغيل اسمًا عربيًا واضحًا داخل مجلد التطبيق أيضًا.
+          Get-ChildItem $pkg | Select-Object Name | Format-Table -AutoSize
+
       - name: Package ZIP
         shell: pwsh
         run: |
-          $src = "build\windows\x64\runner\Release"
           $zip = "nexora-windows.zip"
-          Compress-Archive -Path "$src\*" -DestinationPath $zip -Force
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "nexora-windows\*" -DestinationPath $zip -Force
           echo "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Build MSIX installer (true installed app)
+        shell: pwsh
+        run: |
+          $rel = "build\windows\x64\runner\Release"
+          # هيّئ محتوى الحزمة: مجلد التطبيق الجاهز كمحتوى رئيسي للحزمة.
+          $staging = "msix-pkg"
+          Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$staging\app" | Out-Null
+          Copy-Item -Path "$rel\*" -Destination "$staging\app" -Recurse -Force
+          # بيانات الحزمة (تعمل بدون توقيع لتثبيت محلي بشهادة مطوّر).
+          $manifest = @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+            <Identity Name="Nexora.MudirAlHesabat" Version="1.0.0.0"
+                      Publisher="CN=Nexora" ProcessorArchitecture="x64"/>
+            <Properties>
+              <DisplayName>مدير الحسابات</DisplayName>
+              <PublisherDisplayName>Nexora</PublisherDisplayName>
+              <Logo>app\data\flutter_assets\assets\images\logo.png</Logo>
+            </Properties>
+            <Dependencies>
+              <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
+                                  MaxVersionTested="10.0.22621.0"/>
+            </Dependencies>
+            <Resources><Resource Language="ar"/></Resources>
+            <Applications>
+              <Application Id="App" Executable="app\nexora_app.exe"
+                           EntryPoint="Windows.FullTrustApplication">
+                <uap:VisualElements DisplayName="مدير الحسابات"
+                                    Description="مدير الحسابات — سجل المبيعات والديون"
+                                    BackgroundColor="transparent"
+                                    Square150x150Logo="app\data\flutter_assets\assets\images\logo.png"
+                                    Square44x44Logo="app\data\flutter_assets\assets\images\logo.png"/>
+              </Application>
+            </Applications>
+          </Package>
+          '@
+          Set-Content -Path "$staging\AppxManifest.xml" -Value $manifest -Encoding UTF8
+          $makeappx = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\makeappx.exe"
+          if (-not (Test-Path $makeappx)) {
+            $makeappx = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if ($makeappx) {
+            & $makeappx pack /d $staging /p nexora-windows.msix /o
+            Write-Host "MSIX built"
+          } else {
+            Write-Host "makeappx غير موجود — سنتجاوز MSIX"
+          }
+
+      - name: Download install-certificate helper
+        shell: pwsh
+        run: |
+          # ملف مساعدة يشرح تثبيت MSIX بخطوتين (شهادة مطوّر + تثبيت).
+          $help = "طريقة تثبيت تطبيق ويندوز:`r`n`r`n1) انقر نقرة يمين على nexora-windows.msix ← خصائص ← التوقيع الرقمي ← ثق بالشهادة (أو ثبّت الشهادة في 'الجذر الموثوق/الأشخاص الموثوقون').`r`n2) افتح nexora-windows.msix واضغط 'تثبيت'.`r`n`r`nإن لم يعمل المثبّت، استخدم النسخة المحمولة: استخرج nexora-windows.zip وشغّل 'تشغيل-مدير-الحسابات.bat'."
+          Set-Content -Path "كيفية-التثبيت.txt" -Value $help -Encoding UTF8
 
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
@@ -103,6 +176,8 @@ jobs:
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
           files: |
             nexora-windows.zip
+            nexora-windows.msix
+            كيفية-التثبيت.txt
             nexora-arm64.apk
             version.json
           fail_on_unmatched_files: false
