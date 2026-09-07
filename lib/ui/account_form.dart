@@ -7,6 +7,7 @@ import 'package:flutter_contacts/flutter_contacts.dart' hide Account;
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
+import '../core/permission_dialog.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
@@ -143,13 +144,38 @@ class _State extends ConsumerState<AccountFormScreen> {
     }
   }
 
-  /// جلب اسم ورقم العميل من تطبيق جهات الاتصال (منتقي النظام، بلا إذن قراءة).
+  /// جلب اسم ورقم العميل من تطبيق جهات الاتصال (منتقي النظام الخارجي).
   Future<void> _pickContact() async {
     if (!Platform.isAndroid && !Platform.isIOS) {
       showSnack(context, 'اختيار جهة الاتصال متاح على الهاتف فقط', error: true);
       return;
     }
     try {
+      // بعض الأجهزة تشترط إذن جهات الاتصال لقراءة بيانات الجهة المختارة
+      // بعد عودتها من المنتقي الخارجي. نطلبه مرة واحدة بنافذة شرح ودّية،
+      // فيظهر بعدها ضمن «الأذونات المسموح بها» في إعدادات النظام.
+      final granted =
+          await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        if (!mounted) return;
+        final retry =
+            await showPermissionRationale(context, PermissionRationale.contacts);
+        if (!retry) return;
+        final second =
+            await FlutterContacts.requestPermission(readonly: true);
+        if (!second) {
+          if (mounted) {
+            showSnack(
+              context,
+              'لم يُمنح إذن جهات الاتصال — فعّله من إعدادات النظام: '
+              'التطبيقات ← مدير الحسابات ← الأذونات',
+              error: true,
+            );
+          }
+          return;
+        }
+      }
+      if (!mounted) return;
       // يفتح منتقي جهات اتصال النظام ويعيد جهة واحدة (لا يقرأ كل الجهات).
       final contact = await FlutterContacts.openExternalPick();
       if (contact == null) return; // ألغى المستخدم.

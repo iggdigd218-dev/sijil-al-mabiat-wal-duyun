@@ -24,8 +24,10 @@
          التثبيت النهائي يظل بيد المستخدم (شاشة النظام) — لا تثبيت صامت. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
-    <!-- جهات الاتصال: لا حاجة لإذن READ_CONTACTS — يُستخدم منتقي النظام
-         (openExternalPick) الذي يفتح تطبيق جهات الاتصال ويعيد جهة واحدة فقط -->
+    <!-- جهات الاتصال: منتقي النظام الخارجي (openExternalPick) لا يحتاج الإذن نظرياً،
+         لكن بعض الأجهزة (خصوصاً بواجهات مصنّعين معدّلة) تشترط READ_CONTACTS
+         لقراءة بيانات الجهة المختارة بعد عودتها من المنتقي — نعلنه لضمان العمل. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <!-- الصور والتخزين: اختيار صور من المعرض + حفظ/قراءة النسخ الاحتياطية -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
