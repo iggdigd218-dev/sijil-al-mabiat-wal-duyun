@@ -25,6 +25,7 @@ import 'tx_form.dart';
 import 'vouchers_screen.dart';
 import 'pos_screen.dart';
 import 'sync_status_indicator.dart';
+import 'sync_ops_screen.dart';
 import '../data/sync/sync_service.dart';
 
 import 'group_management_screen.dart';
@@ -49,6 +50,7 @@ enum AppScreen {
   trash('سلة المهملات', Icons.delete_outline, Icons.delete),
   activity('سجل النشاط', Icons.history, Icons.history),
   backup('النسخ الاحتياطي', Icons.backup_outlined, Icons.backup),
+  syncOps('العمليات المتزامنة', Icons.cloud_sync_outlined, Icons.cloud_sync),
   settings('الإعدادات', Icons.settings_outlined, Icons.settings);
 
   const AppScreen(this.title, this.icon, this.activeIcon);
@@ -149,6 +151,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         AppScreen.trash => const TrashScreen(),
         AppScreen.activity => const ActivityScreen(),
         AppScreen.backup => const BackupScreen(),
+        AppScreen.syncOps => const SyncOpsScreen(),
         AppScreen.settings => const SettingsScreen(),
       };
 
@@ -364,6 +367,7 @@ class _Drawer extends ConsumerWidget {
         AppScreen.trash => const Color(0xFFE11D48),
         AppScreen.activity => const Color(0xFF64748B),
         AppScreen.backup => const Color(0xFF0D9488),
+        AppScreen.syncOps => const Color(0xFF0284C7),
       };
 
   @override

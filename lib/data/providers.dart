@@ -6,6 +6,7 @@ import '../core/models.dart';
 import 'repository.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/sync_engine.dart';
+import 'sync/sync_queue.dart';
 
 /// Repo واحدة ومُهيّأة مسبقًا تُحقن عبر ProviderScope.override في main.
 /// لا ننشئ نسخة جديدة هنا لضمان أن initSyncInfra() استُدعيت مرة واحدة.
@@ -684,4 +685,94 @@ final canProvider = FutureProvider.family<bool, String>((ref, perm) async {
       .read(repoProvider)
       .can(perm)
       .timeout(const Duration(seconds: 8), onTimeout: () => false);
+});
+
+// ---------- شاشة العمليات المتزامنة ----------
+
+/// صف واحد من شاشة العمليات: صف الطابور مع العملية المرتبطة به.
+class SyncOpRow {
+  final int queueId;
+  final String status; // pending | syncing | synced | failed
+  final String target; // cloud | lan
+  final int attempts;
+  final String lastError;
+  final String entityType;
+  final String opType;
+  final String entityId;
+  final String updatedAt;
+  final String deviceId;
+  const SyncOpRow({
+    required this.queueId,
+    required this.status,
+    required this.target,
+    required this.attempts,
+    required this.lastError,
+    required this.entityType,
+    required this.opType,
+    required this.entityId,
+    required this.updatedAt,
+    required this.deviceId,
+  });
+}
+
+/// كل صفوف المزامنة النشطة (غير المكتملة) منضمةً إلى نوع العملية.
+final syncOpsProvider =
+    FutureProvider<List<SyncOpRow>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  final q = SyncQueueOps(db);
+  final rows = await q.activeRows(limit: 300);
+  final opIds = rows
+      .map((r) => r['operation_id'] as String?)
+      .whereType<String>()
+      .toSet()
+      .toList();
+  final ops = <String, Map<String, Object?>>{};
+  if (opIds.isNotEmpty) {
+    final placeholders = List.filled(opIds.length, '?').join(',');
+    final opRows = await db.rawQuery(
+      'SELECT id, entity_type, op_type, entity_id, device_id FROM operations '
+      'WHERE id IN ($placeholders)',
+      opIds,
+    );
+    for (final o in opRows) {
+      ops[o['id'] as String] = o;
+    }
+  }
+  return rows.map((r) {
+    final o = ops[r['operation_id'] as String? ?? ''];
+    return SyncOpRow(
+      queueId: r['id'] as int,
+      status: (r['status'] as String?) ?? 'pending',
+      target: (r['target'] as String?) ?? '',
+      attempts: (r['attempts'] as int?) ?? 0,
+      lastError: (r['last_error'] as String?) ?? '',
+      entityType: (o?['entity_type'] as String?) ?? '?',
+      opType: (o?['op_type'] as String?) ?? '?',
+      entityId: (o?['entity_id'] as String?) ?? '',
+      updatedAt: (r['updated_at'] as String?) ?? '',
+      deviceId: (o?['device_id'] as String?) ?? '',
+    );
+  }).toList();
+});
+
+/// ملخّص أعداد حالات المزامنة (للشارة والبطاقات العلوية).
+final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  final q = SyncQueueOps(db);
+  final pending = await q.countPending();
+  final withError = await q.countWithError();
+  final syncedR = await db.rawQuery(
+    "SELECT COUNT(*) c FROM sync_queue WHERE status = ?",
+    ['synced'],
+  );
+  final syncedToday = (syncedR.first['c'] as int?) ?? 0;
+  return {
+    'pending': pending,
+    'withError': withError,
+    'synced': syncedToday,
+  };
 });

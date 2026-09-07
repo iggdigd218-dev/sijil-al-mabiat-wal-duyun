@@ -100,7 +100,10 @@ class SyncQueueOps {
     );
   }
 
-  Future<void> markFailed(int id, Object error, {int maxAttempts = 12}) async {
+  /// تسجيل فشل مؤقت: لا توجد حالة "فشل نهائي" إطلاقًا — أي عملية تبقى
+  /// في الانتظار (pending) وتُعاد جدولتها بمحاولة تالية حتى تنجح.
+  /// الحقل last_error يحفظ آخر سبب فقط للعرض، دون إيقاف المحاولات.
+  Future<void> markFailed(int id, Object error) async {
     final now = DateTime.now();
     final rows = await db.query(
       'sync_queue',
@@ -110,21 +113,77 @@ class SyncQueueOps {
     );
     final attempts =
         rows.isEmpty ? 1 : max(1, (rows.first['attempts'] as int?) ?? 0);
-    final tooMany = attempts >= maxAttempts;
-    final next = tooMany ? null : now.add(_backoffFor(attempts));
+    // Backoff متزايد لكنه مقيّد بسقف دقيقتين كحد أقصى، فتستمر المحاولات
+    // للأبد (كل دقيقتين) حتى في حالات انقطاع الشبكة الطويلة.
+    final next = now.add(_backoffFor(attempts));
     await db.update(
       'sync_queue',
       {
-        'status': tooMany ? SyncStatus.failed.name : SyncStatus.pending.name,
+        'status': SyncStatus.pending.name,
         'attempts': attempts,
         'last_error':
             '$error'.length > 500 ? '${'$error'.substring(0, 500)}…' : '$error',
-        'next_try_at': next?.toIso8601String() ?? '',
+        'next_try_at': next.toIso8601String(),
         'updated_at': now.toIso8601String(),
       },
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  /// هل توجد صفوف لها آخر خطأ (فشلت محاولتها الأخيرة) لكنها ما زالت ستُعاد.
+  Future<int> countWithError() async {
+    final r = await db.rawQuery(
+      "SELECT COUNT(*) AS c FROM sync_queue "
+      "WHERE status IN (?, ?) AND COALESCE(last_error,'') <> ''",
+      [SyncStatus.pending.name, SyncStatus.syncing.name],
+    );
+    return (r.first['c'] as int?) ?? 0;
+  }
+
+  /// قائمة الصفوف ذات الأخطاء (للعرض في شاشة العمليات المتزامنة).
+  Future<List<Map<String, Object?>>> rowsWithError({int limit = 50}) async {
+    return db.query(
+      'sync_queue',
+      where:
+          "status IN (?, ?) AND COALESCE(last_error,'') <> ''",
+      whereArgs: [SyncStatus.pending.name, SyncStatus.syncing.name],
+      orderBy: 'updated_at DESC',
+      limit: limit,
+    );
+  }
+
+  /// كل الصفوف غير المكتملة (معلّقة/قيد المزامنة/لها خطأ) — للعرض والإعادة.
+  Future<List<Map<String, Object?>>> activeRows({int limit = 200}) async {
+    return db.query(
+      'sync_queue',
+      where: 'status IN (?, ?, ?)',
+      whereArgs: [
+        SyncStatus.pending.name,
+        SyncStatus.syncing.name,
+        SyncStatus.failed.name,
+      ],
+      orderBy: 'updated_at DESC',
+      limit: limit,
+    );
+  }
+
+  /// إعادة محاولة يدوية فورية: تصفير وقت الانتظار والأخطاء لتُدفع الآن.
+  Future<int> retryNow({int? id}) async {
+    final now = DateTime.now().toIso8601String();
+    final data = {
+      'status': SyncStatus.pending.name,
+      'next_try_at': '',
+      'last_error': '',
+      'updated_at': now,
+    };
+    if (id != null) {
+      return db.update('sync_queue', data,
+          where: 'id = ?', whereArgs: [id]);
+    }
+    return db.update('sync_queue', data,
+        where: 'status IN (?, ?)',
+        whereArgs: [SyncStatus.pending.name, SyncStatus.failed.name]);
   }
 
   /// Only scheduled pending rows are automatic retries; failed is terminal.
@@ -166,21 +225,25 @@ class SyncQueueOps {
         whereArgs: [SyncStatus.syncing.name]);
   }
 
-  /// Explicit user retry, not a background infinite retry loop.
+  /// إعادة محاولة فورية من المستخدم: تُعيد كل الصفوف غير المكتملة
+  /// (بما فيها ذات الأخطار المؤقتة) لتُدفع الآن دون انتظار backoff.
   Future<void> retryFailed() async {
     await db.update(
-        'sync_queue',
-        {
-          'status': SyncStatus.pending.name,
-          'attempts': 0,
-          'next_try_at': '',
-          'last_error': '',
-          'updated_at': DateTime.now().toIso8601String(),
-        },
-        where: 'status = ?',
-        whereArgs: [SyncStatus.failed.name]);
-    await db.update('sync_queue', {'next_try_at': ''},
-        where: 'status = ?', whereArgs: [SyncStatus.pending.name]);
+      'sync_queue',
+      {
+        'status': SyncStatus.pending.name,
+        'attempts': 0,
+        'next_try_at': '',
+        'last_error': '',
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'status IN (?, ?, ?)',
+      whereArgs: [
+        SyncStatus.pending.name,
+        SyncStatus.syncing.name,
+        SyncStatus.failed.name,
+      ],
+    );
   }
 
   Future<int> countPending() async {
@@ -199,17 +262,18 @@ class SyncQueueOps {
     return (r.first['c'] as int?) ?? 0;
   }
 
-  /// Exponential backoff: 5s, 30s, 2m, 10m, 1h, 4h, ثم ثابت عند 4 ساعات.
+  /// Backoff متزايد لكنه يصل إلى سقف دقيقتين ثم يثبت عليه، فلا تتوقف
+  /// المحاولات أبدًا (إعادة كل دقيقتين حتى تُستأنف الشبكة وتنجح العملية).
   static Duration _backoffFor(int attempt) {
     const table = [
       Duration(seconds: 5),
-      Duration(seconds: 30),
-      Duration(minutes: 2),
-      Duration(minutes: 10),
-      Duration(hours: 1),
+      Duration(seconds: 10),
+      Duration(seconds: 20),
+      Duration(seconds: 45),
+      Duration(minutes: 1),
     ];
     if (attempt - 1 < table.length) return table[attempt - 1];
-    return const Duration(hours: 4);
+    return const Duration(minutes: 2);
   }
 }
 

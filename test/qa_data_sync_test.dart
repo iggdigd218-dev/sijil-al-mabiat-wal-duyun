@@ -215,14 +215,25 @@ void main() {
     expect(t.calls, 1, reason: 'Backoff must prevent immediate retry');
   });
 
-  test('QA-SYNC-03 exhausted retries stop until explicit reset', () async {
+  test('QA-SYNC-03 الفشل ليس نهائيًا: العملية تبقى قيد إعادة المحاولة',
+      () async {
     await repo.saveTx(_tx(accountId));
-    await db.update('sync_queue', {'status': 'syncing', 'attempts': 12});
+    await db.update('sync_queue', {'status': 'syncing', 'attempts': 99});
     final q = SyncQueueOps(db);
     final id = (await db.query('sync_queue')).single['id'] as int;
-    await q.markFailed(id, 'QA permanent failure');
-    expect((await db.query('sync_queue')).single['status'], 'failed');
-    expect(await q.pickPending(), isEmpty);
+    // حتى بعد عدد ضخم من المحاولات، لا تُعلَّق العملية نهائيًا.
+    await q.markFailed(id, 'QA offline');
+    final row = (await db.query('sync_queue')).single;
+    expect(row['status'], 'pending',
+        reason: 'لا يوجد فشل نهائي — تبقى العملية في الانتظار للمحاولة تالية.');
+    expect(row['last_error'].toString(), contains('QA offline'));
+    // جدولتها المستقبلية بعد backoff قصير (≤ دقيقتين) ثم تُعاد تلقائيًا.
+    expect(row['next_try_at'], isNot(''));
+    // إعادة المحاولة اليدوية الفورية تصفّر الجدولة لتُدفع الآن.
+    await q.retryNow(id: id);
+    final reset = (await db.query('sync_queue')).single;
+    expect(reset['next_try_at'], '');
+    expect(reset['last_error'], '');
   });
 
   test('QA-SYNC-04 local save enqueues LAN when enabled', () async {

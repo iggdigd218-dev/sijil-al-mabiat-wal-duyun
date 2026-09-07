@@ -222,6 +222,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         .read(repoProvider)
                         .setDevicePermissions(
                             device['id'] as String, role, perms);
+                    // فرض فوري: نبثّ إشعارًا لكل الأقران ليسحب الجهاز المعني
+                    // صلاحياته الجديدة خلال ثوانٍ (<10 ثوانٍ) دون انتظار الدورية.
+                    await ref.read(syncEngineProvider).broadcastRosterChange();
                     if (ctx.mounted) Navigator.pop(ctx);
                     Sfx.success();
                   } catch (e) {
@@ -289,6 +292,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         await ref
                             .read(repoProvider)
                             .assignDeviceUser(d['id'] as String, uid);
+                        await ref
+                            .read(syncEngineProvider)
+                            .broadcastRosterChange();
                         bump(ref);
                       },
                       onPermissions: () async {

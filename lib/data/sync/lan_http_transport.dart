@@ -137,6 +137,10 @@ class LanSyncService implements SyncTransport {
         await _handleRoster(req, cors);
         return;
       }
+      if (path == '/notify' && req.method == 'POST') {
+        await _handleNotify(req, cors);
+        return;
+      }
       cors.statusCode = HttpStatus.notFound;
       await cors.close();
     } catch (e) {
@@ -465,6 +469,94 @@ class LanSyncService implements SyncTransport {
       resp.write(jsonEncode({'ok': false, 'error': '$e'}));
     }
     await resp.close();
+  }
+
+  /// إشعار فوري من نظير (مثلاً المالك غيّر صلاحية جهاز): يردّ بالموافقة فقط،
+  /// والعميل عند استلامه يبادر فورًا بسحب الـ roster ومعالجة طابور العمليات.
+  Future<void> _handleNotify(HttpRequest req, HttpResponse resp) async {
+    int statusCode = HttpStatus.ok;
+    String? error;
+    try {
+      final auth = req.headers.value('Authorization') ?? '';
+      final secret =
+          auth.startsWith('Bearer ') ? auth.substring(7).trim() : auth;
+      if (secret.isEmpty) {
+        statusCode = HttpStatus.unauthorized;
+        error = 'auth-required';
+        return;
+      }
+      final db = await dbProvider();
+      final dev = await db.query(
+        'devices',
+        where:
+            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [secret],
+        limit: 1,
+      );
+      if (dev.isEmpty) {
+        statusCode = HttpStatus.forbidden;
+        error = 'unknown-device';
+        return;
+      }
+      // حدّث آخر ظهور للمرسل وعنوانه.
+      await db.update(
+        'devices',
+        {
+          'last_seen_at': DateTime.now().toIso8601String(),
+          'ip_address': req.connectionInfo?.remoteAddress.address ?? '',
+        },
+        where: 'id = ?',
+        whereArgs: [dev.first['id']],
+      );
+      onPeerNotify?.call();
+    } catch (e) {
+      statusCode = HttpStatus.internalServerError;
+      error = 'internal';
+    } finally {
+      resp.statusCode = statusCode;
+      resp.headers.contentType = ContentType.json;
+      resp.write(jsonEncode({'ok': error == null, 'error': error}));
+      await resp.close();
+    }
+  }
+
+  /// يُستدعى محليًا عند استقبال إشعار فوري من نظير (يضبطه محرك المزامنة
+  /// ليسحب الـ roster ويعالج الطابور فورًا دون انتظار الدورية).
+  void Function()? onPeerNotify;
+
+  /// يبثّ إشعارًا فوريًا لكل الأقران المقترنين بأن شيئًا تغيّر
+  /// (صلاحية/جهاز/عملية). استدعاء غير متزامن يتجاهل أخطاء الشبكة بصمت.
+  Future<void> broadcastNotify({String reason = 'roster'}) async {
+    try {
+      final db = await dbProvider();
+      final own = await db.query('devices',
+          columns: ['auth_secret'],
+          where: 'id = ?',
+          whereArgs: [ourDeviceId],
+          limit: 1);
+      final secret =
+          own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+      if (secret.isEmpty) return;
+      final devices = await db.query(
+        'devices',
+        where:
+            "is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' AND ip_address <> '' AND id <> ?",
+        whereArgs: [ourDeviceId],
+      );
+      for (final d in devices) {
+        final ip = d['ip_address'] as String?;
+        final p = d['port'] as int?;
+        if (ip == null || ip.isEmpty || p == null) continue;
+        try {
+          final req = await _httpClient.postUrl(Uri.parse('http://$ip:$p/notify'))
+            ..headers.set('Authorization', 'Bearer $secret');
+          req.write(jsonEncode({'reason': reason}));
+          await req.close().timeout(const Duration(seconds: 3));
+        } catch (_) {
+          // تجاهل: القرين غير متصل حاليًا، ستصلح الدورية الأمر لاحقًا.
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _handleOps(HttpRequest req, HttpResponse resp) async {

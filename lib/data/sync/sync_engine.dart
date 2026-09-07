@@ -15,6 +15,7 @@ import 'device_id.dart';
 import 'lan_http_transport.dart';
 import 'operation.dart';
 import 'recorder.dart';
+import 'sync_activity.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 
@@ -35,6 +36,9 @@ class SyncEngine {
   bool _running = false;
   bool _started = false;
   bool get hasStarted => _started;
+
+  /// يُستدعى أي نشاط مزامنة (وصول عملية/تغيّر صلاحيات) لتنبيه الواجهة للتحديث.
+  static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
   String? _cloudUrl;
   CloudFirebaseTransport? _cloudTransport;
   LanSyncService? _lanTransport;
@@ -97,9 +101,29 @@ class SyncEngine {
       ourDeviceId: ourId,
       port: port,
     );
+    _wireLanNotify(_lanTransport!);
     await _lanTransport!.startServer();
     registerTransport(_lanTransport!);
     _lanEnabled = true;
+  }
+
+  /// يربط إشعار الأقران الفوري: عند وصول إشعار من نظير نسحب الـ roster ونعالج
+  /// الطابور فورًا (فرض الصلاحيات/العمليات خلال ثوانٍ لا انتظار الدورية).
+  void _wireLanNotify(LanSyncService svc) {
+    svc.onPeerNotify = () {
+      try {
+        onSyncActivity?.call();
+      } catch (_) {}
+      Future(() async {
+        try {
+          final changed = await svc.reconcileRoster();
+          if (changed == true) await processQueue();
+        } catch (_) {}
+        try {
+          await processQueue();
+        } catch (_) {}
+      });
+    };
   }
 
   Future<void> reconfigureAll() async {
@@ -130,6 +154,7 @@ class SyncEngine {
         ourDeviceId: ourId,
         port: port,
       );
+      _wireLanNotify(svc);
       await svc.startServer();
       if (!svc.isRunning) return false;
       _lanTransport = svc;
@@ -214,7 +239,7 @@ class SyncEngine {
       return;
     }
     _timer ??= Timer.periodic(
-      const Duration(seconds: 15),
+      const Duration(seconds: 8),
       (_) => processQueue(),
     );
     Future(() async {
@@ -238,7 +263,7 @@ class SyncEngine {
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
     // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
     _rosterTimer ??= Timer.periodic(
-      const Duration(seconds: 20),
+      const Duration(seconds: 10),
       (_) => _reconcileRoster(),
     );
   }
@@ -293,6 +318,17 @@ class SyncEngine {
     final q = _queue ??= SyncQueueOps(await _db);
     await q.retryFailed();
     await processQueue();
+    // نبّه الأقران فورًا ليسحبوا الطابور/الصلاحيات المعلّقة.
+    await _lanTransport?.broadcastNotify(reason: 'force');
+  }
+
+  /// يُستدعى بعد تغيير صلاحية/جهاز (منح صلاحية لجهاز) لبثّ التغيير فورًا
+  /// إلى كل الأقران ودفع أي عمليات معلّقة — استجابة خلال ثوانٍ (<10 ثوانٍ).
+  Future<void> broadcastRosterChange() async {
+    try {
+      await _lanTransport?.broadcastNotify(reason: 'roster');
+    } catch (_) {}
+    notifyNewOperation();
   }
 
   /// جدولة push فورية (لا تنتظر دورة الـ Timer) — لتسريع Near-Real-Time.
@@ -300,8 +336,8 @@ class SyncEngine {
   void notifyNewOperation() {
     if (!_started) return;
     _immediate?.cancel();
-    // Debounce بسيط: 200ms لتجميع العمليات السريعة.
-    _immediate = Timer(const Duration(milliseconds: 200), () {
+    // Debounce قصير جدًا (80ms) لتجميع العمليات السريعة مع بقاء المزامنة فورية.
+    _immediate = Timer(const Duration(milliseconds: 80), () {
       processQueue();
     });
   }
@@ -416,6 +452,9 @@ class SyncEngine {
       }
     } finally {
       _running = false;
+      try {
+        onSyncActivity?.call();
+      } catch (_) {}
     }
   }
 }
