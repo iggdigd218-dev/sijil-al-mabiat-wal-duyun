@@ -52,7 +52,7 @@ class AppDatabase {
 
     // ---------- الحسابات ----------
     await db.execute('''
-      CREATE TABLE accounts (
+      CREATE TABLE IF NOT EXISTS accounts (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id    TEXT NOT NULL DEFAULT 'default',
         name            TEXT NOT NULL,
@@ -75,13 +75,13 @@ class AppDatabase {
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL
       )''');
-    await db.execute('CREATE INDEX idx_acc_kind ON accounts(kind)');
-    await db.execute('CREATE INDEX idx_acc_arch ON accounts(archived)');
-    await db.execute('CREATE INDEX idx_acc_del  ON accounts(deleted_at)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_kind ON accounts(kind)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_arch ON accounts(archived)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_del  ON accounts(deleted_at)');
 
     // ---------- العمليات ----------
     await db.execute('''
-      CREATE TABLE transactions (
+      CREATE TABLE IF NOT EXISTS transactions (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         account_id   INTEGER,
@@ -111,15 +111,15 @@ class AppDatabase {
         FOREIGN KEY (from_id)    REFERENCES accounts (id) ON DELETE CASCADE,
         FOREIGN KEY (to_id)      REFERENCES accounts (id) ON DELETE CASCADE
       )''');
-    await db.execute('CREATE INDEX idx_tx_acc ON transactions(account_id)');
-    await db.execute('CREATE INDEX idx_tx_date ON transactions(date)');
-    await db.execute('CREATE INDEX idx_tx_from ON transactions(from_id)');
-    await db.execute('CREATE INDEX idx_tx_to ON transactions(to_id)');
-    await db.execute('CREATE INDEX idx_tx_del ON transactions(deleted_at)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_acc ON transactions(account_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_from ON transactions(from_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_del ON transactions(deleted_at)');
 
     // ---------- السندات ----------
     await db.execute('''
-      CREATE TABLE vouchers (
+      CREATE TABLE IF NOT EXISTS vouchers (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         number      TEXT NOT NULL,
@@ -139,12 +139,12 @@ class AppDatabase {
         updated_at  TEXT NOT NULL,
         FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
       )''');
-    await db.execute('CREATE INDEX idx_v_acc ON vouchers(account_id)');
-    await db.execute('CREATE INDEX idx_v_del ON vouchers(deleted_at)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_v_acc ON vouchers(account_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_v_del ON vouchers(deleted_at)');
 
     // ---------- العملات ----------
     await db.execute('''
-      CREATE TABLE currencies (
+      CREATE TABLE IF NOT EXISTS currencies (
         code    TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name    TEXT NOT NULL,
@@ -156,7 +156,7 @@ class AppDatabase {
 
     // ---------- التصنيفات ----------
     await db.execute('''
-      CREATE TABLE categories (
+      CREATE TABLE IF NOT EXISTS categories (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name       TEXT NOT NULL,
@@ -167,12 +167,12 @@ class AppDatabase {
     // ---------- فئات المخزون ----------
     await db.execute(createItemCategoriesSql);
     await db.execute(
-      'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
     );
 
     // ---------- المستخدمون والصلاحيات ----------
     await db.execute('''
-      CREATE TABLE users (
+      CREATE TABLE IF NOT EXISTS users (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name        TEXT NOT NULL,
@@ -191,7 +191,7 @@ class AppDatabase {
 
     // ---------- الدردشة ----------
     await db.execute('''
-      CREATE TABLE conversations (
+      CREATE TABLE IF NOT EXISTS conversations (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         title      TEXT NOT NULL,
@@ -199,7 +199,7 @@ class AppDatabase {
         updated_at TEXT NOT NULL
       )''');
     await db.execute('''
-      CREATE TABLE messages (
+      CREATE TABLE IF NOT EXISTS messages (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER NOT NULL,
         workspace_id    TEXT NOT NULL DEFAULT 'default',
@@ -210,11 +210,11 @@ class AppDatabase {
         created_at      TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
       )''');
-    await db.execute('CREATE INDEX idx_msg_conv ON messages(conversation_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id)');
 
     // ---------- سجل النشاط ----------
     await db.execute('''
-      CREATE TABLE activity (
+      CREATE TABLE IF NOT EXISTS activity (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         text       TEXT NOT NULL,
@@ -223,11 +223,11 @@ class AppDatabase {
         user_name  TEXT DEFAULT '',
         created_at TEXT NOT NULL
       )''');
-    await db.execute('CREATE INDEX idx_act_date ON activity(created_at)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_act_date ON activity(created_at)');
 
     // ---------- سلة المحذوفات القديمة (يبقى للتوافق مع الإصدارات السابقة) ----------
     await db.execute('''
-      CREATE TABLE trash (
+      CREATE TABLE IF NOT EXISTS trash (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         store      TEXT NOT NULL,
         payload    TEXT NOT NULL,
@@ -237,7 +237,7 @@ class AppDatabase {
 
     // ---------- التنبيهات ----------
     await db.execute('''
-      CREATE TABLE notifications (
+      CREATE TABLE IF NOT EXISTS notifications (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         title      TEXT NOT NULL,
         body       TEXT DEFAULT '',
@@ -248,7 +248,7 @@ class AppDatabase {
 
     // ---------- قوالب الرسائل ----------
     await db.execute('''
-      CREATE TABLE templates (
+      CREATE TABLE IF NOT EXISTS templates (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         name       TEXT NOT NULL,
         body       TEXT NOT NULL,
@@ -258,15 +258,15 @@ class AppDatabase {
     // ---------- الأصناف والمخزون ----------
     await db.execute(createItemsSql);
     await db.execute(createStockSql);
-    await db.execute('CREATE INDEX idx_stock_item ON stock_moves(item_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
     await db.execute(createTransactionItemsSql);
     await db.execute(
-      'CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)',
+      'CREATE INDEX IF NOT EXISTS idx_tx_items_tx ON transaction_items(tx_id)',
     );
 
     // ---------- الإعدادات ----------
     await db.execute('''
-      CREATE TABLE settings (
+      CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )''');
@@ -276,7 +276,7 @@ class AppDatabase {
 
   /// جداول المزامنة الجديدة (v5).
   static const createSyncSchemaSql = '''
-      CREATE TABLE workspaces (
+      CREATE TABLE IF NOT EXISTS workspaces (
         id              TEXT PRIMARY KEY,
         name            TEXT NOT NULL DEFAULT '',
         owner_google_id TEXT DEFAULT '',
@@ -286,7 +286,7 @@ class AppDatabase {
         updated_at      TEXT NOT NULL
       );
 
-      CREATE TABLE devices (
+      CREATE TABLE IF NOT EXISTS devices (
         id             TEXT PRIMARY KEY,
         workspace_id   TEXT NOT NULL,
         name           TEXT NOT NULL DEFAULT '',
@@ -311,7 +311,7 @@ class AppDatabase {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       );
 
-      CREATE TABLE operations (
+      CREATE TABLE IF NOT EXISTS operations (
         id           TEXT PRIMARY KEY,
         device_id    TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
@@ -327,11 +327,11 @@ class AppDatabase {
         timestamp    TEXT NOT NULL,
         synced       INTEGER NOT NULL DEFAULT 0
       );
-      CREATE INDEX idx_ops_entity ON operations(entity_type, entity_id);
-      CREATE INDEX idx_ops_time   ON operations(timestamp);
-      CREATE INDEX idx_ops_sync   ON operations(synced, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_ops_entity ON operations(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_ops_time   ON operations(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_ops_sync   ON operations(synced, timestamp);
 
-      CREATE TABLE sync_queue (
+      CREATE TABLE IF NOT EXISTS sync_queue (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         operation_id TEXT NOT NULL,
         status       TEXT NOT NULL DEFAULT 'pending',
@@ -344,14 +344,14 @@ class AppDatabase {
         UNIQUE(operation_id, target),
         FOREIGN KEY (operation_id) REFERENCES operations(id) ON DELETE CASCADE
       );
-      CREATE INDEX idx_queue_status ON sync_queue(status, next_try_at);
+      CREATE INDEX IF NOT EXISTS idx_queue_status ON sync_queue(status, next_try_at);
 
-      CREATE TABLE sync_meta (
+      CREATE TABLE IF NOT EXISTS sync_meta (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
 
-      CREATE TABLE google_auth (
+      CREATE TABLE IF NOT EXISTS google_auth (
         id           INTEGER PRIMARY KEY CHECK (id = 1),
         google_id    TEXT DEFAULT '',
         email        TEXT DEFAULT '',
@@ -364,7 +364,7 @@ class AppDatabase {
   ''';
 
   static const createItemCategoriesSql = '''
-      CREATE TABLE item_categories (
+      CREATE TABLE IF NOT EXISTS item_categories (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name       TEXT NOT NULL,
@@ -373,7 +373,7 @@ class AppDatabase {
       )''';
 
   static const createItemsSql = '''
-      CREATE TABLE items (
+      CREATE TABLE IF NOT EXISTS items (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id  TEXT NOT NULL DEFAULT 'default',
         name          TEXT NOT NULL,
@@ -398,7 +398,7 @@ class AppDatabase {
       )''';
 
   static const createStockSql = '''
-      CREATE TABLE stock_moves (
+      CREATE TABLE IF NOT EXISTS stock_moves (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         item_id     INTEGER NOT NULL,
@@ -416,7 +416,7 @@ class AppDatabase {
       )''';
 
   static const createTransactionItemsSql = '''
-      CREATE TABLE transaction_items (
+      CREATE TABLE IF NOT EXISTS transaction_items (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         tx_id       INTEGER NOT NULL,
         workspace_id TEXT NOT NULL DEFAULT 'default',
@@ -536,20 +536,20 @@ class AppDatabase {
     if (from < 2) {
       await db.execute(createItemsSql);
       await db.execute(createStockSql);
-      await db.execute('CREATE INDEX idx_stock_item ON stock_moves(item_id)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
       await _addColumn(db, 'transactions', 'image', "TEXT DEFAULT ''");
       await _addColumn(db, 'users', 'password', "TEXT DEFAULT ''");
     }
     if (from < 3) {
       await db.execute(createTransactionItemsSql);
       await db.execute(
-        'CREATE INDEX idx_tx_items_tx ON transaction_items(tx_id)',
+        'CREATE INDEX IF NOT EXISTS idx_tx_items_tx ON transaction_items(tx_id)',
       );
     }
     if (from < 4) {
       await db.execute(createItemCategoriesSql);
       await db.execute(
-        'CREATE UNIQUE INDEX idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
       );
       await _addColumn(db, 'items', 'category_id', 'INTEGER');
       final now = DateTime.now().toIso8601String();
