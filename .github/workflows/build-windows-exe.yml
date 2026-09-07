@@ -58,17 +58,22 @@ jobs:
         shell: pwsh
         run: |
           $rel = "build\windows\x64\runner\Release"
-          $pkg = "nexora-windows\مدير الحسابات"
+          $pkg = "nexora-windows\App"
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-          # انسخ كل ملفات التطبيق (exe + dll + data) داخل مجلد التطبيق.
           Copy-Item -Path "$rel\*" -Destination $pkg -Recurse -Force
-          # ملف تشغيل بسيط للمستخدم في جذر المجلد.
-          $launcher = "nexora-windows\تشغيل-مدير-الحسابات.bat"
-          Set-Content -Path $launcher -Value "@echo off`r`nstart \"\" \"%~dp0مدير الحسابات\nexora_app.exe\"" -Encoding Default
-          $readme = "nexora-windows\تعليمات التشغيل.txt"
-          Set-Content -Path $readme -Value "مدير الحسابات — نسخة ويندوز`r`n`r`nطريقة التشغيل:`r`n1) استخرج محتويات الملف المضغوط بالكامل إلى مجلد.`r`n2) افتح مجلد (مدير الحسابات) وشغّل nexora_app.exe، أو استخدم (تشغيل-مدير-الحسابات.bat).`r`n`r`nملاحظة: لا تنقل nexora_app.exe وحده خارج المجلد؛ فهو يحتاج ملفات data و dll المجاورة.`r`nأول تشغيل قد يطلب ويندوز سماحاً (SmartScreen) — اختر: مزيد من المعلومات ثم تشغيل على أي حال." -Encoding UTF8
-          # أعطِ ملف التشغيل اسمًا عربيًا واضحًا داخل مجلد التطبيق أيضًا.
-          Get-ChildItem $pkg | Select-Object Name | Format-Table -AutoSize
+          # ملف تشغيل في الجذر يتتبع المسار تلقائيًا (مسار ASCII للتوافق).
+          $bat = @(
+            "@echo off",
+            "cd /d `"%~dp0App`"",
+            "start `"`" `"nexora_app.exe`"",
+            "exit"
+          )
+          Set-Content -Path "nexora-windows\Run.bat" -Value $bat -Encoding ASCII
+          # انسخ الملف العربي داخل مجلد التطبيق كاختصار إضافي.
+          Set-Content -Path "nexora-windows\App\Run.bat" -Value $bat -Encoding ASCII
+          $readme = "مدير الحسابات (Nexora) - Windows portable`r`n`r`nHOW TO RUN:`r`n1) Extract this whole zip to a folder (keep all files together).`r`n2) Double-click Run.bat  OR open the App folder and run nexora_app.exe.`r`n`r`nIMPORTANT: Do NOT move nexora_app.exe out of the App folder; it needs the data folder and DLLs next to it.`r`nOn first run Windows SmartScreen may warn: click (More info) then (Run anyway)."
+          Set-Content -Path "nexora-windows\README.txt" -Value $readme -Encoding UTF8
+          Get-ChildItem $pkg | Select-Object -ExpandProperty Name
 
       - name: Package ZIP
         shell: pwsh
@@ -86,7 +91,24 @@ jobs:
           $staging = "msix-pkg"
           Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$staging\app" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$staging\Assets" | Out-Null
           Copy-Item -Path "$rel\*" -Destination "$staging\app" -Recurse -Force
+          # ولّد شعار PNG صالحًا بسيطًا (مربع ملوّن) لاجتياز makeappx.
+          Add-Type -AssemblyName System.Drawing
+          function New-Logo($path,$size){
+            $bmp = New-Object System.Drawing.Bitmap($size,$size)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(15,118,110))
+            $f = New-Object System.Drawing.Font("Arial",($size/2),[System.Drawing.FontStyle]::Bold)
+            $br = [System.Drawing.Brushes]::White
+            $sf = New-Object System.Drawing.StringFormat; $sf.Alignment="Center"; $sf.LineAlignment="Center"
+            $g.DrawString("م",$f,$br,(New-Object System.Drawing.RectangleF(0,0,$size,$size)),$sf)
+            $bmp.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          New-Logo "$staging\Assets\StoreLogo.png" 50
+          New-Logo "$staging\Assets\Square44x44Logo.png" 44
+          New-Logo "$staging\Assets\Square150x150Logo.png" 150
           # بيانات الحزمة (تعمل بدون توقيع لتثبيت محلي بشهادة مطوّر).
           $manifest = @'
           <?xml version="1.0" encoding="utf-8"?>
@@ -97,7 +119,7 @@ jobs:
             <Properties>
               <DisplayName>مدير الحسابات</DisplayName>
               <PublisherDisplayName>Nexora</PublisherDisplayName>
-              <Logo>app\data\flutter_assets\assets\images\logo.png</Logo>
+              <Logo>Assets\StoreLogo.png</Logo>
             </Properties>
             <Dependencies>
               <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
@@ -108,32 +130,33 @@ jobs:
               <Application Id="App" Executable="app\nexora_app.exe"
                            EntryPoint="Windows.FullTrustApplication">
                 <uap:VisualElements DisplayName="مدير الحسابات"
-                                    Description="مدير الحسابات — سجل المبيعات والديون"
+                                    Description="مدير الحسابات"
                                     BackgroundColor="transparent"
-                                    Square150x150Logo="app\data\flutter_assets\assets\images\logo.png"
-                                    Square44x44Logo="app\data\flutter_assets\assets\images\logo.png"/>
+                                    Square150x150Logo="Assets\Square150x150Logo.png"
+                                    Square44x44Logo="Assets\Square44x44Logo.png"/>
               </Application>
             </Applications>
           </Package>
           '@
           Set-Content -Path "$staging\AppxManifest.xml" -Value $manifest -Encoding UTF8
-          $makeappx = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\makeappx.exe"
-          if (-not (Test-Path $makeappx)) {
+          # بناء MSIX اختياري: أي فشل لا يُفشل سير العمل (النسخة المحمولة هي الأساس).
+          try {
             $makeappx = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          }
-          if ($makeappx) {
-            & $makeappx pack /d $staging /p nexora-windows.msix /o
-            Write-Host "MSIX built"
-          } else {
-            Write-Host "makeappx غير موجود — سنتجاوز MSIX"
+            if ($makeappx) {
+              & $makeappx pack /d $staging /p nexora-windows.msix /o
+              Write-Host "MSIX built OK"
+            } else {
+              Write-Host "makeappx غير موجود — تم تخطي MSIX"
+            }
+          } catch {
+            Write-Host "تخطّي MSIX (غير حرج): $_"
           }
 
-      - name: Download install-certificate helper
+      - name: Write install/readme file
         shell: pwsh
         run: |
-          # ملف مساعدة يشرح تثبيت MSIX بخطوتين (شهادة مطوّر + تثبيت).
-          $help = "طريقة تثبيت تطبيق ويندوز:`r`n`r`n1) انقر نقرة يمين على nexora-windows.msix ← خصائص ← التوقيع الرقمي ← ثق بالشهادة (أو ثبّت الشهادة في 'الجذر الموثوق/الأشخاص الموثوقون').`r`n2) افتح nexora-windows.msix واضغط 'تثبيت'.`r`n`r`nإن لم يعمل المثبّت، استخدم النسخة المحمولة: استخرج nexora-windows.zip وشغّل 'تشغيل-مدير-الحسابات.bat'."
-          Set-Content -Path "كيفية-التثبيت.txt" -Value $help -Encoding UTF8
+          $help = "مدير الحسابات — نسخة ويندوز`r`n`r`nالأسهل (نسخة محمولة، لا تحتاج تثبيت):`r`n1) استخرج nexora-windows.zip بالكامل إلى مجلد (لا تفرّق الملفات).`r`n2) انقر مرتين على Run.bat، أو افتح مجلد App وشغّل nexora_app.exe.`r`nملاحظة: لا تنقل nexora_app.exe خارج مجلد App (يحتاج ملفات data وDLL مجاورة).`r`nأول تشغيل قد يحذّرك SmartScreen: اضغط (مزيد من المعلومات) ثم (تشغيل على أي حال)."
+          Set-Content -Path "README-install.txt" -Value $help -Encoding UTF8
 
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
@@ -177,7 +200,7 @@ jobs:
           files: |
             nexora-windows.zip
             nexora-windows.msix
-            كيفية-التثبيت.txt
+            README-install.txt
             nexora-arm64.apk
             version.json
           fail_on_unmatched_files: false
