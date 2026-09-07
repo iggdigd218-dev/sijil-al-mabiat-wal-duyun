@@ -137,7 +137,10 @@ class UpdateService {
           error: 'الخادم أعاد الرمز ${res.statusCode}.',
         );
       }
-      return _parse(res.body);
+      // نفكّ البايتات بـ UTF-8 صراحةً: GitHub يقدّم version.json بنوع
+      // application/octet-stream بلا charset، فتتراجع res.body إلى Latin-1
+      // ويتشوّه النص العربي في الملاحظات (Ø§Ù…). allowMalformed حمايةً من بايتات شاذة.
+      return _parse(utf8.decode(res.bodyBytes, allowMalformed: true));
     } on TimeoutException {
       return UpdateInfo(
         status: UpdateStatus.unknown,
