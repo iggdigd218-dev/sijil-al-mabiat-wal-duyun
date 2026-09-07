@@ -1,6 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_contacts/flutter_contacts.dart' hide Account;
 
 import '../core/accounting.dart';
 import '../core/format.dart';
@@ -141,24 +143,32 @@ class _State extends ConsumerState<AccountFormScreen> {
     }
   }
 
-  String? get _phoneDigits {
-    final d = Fmt.phoneDigits(_phone.text);
-    return d.isEmpty ? null : d;
-  }
-
-  Future<void> _launch(String scheme) async {
-    final num = _phoneDigits;
-    if (num == null) {
-      Sfx.reject();
-      showSnack(context, 'أدخل رقم الهاتف أولاً', error: true);
+  /// جلب اسم ورقم العميل من تطبيق جهات الاتصال (منتقي النظام، بلا إذن قراءة).
+  Future<void> _pickContact() async {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      showSnack(context, 'اختيار جهة الاتصال متاح على الهاتف فقط', error: true);
       return;
     }
-    final uri = Uri.parse('$scheme$num');
     try {
-      Sfx.pop();
-      await launchUrl(uri);
-    } catch (_) {
-      if (mounted) showSnack(context, 'تعذّر فتح التطبيق', error: true);
+      // يفتح منتقي جهات اتصال النظام ويعيد جهة واحدة (لا يقرأ كل الجهات).
+      final contact = await FlutterContacts.openExternalPick();
+      if (contact == null) return; // ألغى المستخدم.
+      final name = contact.displayName.trim();
+      final phone = contact.phones.isNotEmpty
+          ? Fmt.phoneDigits(contact.phones.first.number)
+          : '';
+      setState(() {
+        if (name.isNotEmpty && (_name.text.trim().isEmpty || !_isEdit)) {
+          _name.text = name;
+        }
+        if (phone.isNotEmpty) _phone.text = phone;
+      });
+      Sfx.success();
+      if (mounted) showSnack(context, 'تم جلب بيانات العميل من جهات الاتصال');
+    } catch (e) {
+      if (mounted) {
+        showSnack(context, 'تعذّر جلب جهة الاتصال: $e', error: true);
+      }
     }
   }
 
@@ -179,8 +189,7 @@ class _State extends ConsumerState<AccountFormScreen> {
             100 + MediaQuery.of(context).viewInsets.bottom,
           ),
           children: [
-            // زر اتصال بجانب الاسم: يفتح تطبيق الهاتف مباشرة على الرقم
-            // (ولا يقرأ/يحمّل جهات الاتصال داخل التطبيق إطلاقًا).
+            // زر جلب بيانات العميل (اسم + رقم) من تطبيق جهات الاتصال.
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -198,14 +207,14 @@ class _State extends ConsumerState<AccountFormScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: IconButton.filledTonal(
-                    tooltip: 'اتصال بالعميل',
+                    tooltip: 'جلب من جهات الاتصال',
                     style: IconButton.styleFrom(
-                      backgroundColor: Colors.green.withValues(alpha: 0.12),
-                      foregroundColor: Colors.green.shade700,
+                      backgroundColor: Colors.blue.withValues(alpha: 0.12),
+                      foregroundColor: Colors.blue.shade700,
                       minimumSize: const Size(48, 48),
                     ),
-                    icon: const Icon(Icons.call),
-                    onPressed: () => _launch('tel:'),
+                    icon: const Icon(Icons.contacts_rounded),
+                    onPressed: _pickContact,
                   ),
                 ),
               ],
@@ -293,30 +302,10 @@ class _State extends ConsumerState<AccountFormScreen> {
             TextFormField(
               controller: _phone,
               keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'رقم الجوال',
                 hintText: '7xxxxxxxx',
-                prefixIcon: const Icon(Icons.phone_android),
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'اتصال',
-                      icon: const Icon(Icons.call, color: Colors.green),
-                      onPressed: () => _launch('tel:'),
-                    ),
-                    IconButton(
-                      tooltip: 'رسالة نصية (SMS)',
-                      icon: const Icon(Icons.sms, color: Colors.blue),
-                      onPressed: () => _launch('sms:'),
-                    ),
-                    IconButton(
-                      tooltip: 'واتساب',
-                      icon: const Icon(Icons.chat, color: Color(0xFF25D366)),
-                      onPressed: () => _launch('https://wa.me/'),
-                    ),
-                  ],
-                ),
+                prefixIcon: Icon(Icons.phone_android),
               ),
             ),
             const SizedBox(height: 13),

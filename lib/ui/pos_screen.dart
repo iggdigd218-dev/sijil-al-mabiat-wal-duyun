@@ -90,6 +90,21 @@ class _PosScreenState extends ConsumerState<PosScreen>
       _cart.values.fold<int>(0, (sum, e) => sum + e.quantity.toInt());
 
   void _addItem(Item item) {
+    final inCart = _cart[item.id]?.quantity ?? 0.0;
+    if (item.quantity <= 0) {
+      Sfx.reject();
+      showSnack(context, 'الصنف «${item.name}» نفد من المخزون', error: true);
+      return;
+    }
+    if (inCart + 1 > item.quantity) {
+      Sfx.reject();
+      showSnack(
+        context,
+        'الكمية المتاحة من «${item.name}»: ${item.quantity.toStringAsFixed(0)} ${item.unit} فقط',
+        error: true,
+      );
+      return;
+    }
     setState(() {
       if (_cart.containsKey(item.id)) {
         _cart[item.id]!.quantity += 1.0;
@@ -101,6 +116,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
         );
       }
     });
+    Sfx.click();
   }
 
   void _removeItem(int itemId) {
@@ -279,7 +295,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       ),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        onTap: () => _addItem(item),
+                        onTap: isOut ? null : () => _addItem(item),
                         child: Padding(
                           padding: const EdgeInsets.all(10),
                           child: Column(
@@ -300,7 +316,24 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
-                                  if (inCart > 0)
+                                  if (isOut)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.dangerOf(context),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        'نفد',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    )
+                                  else if (inCart > 0)
                                     CircleAvatar(
                                       radius: 12,
                                       backgroundColor: AppColors.primaryOf(
@@ -542,6 +575,16 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   size: 20,
                                 ),
                                 onPressed: () {
+                                  if (entry.quantity + 1 >
+                                      entry.item.quantity) {
+                                    Sfx.reject();
+                                    showSnack(
+                                      context,
+                                      'الكمية المتاحة: ${entry.item.quantity.toStringAsFixed(0)} ${entry.item.unit} فقط',
+                                      error: true,
+                                    );
+                                    return;
+                                  }
                                   setSheetState(() {
                                     entry.quantity += 1;
                                   });
@@ -776,6 +819,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
       final cur = currencies.first;
       // رقم فاتورة تسلسلي رقمي بحت (بدون أحرف)
       final refNum = await repo.nextTxNumber();
+
+      // 0. تحقق نهائي من توفر المخزون (دفاع ضد بيانات تغيّرت أثناء الجلسة).
+      for (final e in _cart.values) {
+        if (e.item.id == null) continue;
+        final fresh = await repo.item(e.item.id!);
+        final available = fresh?.quantity ?? e.item.quantity;
+        if (available < e.quantity) {
+          throw StateError(
+            'الكمية المطلوبة من «${e.item.name}» غير متوفرة. '
+            'المتاح: ${available.toStringAsFixed(0)} ${e.item.unit}.',
+          );
+        }
+      }
 
       // 1. تجهيز أسطر الفاتورة
       final lines = _cart.values.map((e) {

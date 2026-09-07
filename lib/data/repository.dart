@@ -2694,6 +2694,13 @@ class Repo {
         final delta = m.kind == StockKind.adjust
             ? m.quantity - it.quantity
             : m.kind.qtySign * m.quantity;
+        // منع البيع/الخصم بما يتجاوز الرصيد المتاح (لا مخزون سالب).
+        if (m.kind == StockKind.sale && m.quantity > it.quantity) {
+          throw StateError(
+            'الكمية المطلوبة من «${it.name}» غير متوفرة. '
+            'المتاح: ${it.quantity.toStringAsFixed(0)} ${it.unit}.',
+          );
+        }
         final now = DateTime.now().toIso8601String();
         await txn.update(
           'items',
