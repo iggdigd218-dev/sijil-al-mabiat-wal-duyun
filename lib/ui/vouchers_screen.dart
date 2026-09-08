@@ -322,9 +322,17 @@ Future<void> openVoucherPreview(
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: () async {
-                          await repo.saveVoucher(
-                            v.copyWith(status: 'approved'),
-                          );
+                          try {
+                            // يتطلب صلاحية approve_vouchers — تُفحص في Repo.
+                            await repo.saveVoucher(
+                              v.copyWith(status: 'approved'),
+                            );
+                          } catch (e) {
+                            if (context.mounted) {
+                              showSnack(context, '$e', error: true);
+                            }
+                            return;
+                          }
                           bump(ref);
                           if (context.mounted) {
                             Navigator.pop(context);

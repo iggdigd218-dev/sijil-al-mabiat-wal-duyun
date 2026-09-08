@@ -188,10 +188,21 @@ void main() {
   });
 
   test(
-      'QA-LAN-07 snapshot excludes other device credentials and password hashes',
-      () async {
+      'QA-LAN-07 snapshot distributes active peer secrets but never passwords '
+      'or revoked-device secrets', () async {
     await b.update(
         'users', {'password': 'qa-private-hash', 'pin': 'qa-private-pin'});
+    // جهاز ثالث موقوف: سرّه يجب ألا يُوزَّع أبداً.
+    await b.insert('devices', {
+      'id': 'DEVICE-REVOKEDC',
+      'workspace_id': 'default',
+      'name': 'C',
+      'auth_secret': 'qa-revoked-secret',
+      'is_paired': 1,
+      'revoked_at': now.toIso8601String(),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
     final client = HttpClient();
     try {
       final request =
@@ -200,7 +211,10 @@ void main() {
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
       expect(response.statusCode, HttpStatus.ok);
-      expect(body, isNot(contains(bSecret)));
+      // العقد الجديد: أسرار الأجهزة النشطة تُوزَّع للعضو المنضم حتى يستطيع
+      // التحقق من عمليات بقية الأعضاء عند غياب المدير.
+      expect(body, contains(bSecret));
+      expect(body, isNot(contains('qa-revoked-secret')));
       expect(body, isNot(contains('qa-private-hash')));
       expect(body, isNot(contains('qa-private-pin')));
     } finally {

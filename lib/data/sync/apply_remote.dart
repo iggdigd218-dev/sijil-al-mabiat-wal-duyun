@@ -1,4 +1,6 @@
 // Apply an incoming operation using the actual primary key of each table.
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 
 import '../repository.dart';
@@ -145,6 +147,9 @@ extension ApplyRemoteOp on Repo {
           await txn.delete(table,
               where: '$primaryKey = ?', whereArgs: [op.entityId]);
         }
+        // مزامنة سلة المهملات: الحذف الوارد من جهاز آخر يظهر في سلتنا
+        // أيضاً حتى يمكن استرجاعه من أي جهاز في المجموعة.
+        await _mirrorTrash(txn, op, existing);
         break;
       case OpKind.restore:
         if (columns.contains('deleted_at')) {
@@ -158,11 +163,82 @@ extension ApplyRemoteOp on Repo {
               where: '$primaryKey = ?',
               whereArgs: [op.entityId]);
         }
+        // الاسترجاع على جهاز آخر يزيل السجل المقابل من سلتنا المحلية.
+        await _removeTrashMirror(txn, op);
         break;
     }
     await txn.insert('operations', op.toMap()..['synced'] = 1,
         conflictAlgorithm: ConflictAlgorithm.ignore);
     return true;
+  }
+
+  /// حذف وارد من جهاز آخر → صف مطابق في سلة المهملات المحلية حتى تعرض
+  /// كل الأجهزة نفس السلة ويمكن الاسترجاع من أيٍّ منها.
+  Future<void> _mirrorTrash(
+    DatabaseExecutor txn,
+    SyncOperation op,
+    List<Map<String, Object?>> existing,
+  ) async {
+    final store = switch (op.entityType) {
+      EntityKind.account => 'accounts',
+      EntityKind.tx => 'transactions',
+      EntityKind.item => 'items',
+      EntityKind.voucher => 'vouchers',
+      _ => null, // بقية الكيانات لا تمر عبر السلة.
+    };
+    if (store == null) return;
+    try {
+      // منع التكرار: لا ندرج إن كان لدينا صف سلة لنفس الكيان.
+      final marker = '"__sync_entity":"${op.entityType.name}:${op.entityId}"';
+      final dup = await txn.query('trash',
+          where: 'payload LIKE ?', whereArgs: ['%$marker%'], limit: 1);
+      if (dup.isNotEmpty) return;
+      final snapshot = existing.isNotEmpty
+          ? Map<String, Object?>.from(existing.first)
+          : Map<String, Object?>.from(op.payload)
+        ..remove('items');
+      snapshot['__sync_entity'] = '${op.entityType.name}:${op.entityId}';
+      final label = switch (op.entityType) {
+        EntityKind.account => 'حساب: ${snapshot['name'] ?? op.entityId}',
+        EntityKind.tx =>
+          'عملية بمبلغ ${snapshot['amount'] ?? '?'} ${snapshot['currency'] ?? ''}',
+        EntityKind.item => 'صنف: ${snapshot['name'] ?? op.entityId}',
+        EntityKind.voucher => 'سند: ${snapshot['ref'] ?? op.entityId}',
+        _ => op.entityId,
+      };
+      await txn.insert('trash', {
+        'store': store,
+        'payload': jsonEncode(store == 'transactions'
+            ? {'transaction': snapshot, 'items': const []}
+            : snapshot),
+        'label': '$label (حُذف من جهاز آخر)',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    } catch (_) {
+      // السلة انعكاس مساعد — فشلها لا يفشل تطبيق العملية.
+    }
+  }
+
+  /// استرجاع وارد → إزالة صف السلة المقابل محلياً.
+  Future<void> _removeTrashMirror(DatabaseExecutor txn, SyncOperation op) async {
+    try {
+      final marker = '"__sync_entity":"${op.entityType.name}:${op.entityId}"';
+      await txn.delete('trash', where: 'payload LIKE ?', whereArgs: ['%$marker%']);
+      // السجلات المحلية القديمة (بلا وسم): طابق بالمعرف داخل الحمولة.
+      final idMarker = '"id":${op.entityId}';
+      final store = switch (op.entityType) {
+        EntityKind.account => 'accounts',
+        EntityKind.tx => 'transactions',
+        EntityKind.item => 'items',
+        EntityKind.voucher => 'vouchers',
+        _ => null,
+      };
+      if (store != null) {
+        await txn.delete('trash',
+            where: 'store = ? AND payload LIKE ?',
+            whereArgs: [store, '%$idMarker%']);
+      }
+    } catch (_) {}
   }
 
   Future<void> _replaceInvoiceLines(

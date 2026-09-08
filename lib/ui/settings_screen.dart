@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/app_version.dart';
 import '../core/receipt_image.dart';
@@ -66,6 +68,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void initState() {
     super.initState();
     _checkBiometrics();
+  }
+
+  /// نسخة احتياطية محلية لجهاز العضو — تُكتب في مستندات التطبيق فقط.
+  Future<void> _createLocalBackup(BuildContext context) async {
+    try {
+      final repo = ref.read(repoProvider);
+      final payload = await repo.exportForLocalBackup(withImages: true);
+      final dir = await getApplicationDocumentsDirectory();
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')
+          .first;
+      final f = File('${dir.path}/nexora-local-backup-$ts.nexora');
+      await f.writeAsString(jsonEncode(payload));
+      if (mounted) {
+        showSnack(context, '✅ حُفظت نسخة محلية: ${f.path.split('/').last}');
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر إنشاء النسخة: $e', error: true);
+    }
   }
 
   Future<void> _checkBiometrics() async {
@@ -535,6 +558,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                   ],
                 ),
+                // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،
+                // ويظهر هنا فقط خيار إنشاء نسخة محلية (بلا Google ولا سحابة).
+                if (!canEditOrg) ...[
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'نسخة احتياطية محلية',
+                    icon: Icons.save_outlined,
+                    color: const Color(0xFF0D9488),
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.backup_outlined),
+                        title: const Text('إنشاء نسخة احتياطية محلية الآن'),
+                        subtitle: const Text(
+                          'تُحفظ داخل مجلد التطبيق على هذا الجهاز فقط، '
+                          'ولا يمكن استخدامها خارج مجموعتك.',
+                          style: TextStyle(fontSize: 11.5, height: 1.5),
+                        ),
+                        trailing: const Icon(Icons.chevron_left),
+                        onTap: () => _createLocalBackup(context),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 18),
                 const UpdateSection(),
                 const SizedBox(height: 18),

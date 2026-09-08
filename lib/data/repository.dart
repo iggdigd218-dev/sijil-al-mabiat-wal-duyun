@@ -1038,6 +1038,19 @@ class Repo {
 
   Future<int> saveVoucher(Voucher v) async {
     final db = await _db;
+    // فحص الصلاحيات: إنشاء = add_tx، تعديل = edit_tx، وتغيير حالة
+    // الاعتماد/الإلغاء يتطلب صلاحية approve_vouchers صراحةً.
+    if (v.id == null) {
+      await _ensureCan('add_tx');
+    } else {
+      final prev = await db.query('vouchers',
+          columns: ['status'], where: 'id = ?', whereArgs: [v.id], limit: 1);
+      final prevStatus =
+          prev.isEmpty ? '' : ((prev.first['status'] as String?) ?? '');
+      final statusChanged = prevStatus != v.status &&
+          (v.status == 'approved' || v.status == 'cancelled');
+      await _ensureCan(statusChanged ? 'approve_vouchers' : 'edit_tx');
+    }
     late final int id;
     if (v.id == null) {
       id = await db.insert('vouchers', v.toMap()..['id'] = newGlobalId());
@@ -1063,6 +1076,7 @@ class Repo {
   }
 
   Future<void> deleteVoucher(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     final r = await db.query('vouchers', where: 'id = ?', whereArgs: [id]);
     if (r.isNotEmpty) {
@@ -1911,6 +1925,7 @@ class Repo {
   /// يعيد سجلًا محذوفًا إلى جدوله الأصلي.
   /// يدعم السجلات القديمة (hard delete مع payload محفوظ) والسجلات الجديدة التي تحمل entity_id.
   Future<void> restoreFromTrash(int trashId) async {
+    await _ensureCan('add_tx'); // الاسترجاع = إعادة إنشاء السجل.
     final db = await _db;
     final r = await db.query('trash', where: 'id = ?', whereArgs: [trashId]);
     if (r.isEmpty) return;
@@ -1933,6 +1948,8 @@ class Repo {
           decoded is Map &&
           decoded['transaction'] is Map) {
         final tx = Map<String, Object?>.from(decoded['transaction'] as Map);
+        // وسوم المزامنة الداخلية (مثل __sync_entity) ليست أعمدة حقيقية.
+        tx.removeWhere((k, _) => k.startsWith('__'));
         tx['deleted_at'] = '';
         tx['updated_at'] = now;
         await txn.insert(
@@ -1952,6 +1969,8 @@ class Repo {
         }
       } else if (decoded is Map && decoded['id'] != null) {
         final payload = Map<String, Object?>.from(decoded);
+        // وسوم المزامنة الداخلية (مثل __sync_entity) ليست أعمدة حقيقية.
+        payload.removeWhere((k, _) => k.startsWith('__'));
         // إن كان السجل الأصلي ما زال موجودًا (soft delete)، نُلغِ deleted_at.
         final id = payload['id'];
         final exists = await txn.query(
@@ -2014,11 +2033,13 @@ class Repo {
 
   /// حذف عنصر واحد من السلة نهائيًا.
   Future<void> deleteFromTrash(int trashId) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     await db.delete('trash', where: 'id = ?', whereArgs: [trashId]);
   }
 
   Future<void> emptyTrash() async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     await db.delete('trash');
     await logActivity('تفريغ سلة المهملات', 'trash', '');
@@ -2120,8 +2141,19 @@ class Repo {
   ///
   /// [withImages] يضمّن صور العمليات والحسابات والأصناف مرمّزة base64 داخل
   /// الملف، فلا تضيع عند النقل إلى هاتف آخر.
-  Future<Map<String, Object?>> exportAll({bool withImages = true}) async {
-    await _ensureCan('export');
+  /// نسخة احتياطية محلية فقط (تُحفظ داخل مجلد التطبيق) — متاحة لكل
+  /// الأجهزة بمن فيهم الأعضاء بلا صلاحية تصدير: الملف لا يغادر الجهاز،
+  /// ولا يمكن استيراده في مجموعة أخرى بفضل بصمة المجموعة.
+  Future<Map<String, Object?>> exportForLocalBackup({
+    bool withImages = false,
+  }) =>
+      exportAll(withImages: withImages, localOnly: true);
+
+  Future<Map<String, Object?>> exportAll({
+    bool withImages = true,
+    bool localOnly = false,
+  }) async {
+    if (!localOnly) await _ensureCan('export');
     final db = await _db;
     final data = <String, Object?>{};
     for (final t in backupTables) {
@@ -2189,14 +2221,26 @@ class Repo {
       }
     }
 
+    // بصمة المجموعة: معرّف جهاز المدير (المالك) يميّز كل مجموعة عن غيرها،
+    // فلا تُستورد نسخة احتياطية صادرة من مجموعة أخرى.
     return {
       'app': 'nexora',
       'format': 2,
       'db_version': AppDatabase.schemaVersion,
       'created_at': DateTime.now().toIso8601String(),
+      'group_fingerprint': await _groupFingerprint(),
+      'workspace_mode': await workspaceMode(),
       'data': data,
       'images': images,
     };
+  }
+
+  /// معرّف جهاز مالك المجموعة (يُميّز المجموعة). فارغ إن لم يوجد مالك.
+  Future<String> _groupFingerprint() async {
+    final db = await _db;
+    final owner = await db.query('devices',
+        columns: ['id'], where: 'is_owner = 1', limit: 1);
+    return owner.isEmpty ? '' : (owner.first['id'] as String? ?? '');
   }
 
   /// يستبدل كل البيانات بمحتوى نسخة احتياطية ذرّيًا.
@@ -2206,6 +2250,19 @@ class Repo {
   Future<int> importAll(Map<String, Object?> backup) async {
     await _ensureCan('manage_backup');
     final db = await _db;
+    // داخل مجموعة: تُرفض أي نسخة غير صادرة من المجموعة نفسها — استيراد
+    // بيانات غريبة يفسد دفاتر كل الأجهزة عند أول مزامنة.
+    final mode = await workspaceMode();
+    if (mode == 'member' || mode == 'host') {
+      final ourFp = await _groupFingerprint();
+      final theirFp = (backup['group_fingerprint'] as String?) ?? '';
+      if (ourFp.isNotEmpty && theirFp != ourFp) {
+        throw const BackupImportException(
+          'هذه النسخة الاحتياطية غير صادرة من مجموعتك — '
+          'لا يُسمح باستيراد نسخة من خارج المجموعة.',
+        );
+      }
+    }
     final data = _normalize(backup);
     if (data.isEmpty) {
       throw const BackupImportException(
@@ -2563,6 +2620,7 @@ class Repo {
 
   /// إضافة فئة أو تعديل اسمها مع تحديث اسم الفئة في الأصناف التابعة لها.
   Future<int> saveItemCategory(ItemCategory category) async {
+    await _ensureCan(category.id == null ? 'add_tx' : 'edit_tx');
     final name = category.name.trim();
     if (name.isEmpty) throw ArgumentError('اسم الفئة مطلوب');
 
@@ -2631,6 +2689,7 @@ class Repo {
 
   /// يحذف الفئة فقط، ويفك ربط أصنافها لتبقى بيانات الأصناف محفوظة.
   Future<void> deleteItemCategory(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     final rows = await db.query(
       'item_categories',
@@ -2775,6 +2834,7 @@ class Repo {
 
   /// يسجّل حركة مخزنية ويحدّث كمية الصنف تلقائيًا.
   Future<int> addStockMove(StockMove m) async {
+    await _ensureCan('add_tx');
     final db = await _db;
     late final int id;
     String? lowName;
@@ -2848,6 +2908,7 @@ class Repo {
   }
 
   Future<void> deleteStockMove(int id) async {
+    await _ensureCan('delete_tx');
     final db = await _db;
     await db.transaction((txn) async {
       final r = await txn.query(

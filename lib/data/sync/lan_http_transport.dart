@@ -404,7 +404,12 @@ class LanSyncService implements SyncTransport {
             row['password'] = '';
           }
           if (t == 'devices') {
-            if (row['id'] != devRows.first['id']) row['auth_secret'] = '';
+            // نوزّع أسرار الأجهزة النشطة للعضو المنضم (الطلب موثّق بسرّه):
+            // بها يقبل عمليات بقية الأعضاء مباشرة حتى بغياب المدير.
+            final active =
+                ((row['revoked_at'] as String?) ?? '').isEmpty &&
+                    ((row['expelled_at'] as String?) ?? '').isEmpty;
+            if (!active) row['auth_secret'] = '';
             row['pair_token'] = '';
             row['pair_token_exp'] = '';
           }
@@ -453,13 +458,16 @@ class LanSyncService implements SyncTransport {
       final selfId = dev.first['id'] as String;
       final devices = await db.query('devices');
       final roster = devices.map((d) {
-        final isSelf = d['id'] == selfId;
         final m = Map<String, Object?>.from(d);
-        m.remove('auth_secret');
         m['pair_token'] = '';
         m['pair_token_exp'] = '';
-        // السر لا يُوزَّع لغير سجلنا.
-        if (!isSelf) m['auth_secret'] = '';
+        // أسرار المصادقة تُوزَّع لكل جهاز مقترن موثّق (طلب الـ roster نفسه
+        // محمي بسر الجهاز): بدونها لا يستطيع عضو التحقق من عمليات عضو آخر
+        // فتتعطل مزامنة الأعضاء بغياب المدير. الأجهزة الموقوفة/المطرودة
+        // لا سر لها أصلاً (يُمسح عند الإيقاف/الطرد).
+        final active = ((d['revoked_at'] as String?) ?? '').isEmpty &&
+            ((d['expelled_at'] as String?) ?? '').isEmpty;
+        if (!active) m['auth_secret'] = '';
         return m;
       }).toList();
       // أدوار المستخدمين (للمصالحة) دون أسرار.
@@ -861,15 +869,21 @@ class LanSyncService implements SyncTransport {
           'last_seen_at': now,
           'updated_at': now,
         };
+        // أسرار الأقران الواردة من المصدر الموثوق: نلتقطها إن كانت لدينا
+        // ناقصة — بها يستطيع الأعضاء التحقق من عمليات بعضهم بغياب المدير.
+        // سرّنا نحن لا يُكتب أبداً من بيانات واردة.
+        final incomingSecret = (d['auth_secret'] as String?) ?? '';
         if (existing.isNotEmpty) {
-          // لا نكتب سرّنا من بيانات واردة.
+          final haveSecret =
+              ((existing.first['auth_secret'] as String?) ?? '').isNotEmpty;
+          if (!isSelf && !haveSecret && incomingSecret.isNotEmpty) {
+            map['auth_secret'] = incomingSecret;
+          }
           await txn.update('devices', map,
               where: 'id = ?', whereArgs: [id]);
         } else {
           map['id'] = id;
-          map['auth_secret'] = isSelf
-              ? (d['auth_secret'] ?? '')
-              : '';
+          map['auth_secret'] = isSelf ? '' : incomingSecret;
           map['created_at'] = now;
           await txn.insert('devices', map,
               conflictAlgorithm: ConflictAlgorithm.replace);
@@ -1086,6 +1100,19 @@ class LanSyncService implements SyncTransport {
   }) async {
     try {
       final db = await dbProvider();
+      // العضو المرتبط بمجموعة لا يمكنه إنشاء اقتران/مزامنة خارجها:
+      // الانضمام إلى مجموعة أخرى يمر حصراً عبر الطرد ثم إعادة الانضمام.
+      final modeRows = await db.query('sync_meta',
+          where: 'key = ?', whereArgs: ['workspaceMode'], limit: 1);
+      final wsMode =
+          modeRows.isEmpty ? 'standalone' : (modeRows.first['value'] ?? '');
+      if (wsMode == 'member') {
+        return const LanPairResult(
+          ok: false,
+          error: 'أنت عضو في مجموعة قائمة — لا يمكن الاقتران أو المزامنة '
+              'خارج المجموعة من جهاز عضو.',
+        );
+      }
       final localDev = await db.query(
         'devices',
         where: 'id = ?',
@@ -1254,9 +1281,10 @@ class LanSyncService implements SyncTransport {
               if (k is String) map[k] = v as Object?;
             });
             if (table == 'devices') {
-              if ((map['auth_secret'] as String? ?? '').isEmpty) {
-                // Retain only credentials already obtained through pairing;
-                // redacted snapshots never distribute other peers' secrets.
+              if (map['id'] == ourDeviceId ||
+                  (map['auth_secret'] as String? ?? '').isEmpty) {
+                // سرّنا لا يُكتب أبداً من لقطة واردة؛ وعند غياب السر في
+                // اللقطة نحتفظ بما تعلمناه سابقاً عبر الاقتران.
                 map['auth_secret'] = knownSecrets[map['id']] ?? '';
               }
               if (map['id'] == ourDeviceId) {

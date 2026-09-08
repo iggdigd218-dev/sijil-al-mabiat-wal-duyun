@@ -451,6 +451,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   Widget build(BuildContext context) {
     final counts = ref.watch(countsProvider).valueOrNull ?? {};
     final trash = ref.watch(trashProvider);
+    // جهاز العضو داخل مجموعة: نسخة احتياطية محلية فقط — لا تسجيل دخول
+    // Google ولا مزامنة سحابية (تلك بيد المدير وحده حسب الصلاحية).
+    final wsMode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+    final wsOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
+    final cloudAllowed = wsMode == 'standalone' || (wsMode != 'member' && wsOwner);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
@@ -547,6 +552,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             ),
           ),
         ),
+        if (cloudAllowed) ...[
         const SizedBox(height: 20),
         const SectionTitle(
           'المزامنة السحابية (Firebase — رابط ورمز، بلا تسجيل دخول)',
@@ -797,6 +803,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
             ),
           ),
         ),
+        ], // نهاية أقسام السحابة (مخفية عن أجهزة الأعضاء)
         const SizedBox(height: 20),
         const SectionTitle('استخدام البيانات على أكثر من هاتف'),
         Card(

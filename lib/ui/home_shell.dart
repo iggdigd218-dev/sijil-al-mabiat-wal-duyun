@@ -861,9 +861,19 @@ class _DrawerItems {
       AppScreen.values
           .where((s) => !_HomeShellState._bottomTabs.contains(s))
           .where((s) {
+        // المدير يرى كل شيء؛ العضو يرى فقط ما تسمح به صلاحياته —
+        // الأيقونات بلا صلاحية تُخفى من حساب العضو بالكامل.
+        bool can(String p) => isOwner || (user?.can(p) ?? false);
         if (s == AppScreen.group) return isOwner;
         // قسم العمليات والمزامنة يُفتح من أيقونة المزامنة أعلى الشاشة فقط.
         if (s == AppScreen.syncOps) return false;
+        // التقارير تتطلب صلاحية عرض التقارير.
+        if (s == AppScreen.reports) return can('view_reports');
+        // النسخ الاحتياطي يُحذف من القائمة الجانبية للأعضاء بلا صلاحية
+        // إدارة النسخ — يبقى لهم خيار النسخة المحلية في الإعدادات فقط.
+        if (s == AppScreen.backup) return can('manage_backup');
+        // سلة المهملات: الاسترجاع والحذف النهائي شأن من يملك حذف العمليات.
+        if (s == AppScreen.trash) return can('delete_tx');
         return true;
       }).toList();
 }
