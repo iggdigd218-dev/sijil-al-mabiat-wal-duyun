@@ -64,6 +64,9 @@ jobs:
         run: |
           VER=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
           NAME="${VER%%+*}"; BUILD="${VER##*+}"
+          # ملاحظات الإصدار تُقرأ من release_notes.txt (سطر واحد) حتى
+          # تتحدث مع كل إصدار بدل نص قديم مضمّن في الـ workflow.
+          NOTES=$(head -c 1200 release_notes.txt | tr -d '\n' | sed 's/"/\\"/g')
           echo "إصدار البناء: $NAME (build $BUILD)"
           cat > version.json <<EOF
           {
@@ -75,7 +78,7 @@ jobs:
               "windows": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-windows.zip"
             },
             "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "notes": "الجديد: مزامنة تلقائية فورية بنظام حضور ذكي — الأجهزة تكتشف بعضها خلال ثوانٍ، لا محاولات فاشلة عند غياب جهاز، ومزامنة لحظية فور عودته. دعم 5+ أجهزة مع شارة عدد الأجهزة المستلمة لكل عملية و✅ عند اكتمالها. تصميم جديد كلياً للسند (ترويسة خضراء، كبسولة المبلغ، جدول أصناف، الرصيد بعد العملية). أصوات مميزة لكل تفاعل مع معاينة في الإعدادات، اهتزاز 1.5 ثانية عند إنشاء عملية، إشعارات خارجية بصوت خاص، نوافذ إشعارات داخلية أنيقة، وتحيات صباحية ومسائية."
+            "notes": "$NOTES"
           }
           EOF
           cat version.json

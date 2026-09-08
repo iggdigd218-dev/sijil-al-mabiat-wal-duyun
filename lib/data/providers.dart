@@ -888,6 +888,21 @@ final ownDeviceNameProvider = FutureProvider<String?>((ref) async {
   return n;
 });
 
+/// أسماء كل الأجهزة بما فيها المطرودة — لعرض اسم المرسل على رسائله
+/// وعملياته حتى بعد مغادرته المجموعة (العمليات تبقى منسوبة لصاحبها).
+final allDeviceNamesProvider =
+    FutureProvider<Map<String, String>>((ref) async {
+  ref.watch(refreshProvider);
+  final db = await ref.read(repoProvider).database;
+  final rows = await db.query('devices', columns: ['id', 'name']);
+  return {
+    for (final r in rows)
+      r['id'] as String: (r['name'] as String?)?.trim().isNotEmpty == true
+          ? (r['name'] as String).trim()
+          : 'جهاز',
+  };
+});
+
 class GroupPeer {
   final String deviceId;
   final String name;

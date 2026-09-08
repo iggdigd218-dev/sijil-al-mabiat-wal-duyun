@@ -86,7 +86,10 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
     final peersAsync = ref.watch(groupPeersProvider);
     final msgsAsync = ref.watch(groupMessagesProvider);
     final peers = peersAsync.valueOrNull ?? const <GroupPeer>[];
-    final names = {for (final p in peers) p.deviceId: p.name};
+    // أسماء كل الأجهزة (حتى المطرودة): رسائل من غادر تبقى منسوبة لاسمه.
+    final allNames =
+        ref.watch(allDeviceNamesProvider).valueOrNull ?? const <String, String>{};
+    final names = {...allNames, for (final p in peers) p.deviceId: p.name};
     final ourId = peers
         .where((p) => p.isSelf)
         .map((p) => p.deviceId)
@@ -167,12 +170,19 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
                   itemBuilder: (context, i) {
                     final m = msgs[i];
                     final mine = m.sender == ourId || m.sender == 'me';
+                    // من غادر المجموعة تبقى رسائله باسمه (يُوسم «غادر»).
+                    final inGroup = peers.any((p) => p.deviceId == m.sender);
+                    final known = names[m.sender];
                     return _GroupBubble(
                       message: m,
                       mine: mine,
                       senderName: mine
                           ? 'أنا'
-                          : (names[m.sender] ?? 'جهاز غادر المجموعة'),
+                          : known == null
+                              ? 'جهاز غادر المجموعة'
+                              : inGroup
+                                  ? known
+                                  : '$known (غادر المجموعة)',
                     );
                   },
                 );
