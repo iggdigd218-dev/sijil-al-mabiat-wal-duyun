@@ -16,7 +16,10 @@ enum EntityKind {
   voucher,
   user,
   currency,
-  setting;
+  setting,
+  category, // تصنيفات الحسابات (جدول categories)
+  conversation, // محادثات الدردشة
+  message; // رسائل الدردشة (دردشة المجموعة بين الأجهزة)
 
   static EntityKind from(String s) => EntityKind.values.firstWhere(
         (e) => e.name == s,

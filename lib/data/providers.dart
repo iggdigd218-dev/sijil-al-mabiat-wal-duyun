@@ -865,6 +865,96 @@ final txDeliveryBadgesProvider =
   return out;
 });
 
+/// حالة جهاز في المجموعة (لشريط الدردشة الجماعية).
+/// اسم هذا الجهاز كما عيّنه المدير (من جدول devices) — يظهر في الشريط
+/// العلوي لجهاز العضو بدل «مدير الحسابات».
+final ownDeviceNameProvider = FutureProvider<String?>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final ourId = (await repo.settings())['sync.deviceId'];
+  if (ourId == null || ourId.isEmpty) return null;
+  final db = await repo.database;
+  final rows = await db.query(
+    'devices',
+    columns: ['name'],
+    where: 'id = ?',
+    whereArgs: [ourId],
+    limit: 1,
+  );
+  if (rows.isEmpty) return null;
+  final n = (rows.first['name'] as String?)?.trim();
+  return (n == null || n.isEmpty) ? null : n;
+});
+
+class GroupPeer {
+  final String deviceId;
+  final String name;
+  final bool isOwner;
+  final bool isSelf;
+  final bool online;
+  final bool suspended; // موقوف من المدير (revoked)
+  final bool pendingUser; // حسابه معلق (لم يعين المدير مستخدماً له)
+  const GroupPeer({
+    required this.deviceId,
+    required this.name,
+    required this.isOwner,
+    required this.isSelf,
+    required this.online,
+    required this.suspended,
+    required this.pendingUser,
+  });
+}
+
+/// أجهزة المجموعة مع حالة كل جهاز (متصل/غير متصل/موقوف/معلق).
+/// الأجهزة المطرودة (expelled) تُخفى نهائياً.
+final groupPeersProvider = FutureProvider<List<GroupPeer>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+  final rows = await db.query(
+    'devices',
+    where: "COALESCE(expelled_at,'') = ''",
+    orderBy: 'is_owner DESC, name ASC',
+  );
+  final presence = ref.read(syncEngineProvider).presence;
+  final out = <GroupPeer>[];
+  for (final d in rows) {
+    final id = d['id'] as String;
+    final isSelf = id == ourId;
+    final revoked = ((d['revoked_at'] as String?) ?? '').isNotEmpty;
+    // متصل: نحن دائماً؛ الأقران وفق نظام الحضور أو آخر ظهور حديث (<15 ث).
+    bool online = isSelf;
+    if (!isSelf) {
+      if (presence != null) {
+        online = presence.isOnline(id);
+      } else {
+        final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
+        online = seen != null &&
+            DateTime.now().difference(seen) < const Duration(seconds: 15);
+      }
+    }
+    out.add(GroupPeer(
+      deviceId: id,
+      name: (d['name'] as String?) ?? 'جهاز',
+      isOwner: (d['is_owner'] as int? ?? 0) == 1,
+      isSelf: isSelf,
+      online: online,
+      suspended: revoked,
+      pendingUser: !revoked &&
+          (d['is_owner'] as int? ?? 0) != 1 &&
+          d['user_id'] == null,
+    ));
+  }
+  return out;
+});
+
+/// رسائل دردشة المجموعة.
+final groupMessagesProvider = FutureProvider<List<ChatMessage>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.read(repoProvider).groupMessages();
+});
+
 /// ملخّص أعداد حالات المزامنة (للشارة والبطاقات العلوية).
 final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
   ref.watch(refreshProvider);

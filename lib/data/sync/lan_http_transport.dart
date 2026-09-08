@@ -629,20 +629,27 @@ class LanSyncService implements SyncTransport {
                 whereArgs: [userId],
                 limit: 1);
         final user = users.isEmpty ? null : AppUser.fromMap(users.first);
-        final permission = switch (op.entityType) {
-          EntityKind.user => 'manage_users',
-          EntityKind.setting || EntityKind.currency => 'manage_users',
-          _ => switch (op.opType) {
-              OpKind.create || OpKind.restore => 'add_tx',
-              OpKind.update => 'edit_tx',
-              OpKind.delete_ => 'delete_tx',
-              OpKind.settings => 'manage_users',
-            },
-        };
-        if (user == null || !user.can(permission)) {
-          statusCode = HttpStatus.forbidden;
-          error = 'user-not-authorized';
-          return;
+        // رسائل الدردشة الجماعية مسموحة لكل جهاز مقترن حتى بلا صلاحيات —
+        // الدردشة قناة تواصل داخل المجموعة (يتواصل بها العضو مع المدير
+        // حتى لو لم تُمنح له أي صلاحية بعد).
+        final isChat = op.entityType == EntityKind.message ||
+            op.entityType == EntityKind.conversation;
+        if (!isChat) {
+          final permission = switch (op.entityType) {
+            EntityKind.user => 'manage_users',
+            EntityKind.setting || EntityKind.currency => 'manage_users',
+            _ => switch (op.opType) {
+                OpKind.create || OpKind.restore => 'add_tx',
+                OpKind.update => 'edit_tx',
+                OpKind.delete_ => 'delete_tx',
+                OpKind.settings => 'manage_users',
+              },
+          };
+          if (user == null || !user.can(permission)) {
+            statusCode = HttpStatus.forbidden;
+            error = 'user-not-authorized';
+            return;
+          }
         }
       }
       // 3) تحقق من workspaceId المطابق.

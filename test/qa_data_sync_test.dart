@@ -182,6 +182,8 @@ void main() {
   test(
       'QA-SYNC-01 queue states pending to syncing to synced with controlled transport',
       () async {
+    // بعد إصلاح «المزامنات العالقة» لا يُدرج هدف Cloud إلا مع خادم مهيأ.
+    await repo.setSetting('cloudBackendUrl', 'http://qa.local');
     final id = await repo.saveTx(_tx(accountId));
     final t = TestTransport()..gate = Completer<void>();
     engine.registerTransport(t);
@@ -201,6 +203,7 @@ void main() {
 
   test('QA-SYNC-02 one failed push counts one attempt and retains local data',
       () async {
+    await repo.setSetting('cloudBackendUrl', 'http://qa.local');
     await repo.saveTx(_tx(accountId));
     final t = TestTransport()..error = const SocketException('QA offline');
     engine.registerTransport(t);
@@ -217,6 +220,7 @@ void main() {
 
   test('QA-SYNC-03 الفشل ليس نهائيًا: العملية تبقى قيد إعادة المحاولة',
       () async {
+    await repo.setSetting('cloudBackendUrl', 'http://qa.local');
     await repo.saveTx(_tx(accountId));
     await db.update('sync_queue', {'status': 'syncing', 'attempts': 99});
     final q = SyncQueueOps(db);

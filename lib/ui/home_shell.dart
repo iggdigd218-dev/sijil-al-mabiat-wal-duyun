@@ -279,7 +279,24 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: Text(_screen == AppScreen.dashboard ? 'مدير الحسابات' : _screen.title),
+        title: Consumer(
+          builder: (ctx, rref, _) {
+            if (_screen != AppScreen.dashboard) return Text(_screen.title);
+            final mode =
+                rref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+            final isOwner = rref.watch(isOwnerProvider).valueOrNull ?? true;
+            // جهاز العضو داخل المجموعة يعرض اسمه المعيَّن من المدير
+            // بدل «مدير الحسابات» — المجموعة تعمل كحساب واحد.
+            if (mode != 'standalone' && !isOwner) {
+              final devName =
+                  rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
+              if (devName != null && devName.isNotEmpty) {
+                return Text(devName, overflow: TextOverflow.ellipsis);
+              }
+            }
+            return const Text('مدير الحسابات');
+          },
+        ),
         actions: [
           // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
           Consumer(

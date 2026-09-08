@@ -254,6 +254,22 @@ class SyncEngine {
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
       _cloudTransport = null;
       _cloudUrl = null;
+      // تنظيف: صفوف cloud القديمة العالقة بلا خادم سحابي مهيأ — كانت تبقى
+      // «بانتظار الإرسال» للأبد وتظهر كمزامنات معلقة. نُعلمها synced.
+      try {
+        final db = await _db;
+        await db.update(
+          'sync_queue',
+          {
+            'status': 'synced',
+            'last_error': '',
+            'next_try_at': '',
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "target = ? AND status IN ('pending','syncing','failed')",
+          whereArgs: [SyncTarget.cloud],
+        );
+      } catch (_) {}
       return;
     }
     if (url == _cloudUrl && _cloudTransport != null) return;
@@ -288,6 +304,11 @@ class SyncEngine {
     final generation = ++_generation;
     _queue ??= SyncQueueOps(await _db);
     await _queue!.recoverInterrupted();
+    // إنقاذ المزامنات السابقة العالقة: أي عملية محلية لم تصل لكل الأجهزة
+    // (لا صف lan لها في الطابور أو صفها علق قبل الإصلاحات) يُعاد إدراجها.
+    try {
+      await _backfillMissedLanOps();
+    } catch (_) {}
     if (!_started || generation != _generation) return;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
     SyncRecorder.onOperationRecorded = notifyNewOperation;
@@ -332,6 +353,57 @@ class SyncEngine {
       const Duration(seconds: 10),
       (_) => _reconcileRoster(),
     );
+  }
+
+  /// إنقاذ العمليات السابقة (ما قبل الإصلاحات): عمليات محلية سُجّلت أيام
+  /// كانت مزامنة LAN معطلة أو علقت في الطابور — نعيد إدراج هدف lan لها
+  /// حتى تُدفع الآن لكل الأجهزة. آمنة تماماً: الاستقبال idempotent
+  /// (نفس operation id لا يُطبق مرتين)، وop_deliveries يمنع التكرار للجهاز
+  /// الذي استلم فعلاً.
+  Future<void> _backfillMissedLanOps() async {
+    final db = await _db;
+    final st = await repo.settings();
+    if ((st['lanSyncEnabled'] ?? '0') != '1') return;
+    final ourId = st['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return;
+    // لا معنى للإنقاذ بلا أقران.
+    final peers = await db.rawQuery(
+      "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+      "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
+      "AND id <> ?",
+      [ourId],
+    );
+    if (((peers.first['c'] as int?) ?? 0) == 0) return;
+    final now = DateTime.now().toIso8601String();
+    // كل عملية محلية بلا صف lan في الطابور — أدرجه pending.
+    await db.rawInsert('''
+      INSERT OR IGNORE INTO sync_queue
+        (operation_id, status, target, attempts, last_error, next_try_at,
+         created_at, updated_at)
+      SELECT o.id, 'pending', 'lan', 0, '', '', ?, ?
+      FROM operations o
+      WHERE o.device_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_queue q
+          WHERE q.operation_id = o.id AND q.target = 'lan'
+        )
+    ''', [now, now, ourId]);
+    // صفوف lan التي عُلّمت synced قديماً لكن لم تُسلَّم فعلياً لكل الأجهزة
+    // (لا سجلات كافية في op_deliveries) — نعيدها pending لتُستكمل.
+    await db.rawUpdate('''
+      UPDATE sync_queue SET status = 'pending', next_try_at = '',
+                            attempts = 0, updated_at = ?
+      WHERE target = 'lan' AND status = 'synced'
+        AND operation_id IN (
+          SELECT o.id FROM operations o
+          WHERE o.device_id = ?
+            AND (SELECT COUNT(*) FROM op_deliveries d
+                 WHERE d.operation_id = o.id) <
+                (SELECT COUNT(*) FROM devices v
+                 WHERE v.is_paired = 1 AND COALESCE(v.revoked_at,'') = ''
+                   AND COALESCE(v.expelled_at,'') = '' AND v.id <> ?)
+        )
+    ''', [now, ourId, ourId]);
   }
 
   Future<void> _reconcileRoster() async {
@@ -468,6 +540,9 @@ class SyncEngine {
               EntityKind.user => 'users',
               EntityKind.currency => 'currencies',
               EntityKind.setting => 'settings',
+              EntityKind.category => 'categories',
+              EntityKind.conversation => 'conversations',
+              EntityKind.message => 'messages',
             };
             entityId = op.entityId;
             if (entityTable == 'transactions') {

@@ -235,6 +235,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       data: (st) {
         _hydrate(st);
+        // جهاز العضو داخل مجموعة لا يعدّل بيانات المؤسسة — المجموعة حساب
+        // واحد وبياناتها بيد المدير فقط، لذا نخفي القسم بالكامل.
+        final wsMode =
+            ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+        final wsOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
+        final canEditOrg = wsMode == 'standalone' || wsOwner;
         return Stack(
           children: [
             ListView(
@@ -242,6 +248,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               children: [
                 const SectionTitle('الإعدادات'),
                 const SizedBox(height: 6),
+                if (canEditOrg)
                 _Collapsible(
                   title: 'بيانات المؤسسة',
                   icon: Icons.business_outlined,

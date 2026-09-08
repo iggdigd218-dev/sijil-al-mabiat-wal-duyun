@@ -14,6 +14,7 @@ import '../core/models.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
 import 'devices_screen.dart' show DeviceCard;
+import 'join_group_flow.dart';
 import 'qr_pair_scanner.dart' show scanQrPair;
 import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
 import 'users_screen.dart' show UserCard, openUserForm;
@@ -586,9 +587,16 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
   }
 
   Future<void> _scanQr() async {
+    // كان الخلل هنا: الكاميرا تُفتح وتُهمل نتيجتها فيخرج الجهاز بلا ربط.
+    // الآن: مسح ← تأكيد ← اقتران فعلي ← استلام لقطة البيانات كاملة.
+    // نلتقط container وnavigator قبل إغلاق الـ sheet لأن ref يفنى معها.
+    final container = ProviderScope.containerOf(context, listen: false);
+    final rootContext = Navigator.of(context, rootNavigator: true).context;
     Navigator.pop(context);
     Sfx.click();
-    await scanQrPair(context);
+    final data = await scanQrPair(rootContext);
+    if (data == null || !rootContext.mounted) return;
+    await joinGroupFromScan(rootContext, container, data);
   }
 
   @override

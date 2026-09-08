@@ -1728,6 +1728,68 @@ class Repo {
 
   // ==================== الدردشة ====================
 
+  /// معرّف ثابت لمحادثة المجموعة — نفسه على كل الأجهزة حتى تتلاقى الرسائل.
+  static const int groupConversationId = 777000111;
+
+  /// محادثة المجموعة (بين أجهزة المجموعة فقط) — تُنشأ عند أول استخدام.
+  Future<int> groupConversation() async {
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    await db.insert(
+        'conversations',
+        {
+          'id': groupConversationId,
+          'workspace_id': requireWorkspaceId,
+          'title': 'دردشة المجموعة',
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+    return groupConversationId;
+  }
+
+  /// يرسل رسالة في دردشة المجموعة ويزامنها فورياً لكل الأجهزة.
+  /// متاحة لكل جهاز مقترن حتى بلا صلاحيات — قناة تواصل العضو مع المدير.
+  Future<int> sendGroupMessage(String body) async {
+    final db = await _db;
+    await groupConversation();
+    final now = DateTime.now().toIso8601String();
+    final id = newGlobalId();
+    final row = {
+      'id': id,
+      'conversation_id': groupConversationId,
+      'workspace_id': requireWorkspaceId,
+      'sender': requireDeviceId, // هوية الجهاز المرسل (تُعرض باسمه)
+      'body': body.trim(),
+      'kind': 'text',
+      'payload': '',
+      'created_at': now,
+    };
+    await db.insert('messages', row);
+    await db.update('conversations', {'updated_at': now},
+        where: 'id = ?', whereArgs: [groupConversationId]);
+    await queueOperation(
+      entityType: EntityKind.message,
+      entityId: '$id',
+      opType: OpKind.create,
+      payload: {...row, 'conv_title': 'دردشة المجموعة'},
+    );
+    return id;
+  }
+
+  /// رسائل دردشة المجموعة (الأقدم أولاً).
+  Future<List<ChatMessage>> groupMessages({int limit = 300}) async {
+    final db = await _db;
+    final rows = await db.query(
+      'messages',
+      where: 'conversation_id = ?',
+      whereArgs: [groupConversationId],
+      orderBy: 'created_at ASC, id ASC',
+      limit: limit,
+    );
+    return rows.map(ChatMessage.fromMap).toList();
+  }
+
   /// محادثة لكل حساب، تُنشأ عند أول رسالة.
   Future<int> conversationFor(Account a) async {
     final db = await _db;
@@ -1788,16 +1850,36 @@ class Repo {
 
   Future<void> addCategory(String name) async {
     final db = await _db;
-    await db.insert('categories', {
+    final row = {
+      'id': newGlobalId(),
+      'workspace_id': requireWorkspaceId,
       'name': name,
       'scope': 'account',
       'created_at': DateTime.now().toIso8601String(),
-    });
+    };
+    await db.insert('categories', row);
+    // مزامنة التصنيف لكل الأجهزة مثل أي كيان آخر.
+    await queueOperation(
+      entityType: EntityKind.category,
+      entityId: '${row['id']}',
+      opType: OpKind.create,
+      payload: row,
+    );
   }
 
   Future<void> deleteCategory(String name) async {
     final db = await _db;
+    final rows = await db.query('categories',
+        columns: ['id'], where: 'name = ?', whereArgs: [name]);
     await db.delete('categories', where: 'name = ?', whereArgs: [name]);
+    for (final r in rows) {
+      await queueOperation(
+        entityType: EntityKind.category,
+        entityId: '${r['id']}',
+        opType: OpKind.delete_,
+        payload: {'id': r['id'], 'name': name},
+      );
+    }
   }
 
   // ==================== سلة المهملات ====================

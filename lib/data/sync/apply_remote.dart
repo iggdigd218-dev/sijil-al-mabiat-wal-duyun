@@ -73,6 +73,25 @@ extension ApplyRemoteOp on Repo {
       if (columns.contains('workspace_id')) 'workspace_id': op.workspaceId,
       if (columns.contains('updated_at')) 'updated_at': now,
     };
+    // رسالة دردشة تشير لمحادثة غير موجودة محلياً: أنشئ المحادثة أولاً
+    // (قيد المفتاح الأجنبي conversation_id) — عنوانها يأتي في الحمولة.
+    if (op.entityType == EntityKind.message) {
+      final convId = op.payload['conversation_id'];
+      if (convId != null) {
+        final conv = await txn.query('conversations',
+            where: 'id = ?', whereArgs: [convId], limit: 1);
+        if (conv.isEmpty) {
+          await txn.insert('conversations', {
+            'id': convId,
+            'workspace_id': op.workspaceId,
+            'title': (op.payload['conv_title'] as String?) ?? 'محادثة',
+            'created_at': now,
+            'updated_at': now,
+          });
+        }
+      }
+    }
+
     switch (op.opType) {
       case OpKind.create:
       case OpKind.update:
@@ -179,5 +198,8 @@ extension ApplyRemoteOp on Repo {
         EntityKind.user => 'users',
         EntityKind.currency => 'currencies',
         EntityKind.setting => 'settings',
+        EntityKind.category => 'categories',
+        EntityKind.conversation => 'conversations',
+        EntityKind.message => 'messages',
       };
 }

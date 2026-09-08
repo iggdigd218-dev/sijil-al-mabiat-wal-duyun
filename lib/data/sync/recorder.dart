@@ -79,15 +79,37 @@ class SyncRecorder {
     await db.insert('operations', op.toMap());
 
     final qnow = now.toIso8601String();
-    // هدف Cloud دائمًا إن كان مُفعّلًا لاحقًا — نضيفه افتراضيًا حتى لا يضيع أي operation.
-    final lan = await db.query('settings',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['lanSyncEnabled'],
-        limit: 1);
+    // لا نضيف هدف Cloud إلا إذا كان خادم سحابي مهيأ فعلاً — إضافته دائماً
+    // كانت تترك صفوفاً «بانتظار الإرسال» للأبد (لا ناقل يلتقطها) فتظهر
+    // للمستخدم كمزامنات عالقة وتزاحم الطابور.
+    final st = await db.query('settings',
+        columns: ['key', 'value'],
+        where: 'key IN (?, ?, ?)',
+        whereArgs: ['lanSyncEnabled', 'cloudBackendUrl', 'cloudAutoSync']);
+    final map = {for (final r in st) r['key'] as String: r['value'] as String?};
+    final cloudOn = (map['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+        (map['cloudAutoSync'] ?? '1') != '0';
+    // احتياط: حتى لو لم يُضبط lanSyncEnabled (اقتران قديم قبل الإصلاح)،
+    // أي جهاز داخل مجموعة (workspaceMode غير standalone) يجب أن تُدرج
+    // عملياته لهدف LAN وإلا لن تصل أبداً لبقية الأجهزة.
+    var lanOn = map['lanSyncEnabled'] == '1';
+    if (!lanOn) {
+      try {
+        final wm = await db.query('sync_meta',
+            columns: ['value'],
+            where: 'key = ?',
+            whereArgs: ['workspaceMode'],
+            limit: 1);
+        final mode =
+            wm.isEmpty ? 'standalone' : (wm.first['value'] as String? ?? '');
+        lanOn = mode.isNotEmpty && mode != 'standalone';
+      } catch (_) {
+        // جدول sync_meta غير موجود (بيئة اختبار مصغّرة) — تجاهل.
+      }
+    }
     final targets = <String>{
-      SyncTarget.cloud,
-      if (lan.isNotEmpty && lan.first['value'] == '1') SyncTarget.lanBroadcast,
+      if (cloudOn) SyncTarget.cloud,
+      if (lanOn) SyncTarget.lanBroadcast,
       ...extraTargets,
     };
     for (final t in targets) {

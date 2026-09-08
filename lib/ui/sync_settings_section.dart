@@ -1180,7 +1180,7 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                           ),
                           SizedBox(height: 2),
                           Text(
-                            'امسح هذا الرمز بالجهاز الآخر من شاشة المزامنة',
+                            'امسح هذا الرمز بكاميرا الجهاز الآخر من داخل التطبيق',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.black54,
@@ -1308,7 +1308,7 @@ class PairingQrDialogState extends State<PairingQrDialog> {
                 const SizedBox(height: 14),
                 // تعليمات مختصرة.
                 const Text(
-                  'على الجهاز الآخر: افتح الإعدادات ← المزامنة ← انضمام لمجموعة موجودة ← اضغط "مسح QR".',
+                  'على الجهاز الآخر: افتح إدارة المجموعة ← ربط جهاز ← "مسح QR" ثم وجّه الكاميرا نحو هذا الرمز.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 11,

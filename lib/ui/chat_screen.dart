@@ -8,6 +8,7 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'group_chat_screen.dart';
 import 'widgets.dart';
 
 /// الدردشة — محادثة لكل حساب، مع إرسال كشف الحساب ومشاركة عبر واتساب.
@@ -18,6 +19,35 @@ class ChatScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final accounts = ref.watch(accountsProvider);
+    final mode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+    final peers = ref.watch(groupPeersProvider).valueOrNull ?? const [];
+    final online = peers.where((p) => p.online).length;
+
+    // بطاقة دردشة المجموعة — تظهر فقط في الوضع المُدار (host/member).
+    final groupTile = mode == 'standalone'
+        ? null
+        : Card(
+            color: AppColors.primarySoftOf(context),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primaryOf(context),
+                child: const Icon(Icons.groups, color: Colors.white),
+              ),
+              title: const Text(
+                'دردشة المجموعة',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: Text(
+                'بين أجهزة المجموعة فقط · $online/${peers.length} متصل',
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_left),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const GroupChatScreen()),
+              ),
+            ),
+          );
 
     return accounts.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -27,7 +57,7 @@ class ChatScreen extends ConsumerWidget {
         message: '$e',
       ),
       data: (list) {
-        if (list.isEmpty) {
+        if (list.isEmpty && groupTile == null) {
           return const EmptyState(
             icon: Icons.forum_outlined,
             title: 'لا توجد محادثات',
@@ -36,9 +66,13 @@ class ChatScreen extends ConsumerWidget {
         }
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 96),
-          itemCount: list.length,
+          itemCount: list.length + (groupTile == null ? 0 : 1),
           separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (context, i) {
+            if (groupTile != null) {
+              if (i == 0) return groupTile;
+              i -= 1;
+            }
             final a = list[i].account;
             return Card(
               child: ListTile(

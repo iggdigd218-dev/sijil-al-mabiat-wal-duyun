@@ -203,11 +203,13 @@ class SyncQueueOps {
       where.write(' AND target = ?');
       args.add(target);
     }
+    // attempts ASC أولاً: العمليات الجديدة (0 محاولات) تُرسل قبل العالقة
+    // المتكررة الفشل — يمنع «تجويع» العمليات الجديدة خلف طابور قديم معلّق.
     return db.query(
       'sync_queue',
       where: where.toString(),
       whereArgs: args,
-      orderBy: 'created_at ASC',
+      orderBy: 'attempts ASC, created_at ASC',
       limit: limit,
     );
   }
