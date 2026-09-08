@@ -93,6 +93,17 @@ class MainActivity : FlutterFragmentActivity() {
                         val path = call.argument<String>("path") ?: ""
                         result.success(installApk(path))
                     }
+                    // تنزيل عبر مدير تنزيلات النظام: يستمر في الخلفية حتى لو
+                    // أُغلق التطبيق، ويستأنف تلقائياً عند انقطاع الشبكة.
+                    "startDownload" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        result.success(startUpdateDownload(url))
+                    }
+                    // حالة التنزيل الجاري (status/bytes/total/path).
+                    "queryDownload" -> {
+                        val id = (call.argument<Number>("id") ?: -1L).toLong()
+                        result.success(queryUpdateDownload(id))
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -194,6 +205,78 @@ class MainActivity : FlutterFragmentActivity() {
         nm.notify((System.currentTimeMillis() % 100000).toInt(), notification)
         true
     } catch (e: Exception) { false }
+
+    /**
+     * يبدأ تنزيل التحديث عبر DownloadManager (خدمة نظام):
+     * - يستمر في الخلفية حتى بعد إغلاق التطبيق نهائياً.
+     * - يستأنف تلقائياً بعد انقطاع الشبكة (يدعم HTTP Range).
+     * - أسرع من تنزيل داخل عملية التطبيق لأنه لا يتأثر بخمول/كبح التطبيق.
+     * يعيد معرّف التنزيل، أو -1 عند الفشل.
+     */
+    private fun startUpdateDownload(url: String): Long = try {
+        val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE)
+            as android.app.DownloadManager
+        // نظّف ملفات تحديث قديمة حتى لا تتراكم.
+        getExternalFilesDir("updates")?.listFiles()?.forEach { it.delete() }
+        val req = android.app.DownloadManager.Request(Uri.parse(url)).apply {
+            setTitle("تحديث مدير الحسابات")
+            setDescription("جارٍ تنزيل التحديث…")
+            setMimeType("application/vnd.android.package-archive")
+            setNotificationVisibility(
+                android.app.DownloadManager.Request.VISIBILITY_VISIBLE
+            )
+            setAllowedOverMetered(true)
+            setAllowedOverRoaming(true)
+            setDestinationInExternalFilesDir(
+                this@MainActivity, "updates", "nexora-update.apk"
+            )
+        }
+        dm.enqueue(req)
+    } catch (e: Exception) { -1L }
+
+    /** حالة تنزيل جارٍ: خريطة {status, bytes, total, path, reason}. */
+    private fun queryUpdateDownload(id: Long): Map<String, Any> {
+        val out = mutableMapOf<String, Any>(
+            "status" to "unknown", "bytes" to 0L, "total" to -1L, "path" to ""
+        )
+        if (id < 0) return out
+        try {
+            val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE)
+                as android.app.DownloadManager
+            val c = dm.query(android.app.DownloadManager.Query().setFilterById(id))
+            c?.use {
+                if (!it.moveToFirst()) return out
+                val status = it.getInt(
+                    it.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS)
+                )
+                out["bytes"] = it.getLong(
+                    it.getColumnIndexOrThrow(
+                        android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
+                    )
+                )
+                out["total"] = it.getLong(
+                    it.getColumnIndexOrThrow(
+                        android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES
+                    )
+                )
+                out["reason"] = it.getInt(
+                    it.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_REASON)
+                )
+                out["status"] = when (status) {
+                    android.app.DownloadManager.STATUS_SUCCESSFUL -> "done"
+                    android.app.DownloadManager.STATUS_FAILED -> "failed"
+                    android.app.DownloadManager.STATUS_PAUSED -> "paused"
+                    android.app.DownloadManager.STATUS_PENDING -> "pending"
+                    else -> "running"
+                }
+                if (status == android.app.DownloadManager.STATUS_SUCCESSFUL) {
+                    val f = File(getExternalFilesDir("updates"), "nexora-update.apk")
+                    if (f.exists()) out["path"] = f.absolutePath
+                }
+            }
+        } catch (e: Exception) { /* تُعاد "unknown" */ }
+        return out
+    }
 
     /** يفتح شاشة تثبيت النظام لملف APK عبر FileProvider (لا تثبيت صامت). */
     private fun installApk(path: String): String {

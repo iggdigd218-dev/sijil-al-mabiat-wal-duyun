@@ -4,4 +4,6 @@
     <cache-path name="shared" path="shared/" />
     <!-- ملف APK للتحديث بنقرة واحدة (يُنزَّل إلى cache/updates ثم يُثبَّت). -->
     <cache-path name="updates" path="updates/" />
+    <!-- تنزيل DownloadManager يذهب إلى external files/updates (يستمر بالخلفية). -->
+    <external-files-path name="ext_updates" path="updates/" />
 </paths>

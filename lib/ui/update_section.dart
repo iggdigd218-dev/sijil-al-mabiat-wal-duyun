@@ -119,8 +119,9 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
       InstallPhase.downloading => (
           'جارٍ تنزيل التحديث…',
           _state.progress != null
-              ? '${(_state.progress! * 100).round()}٪ — لا تغلق التطبيق'
-              : 'لا تغلق التطبيق',
+              ? '${(_state.progress! * 100).round()}٪ — التنزيل يستمر في '
+                  'الخلفية حتى لو خرجت من التطبيق'
+              : 'التنزيل يستمر في الخلفية حتى لو خرجت من التطبيق',
         ),
       InstallPhase.launchingInstaller || InstallPhase.done => (
           'اكتمل التنزيل ✅',
@@ -130,8 +131,11 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
       InstallPhase.idle => ('لحظة…', ''),
     };
     final failed = _state.phase == InstallPhase.failed;
+    final downloading = _state.phase == InstallPhase.downloading;
     return PopScope(
-      canPop: failed,
+      // أثناء التنزيل يمكن إغلاق الحوار بأمان: مدير تنزيلات النظام يواصل
+      // في الخلفية، وعند فتح «تحديث الآن» لاحقاً يُستأنف من حيث وصل.
+      canPop: failed || downloading,
       child: AlertDialog(
         icon: failed
             ? Icon(Icons.error_outline, color: AppColors.dangerOf(context))
@@ -149,6 +153,11 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
           ],
         ),
         actions: [
+          if (downloading)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('متابعة في الخلفية'),
+            ),
           if (failed) ...[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
@@ -305,6 +314,19 @@ class _StatusRow extends StatelessWidget {
       );
 }
 
+/// يختصر ملاحظات الإصدار لأول جملتين (بحد أقصى ~160 حرفاً) لعرضها في
+/// حوار «الجديد في التطبيق» بلا نص طويل مرهق.
+String _shortNotes(String notes) {
+  final sentences = notes
+      .split(RegExp(r'[.。]\s*'))
+      .where((s) => s.trim().isNotEmpty)
+      .toList();
+  var out = sentences.take(2).join('. ').trim();
+  if (out.length > 160) out = '${out.substring(0, 157).trimRight()}…';
+  if (out.isNotEmpty && !out.endsWith('…') && !out.endsWith('.')) out = '$out.';
+  return out;
+}
+
 /// حوار التحديث الذي يظهر تلقائيًا. الإلزامي لا يمكن إغلاقه.
 Future<void> showUpdateDialog(
   BuildContext context,
@@ -341,7 +363,12 @@ Future<void> showUpdateDialog(
             ],
             if (info.notes.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text(info.notes, style: const TextStyle(fontSize: 12.5)),
+              // نعرض ملخصاً قصيراً فقط — النص الكامل يظهر في قسم
+              // التحديثات داخل الإعدادات لمن أراد التفاصيل.
+              Text(
+                _shortNotes(info.notes),
+                style: const TextStyle(fontSize: 12.5, height: 1.6),
+              ),
             ],
           ],
         ),
