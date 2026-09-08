@@ -8,7 +8,6 @@ import 'package:path_provider/path_provider.dart';
 import 'accounting.dart';
 import 'format.dart';
 import 'models.dart';
-import 'theme.dart';
 import 'words.dart';
 
 /// بيانات الإيصال المرسوم كصورة.
@@ -89,9 +88,34 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   const w = 1000.0;
   const pad = 48.0;
 
-  // نقيس أولًا لنعرف الارتفاع المطلوب.
-  final body = _lines(d);
-  final height = 470.0 + body.length * 52.0 + (d.footer.isEmpty ? 0 : 60);
+  // تخطيط مستوحى من سندات «تدوين الحسابات» و«نكسورا»:
+  // ترويسة خضراء (اسم المنشأة/الهاتف/الشعار) ← شريط «سند عملية» مع الرقم
+  // ← بيانات الحساب ← كبسولة المبلغ الكبيرة (عليه بالأحمر/له بالأخضر)
+  // ← جدول الأصناف (صنف/كمية/سعر/إجمالي) مع الإجمالي ← التفاصيل والتاريخ
+  // ← «الرصيد بعد العملية» ← تذييل الشكر.
+  const headerH = 150.0;
+  const bandH = 66.0;
+  const rowH = 58.0;
+  const amountH = 128.0;
+  final infoRows = 1 + // اسم الحساب
+      (d.accountPhone.isNotEmpty ? 1 : 0) +
+      1; // التاريخ والوقت (يُرسم لاحقاً في قسم التفاصيل)
+  final detailRows = (d.statement.isNotEmpty ? 1 : 0) + 1;
+  final itemsBlock =
+      d.items.isEmpty ? 0.0 : (54.0 + d.items.length * 52.0 + 56.0 + 24.0);
+  final balanceBlock = d.balanceAfter != null ? 96.0 : 0.0;
+  final height = headerH +
+      bandH +
+      (infoRows - 1) * rowH + // صفوف بيانات الحساب (بدون صف التاريخ)
+      24 +
+      amountH +
+      24 +
+      itemsBlock +
+      detailRows * rowH +
+      16 +
+      balanceBlock +
+      110 + // تذييل الشكر
+      40;
 
   ui.Image? logo;
   if (d.logoPath.trim().isNotEmpty) {
@@ -109,93 +133,86 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w, height));
 
-  final bg = Paint()..color = const Color(0xFFF4F6FB);
-  canvas.drawRect(Rect.fromLTWH(0, 0, w, height), bg);
+  const ink = Color(0xFF1F2A37); // نص أساسي داكن
+  const muted = Color(0xFF6B7280); // عناوين رمادية
+  const line = Color(0xFFE5E7EB); // خطوط فاصلة
+  const green = Color(0xFF15803D); // أخضر «له»/الترويسة
+  const red = Color(0xFFDC2626); // أحمر «عليه»
 
-  // البطاقة البيضاء
-  final card = RRect.fromRectAndRadius(
-    Rect.fromLTWH(pad / 2, pad / 2, w - pad, height - pad),
-    const Radius.circular(28),
-  );
-  canvas.drawRRect(card, Paint()..color = Colors.white);
-  canvas.drawRRect(
-    card,
-    Paint()
-      ..color = const Color(0xFFE2E8F2)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2,
-  );
+  canvas.drawRect(Rect.fromLTWH(0, 0, w, height), Paint()..color = Colors.white);
 
-  // الشريط العلوي
-  final header = RRect.fromRectAndCorners(
-    Rect.fromLTWH(pad / 2, pad / 2, w - pad, 130),
-    topLeft: const Radius.circular(28),
-    topRight: const Radius.circular(28),
-  );
-  canvas.drawRRect(header, Paint()..color = AppColors.primary);
-
+  // ===== 1) الترويسة الخضراء: اسم المنشأة + الهاتف + الشعار يميناً =====
+  canvas.drawRect(
+      Rect.fromLTWH(0, 0, w, headerH), Paint()..color = green);
   if (logo != null) {
     final logoBox = RRect.fromRectAndRadius(
-      Rect.fromLTWH(pad + 10, pad / 2 + 24, 82, 82),
+      Rect.fromLTWH(w - pad - 96, (headerH - 96) / 2, 96, 96),
       const Radius.circular(14),
     );
     canvas.drawRRect(logoBox, Paint()..color = Colors.white);
-    final source = Rect.fromLTWH(
-      0,
-      0,
-      logo.width.toDouble(),
-      logo.height.toDouble(),
-    );
-    final target = logoBox.outerRect.deflate(7);
     canvas.drawImageRect(
       logo,
-      source,
-      target,
+      Rect.fromLTWH(0, 0, logo.width.toDouble(), logo.height.toDouble()),
+      logoBox.outerRect.deflate(6),
       Paint()..filterQuality = ui.FilterQuality.high,
     );
   }
+  final orgX = logo != null ? w - pad - 116 : w - pad;
+  _text(canvas, d.orgName.isEmpty ? 'نكسورا' : d.orgName, orgX, 26, 36,
+      Colors.white, bold: true, alignEnd: true, maxWidth: w * .7);
+  if (d.orgPhone.isNotEmpty) {
+    _text(canvas, d.orgPhone, orgX, 78, 24, Colors.white70,
+        alignEnd: true);
+  }
 
-  var y = pad / 2 + 30.0;
-  _text(
-    canvas,
-    d.orgName.isEmpty ? 'إدارة البيانات' : d.orgName,
-    w / 2,
-    y,
-    34,
-    Colors.white,
-    bold: true,
-    center: true,
-  );
-  y += 46;
-  _text(
-    canvas,
-    d.title,
-    w / 2,
-    y,
-    26,
-    Colors.white70,
-    bold: true,
-    center: true,
-  );
+  var y = headerH;
 
-  y = pad / 2 + 170;
+  // ===== 2) شريط «سند عملية» + الرقم المرجعي يساراً =====
+  canvas.drawRect(
+      Rect.fromLTWH(0, y, w, bandH), Paint()..color = const Color(0xFFF3F4F6));
+  _text(canvas, d.title, w - pad, y + 16, 28, ink,
+      bold: true, alignEnd: true);
+  if (d.number.isNotEmpty) {
+    _text(canvas, d.number, pad, y + 20, 24, muted, alignStart: true);
+  }
+  y += bandH + 18;
 
-  // صندوق المبلغ: أحمر للمبالغ عليه (مدين/صرف) وأخضر للمبالغ له (قبض/دائن).
-  const amountColor = Color(0xFF16A34A); // أخضر (له/قبض)
-  const amountColorDebit = Color(0xFFC0392B); // أحمر (عليه/صرف)
-  final amtColor = d.isDebit ? amountColorDebit : amountColor;
-  final amtBg = d.isDebit ? const Color(0xFFFDECEA) : const Color(0xFFEAF7EF);
+  void divider() {
+    canvas.drawRect(
+        Rect.fromLTWH(pad, y, w - pad * 2, 2), Paint()..color = line);
+    y += 16;
+  }
+
+  // صف بيانات: عنوان يميناً وقيمة في الوسط/يسار (مثل «تدوين الحسابات»).
+  void infoRow(String label, String value, {Color? valueColor, bool big = false}) {
+    _text(canvas, label, w - pad, y, 24, muted, alignEnd: true);
+    _text(canvas, value, pad, y - (big ? 4 : 0), big ? 28 : 25,
+        valueColor ?? ink,
+        bold: true, alignStart: true, maxWidth: w * .6);
+    y += rowH;
+  }
+
+  // ===== 3) بيانات الحساب =====
+  infoRow('اسم الحساب', d.accountName);
+  if (d.accountPhone.isNotEmpty) infoRow('رقم الهاتف', d.accountPhone);
+  divider();
+
+  // ===== 4) كبسولة المبلغ الكبيرة: «عليه» أحمر / «له» أخضر =====
+  final amtColor = d.isDebit ? red : green;
+  final amtBg = d.isDebit ? const Color(0xFFFDECEC) : const Color(0xFFEAF7EF);
   final amountBox = RRect.fromRectAndRadius(
-    Rect.fromLTWH(pad, y, w - pad * 2, 150),
-    const Radius.circular(20),
+    Rect.fromLTWH(pad, y, w - pad * 2, amountH),
+    const Radius.circular(22),
   );
   canvas.drawRRect(amountBox, Paint()..color = amtBg);
+  _text(canvas, d.isDebit ? 'عليه' : 'له', w - pad - 28, y + 42, 30, amtColor,
+      bold: true, alignEnd: true);
   _text(
     canvas,
     '${Fmt.money(d.amount, d.currency.decimal)} ${d.currency.symbol}',
-    w / 2,
-    y + 30,
-    52,
+    pad + (w - pad * 2) / 2 - 40,
+    y + 26,
+    54,
     amtColor,
     bold: true,
     center: true,
@@ -204,53 +221,114 @@ Future<String> buildReceiptImage(ReceiptData d) async {
     canvas,
     'فقط ${numberToWords(d.amount)} ${d.currency.name} لا غير',
     w / 2,
-    y + 100,
-    20,
-    const Color(0xFF5B6B83),
+    y + amountH - 36,
+    18,
+    muted,
     center: true,
     maxWidth: w - pad * 3,
   );
+  y += amountH + 24;
 
-  y += 190;
-
-  // الأسطر
-  for (final l in body) {
-    _text(
-      canvas,
-      l.$1,
-      w - pad - 12,
-      y,
-      22,
-      const Color(0xFF8A97AB),
-      alignEnd: true,
+  // ===== 5) جدول الأصناف (صنف/كمية/سعر/إجمالي) مثل سند نكسورا =====
+  if (d.items.isNotEmpty) {
+    const tPad = pad;
+    final tw = w - tPad * 2;
+    // أعمدة من اليمين: الصنف 40٪، الكمية 15٪، السعر 22.5٪، الإجمالي 22.5٪.
+    final cName = w - tPad; // حافة يمنى
+    final cQty = w - tPad - tw * 0.40 - tw * 0.075;
+    final cPrice = tPad + tw * 0.225 + tw * 0.1125;
+    final cTotal = tPad + tw * 0.1125;
+    // رأس الجدول.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+          Rect.fromLTWH(tPad, y, tw, 46), const Radius.circular(10)),
+      Paint()..color = const Color(0xFFF3F4F6),
     );
+    _text(canvas, 'الصنف', cName - 14, y + 8, 22, muted, alignEnd: true);
+    _text(canvas, 'الكمية', cQty, y + 8, 22, muted, center: true);
+    _text(canvas, 'السعر', cPrice, y + 8, 22, muted, center: true);
+    _text(canvas, 'الإجمالي', cTotal, y + 8, 22, muted, center: true);
+    y += 54;
+    for (final it in d.items) {
+      _text(canvas, it.name, cName - 14, y, 23, ink,
+          bold: true, alignEnd: true, maxWidth: tw * 0.38);
+      _text(canvas, _quantity(it.quantity), cQty, y, 23, ink, center: true);
+      _text(canvas, Fmt.money(it.unitPrice, d.currency.decimal), cPrice, y, 23,
+          ink, center: true);
+      _text(canvas, Fmt.money(it.total, d.currency.decimal), cTotal, y, 23,
+          ink, bold: true, center: true);
+      y += 52;
+    }
+    // صف الإجمالي.
+    final itemsTotal =
+        d.items.fold<double>(0, (sum, line) => sum + line.total);
+    canvas.drawRect(
+        Rect.fromLTWH(tPad, y, tw, 2), Paint()..color = line);
+    y += 12;
+    _text(canvas, 'الإجمالي', w - tPad - 14, y, 24, ink,
+        bold: true, alignEnd: true);
+    _text(canvas,
+        '${Fmt.money(itemsTotal, d.currency.decimal)} ${d.currency.symbol}',
+        tPad + 14, y, 26, ink, bold: true, alignStart: true);
+    y += 56;
+    divider();
+  }
+
+  // ===== 6) التفاصيل + التاريخ والوقت =====
+  if (d.statement.isNotEmpty) infoRow('التفاصيل', d.statement);
+  infoRow('التاريخ والوقت', Fmt.dateTime(d.date));
+  y += 4;
+
+  // ===== 7) الرصيد بعد العملية (شريط رمادي فاتح بقيمة ملونة) =====
+  if (d.balanceAfter != null) {
+    final b = d.balanceAfter!;
+    final label = b > 0 ? '(عليه)' : (b < 0 ? '(له)' : '');
+    final balColor = b > 0 ? red : (b < 0 ? green : ink);
+    final balBox = RRect.fromRectAndRadius(
+      Rect.fromLTWH(pad, y, w - pad * 2, 76),
+      const Radius.circular(16),
+    );
+    canvas.drawRRect(balBox, Paint()..color = const Color(0xFFF3F4F6));
+    _text(canvas, 'الرصيد بعد العملية', w - pad - 22, y + 22, 25, ink,
+        bold: true, alignEnd: true);
     _text(
       canvas,
-      l.$2,
-      pad + 12,
-      y,
-      24,
-      const Color(0xFF12223A),
+      '${Fmt.money(b.abs(), d.currency.decimal)} ${d.currency.symbol} $label',
+      pad + 22,
+      y + 20,
+      27,
+      balColor,
       bold: true,
       alignStart: true,
-      maxWidth: w * .55,
     );
-    y += 52;
+    y += 96;
   }
 
-  if (d.footer.isNotEmpty) {
-    y += 8;
-    _text(
-      canvas,
-      d.footer,
-      w / 2,
-      y,
-      19,
-      const Color(0xFF8A97AB),
-      center: true,
-      maxWidth: w - pad * 2,
-    );
-  }
+  // ===== 8) تذييل الشكر =====
+  canvas.drawRect(
+      Rect.fromLTWH(pad, y, w - pad * 2, 2), Paint()..color = line);
+  y += 20;
+  _text(
+    canvas,
+    'شكراً لتعاملكم معنا — نتمنى لكم أطيب الأوقات',
+    w / 2,
+    y,
+    23,
+    green,
+    bold: true,
+    center: true,
+  );
+  y += 40;
+  _text(
+    canvas,
+    d.footer.isEmpty ? 'هذا السند آلي ولا يحتاج إلى ختم أو توقيع.' : d.footer,
+    w / 2,
+    y,
+    18,
+    muted,
+    center: true,
+    maxWidth: w - pad * 2,
+  );
 
   final picture = recorder.endRecording();
   final img = await picture.toImage(w.toInt(), height.toInt());
@@ -263,45 +341,6 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   final file = File('${shared.path}/receipt-$stamp.png');
   await file.writeAsBytes(data, flush: true);
   return file.path;
-}
-
-/// أسطر الإيصال: (العنوان، القيمة).
-List<(String, String)> _lines(ReceiptData d) {
-  final out = <(String, String)>[
-    ('الحساب', d.accountName),
-    ('التاريخ', Fmt.date(d.date)),
-  ];
-  if (d.number.isNotEmpty) out.add(('رقم السند', d.number));
-  if (d.accountPhone.isNotEmpty) out.add(('الهاتف', d.accountPhone));
-  if (d.statement.isNotEmpty) out.add(('البيان', d.statement));
-  if (d.items.isNotEmpty) {
-    out.add(('تفاصيل المشتريات', ''));
-    for (var i = 0; i < d.items.length; i++) {
-      final line = d.items[i];
-      final price = Fmt.money(line.unitPrice, d.currency.decimal);
-      final total = Fmt.money(line.total, d.currency.decimal);
-      out.add((
-        'الصنف ${i + 1}',
-        '${line.name} — ${_quantity(line.quantity)} ${line.unit} × '
-            '$price ${d.currency.symbol} = $total ${d.currency.symbol}',
-      ));
-    }
-    final itemsTotal = d.items.fold<double>(0, (sum, line) => sum + line.total);
-    out.add((
-      'إجمالي المشتريات',
-      '${Fmt.money(itemsTotal, d.currency.decimal)} ${d.currency.symbol}',
-    ));
-  }
-  if (d.balanceAfter != null) {
-    final b = d.balanceAfter!;
-    final label = b > 0 ? 'عليه' : (b < 0 ? 'له' : 'متساوٍ');
-    out.add((
-      'الرصيد بعد العملية',
-      '${Fmt.money(b.abs(), d.currency.decimal)} ($label)',
-    ));
-  }
-  if (d.orgPhone.isNotEmpty) out.add(('للتواصل', d.orgPhone));
-  return out;
 }
 
 String _quantity(double value) =>

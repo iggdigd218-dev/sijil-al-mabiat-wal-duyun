@@ -991,7 +991,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
       if (mounted) {
         Navigator.pop(sheetCtx);
-        Sfx.payment(); // صوت "الدفع الإلكتروني" الأطول عند إتمام الفاتورة.
+        Sfx.opCreated(); // صوت الدفع + اهتزاز طويل (1.5 ث) عند إنشاء العملية.
         _showSuccessDialog(txId, refNum, lines);
         _clearCart();
       }

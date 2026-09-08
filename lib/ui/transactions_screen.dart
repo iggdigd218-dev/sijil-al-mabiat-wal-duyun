@@ -623,6 +623,7 @@ class _TxCard extends ConsumerWidget {
                       children: [
                         _statusPill(context, tx.status),
                         _syncPill(context, tx.syncState),
+                        _deliveryBadge(context, ref),
                       ],
                     ),
                   ],
@@ -674,6 +675,31 @@ class _TxCard extends ConsumerWidget {
       _ => ('ناجحة', Colors.green.shade600, Icons.check_circle_outline),
     };
     return _Badge(label: label, color: color, icon: icon);
+  }
+
+  /// شارة صغيرة بعدد الأجهزة التي استلمت العملية؛ ✅ عند وصولها للجميع.
+  Widget _deliveryBadge(BuildContext context, WidgetRef ref) {
+    final badges = ref.watch(txDeliveryBadgesProvider).valueOrNull;
+    final b = badges?['${tx.id}'];
+    if (b == null || b.total <= 0) return const SizedBox.shrink();
+    if (b.all) {
+      return const Icon(Icons.check_circle, size: 16, color: Colors.green);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.blue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text(
+        '${b.delivered}/${b.total}',
+        style: const TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w800,
+          color: Colors.blue,
+        ),
+      ),
+    );
   }
 
   Widget _syncPill(BuildContext context, String sync) {

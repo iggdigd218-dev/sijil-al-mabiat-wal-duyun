@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
+import '../core/format.dart';
 import '../core/models.dart';
 import 'repository.dart';
 import 'sync/google_auth_service.dart';
@@ -701,6 +704,16 @@ class SyncOpRow {
   final String entityId;
   final String updatedAt;
   final String deviceId;
+
+  /// عدد الأجهزة التي استلمت العملية فعلاً.
+  final int deliveredCount;
+
+  /// إجمالي الأجهزة المقترنة المطلوب التسليم إليها.
+  final int totalPeers;
+
+  /// موجز مقروء من حمولة العملية (البيان/المبلغ/الاسم...).
+  final String summary;
+
   const SyncOpRow({
     required this.queueId,
     required this.status,
@@ -712,7 +725,34 @@ class SyncOpRow {
     required this.entityId,
     required this.updatedAt,
     required this.deviceId,
+    this.deliveredCount = 0,
+    this.totalPeers = 0,
+    this.summary = '',
   });
+
+  /// هل وصلت لكل الأجهزة؟ (تظهر ✅ بدل العداد)
+  bool get deliveredToAll => totalPeers > 0 && deliveredCount >= totalPeers;
+}
+
+/// يستخرج موجزاً مقروءاً من حمولة عملية المزامنة (لعرضه في القائمة).
+String syncOpSummary(String payloadJson) {
+  try {
+    final m = jsonDecode(payloadJson);
+    if (m is! Map) return '';
+    final parts = <String>[];
+    final desc = (m['description'] ?? m['name'] ?? '').toString().trim();
+    if (desc.isNotEmpty) parts.add(desc);
+    final amount = m['amount'];
+    if (amount is num && amount > 0) {
+      final cur = (m['currency'] ?? '').toString();
+      parts.add('${Fmt.money(amount.toDouble())} $cur'.trim());
+    }
+    final qty = m['quantity'];
+    if (qty is num && desc.isEmpty) parts.add('الكمية: $qty');
+    return parts.join(' — ');
+  } catch (_) {
+    return '';
+  }
 }
 
 /// كل صفوف المزامنة النشطة (غير المكتملة) منضمةً إلى نوع العملية.
@@ -729,19 +769,39 @@ final syncOpsProvider =
       .toSet()
       .toList();
   final ops = <String, Map<String, Object?>>{};
+  final deliveries = <String, int>{};
   if (opIds.isNotEmpty) {
     final placeholders = List.filled(opIds.length, '?').join(',');
     final opRows = await db.rawQuery(
-      'SELECT id, entity_type, op_type, entity_id, device_id FROM operations '
-      'WHERE id IN ($placeholders)',
+      'SELECT id, entity_type, op_type, entity_id, device_id, payload '
+      'FROM operations WHERE id IN ($placeholders)',
       opIds,
     );
     for (final o in opRows) {
       ops[o['id'] as String] = o;
     }
+    // عدد الأجهزة التي استلمت كل عملية.
+    final dRows = await db.rawQuery(
+      'SELECT operation_id, COUNT(*) c FROM op_deliveries '
+      'WHERE operation_id IN ($placeholders) GROUP BY operation_id',
+      opIds,
+    );
+    for (final d in dRows) {
+      deliveries[d['operation_id'] as String] = (d['c'] as int?) ?? 0;
+    }
   }
+  // إجمالي الأقران المقترنين (المطلوب الوصول إليهم).
+  final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+  final peersR = await db.rawQuery(
+    "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+    "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
+    "AND id <> ?",
+    [ourId],
+  );
+  final totalPeers = (peersR.first['c'] as int?) ?? 0;
   return rows.map((r) {
-    final o = ops[r['operation_id'] as String? ?? ''];
+    final opId = r['operation_id'] as String? ?? '';
+    final o = ops[opId];
     return SyncOpRow(
       queueId: r['id'] as int,
       status: (r['status'] as String?) ?? 'pending',
@@ -753,8 +813,56 @@ final syncOpsProvider =
       entityId: (o?['entity_id'] as String?) ?? '',
       updatedAt: (r['updated_at'] as String?) ?? '',
       deviceId: (o?['device_id'] as String?) ?? '',
+      deliveredCount: deliveries[opId] ?? 0,
+      totalPeers: totalPeers,
+      summary: syncOpSummary((o?['payload'] as String?) ?? ''),
     );
   }).toList();
+});
+
+/// شارة تسليم المعاملات: لكل معاملة (entity_id) عدد الأجهزة التي استلمت
+/// أحدث عملية تخصها + إجمالي الأقران. تُعرض كرقم صغير في قائمة العمليات
+/// وتتحول ✅ عند وصولها لكل الأجهزة.
+class TxDeliveryBadge {
+  final int delivered;
+  final int total;
+  const TxDeliveryBadge(this.delivered, this.total);
+  bool get all => total > 0 && delivered >= total;
+}
+
+final txDeliveryBadgesProvider =
+    FutureProvider<Map<String, TxDeliveryBadge>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+  final peersR = await db.rawQuery(
+    "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+    "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
+    "AND id <> ?",
+    [ourId],
+  );
+  final total = (peersR.first['c'] as int?) ?? 0;
+  if (total <= 0) return const {};
+  // أحدث عملية محلية لكل معاملة + عدد الأجهزة التي استلمتها.
+  final rows = await db.rawQuery('''
+    SELECT o.entity_id AS eid,
+           (SELECT COUNT(*) FROM op_deliveries d WHERE d.operation_id = o.id)
+             AS delivered
+    FROM operations o
+    WHERE o.entity_type = 'tx' AND o.device_id = ?
+      AND o.version = (
+        SELECT MAX(v.version) FROM operations v
+        WHERE v.entity_type = 'tx' AND v.entity_id = o.entity_id
+          AND v.device_id = o.device_id
+      )
+  ''', [ourId]);
+  final out = <String, TxDeliveryBadge>{};
+  for (final r in rows) {
+    out[(r['eid'] as String?) ?? ''] =
+        TxDeliveryBadge((r['delivered'] as int?) ?? 0, total);
+  }
+  return out;
 });
 
 /// ملخّص أعداد حالات المزامنة (للشارة والبطاقات العلوية).

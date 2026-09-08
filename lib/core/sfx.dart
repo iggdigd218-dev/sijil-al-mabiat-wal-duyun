@@ -1,23 +1,32 @@
 // خدمة المؤثرات الصوتية والاهتزازية التفاعلية.
-// تستخدم فقط SystemSound و HapticFeedback المدمجان في Flutter، لا حاجة لمكتبات
-// خارجية ولا لملفات صوت في assets (توافق فوري على Android/Windows/iOS/Linux/macOS).
 //
-// الأنماط مصممة لإعطاء "إحساس" مميز كالدفع الإلكتروني NFC:
-//   - success   : نقرة ناجحة (حفظ عملية، تأكيد) — نغمة ثلاثية قصيرة + نقرة نظام.
-//   - payment   : دفع/إتمام فاتورة ناجح — نمط أطول (medium-light-light-pop).
-//   - delete    : حذف/إلغاء — اهتزاز ثقيل قصير (حذري).
-//   - warning   : تنبيه غير فادح (نقص مخزون، إلخ) — اهتزاز مزدوج خفيف.
-//   - error     : فشل/خطأ جسيم — اهتزاز قوي + صوت تنبيه نظام.
-//   - scan      : مسح باركود ناجح — نقرة سريعة.
-//   - click     : نقرة عادية (تبويبات، أزرار).
-//   - pop       : فتح/إغلاق نوافذ أو إجراء كبير.
-//   - pair      : اقتران جهاز ناجح — نمط احتفالي قصير.
+// على أندرويد: أصوات مخصصة مميزة لكل نوع تفاعل (ملفات WAV مولّدة في res/raw
+// تُشغَّل عبر MethodChannel «nexora/sfx»)، مع اهتزاز بمدة قابلة للتحكم
+// (1.5 ثانية عند إنشاء عملية) وإشعارات نظام خارجية بصوت مختلف عن صوت
+// النظام الافتراضي حتى يعرف المستخدم أن أمراً مهماً حدث.
+// على المنصات الأخرى: نعود تلقائياً إلى SystemSound وHapticFeedback المدمجين.
+//
+// الأنماط:
+//   - success   : حفظ/تأكيد — نغمة صعود ثلاثية مشرقة.
+//   - payment   : دفع/فاتورة — نمط NFC صاعد رباعي.
+//   - delete    : حذف — نزول تحذيري.
+//   - warning   : تنبيه غير فادح — نغمتان متوسطتان.
+//   - error     : خطأ جسيم — نغمة منخفضة حادة.
+//   - scan      : مسح باركود — نقرة عالية سريعة.
+//   - pair      : اقتران جهاز — نمط احتفالي صاعد.
+//   - synced    : اكتمال مزامنة عملية — نغمتان خفيفتان.
+//   - opCreated : إنشاء عملية — صوت الدفع + اهتزاز طويل (1.5 ثانية).
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 class Sfx {
+  static const MethodChannel _channel = MethodChannel('nexora/sfx');
+
   static bool _muted = false; // كتم شامل (يستخدمه وضع الاختبار).
-  static bool _soundOn = true; // الأصوات (SystemSound).
-  static bool _hapticOn = true; // الاهتزاز (HapticFeedback).
+  static bool _soundOn = true; // الأصوات.
+  static bool _hapticOn = true; // الاهتزاز.
 
   static bool get muted => _muted;
   static void setMuted(bool v) => _muted = v;
@@ -31,57 +40,112 @@ class Sfx {
   static bool get _soundEnabled => !_muted && _soundOn;
   static bool get _hapticEnabled => !_muted && _hapticOn;
 
+  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+
+  /// يشغّل صوتاً مخصصاً من res/raw على أندرويد؛ يتجاهل الفشل بصمت.
+  static Future<void> _playCustom(String name) async {
+    if (!_soundEnabled || !_isAndroid) return;
+    try {
+      await _channel.invokeMethod('play', {'name': name});
+    } catch (_) {}
+  }
+
+  /// اهتزاز بمدة محددة على أندرويد (أدق من HapticFeedback المتقطع).
+  static Future<void> _vibrateMs(int ms) async {
+    if (!_hapticEnabled || !_isAndroid) return;
+    try {
+      await _channel.invokeMethod('vibrate', {'ms': ms});
+    } catch (_) {}
+  }
+
+  /// إشعار نظام خارجي بصوت مخصص مختلف عن صوت النظام الافتراضي.
+  /// [peaceful] يستخدم صوت التحية الهادئ بدل جرس التنبيه.
+  static Future<void> systemNotify({
+    required String title,
+    required String body,
+    bool peaceful = false,
+  }) async {
+    if (_muted || !_isAndroid) return;
+    try {
+      await _channel.invokeMethod('notify', {
+        'title': title,
+        'body': body,
+        'sound': peaceful ? 'nexora_peace' : 'nexora_alert',
+      });
+    } catch (_) {}
+  }
+
   // ============ النجاح ============
 
-  /// صوت نجاح عام شبيه بصوت NFC/الدفع الإلكتروني.
-  /// يُستخدم بعد حفظ العمليات، إضافة/تعديل السجلات، إلخ.
+  /// صوت نجاح عام (حفظ عملية، إضافة/تعديل سجل).
   static void success() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    _playCustom('sfx_success');
+    final h = _hapticEnabled;
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 70),
       h ? HapticFeedback.lightImpact : null,
     );
-    Future.delayed(
-      const Duration(milliseconds: 140),
-      h ? HapticFeedback.lightImpact : null,
-    );
-    if (s) SystemSound.play(SystemSoundType.click);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.click);
   }
 
-  /// صوت إتمام فاتورة/دفع (نمط أطول قليلاً من success).
+  /// صوت إتمام فاتورة/دفع.
   static void payment() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    _playCustom('sfx_payment');
+    final h = _hapticEnabled;
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
-      const Duration(milliseconds: 70),
+      const Duration(milliseconds: 90),
       h ? HapticFeedback.lightImpact : null,
     );
     Future.delayed(
-      const Duration(milliseconds: 140),
-      h ? HapticFeedback.lightImpact : null,
-    );
-    Future.delayed(
-      const Duration(milliseconds: 220),
+      const Duration(milliseconds: 200),
       h ? HapticFeedback.mediumImpact : null,
     );
-    if (s) SystemSound.play(SystemSoundType.click);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.click);
   }
 
-  /// نجاح مسح باركود (نقرة سريعة واحدة).
+  /// إنشاء عملية جديدة: صوت الدفع + اهتزاز طويل ملموس (1.5 ثانية).
+  static void opCreated() {
+    if (_muted) return;
+    _playCustom('sfx_payment');
+    if (_isAndroid) {
+      _vibrateMs(1500);
+    } else {
+      // منصات أخرى: أقرب محاكاة بنبضات متتالية.
+      final h = _hapticEnabled;
+      for (var i = 0; i < 6; i++) {
+        Future.delayed(
+          Duration(milliseconds: 120 * i),
+          h ? HapticFeedback.mediumImpact : null,
+        );
+      }
+    }
+  }
+
+  /// اكتمال مزامنة عملية إلى جهاز.
+  static void synced() {
+    if (_muted) return;
+    _playCustom('sfx_synced');
+    if (_hapticEnabled) HapticFeedback.lightImpact();
+  }
+
+  /// نجاح مسح باركود.
   static void scan() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    _playCustom('sfx_scan');
+    final h = _hapticEnabled;
     if (h) HapticFeedback.lightImpact();
-    if (s) SystemSound.play(SystemSoundType.click);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.click);
   }
 
-  /// نجاح اقتران/اتصال جهاز (نمط احتفالي خفيف).
+  /// نجاح اقتران/اتصال جهاز.
   static void pair() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    _playCustom('sfx_pair');
+    final h = _hapticEnabled;
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
       const Duration(milliseconds: 90),
@@ -91,14 +155,15 @@ class Sfx {
       const Duration(milliseconds: 180),
       h ? HapticFeedback.mediumImpact : null,
     );
-    if (s) SystemSound.play(SystemSoundType.click);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.click);
   }
 
   // ============ التحذيرات ============
 
-  /// تنبيه متوسط (مثل: مخزون منخفض، رسالة غير فادحة).
+  /// تنبيه متوسط (مخزون منخفض، رسالة غير فادحة).
   static void warning() {
     if (_muted) return;
+    _playCustom('sfx_warning');
     final h = _hapticEnabled;
     if (h) HapticFeedback.lightImpact();
     Future.delayed(
@@ -109,19 +174,20 @@ class Sfx {
 
   // ============ الفشل ============
 
-  /// صوت فشل/خطأ جسيم (اهتزاز قوي + صوت تنبيه نظام).
+  /// صوت فشل/خطأ جسيم.
   static void error() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    _playCustom('sfx_error');
+    final h = _hapticEnabled;
     if (h) HapticFeedback.heavyImpact();
     Future.delayed(
       const Duration(milliseconds: 110),
       h ? HapticFeedback.lightImpact : null,
     );
-    if (s) SystemSound.play(SystemSoundType.alert);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.alert);
   }
 
-  /// فشل بسيط/رفض (مدخلات غير صالحة) — اهتزاز خفيف مزدوج.
+  /// فشل بسيط/رفض (مدخلات غير صالحة).
   static void reject() {
     if (_muted) return;
     final h = _hapticEnabled;
@@ -134,24 +200,25 @@ class Sfx {
 
   // ============ الأزرار/التنقل ============
 
-  /// نقرة خفيفة عامة للأزرار والتبديل بين التبويبات.
+  /// نقرة خفيفة عامة للأزرار والتبويبات.
   static void click() {
     if (_muted) return;
     final h = _hapticEnabled;
     if (h) HapticFeedback.selectionClick();
   }
 
-  /// اهتزاز خفيف لفتح/إغلاق النوافذ أو العمليات الكبيرة.
+  /// فتح/إغلاق نوافذ أو إجراء كبير.
   static void pop() {
     if (_muted) return;
-    final h = _hapticEnabled; final s = _soundEnabled;
+    final h = _hapticEnabled;
     if (h) HapticFeedback.lightImpact();
-    if (s) SystemSound.play(SystemSoundType.click);
+    if (!_isAndroid && _soundEnabled) SystemSound.play(SystemSoundType.click);
   }
 
-  /// اهتزاز للحذف (ثقيل قصير — ليعطي إحساساً تحذيرياً قبل الحذف النهائي).
+  /// حذف (ثقيل قصير).
   static void delete() {
     if (_muted) return;
+    _playCustom('sfx_delete');
     final h = _hapticEnabled;
     if (h) HapticFeedback.mediumImpact();
     Future.delayed(
@@ -162,7 +229,7 @@ class Sfx {
 
   // ============ مساعدات ============
 
-  /// اهتزاز طويل نسبيًا لإشعار يمكن ملاحظته في الجيب (إشعار/تنبيه خارجي).
+  /// اهتزاز إشعار ملموس.
   static void notify() {
     if (_muted) return;
     final h = _hapticEnabled;
@@ -177,10 +244,25 @@ class Sfx {
     );
   }
 
-  /// يُستخدم في حوارات التأكيد المدمرة (حذف، طرد) ليعطي إحساساً مختلفاً.
+  /// حوارات التأكيد المدمرة (حذف، طرد).
   static void dangerConfirm() {
     if (_muted) return;
     final h = _hapticEnabled;
     if (h) HapticFeedback.heavyImpact();
   }
+
+  /// كل أنواع المؤثرات القابلة للمعاينة في الإعدادات:
+  /// (المعرّف، الاسم المعروض، الدالة).
+  static List<(String, String, void Function())> previewable() => [
+        ('success', 'نجاح الحفظ', success),
+        ('payment', 'إتمام دفع/فاتورة', payment),
+        ('opCreated', 'إنشاء عملية (اهتزاز طويل)', opCreated),
+        ('synced', 'اكتمال مزامنة', synced),
+        ('scan', 'مسح باركود', scan),
+        ('pair', 'اقتران جهاز', pair),
+        ('warning', 'تحذير', warning),
+        ('error', 'خطأ', error),
+        ('delete', 'حذف', delete),
+        ('notify', 'إشعار داخلي', notify),
+      ];
 }

@@ -862,6 +862,14 @@ class LanSyncService implements SyncTransport {
     });
   }
 
+  /// حاضِر أم غائب؟ يضبطه محرك المزامنة من خدمة الحضور — إن وُجد نستخدمه
+  /// لتخطّي الأجهزة الغائبة بدل محاولات فاشلة متراكمة.
+  bool Function(String deviceId)? isPeerOnline;
+
+  /// يُستدعى عند تسليم عملية لجهاز بنجاح (لتحديث سجل op_deliveries والإشعار).
+  void Function(SyncOperation op, String deviceId, String deviceName)?
+      onDelivered;
+
   Future<void> push(SyncOperation op) async {
     final db = await dbProvider();
     final own = await db.query('devices',
@@ -879,12 +887,34 @@ class LanSyncService implements SyncTransport {
       whereArgs: [ourDeviceId],
     );
     if (devices.isEmpty) throw StateError('no-paired-peers');
+    // الأجهزة التي استلمت هذه العملية فعلاً — لا نعيد الإرسال إليها.
+    // (ننشئ الجدول عند غيابه: قواعد قديمة قبل هذه الميزة.)
+    await db.execute('CREATE TABLE IF NOT EXISTS op_deliveries ('
+        'operation_id TEXT NOT NULL, device_id TEXT NOT NULL, '
+        'delivered_at TEXT NOT NULL, PRIMARY KEY (operation_id, device_id))');
+    final deliveredRows = await db.query('op_deliveries',
+        columns: ['device_id'],
+        where: 'operation_id = ?',
+        whereArgs: [op.id]);
+    final delivered =
+        deliveredRows.map((r) => r['device_id'] as String).toSet();
     final errors = <String>[];
+    var skippedOffline = 0;
+    var reachedAll = true;
     for (final d in devices) {
       final ip = d['ip_address'] as String?;
       final p = d['port'] as int?;
       final devId = d['id'] as String;
+      final devName = (d['name'] as String?) ?? 'جهاز';
       if (ip == null || ip.isEmpty || p == null) continue;
+      if (delivered.contains(devId)) continue; // سُلّمت له سابقاً.
+      // جهاز غائب وفق نظام الحضور: تخطَّ بلا محاولة فاشلة — سيُستأنف
+      // الدفع فور عودته (onPeerOnline يستدعي processQueue فوراً).
+      if (isPeerOnline != null && !isPeerOnline!(devId)) {
+        skippedOffline++;
+        reachedAll = false;
+        continue;
+      }
       try {
         final req = await _httpClient.postUrl(Uri.parse('http://$ip:$p/ops'));
         req.headers.contentType = ContentType.json;
@@ -910,6 +940,21 @@ class LanSyncService implements SyncTransport {
             errMsg = '${m['error'] ?? errMsg}';
           } catch (_) {}
           errors.add('$devId: $errMsg');
+          reachedAll = false;
+        } else {
+          // تسليم ناجح لهذا الجهاز: سجّله (idempotent) وأبلغ المستمع.
+          await db.insert(
+            'op_deliveries',
+            {
+              'operation_id': op.id,
+              'device_id': devId,
+              'delivered_at': DateTime.now().toIso8601String(),
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+          try {
+            onDelivered?.call(op, devId, devName);
+          } catch (_) {}
         }
         await db.update(
           'devices',
@@ -919,10 +964,16 @@ class LanSyncService implements SyncTransport {
         );
       } catch (e) {
         errors.add('$devId: $e');
+        reachedAll = false;
       }
     }
     if (errors.isNotEmpty) {
       throw StateError(errors.join('; '));
+    }
+    // كل الأجهزة الحاضرة استلمت، لكن أجهزة غائبة لم تستلم بعد:
+    // نعتبر الدفعة "غير مكتملة" (تبقى pending) دون تسجيل محاولة فاشلة صاخبة.
+    if (skippedOffline > 0 && !reachedAll) {
+      throw StateError('awaiting-offline-peers:$skippedOffline');
     }
   }
 

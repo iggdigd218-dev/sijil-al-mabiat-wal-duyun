@@ -365,6 +365,13 @@ class AppDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_queue_status ON sync_queue(status, next_try_at);
 
+      CREATE TABLE IF NOT EXISTS op_deliveries (
+        operation_id TEXT NOT NULL,
+        device_id    TEXT NOT NULL,
+        delivered_at TEXT NOT NULL,
+        PRIMARY KEY (operation_id, device_id)
+      );
+
       CREATE TABLE IF NOT EXISTS sync_meta (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -492,6 +499,14 @@ class AppDatabase {
           attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
           next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
           UNIQUE(operation_id, target)
+        )''');
+    // تتبع تسليم كل عملية إلى كل جهاز على حدة (عداد الأجهزة المتزامنة + ✅).
+    await _tryCreateTable(db, 'op_deliveries', '''
+        CREATE TABLE IF NOT EXISTS op_deliveries (
+          operation_id TEXT NOT NULL,
+          device_id    TEXT NOT NULL,
+          delivered_at TEXT NOT NULL,
+          PRIMARY KEY (operation_id, device_id)
         )''');
     await _tryCreateTable(db, 'google_auth', '''
         CREATE TABLE IF NOT EXISTS google_auth (

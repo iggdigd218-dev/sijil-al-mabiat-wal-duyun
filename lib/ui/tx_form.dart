@@ -322,7 +322,12 @@ class _TxFormState extends ConsumerState<TxForm> {
       showSnack(context, message.toString(),
           error: stockFailed || share == TxShareOutcome.failed, silent: true);
       Navigator.pop(context, true);
-      Sfx.success();
+      // إنشاء عملية جديدة: اهتزاز طويل (1.5 ث) + صوت مميز؛ التعديل: نجاح عادي.
+      if (widget.existing == null || widget.isCopy) {
+        Sfx.opCreated();
+      } else {
+        Sfx.success();
+      }
     } catch (e) {
       if (!mounted) return;
       Sfx.error();

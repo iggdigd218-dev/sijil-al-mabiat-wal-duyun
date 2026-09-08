@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/sfx.dart';
+import '../core/theme.dart';
 import '../data/providers.dart';
 
 class AppearanceScreen extends ConsumerWidget {
@@ -111,6 +112,48 @@ class AppearanceScreen extends ConsumerWidget {
                   },
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          // معاينة الأصوات: جرّب كل نوع تفاعل قبل استخدامه فعلياً.
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.music_note_outlined,
+                          color: AppColors.primaryOf(context), size: 20),
+                      const SizedBox(width: 8),
+                      const Text('معاينة الأصوات والاهتزازات',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 14.5)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'لكل نوع تفاعل صوت مميز — اضغط أي زر لتجربته.',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.text3Of(context)),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final (_, label, play) in Sfx.previewable())
+                        ActionChip(
+                          avatar: const Icon(Icons.play_arrow, size: 16),
+                          label: Text(label,
+                              style: const TextStyle(fontSize: 12)),
+                          onPressed: play,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],

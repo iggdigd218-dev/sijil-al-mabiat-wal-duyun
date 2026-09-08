@@ -30,6 +30,9 @@ import '../data/sync/sync_service.dart';
 
 import 'group_management_screen.dart';
 import 'notifications_sheet.dart';
+import 'app_notice.dart';
+import '../core/sfx.dart';
+import '../data/sync/sync_engine.dart';
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -72,6 +75,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   Timer? _syncTimer;
   bool _updatePrompted = false;
 
+  Timer? _greetingTimer;
+  DateTime _lastDeliveredNotice = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +87,79 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       (_) => _refreshSync(),
     );
     _checkForUpdateOnStart();
+    _wireSyncNotices();
+    _scheduleGreeting();
+    _greetingTimer = Timer.periodic(
+      const Duration(minutes: 20),
+      (_) => _scheduleGreeting(),
+    );
+  }
+
+  /// ربط أحداث المزامنة بالإشعارات: «تمت مزامنة العملية» عند التسليم،
+  /// و«الجهاز متصل» عند عودة قرين — إشعار خارجي بصوت مميز + صوت داخلي.
+  void _wireSyncNotices() {
+    SyncEngine.onOpDelivered = (opDesc, deviceName) {
+      Sfx.synced();
+      // لا نغرق المستخدم: إشعار خارجي واحد كحد أقصى كل 20 ثانية.
+      final now = DateTime.now();
+      if (now.difference(_lastDeliveredNotice) > const Duration(seconds: 20)) {
+        _lastDeliveredNotice = now;
+        Sfx.systemNotify(
+          title: 'تمت مزامنة العملية',
+          body: '$opDesc — وصلت إلى $deviceName بنجاح',
+        );
+      }
+      try {
+        ref.read(repoProvider).notify(
+              title: 'تمت مزامنة العملية',
+              body: '$opDesc — وصلت إلى $deviceName',
+              kind: 'success',
+            );
+      } catch (_) {}
+    };
+    SyncEngine.onPeerJoined = (deviceName) {
+      Sfx.pair();
+      try {
+        ref.read(repoProvider).notify(
+              title: 'جهاز متصل',
+              body: '$deviceName عاد للاتصال — تجري المزامنة الفورية الآن',
+              kind: 'info',
+            );
+      } catch (_) {}
+    };
+  }
+
+  /// تحية داخلية موقوتة: «صباح الخير» (5-11:59) و«مساء الخير» (16-21:59)
+  /// مرة واحدة لكل فترة يومياً، بصوت هادئ ونافذة منبثقة أنيقة.
+  Future<void> _scheduleGreeting() async {
+    try {
+      final now = DateTime.now();
+      final isMorning = now.hour >= 5 && now.hour < 12;
+      final isEvening = now.hour >= 16 && now.hour < 22;
+      if (!isMorning && !isEvening) return;
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final key = isMorning ? 'lastMorningGreeting' : 'lastEveningGreeting';
+      final today = '${now.year}-${now.month}-${now.day}';
+      if (st[key] == today) return;
+      await repo.setSetting(key, today);
+      final title = isMorning ? 'صباح الخير' : 'مساء الخير';
+      final msg = isMorning
+          ? 'صباح الخير! نتمنى لك يوماً موفقاً مليئاً بالمبيعات الطيبة.'
+          : 'مساء الخير! نتمنى لك أمسية هادئة وحسابات رابحة.';
+      // صوت هادئ عبر إشعار النظام + نافذة داخلية أنيقة.
+      Sfx.systemNotify(title: title, body: msg, peaceful: true);
+      if (!mounted) return;
+      await showAppNotice(
+        context,
+        title: title,
+        message: msg,
+        kind: AppNoticeKind.info,
+        playSound: false,
+      );
+    } catch (_) {
+      // التحية كمالية — لا تعطل شيئاً.
+    }
   }
 
   /// فحص تحديث صامت عند الإقلاع: لا يزعج المستخدم إلا إذا وُجد تحديث فعلًا،
@@ -113,6 +192,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   void dispose() {
     _syncTimer?.cancel();
+    _greetingTimer?.cancel();
+    if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
+    if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
     super.dispose();
   }
 

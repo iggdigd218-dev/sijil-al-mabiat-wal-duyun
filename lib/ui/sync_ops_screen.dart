@@ -344,11 +344,48 @@ class _OpCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '$opLabel — $entityLabel',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '$opLabel — $entityLabel',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 14),
+                        ),
+                      ),
+                      // شارة التسليم: ✅ عند الوصول لكل الأجهزة، وإلا عداد N/M.
+                      if (o.totalPeers > 0)
+                        o.deliveredToAll
+                            ? const Icon(Icons.check_circle,
+                                size: 18, color: Colors.green)
+                            : Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '${o.deliveredCount}/${o.totalPeers}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              ),
+                    ],
                   ),
+                  if (o.summary.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      o.summary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12.5, color: Colors.grey[700]),
+                    ),
+                  ],
                   const SizedBox(height: 3),
                   Wrap(
                     spacing: 8,

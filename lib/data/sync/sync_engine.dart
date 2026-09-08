@@ -14,6 +14,7 @@ import 'conflict_resolver.dart';
 import 'device_id.dart';
 import 'lan_http_transport.dart';
 import 'operation.dart';
+import 'presence_service.dart';
 import 'recorder.dart';
 import 'sync_activity.dart';
 import 'sync_queue.dart';
@@ -36,6 +37,18 @@ class SyncEngine {
   bool _running = false;
   bool _started = false;
   bool get hasStarted => _started;
+
+  /// خدمة الحضور: مناداة كل 3 ثوانٍ + استماع دائم عبر خادم LAN.
+  PresenceService? _presence;
+  PresenceService? get presence => _presence;
+
+  /// يُستدعى عند اكتمال مزامنة عملية مهمة إلى جهاز (لإشعار المستخدم).
+  /// (وصف العملية، اسم الجهاز الهدف)
+  static void Function(String opDescription, String deviceName)?
+      onOpDelivered;
+
+  /// يُستدعى عند عودة جهاز للاتصال (اسمه) لإظهار إشعار "الجهاز متصل".
+  static void Function(String deviceName)? onPeerJoined;
 
   /// يُستدعى أي نشاط مزامنة (وصول عملية/تغيّر صلاحيات) لتنبيه الواجهة للتحديث.
   static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
@@ -102,9 +115,60 @@ class SyncEngine {
       port: port,
     );
     _wireLanNotify(_lanTransport!);
+    _wireLanDelivery(_lanTransport!);
     await _lanTransport!.startServer();
     registerTransport(_lanTransport!);
     _lanEnabled = true;
+  }
+
+  /// يربط ناقل LAN بنظام الحضور (تخطي الغائبين) وبإشعار التسليم الناجح،
+  /// ويشغّل خدمة الحضور (مناداة كل 3 ثوانٍ + مزامنة فورية عند عودة قرين).
+  void _wireLanDelivery(LanSyncService svc) {
+    if (_presence == null || _presence!.ourDeviceId != svc.ourDeviceId) {
+      _presence?.dispose();
+      _presence =
+          PresenceService(dbProvider: dbProvider, ourDeviceId: svc.ourDeviceId)
+            ..onPeerOnline = (id, name) {
+              // جهاز عاد للاتصال: دفع فوري لكل المعلّق + إشعار.
+              try {
+                onPeerJoined?.call(name);
+              } catch (_) {}
+              notifyNewOperation();
+            }
+            ..start();
+    }
+    svc.isPeerOnline = (id) => _presence?.isOnline(id) ?? true;
+    svc.onDelivered = (op, deviceId, deviceName) {
+      // إشعار "تمت مزامنة العملية" للعمليات المهمة فقط (مالية/مخزون/سندات).
+      const important = {'tx', 'stockMove', 'voucher', 'account', 'item'};
+      if (important.contains(op.entityType.name)) {
+        try {
+          onOpDelivered?.call(_describeOp(op), deviceName);
+        } catch (_) {}
+      }
+      try {
+        onSyncActivity?.call();
+      } catch (_) {}
+    };
+  }
+
+  static String _describeOp(SyncOperation op) {
+    final entity = switch (op.entityType.name) {
+      'tx' => 'عملية حسابية',
+      'account' => 'حساب',
+      'item' => 'صنف',
+      'stockMove' => 'حركة مخزون',
+      'voucher' => 'سند',
+      _ => op.entityType.name,
+    };
+    final action = switch (op.opType.name) {
+      'create' => 'إضافة',
+      'update' => 'تعديل',
+      'delete_' => 'حذف',
+      'restore' => 'استعادة',
+      _ => op.opType.name,
+    };
+    return '$action $entity';
   }
 
   /// يربط إشعار الأقران الفوري: عند وصول إشعار من نظير نسحب الـ roster ونعالج
@@ -155,6 +219,7 @@ class SyncEngine {
         port: port,
       );
       _wireLanNotify(svc);
+      _wireLanDelivery(svc);
       await svc.startServer();
       if (!svc.isRunning) return false;
       _lanTransport = svc;
@@ -242,6 +307,7 @@ class SyncEngine {
       const Duration(seconds: 8),
       (_) => processQueue(),
     );
+
     Future(() async {
       if (!_started || generation != _generation) return;
       try {
@@ -299,6 +365,8 @@ class SyncEngine {
     _maintenanceTimer?.cancel();
     _rosterTimer?.cancel();
     _immediate?.cancel();
+    _presence?.dispose();
+    _presence = null;
     _timer = null;
     _maintenanceTimer = null;
     _rosterTimer = null;
