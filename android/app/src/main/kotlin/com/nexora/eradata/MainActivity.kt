@@ -21,6 +21,33 @@ class MainActivity : FlutterFragmentActivity() {
     private val waPackages = listOf("com.whatsapp", "com.whatsapp.w4b")
     private var mediaPlayer: android.media.MediaPlayer? = null
 
+    /** آخر نقرة إشعار خارجي لم تُستهلك بعد: {entityType, entityId}. */
+    private var pendingNotifyTap: Map<String, String>? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        captureNotifyTap(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureNotifyTap(intent)
+    }
+
+    /** يلتقط بيانات الكيان من Intent نقرة الإشعار الخارجي (إن وُجدت). */
+    private fun captureNotifyTap(intent: Intent?) {
+        val type = intent?.getStringExtra("nx_entity_type") ?: return
+        if (type.isEmpty()) return
+        pendingNotifyTap = mapOf(
+            "entityType" to type,
+            "entityId" to (intent.getStringExtra("nx_entity_id") ?: ""),
+        )
+        // لا نلتقط النقرة نفسها مرتين عند استئناف النشاط.
+        intent.removeExtra("nx_entity_type")
+        intent.removeExtra("nx_entity_id")
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -44,7 +71,16 @@ class MainActivity : FlutterFragmentActivity() {
                         val title = call.argument<String>("title") ?: ""
                         val body = call.argument<String>("body") ?: ""
                         val sound = call.argument<String>("sound") ?: "nexora_alert"
-                        result.success(showNotification(title, body, sound))
+                        val entityType = call.argument<String>("entityType") ?: ""
+                        val entityId = call.argument<String>("entityId") ?: ""
+                        result.success(
+                            showNotification(title, body, sound, entityType, entityId)
+                        )
+                    }
+                    // يسلّم نقرة الإشعار الخارجي المعلقة لفلاتر (مرة واحدة).
+                    "takeNotifyTap" -> {
+                        result.success(pendingNotifyTap)
+                        pendingNotifyTap = null
                     }
                     else -> result.notImplemented()
                 }
@@ -157,7 +193,13 @@ class MainActivity : FlutterFragmentActivity() {
      * إشعار نظام خارجي بصوت مخصص من res/raw — قناة مستقلة لكل صوت لأن
      * صوت القناة لا يتغير بعد إنشائها في أندرويد 8+.
      */
-    private fun showNotification(title: String, body: String, sound: String): Boolean = try {
+    private fun showNotification(
+        title: String,
+        body: String,
+        sound: String,
+        entityType: String = "",
+        entityId: String = "",
+    ): Boolean = try {
         val nm = getSystemService(android.content.Context.NOTIFICATION_SERVICE)
             as android.app.NotificationManager
         val channelId = "nexora_$sound"
@@ -181,9 +223,16 @@ class MainActivity : FlutterFragmentActivity() {
             }
             nm.createNotificationChannel(ch)
         }
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
+        val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            // نقرة الإشعار تحمل بيانات الكيان لفتح السجل المقصود داخل التطبيق.
+            if (entityType.isNotEmpty()) {
+                putExtra("nx_entity_type", entityType)
+                putExtra("nx_entity_id", entityId)
+            }
+        }
+        // requestCode فريد لكل إشعار حتى لا تتشارك الإشعارات نفس الـ extras.
         val pi = android.app.PendingIntent.getActivity(
-            this, 0, launch,
+            this, (System.currentTimeMillis() % 100000).toInt(), launch,
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or
                 android.app.PendingIntent.FLAG_IMMUTABLE
         )

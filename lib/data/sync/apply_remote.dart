@@ -49,6 +49,8 @@ extension ApplyRemoteOp on Repo {
         'body': '${op.entityType.name}:${op.entityId} (device ${op.deviceId})',
         'kind': 'warning',
         'seen': 0,
+        'entity_type': op.entityType.name,
+        'entity_id': op.entityId,
         'created_at': DateTime.now().toIso8601String(),
       });
       await txn.insert('operations', op.toMap()..['synced'] = 1,

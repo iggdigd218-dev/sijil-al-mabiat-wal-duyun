@@ -2902,6 +2902,8 @@ class Repo {
         body: 'الكمية المتبقية ${lowQty.toStringAsFixed(0)} '
             'وصلت حد التنبيه ${lowMin.toStringAsFixed(0)}',
         kind: 'warning',
+        entityType: 'item',
+        entityId: '${m.itemId}',
       );
     }
     return id;
@@ -2991,10 +2993,14 @@ class Repo {
   // ==================== الإشعارات الداخلية ====================
 
   /// يضيف إشعارًا داخليًا جديدًا (تنبيه مخزون، اكتمال نسخة، فشل مزامنة…).
+  /// [entityType]/[entityId] يربطان الإشعار بسجل محدد (مثل 'tx' ورقمه)
+  /// حتى يفتح الضغط على الإشعار العملية المقصودة مباشرة.
   Future<void> notify({
     required String title,
     String body = '',
     String kind = 'info',
+    String entityType = '',
+    String entityId = '',
   }) async {
     final db = await _db;
     await db.insert('notifications', {
@@ -3002,6 +3008,8 @@ class Repo {
       'body': body,
       'kind': kind,
       'seen': 0,
+      'entity_type': entityType,
+      'entity_id': entityId,
       'created_at': DateTime.now().toIso8601String(),
     });
   }

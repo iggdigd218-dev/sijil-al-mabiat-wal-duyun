@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/accounting.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
@@ -71,7 +72,8 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell>
+    with WidgetsBindingObserver {
   AppScreen _screen = AppScreen.dashboard;
   Future<SyncStatusInfo>? _syncFuture;
   Timer? _syncTimer;
@@ -83,6 +85,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refreshSync();
     _syncTimer = Timer.periodic(
       const Duration(seconds: 10),
@@ -95,12 +98,89 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       const Duration(minutes: 20),
       (_) => _scheduleGreeting(),
     );
+    // فُتح التطبيق بالضغط على إشعار خارجي؟ انتقل للسجل المقصود.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // عاد التطبيق للمقدمة بنقرة إشعار خارجي: افتح السجل المقصود فوراً.
+    if (state == AppLifecycleState.resumed) _consumeNotifyTap();
+  }
+
+  /// يستهلك نقرة إشعار النظام (إن وُجدت) ويفتح السجل المرتبط بها.
+  Future<void> _consumeNotifyTap() async {
+    final tap = await Sfx.takeNotifyTap();
+    if (tap == null || !mounted) return;
+    await openNotificationEntity(tap['entityType']!, tap['entityId'] ?? '');
+  }
+
+  /// يفتح الشاشة/السجل المرتبط بإشعار: عملية مالية → قسم العمليات مع نافذة
+  /// تفاصيلها فوراً؛ أنواع أخرى → قسمها المناسب. يعيد false إن لم يكن للنوع
+  /// وجهة معروفة (إشعار عام بلا سجل محدد).
+  Future<bool> openNotificationEntity(String type, String id) async {
+    switch (type) {
+      case 'tx':
+        _go(AppScreen.transactions);
+        final txId = int.tryParse(id);
+        if (txId == null) return true;
+        final repo = ref.read(repoProvider);
+        final tx = await repo.transactionById(txId);
+        if (!mounted) return true;
+        if (tx == null) {
+          await showAppNotice(
+            context,
+            title: 'العملية غير موجودة',
+            message: 'العملية المشار إليها في الإشعار حُذفت أو لم تعد متاحة.',
+            kind: AppNoticeKind.warning,
+            playSound: false,
+          );
+          return true;
+        }
+        final acc = tx.type == OpType.transfer
+            ? (tx.fromId == null ? null : await repo.account(tx.fromId!))
+            : (tx.accountId == null ? null : await repo.account(tx.accountId!));
+        final toAcc = tx.toId == null ? null : await repo.account(tx.toId!);
+        if (!mounted) return true;
+        await showTxDetails(context, ref,
+            tx: tx, account: acc, toAccount: toAcc);
+        return true;
+      case 'account':
+        _go(AppScreen.accounts);
+        return true;
+      case 'item' || 'stockMove' || 'itemCategory':
+        _go(AppScreen.inventory);
+        return true;
+      case 'voucher':
+        _go(AppScreen.vouchers);
+        return true;
+      case 'message' || 'conversation':
+        _go(AppScreen.chat);
+        return true;
+      case 'sync':
+        _go(AppScreen.syncOps);
+        return true;
+      case 'user':
+        _go(AppScreen.group);
+        return true;
+    }
+    // نوع بلا وجهة معروفة: نافذة توضيحية بدل تجاهل النقرة.
+    if (mounted) {
+      await showAppNotice(
+        context,
+        title: 'إشعار عام',
+        message: 'هذا الإشعار لا يقود إلى سجل محدد يمكن فتحه.',
+        kind: AppNoticeKind.info,
+        playSound: false,
+      );
+    }
+    return true;
   }
 
   /// ربط أحداث المزامنة بالإشعارات: «تمت مزامنة العملية» عند التسليم،
   /// و«الجهاز متصل» عند عودة قرين — إشعار خارجي بصوت مميز + صوت داخلي.
   void _wireSyncNotices() {
-    SyncEngine.onOpDelivered = (opDesc, deviceName) {
+    SyncEngine.onOpDelivered = (opDesc, deviceName, entityType, entityId) {
       Sfx.synced();
       // لا نغرق المستخدم: إشعار خارجي واحد كحد أقصى كل 20 ثانية.
       final now = DateTime.now();
@@ -109,6 +189,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         Sfx.systemNotify(
           title: 'تمت مزامنة العملية',
           body: '$opDesc — وصلت إلى $deviceName بنجاح',
+          entityType: entityType,
+          entityId: entityId,
         );
       }
       try {
@@ -116,6 +198,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               title: 'تمت مزامنة العملية',
               body: '$opDesc — وصلت إلى $deviceName',
               kind: 'success',
+              entityType: entityType,
+              entityId: entityId,
             );
       } catch (_) {}
     };
@@ -126,6 +210,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               title: 'جهاز متصل',
               body: '$deviceName عاد للاتصال — تجري المزامنة الفورية الآن',
               kind: 'info',
+              entityType: 'sync',
             );
       } catch (_) {}
     };
@@ -135,12 +220,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       Sfx.systemNotify(
         title: 'اكتملت المزامنة',
         body: 'تمت مزامنة جميع العمليات مع $deviceName بنجاح ✅',
+        entityType: 'sync',
       );
       try {
         ref.read(repoProvider).notify(
               title: 'اكتملت المزامنة',
               body: 'تمت مزامنة جميع العمليات مع $deviceName ✅',
               kind: 'success',
+              entityType: 'sync',
             );
       } catch (_) {}
     };
@@ -148,12 +235,17 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     LanSyncService.onChatMessage = (senderName, body) {
       Sfx.notify();
       final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
-      Sfx.systemNotify(title: 'رسالة من $senderName', body: short);
+      Sfx.systemNotify(
+        title: 'رسالة من $senderName',
+        body: short,
+        entityType: 'message',
+      );
       try {
         ref.read(repoProvider).notify(
               title: '💬 رسالة جديدة من $senderName',
               body: short,
               kind: 'info',
+              entityType: 'message',
             );
       } catch (_) {}
     };
@@ -232,6 +324,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
     _greetingTimer?.cancel();
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
@@ -426,7 +519,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                   label: Text('$unread'),
                   child: const Icon(Icons.notifications_outlined),
                 ),
-                onPressed: () => openNotifications(context, ref),
+                onPressed: () => openNotifications(
+                  context,
+                  ref,
+                  onOpenEntity: openNotificationEntity,
+                ),
               );
             },
           ),

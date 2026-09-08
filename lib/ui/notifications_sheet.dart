@@ -1,25 +1,76 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/format.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'app_notice.dart';
 import 'widgets.dart';
 
+/// معالج فتح السجل المرتبط بإشعار: (نوع الكيان، معرّفه) → هل فُتحت وجهة؟
+typedef NotificationEntityOpener = Future<bool> Function(
+    String entityType, String entityId);
+
 /// يفتح مركز الإشعارات الداخلية كصحيفة سفلية.
-Future<void> openNotifications(BuildContext context, WidgetRef ref) async {
+/// [onOpenEntity] يستدعى عند الضغط على إشعار مرتبط بسجل — يتكفل بالانتقال
+/// إلى الشاشة المناسبة (تُغلق الصحيفة قبل الاستدعاء).
+Future<void> openNotifications(
+  BuildContext context,
+  WidgetRef ref, {
+  NotificationEntityOpener? onOpenEntity,
+}) async {
   final repo = ref.read(repoProvider);
   await repo.markAllNotificationsSeen();
   bump(ref);
+  if (!context.mounted) return;
   await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => const _NotificationsSheet(),
+    builder: (_) => _NotificationsSheet(onOpenEntity: onOpenEntity),
   );
 }
 
 class _NotificationsSheet extends ConsumerWidget {
-  const _NotificationsSheet();
+  final NotificationEntityOpener? onOpenEntity;
+  const _NotificationsSheet({this.onOpenEntity});
+
+  /// نقرة على إشعار: إن كان مرتبطاً بسجل نغلق الصحيفة وننتقل إليه،
+  /// وإلا نعرض نافذة توضيحية بمحتوى الإشعار كاملاً.
+  Future<void> _onTap(
+    BuildContext context,
+    Map<String, Object?> n,
+    String kind,
+  ) async {
+    final entityType = (n['entity_type'] ?? '') as String;
+    final entityId = (n['entity_id'] ?? '') as String;
+    if (entityType.isNotEmpty && onOpenEntity != null) {
+      Navigator.pop(context); // أغلق الصحيفة أولاً ثم انتقل.
+      final opened = await onOpenEntity!(entityType, entityId);
+      if (opened) return;
+      // نوع بلا وجهة معروفة: لا شيء آخر يمكن فعله هنا (الصحيفة أُغلقت).
+      return;
+    }
+    // إشعار عام بلا سجل محدد: نافذة توضيحية بالتفاصيل.
+    final noticeKind = switch (kind) {
+      'error' => AppNoticeKind.error,
+      'warning' => AppNoticeKind.warning,
+      'success' => AppNoticeKind.success,
+      _ => AppNoticeKind.info,
+    };
+    final created = DateTime.tryParse((n['created_at'] ?? '') as String);
+    final body = (n['body'] ?? '') as String;
+    final when = created == null ? '' : '\n\n🕓 ${Fmt.dateTime(created)}';
+    await showAppNotice(
+      context,
+      title: (n['title'] ?? '') as String,
+      message: '$body$when'.trim().isEmpty
+          ? 'إشعار عام — لا يوجد سجل مرتبط به.'
+          : '$body$when',
+      kind: noticeKind,
+      playSound: false,
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -103,7 +154,10 @@ class _NotificationsSheet extends ConsumerWidget {
                           _ => (Icons.info_outline, AppColors.info),
                         };
                         final body = (n['body'] ?? '') as String;
+                        final linked =
+                            ((n['entity_type'] ?? '') as String).isNotEmpty;
                         return ListTile(
+                          onTap: () => _onTap(context, n, kind),
                           leading: Container(
                             width: 40,
                             height: 40,
@@ -122,6 +176,11 @@ class _NotificationsSheet extends ConsumerWidget {
                               ? null
                               : Text(body,
                                   style: const TextStyle(fontSize: 13)),
+                          // سهم يدل على أن الإشعار يقود لسجل محدد.
+                          trailing: linked
+                              ? Icon(Icons.chevron_left,
+                                  size: 20, color: AppColors.text3Of(context))
+                              : null,
                         );
                       },
                     );

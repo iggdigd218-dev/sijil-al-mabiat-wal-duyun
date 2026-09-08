@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 17;
+  static const int _version = 18;
 
   static int get schemaVersion => _version;
 
@@ -240,13 +240,18 @@ class AppDatabase {
     // ---------- التنبيهات ----------
     await db.execute('''
       CREATE TABLE IF NOT EXISTS notifications (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        title      TEXT NOT NULL,
-        body       TEXT DEFAULT '',
-        kind       TEXT DEFAULT 'info',
-        seen       INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        body        TEXT DEFAULT '',
+        kind        TEXT DEFAULT 'info',
+        seen        INTEGER NOT NULL DEFAULT 0,
+        entity_type TEXT DEFAULT '',
+        entity_id   TEXT DEFAULT '',
+        created_at  TEXT NOT NULL
       )''');
+    // قواعد قديمة أنشأت الجدول بدون عمودَي الربط — أضفهما (idempotent).
+    await _addColumn(db, 'notifications', 'entity_type', "TEXT DEFAULT ''");
+    await _addColumn(db, 'notifications', 'entity_id', "TEXT DEFAULT ''");
 
     // ---------- قوالب الرسائل ----------
     await db.execute('''
@@ -865,6 +870,11 @@ class AppDatabase {
           "UPDATE users SET permissions='add_tx,edit_tx,delete_tx,view_reports,export,manage_backup,manage_users,approve_vouchers' WHERE role='admin' AND (permissions IS NULL OR TRIM(permissions)='')",
         );
       } catch (_) {}
+    }
+    // ====== v18: ربط الإشعار بالكيان (فتح العملية من الإشعار) ======
+    if (from < 18) {
+      await _addColumn(db, 'notifications', 'entity_type', "TEXT DEFAULT ''");
+      await _addColumn(db, 'notifications', 'entity_id', "TEXT DEFAULT ''");
     }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا

@@ -64,6 +64,8 @@ class Sfx {
     required String title,
     required String body,
     bool peaceful = false,
+    String entityType = '',
+    String entityId = '',
   }) async {
     if (_muted || !_isAndroid) return;
     try {
@@ -71,8 +73,26 @@ class Sfx {
         'title': title,
         'body': body,
         'sound': peaceful ? 'nexora_peace' : 'nexora_alert',
+        'entityType': entityType,
+        'entityId': entityId,
       });
     } catch (_) {}
+  }
+
+  /// يستهلك نقرة إشعار خارجي معلقة (فُتح التطبيق بالضغط على إشعار نظام).
+  /// يعيد {entityType, entityId} مرة واحدة أو null إن لم توجد نقرة.
+  static Future<Map<String, String>?> takeNotifyTap() async {
+    if (!_isAndroid) return null;
+    try {
+      final r = await _channel.invokeMethod('takeNotifyTap');
+      if (r is Map && (r['entityType'] as String?)?.isNotEmpty == true) {
+        return {
+          'entityType': '${r['entityType']}',
+          'entityId': '${r['entityId'] ?? ''}',
+        };
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ============ النجاح ============

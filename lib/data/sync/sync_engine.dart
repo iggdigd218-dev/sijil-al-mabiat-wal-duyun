@@ -43,9 +43,14 @@ class SyncEngine {
   PresenceService? get presence => _presence;
 
   /// يُستدعى عند اكتمال مزامنة عملية مهمة إلى جهاز (لإشعار المستخدم).
-  /// (وصف العملية، اسم الجهاز الهدف)
-  static void Function(String opDescription, String deviceName)?
-      onOpDelivered;
+  /// (وصف العملية، اسم الجهاز الهدف، نوع الكيان مثل 'tx'، معرّفه المحلي)
+  /// نوع الكيان ومعرّفه يسمحان بفتح السجل المقصود عند الضغط على الإشعار.
+  static void Function(
+    String opDescription,
+    String deviceName,
+    String entityType,
+    String entityId,
+  )? onOpDelivered;
 
   /// يُستدعى عند عودة جهاز للاتصال (اسمه) لإظهار إشعار "الجهاز متصل".
   static void Function(String deviceName)? onPeerJoined;
@@ -151,7 +156,8 @@ class SyncEngine {
       const important = {'tx', 'stockMove', 'voucher', 'account', 'item'};
       if (important.contains(op.entityType.name)) {
         try {
-          onOpDelivered?.call(_describeOp(op), deviceName);
+          onOpDelivered?.call(
+              _describeOp(op), deviceName, op.entityType.name, op.entityId);
         } catch (_) {}
       }
       try {
