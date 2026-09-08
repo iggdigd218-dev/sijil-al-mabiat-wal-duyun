@@ -93,11 +93,22 @@ class PresenceService {
       );
       final results = await Future.wait(peers.map((p) async {
         final id = p['id'] as String;
-        final name = (p['name'] as String?) ?? 'جهاز';
-        final online = await _ping(
+        var name = (p['name'] as String?) ?? 'جهاز';
+        final probed = await _ping(
           (p['ip_address'] as String?) ?? '',
           (p['port'] as int?) ?? 0,
         );
+        final online = probed != null;
+        // القرين يعلن اسمه في /status: التقط أي تغيير اسم فوراً
+        // (المستخدم أعاد تسمية جهازه) وحدّث سجلنا المحلي.
+        final remoteName = probed?.trim() ?? '';
+        if (online && remoteName.isNotEmpty && remoteName != name) {
+          name = remoteName;
+          try {
+            await db.update('devices', {'name': remoteName},
+                where: 'id = ?', whereArgs: [id]);
+          } catch (_) {}
+        }
         return (id, name, online, p['last_seen_at'] as String?);
       }));
 
@@ -147,18 +158,27 @@ class PresenceService {
   bool isOnline(String deviceId) => _lastKnown[deviceId] == true;
 
   /// مناداة واحدة خفيفة: GET /status بمهلة قصيرة.
-  Future<bool> _ping(String ip, int port) async {
-    if (ip.isEmpty || port <= 0) return false;
+  /// تُعيد اسم الجهاز المعلَن إذا كان متصلاً، وnull إذا كان غائباً.
+  Future<String?> _ping(String ip, int port) async {
+    if (ip.isEmpty || port <= 0) return null;
     try {
       final req = await _client
           .getUrl(Uri.parse('http://$ip:$port/status'))
           .timeout(const Duration(seconds: 2));
       final resp = await req.close().timeout(const Duration(seconds: 2));
-      // نستهلك الجسم حتى يُعاد استخدام الاتصال.
-      await resp.drain<void>().timeout(const Duration(seconds: 2));
-      return resp.statusCode == HttpStatus.ok;
+      final body = await resp
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 2));
+      if (resp.statusCode != HttpStatus.ok) return null;
+      try {
+        final m = jsonDecode(body) as Map;
+        return (m['name'] as String?) ?? '';
+      } catch (_) {
+        return ''; // متصل لكن بلا اسم مقروء.
+      }
     } catch (_) {
-      return false;
+      return null;
     }
   }
 

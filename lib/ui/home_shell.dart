@@ -34,6 +34,7 @@ import 'app_notice.dart';
 import '../core/sfx.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/lan_http_transport.dart';
+import 'widgets.dart' show showSnack;
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -486,6 +487,49 @@ class _Drawer extends ConsumerWidget {
   final void Function(AppScreen) onSelect;
   const _Drawer({required this.current, required this.onSelect});
 
+  /// المستخدم يحدد اسم جهازه بنفسه — يظهر أعلى القائمة الجانبية والرئيسية.
+  Future<void> _renameSelf(
+      BuildContext context, WidgetRef ref, String currentName) async {
+    Sfx.click();
+    final ctl = TextEditingController(
+        text: currentName == 'مدير الحسابات' ? '' : currentName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('اسمك / اسم هذا الجهاز'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 30,
+          decoration: const InputDecoration(
+            hintText: 'مثال: أحمد — فرع الجملة',
+            helperText: 'يظهر أعلى الشاشة الرئيسية ولدى بقية أجهزة المجموعة',
+            helperMaxLines: 2,
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text),
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await ref.read(repoProvider).renameSelfDevice(name);
+      bump(ref);
+      Sfx.pop();
+    } catch (e) {
+      if (context.mounted) showSnack(context, 'تعذّر الحفظ: $e', error: true);
+    }
+  }
+
   /// لون مميز لكل قسم (كما في التصميم المرجعي).
   Color _colorOf(AppScreen s) => switch (s) {
         AppScreen.dashboard => const Color(0xFF2563EB),
@@ -565,15 +609,33 @@ class _Drawer extends ConsumerWidget {
                                         devName.isNotEmpty)
                                     ? devName
                                     : (user?.name ?? 'مدير الحسابات');
-                                return Text(
-                                  label,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 16,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                // نقرة على القلم = المستخدم يحدد اسمه بنفسه.
+                                return Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        label,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 16,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(12),
+                                      onTap: () =>
+                                          _renameSelf(ctx, rref, label),
+                                      child: const Padding(
+                                        padding: EdgeInsets.all(3),
+                                        child: Icon(Icons.edit_outlined,
+                                            size: 15, color: Colors.white70),
+                                      ),
+                                    ),
+                                  ],
                                 );
                               },
                             ),

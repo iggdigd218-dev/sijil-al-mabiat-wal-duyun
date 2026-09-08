@@ -1386,6 +1386,23 @@ class Repo {
     }
   }
 
+  /// إعادة تسمية هذا الجهاز نفسه — متاحة للمستخدم دائماً بلا صلاحيات
+  /// (يحدد اسمه الظاهر أعلى القائمة الجانبية والرئيسية).
+  Future<void> renameSelfDevice(String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    if (_deviceId == null) await initSyncInfra(); // ضمان تسجيل الجهاز أولاً.
+    final db = await _db;
+    await db.update(
+      'devices',
+      {'name': n, 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [requireDeviceId],
+    );
+    // نحفظه أيضاً في الإعدادات ليبقى الاسم بعد إعادة التسجيل الذاتي.
+    await setSetting('sync.deviceName', n);
+  }
+
   /// تحديث اسم جهاز (ليتعرّف المدير عليه).
   Future<void> renameDevice(String deviceId, String name) async {
     await _ensureCan('manage_users');
