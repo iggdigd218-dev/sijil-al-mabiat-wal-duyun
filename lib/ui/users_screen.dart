@@ -89,6 +89,7 @@ class UserCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final roleColor = switch (user.role) {
       UserRole.admin => AppColors.accentOf(context),
+      UserRole.agent => AppColors.greenOf(context),
       UserRole.accountant => AppColors.infoOf(context),
       UserRole.dataentry => AppColors.violetOf(context),
       UserRole.viewer => AppColors.text3Of(context),
@@ -328,7 +329,13 @@ class _UserFormState extends ConsumerState<_UserForm> {
                     labelText: 'الدور',
                     prefixIcon: Icon(Icons.badge_outlined),
                   ),
+                  // دور «مدير النظام» لا يُمنح من الإعدادات لأي مستخدم —
+                  // يظهر فقط لمدير البذرة الحالي؛ الوكيل أعلى دور يُمنح.
                   items: UserRole.values
+                      .where((r) =>
+                          r != UserRole.admin ||
+                          _isFirstUser ||
+                          widget.existing?.role == UserRole.admin)
                       .map(
                         (r) => DropdownMenuItem(
                           value: r,

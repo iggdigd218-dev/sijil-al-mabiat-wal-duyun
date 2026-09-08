@@ -514,6 +514,7 @@ class Voucher {
 /// الأدوار — نقل حرفي من `ROLES` في نسخة الويب.
 enum UserRole {
   admin('مدير النظام', '👑', 'admin'),
+  agent('وكيل المدير', '🛡️', 'agent'),
   accountant('محاسب', '🧮', 'accountant'),
   dataentry('موظف إدخال', '⌨️', 'dataentry'),
   viewer('عرض فقط', '👁️', 'viewer');
@@ -555,6 +556,9 @@ const kPerms = <Perm>[
 Map<String, bool> defaultPerms(UserRole role) {
   switch (role) {
     case UserRole.admin:
+      return {for (final p in kPerms) p.key: true};
+    // الوكيل يقوم بعمل المدير أثناء غيابه: كل الصلاحيات افتراضياً.
+    case UserRole.agent:
       return {for (final p in kPerms) p.key: true};
     case UserRole.accountant:
       return {

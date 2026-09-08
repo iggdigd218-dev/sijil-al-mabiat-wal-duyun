@@ -24,6 +24,27 @@ class MainActivity : FlutterFragmentActivity() {
     /** آخر نقرة إشعار خارجي لم تُستهلك بعد: {entityType, entityId}. */
     private var pendingNotifyTap: Map<String, String>? = null
 
+    /** نتيجة طلب إذن نظام معلّقة (تُستوفى في onRequestPermissionsResult). */
+    private var pendingPermissionResult: MethodChannel.Result? = null
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSION_REQ_CODE) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pendingPermissionResult?.success(granted)
+            pendingPermissionResult = null
+        }
+    }
+
+    companion object {
+        private const val PERMISSION_REQ_CODE = 7801
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         captureNotifyTap(intent)
@@ -81,6 +102,86 @@ class MainActivity : FlutterFragmentActivity() {
                     "takeNotifyTap" -> {
                         result.success(pendingNotifyTap)
                         pendingNotifyTap = null
+                    }
+                    // تشغيل/إيقاف خدمة اليقظة (foreground service + wake lock):
+                    // تُفعّل داخل المجموعة لتستمر المزامنة والإشعارات والشاشة مطفأة.
+                    "keepAlive" -> {
+                        val on = call.argument<Boolean>("on") ?: false
+                        getSharedPreferences("nexora_keepalive", MODE_PRIVATE)
+                            .edit().putBoolean("enabled", on).apply()
+                        if (on) KeepAliveService.start(this)
+                        else KeepAliveService.stop(this)
+                        result.success(true)
+                    }
+                    // هل التطبيق معفى من تحسينات البطارية؟
+                    "isBatteryExempt" -> {
+                        result.success(
+                            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                                val pm = getSystemService(POWER_SERVICE)
+                                    as android.os.PowerManager
+                                pm.isIgnoringBatteryOptimizations(packageName)
+                            } else true
+                        )
+                    }
+                    // نافذة النظام الرسمية لطلب الإعفاء من تحسينات البطارية —
+                    // إذن نظام حقيقي وليس نافذة مصطنعة من التطبيق.
+                    "requestBatteryExempt" -> {
+                        result.success(
+                            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                                launch(
+                                    Intent(
+                                        android.provider.Settings
+                                            .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:$packageName"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            } else true
+                        )
+                    }
+                    // طلب إذن نظام حقيقي (نافذة أندرويد الرسمية) باسمه الكامل.
+                    "requestSystemPermission" -> {
+                        val perm = call.argument<String>("permission") ?: ""
+                        if (perm.isEmpty()) {
+                            result.success(false)
+                        } else if (checkSelfPermission(perm) ==
+                            PackageManager.PERMISSION_GRANTED) {
+                            result.success(true)
+                        } else {
+                            pendingPermissionResult = result
+                            requestPermissions(arrayOf(perm), PERMISSION_REQ_CODE)
+                        }
+                    }
+                    // هل الإذن ممنوح حالياً؟
+                    "hasSystemPermission" -> {
+                        val perm = call.argument<String>("permission") ?: ""
+                        result.success(
+                            perm.isNotEmpty() && checkSelfPermission(perm) ==
+                                PackageManager.PERMISSION_GRANTED
+                        )
+                    }
+                    // تسجيل صوتي (رسائل الدردشة): يبدأ التسجيل إلى ملف m4a.
+                    "startRecording" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        result.success(startAudioRecording(path))
+                    }
+                    // يوقف التسجيل ويعيد true إن كان الملف صالحاً.
+                    "stopRecording" -> result.success(stopAudioRecording())
+                    // تشغيل ملف صوتي من مسار كامل (رسالة صوتية مستلمة).
+                    "playFile" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        result.success(playAudioFile(path))
+                    }
+                    // إيقاف أي تشغيل جارٍ.
+                    "stopPlayback" -> {
+                        try { mediaPlayer?.stop(); mediaPlayer?.release() }
+                        catch (_: Exception) {}
+                        mediaPlayer = null
+                        result.success(true)
+                    }
+                    // فتح ملف (فيديو/مستند...) بتطبيق النظام المناسب.
+                    "openFile" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        result.success(openFileWithSystem(path))
                     }
                     else -> result.notImplemented()
                 }
@@ -144,6 +245,80 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
     }
+
+    // ============ التسجيل الصوتي (رسائل الدردشة) ============
+
+    private var audioRecorder: android.media.MediaRecorder? = null
+
+    /** يبدأ تسجيلاً صوتياً AAC/m4a إلى المسار المحدد. */
+    private fun startAudioRecording(path: String): Boolean = try {
+        stopAudioRecording()
+        val r = if (android.os.Build.VERSION.SDK_INT >= 31) {
+            android.media.MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION") android.media.MediaRecorder()
+        }
+        r.setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+        r.setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
+        r.setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
+        r.setAudioEncodingBitRate(64000)
+        r.setAudioSamplingRate(44100)
+        r.setOutputFile(path)
+        r.prepare()
+        r.start()
+        audioRecorder = r
+        true
+    } catch (e: Exception) {
+        audioRecorder = null
+        false
+    }
+
+    /** يوقف التسجيل الجاري. */
+    private fun stopAudioRecording(): Boolean = try {
+        audioRecorder?.let { it.stop(); it.release() }
+        val had = audioRecorder != null
+        audioRecorder = null
+        had
+    } catch (e: Exception) {
+        audioRecorder = null
+        false
+    }
+
+    /** يشغّل ملفاً صوتياً من مسار كامل (رسالة صوتية مستلمة). */
+    private fun playAudioFile(path: String): Boolean = try {
+        val f = File(path)
+        if (!f.exists()) false else {
+            mediaPlayer?.release()
+            mediaPlayer = android.media.MediaPlayer().apply {
+                setDataSource(path)
+                setOnCompletionListener { it.release() }
+                prepare()
+                start()
+            }
+            true
+        }
+    } catch (e: Exception) { false }
+
+    /** يفتح ملفاً بتطبيق النظام المناسب عبر FileProvider. */
+    private fun openFileWithSystem(path: String): Boolean = try {
+        val src = File(path)
+        if (!src.exists()) false else {
+            val shared = copyToShared(src)
+            val uri = FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", shared
+            )
+            val mime = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(src.extension.lowercase())
+                ?: "*/*"
+            launch(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }
+    } catch (e: Exception) { false }
 
     /** يشغّل ملف صوت من res/raw فوق أي صوت آخر (بدون مقاطعة الموسيقى طويلاً). */
     private fun playRaw(name: String): Boolean = try {

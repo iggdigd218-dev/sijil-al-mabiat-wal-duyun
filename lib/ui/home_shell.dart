@@ -33,6 +33,7 @@ import 'group_management_screen.dart';
 import 'notifications_sheet.dart';
 import 'app_notice.dart';
 import '../core/sfx.dart';
+import '../core/keep_alive_service.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/lan_http_transport.dart';
 import 'widgets.dart' show showSnack;
@@ -100,12 +101,45 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
     // فُتح التطبيق بالضغط على إشعار خارجي؟ انتقل للسجل المقصود.
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
+    // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
+    _ensureGroupKeepAlive();
+  }
+
+  /// داخل مجموعة: يشغّل خدمة اليقظة (foreground service) ليستقبل الجهاز
+  /// العمليات والإشعارات فوراً حتى والشاشة مطفأة، ويطلب — بنوافذ النظام
+  /// الرسمية — إذن الإشعارات (أندرويد 13+) والإعفاء من تحسينات البطارية.
+  Future<void> _ensureGroupKeepAlive() async {
+    try {
+      final mode = await ref.read(repoProvider).workspaceMode();
+      final inGroup = mode != 'standalone';
+      await NexKeepAlive.setEnabled(inGroup);
+      if (!inGroup) return;
+      // إذن الإشعارات: نافذة النظام مباشرة (لا نافذة مصطنعة).
+      if (!await NexKeepAlive.hasPermission(NexKeepAlive.permNotifications)) {
+        await NexKeepAlive.requestPermission(NexKeepAlive.permNotifications);
+      }
+      // الإعفاء من تحسينات البطارية: نافذة النظام الرسمية، مرة واحدة فقط
+      // (إن رفض لا نلاحقه في كل إقلاع).
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      if (!await NexKeepAlive.isBatteryExempt() &&
+          st['batteryExemptAsked'] != '1') {
+        await repo.setSetting('batteryExemptAsked', '1');
+        await NexKeepAlive.requestBatteryExempt();
+      }
+    } catch (_) {
+      // اليقظة كمالية — لا تعطل الإقلاع.
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // عاد التطبيق للمقدمة بنقرة إشعار خارجي: افتح السجل المقصود فوراً.
-    if (state == AppLifecycleState.resumed) _consumeNotifyTap();
+    if (state == AppLifecycleState.resumed) {
+      _consumeNotifyTap();
+      // إعادة تقييم اليقظة (ربما اقترن/غادر مجموعة أثناء عمل التطبيق).
+      _ensureGroupKeepAlive();
+    }
   }
 
   /// يستهلك نقرة إشعار النظام (إن وُجدت) ويفتح السجل المرتبط بها.
@@ -113,6 +147,67 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final tap = await Sfx.takeNotifyTap();
     if (tap == null || !mounted) return;
     await openNotificationEntity(tap['entityType']!, tap['entityId'] ?? '');
+  }
+
+  /// نافذة منبثقة داخلية لكل إشعار — تستجيب للضغط: تفتح السجل المرتبط
+  /// أو نافذة توضيحية إن لم يكن للإشعار سجل محدد.
+  void _showTappableNotice(
+    String title,
+    String body, {
+    String entityType = '',
+    String entityId = '',
+  }) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+        content: InkWell(
+          onTap: () {
+            messenger.hideCurrentSnackBar();
+            if (entityType.isNotEmpty) {
+              openNotificationEntity(entityType, entityId);
+            } else {
+              showAppNotice(
+                context,
+                title: title,
+                message: body,
+                kind: AppNoticeKind.info,
+                playSound: false,
+              );
+            }
+          },
+          child: Row(
+            children: [
+              const Icon(Icons.notifications_active,
+                  color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 13)),
+                    if (body.isNotEmpty)
+                      Text(body,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11.5)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_left, color: Colors.white70, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// يفتح الشاشة/السجل المرتبط بإشعار: عملية مالية → قسم العمليات مع نافذة
@@ -202,6 +297,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
               entityId: entityId,
             );
       } catch (_) {}
+      _showTappableNotice(
+        'تمت مزامنة العملية',
+        '$opDesc — وصلت إلى $deviceName',
+        entityType: entityType,
+        entityId: entityId,
+      );
     };
     SyncEngine.onPeerJoined = (deviceName) {
       Sfx.pair();
@@ -213,6 +314,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
               entityType: 'sync',
             );
       } catch (_) {}
+      _showTappableNotice(
+        'جهاز متصل',
+        '$deviceName عاد للاتصال — تجري المزامنة الفورية الآن',
+        entityType: 'sync',
+      );
     };
     // اكتمال المزامنة مع جهاز: إشعار داخلي + خارجي باسم الجهاز.
     SyncEngine.onDeviceSyncComplete = (deviceName) {
@@ -230,6 +336,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
               entityType: 'sync',
             );
       } catch (_) {}
+      _showTappableNotice(
+        'اكتملت المزامنة',
+        'تمت مزامنة جميع العمليات مع $deviceName ✅',
+        entityType: 'sync',
+      );
     };
     // رسالة دردشة جماعية واردة: إشعار خارجي بصوت مميز + إشعار داخلي.
     LanSyncService.onChatMessage = (senderName, body) {
@@ -248,6 +359,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
               entityType: 'message',
             );
       } catch (_) {}
+      _showTappableNotice(
+        '💬 رسالة جديدة من $senderName',
+        short,
+        entityType: 'message',
+      );
     };
     // تغيير أجراه المدير على هذا العضو (اسم/صلاحيات): داخلي + خارجي.
     LanSyncService.onMemberNotice = (title, body) {
@@ -256,6 +372,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       try {
         ref.read(repoProvider).notify(title: title, body: body, kind: 'info');
       } catch (_) {}
+      _showTappableNotice(title, body);
     };
   }
 
@@ -443,6 +560,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     'مدير',
                     Colors.amber.shade700,
                     Icons.security,
+                  ),
+                UserRole.agent => (
+                    'وكيل المدير',
+                    Colors.green.shade700,
+                    Icons.verified_user,
                   ),
                 UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
                 UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),

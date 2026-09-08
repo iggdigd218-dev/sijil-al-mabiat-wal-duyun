@@ -1,6 +1,8 @@
 // Apply an incoming operation using the actual primary key of each table.
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../repository.dart';
@@ -92,6 +94,28 @@ extension ApplyRemoteOp on Repo {
             'created_at': now,
             'updated_at': now,
           });
+        }
+      }
+      // مرفق دردشة وارد (صورة/فيديو/ملف/صوت): الملف مضمّن base64 في
+      // الحمولة — نعيد بناءه محلياً ونوجّه payload لمساره الجديد.
+      final b64 = op.payload['file_b64'];
+      if (b64 is String && b64.isNotEmpty) {
+        try {
+          final bytes = base64Decode(b64);
+          final dir = await getApplicationDocumentsDirectory();
+          final folder = Directory('${dir.path}/chat_media');
+          await folder.create(recursive: true);
+          final rawName = (op.payload['file_name'] as String?) ?? 'file';
+          final safeName = rawName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+          final local = File('${folder.path}/${op.entityId}_$safeName');
+          await local.writeAsBytes(bytes, flush: true);
+          row['payload'] = jsonEncode({
+            'name': rawName,
+            'size': bytes.length,
+            'path': local.path,
+          });
+        } catch (_) {
+          // فشل حفظ المرفق لا يمنع وصول الرسالة نفسها.
         }
       }
     }

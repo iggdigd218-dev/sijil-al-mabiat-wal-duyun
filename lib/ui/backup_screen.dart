@@ -137,6 +137,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     try {
       final payload = r['payload'] as Map<String, Object?>;
       final count = await repo.importAll(payload);
+      await _resyncGroupAfterRestore();
       bump(ref);
       if (mounted)
         showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
@@ -220,8 +221,26 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     if (decoded is! Map) throw const FormatException('ملف غير صالح');
     final map = Map<String, Object?>.from(decoded);
     final count = await ref.read(repoProvider).importAll(map);
+    await _resyncGroupAfterRestore();
     bump(ref);
     return count;
+  }
+
+  /// بعد استعادة المدير: تُجدول كل البيانات المستعادة كعمليات مزامنة
+  /// فتصل رأساً إلى بقية أجهزة المجموعة (لا شيء يحدث خارج المجموعة).
+  Future<void> _resyncGroupAfterRestore() async {
+    try {
+      final queued = await ref.read(repoProvider).resyncAllToGroup();
+      if (queued > 0) {
+        ref.read(syncEngineProvider).notifyNewOperation();
+        if (mounted) {
+          showSnack(context,
+              'جارٍ مزامنة النسخة المستعادة إلى أجهزة المجموعة ($queued سجلًا) 🔄');
+        }
+      }
+    } catch (_) {
+      // المزامنة اللاحقة الدورية ستلتقط ما تبقى.
+    }
   }
 
   Future<String> _readPickedFile(PlatformFile picked) async {
@@ -456,6 +475,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     final wsMode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
     final wsOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
     final cloudAllowed = wsMode == 'standalone' || (wsMode != 'member' && wsOwner);
+    // الاستعادة داخل المجموعة حكر على جهاز المدير — وتُزامن رأساً للأجهزة.
+    final restoreAllowed = wsMode == 'standalone' || (wsMode != 'member' && wsOwner);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
@@ -534,16 +555,31 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                         label: const Text('إنشاء نسخة'),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _restore,
-                        icon: const Icon(Icons.restore_outlined),
-                        label: const Text('استعادة'),
+                    if (restoreAllowed) ...[
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _busy ? null : _restore,
+                          icon: const Icon(Icons.restore_outlined),
+                          label: const Text('استعادة'),
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
+                if (!restoreAllowed)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'الاستعادة داخل المجموعة متاحة لجهاز المدير فقط — '
+                      'وعند استعادته نسخة تُزامن بياناتها تلقائياً إلى جهازك.',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        height: 1.5,
+                        color: AppColors.text3Of(context),
+                      ),
+                    ),
+                  ),
                 if (_busy) ...[
                   const SizedBox(height: 12),
                   const LinearProgressIndicator(),

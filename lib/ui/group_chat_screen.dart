@@ -8,11 +8,17 @@
 //  - الأجهزة المطرودة تُخفى نهائياً من الشريط والدردشة.
 //  - الرسائل تُزامن فورياً عبر LAN مثل أي عملية (EntityKind.message).
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
+import '../core/chat_media.dart';
 import '../core/format.dart';
+import '../core/keep_alive_service.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
@@ -33,6 +39,9 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
   Timer? _ticker;
   StreamSubscription<int>? _bus;
   bool _sending = false;
+  bool _recording = false;
+  String? _recordingPath;
+  DateTime? _recordingStart;
 
   @override
   void initState() {
@@ -79,6 +88,157 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// قائمة المرفقات: صورة / فيديو / ملف من أي نوع.
+  Future<void> _pickAttachment() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: Icon(Icons.image_outlined,
+                  color: AppColors.greenOf(context)),
+              title: const Text('صورة'),
+              onTap: () => Navigator.pop(context, 'image'),
+            ),
+            ListTile(
+              leading: Icon(Icons.videocam_outlined,
+                  color: AppColors.violetOf(context)),
+              title: const Text('فيديو'),
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+            ListTile(
+              leading:
+                  Icon(Icons.attach_file, color: AppColors.infoOf(context)),
+              title: const Text('ملف (جميع الأنواع)'),
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: switch (choice) {
+          'image' => FileType.image,
+          'video' => FileType.video,
+          _ => FileType.any,
+        },
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty || !mounted) return;
+      final f = res.files.single;
+      final bytes = f.bytes ??
+          (f.path != null ? await File(f.path!).readAsBytes() : null);
+      if (bytes == null) {
+        if (mounted) showSnack(context, 'تعذّر قراءة الملف', error: true);
+        return;
+      }
+      setState(() => _sending = true);
+      await ref.read(repoProvider).sendGroupAttachment(
+            bytes: bytes,
+            name: f.name,
+            kind: choice == 'file' ? _kindFromName(f.name) : choice,
+            caption: _input.text.trim(),
+          );
+      _input.clear();
+      Sfx.success();
+      _refresh();
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر الإرسال: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// يستنتج نوع المرفق من الامتداد (لملفات «جميع الأنواع»).
+  static String _kindFromName(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    if (const {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}.contains(ext)) {
+      return 'image';
+    }
+    if (const {'mp4', 'mkv', 'avi', 'mov', '3gp', 'webm'}.contains(ext)) {
+      return 'video';
+    }
+    if (const {'m4a', 'mp3', 'aac', 'wav', 'ogg', 'opus'}.contains(ext)) {
+      return 'audio';
+    }
+    return 'file';
+  }
+
+  /// يبدأ/يوقف تسجيل رسالة صوتية (زر الميكروفون).
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      // إيقاف وإرسال.
+      final ok = await ChatMedia.stopRecording();
+      final path = _recordingPath;
+      final started = _recordingStart;
+      setState(() {
+        _recording = false;
+        _recordingPath = null;
+        _recordingStart = null;
+      });
+      if (!ok || path == null) return;
+      final f = File(path);
+      if (!await f.exists() || await f.length() == 0) return;
+      // تسجيلات أقصر من ثانية غالباً ضغطة خاطئة.
+      if (started != null &&
+          DateTime.now().difference(started) < const Duration(seconds: 1)) {
+        try {
+          await f.delete();
+        } catch (_) {}
+        return;
+      }
+      try {
+        setState(() => _sending = true);
+        final bytes = await f.readAsBytes();
+        await ref.read(repoProvider).sendGroupAttachment(
+              bytes: bytes,
+              name: 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a',
+              kind: 'audio',
+            );
+        Sfx.success();
+        _refresh();
+      } catch (e) {
+        if (mounted) showSnack(context, 'تعذّر إرسال التسجيل: $e', error: true);
+      } finally {
+        if (mounted) setState(() => _sending = false);
+      }
+      return;
+    }
+    // بدء التسجيل: إذن الميكروفون بنافذة النظام الرسمية أولاً.
+    if (!await NexKeepAlive.hasPermission(NexKeepAlive.permRecordAudio)) {
+      final granted =
+          await NexKeepAlive.requestPermission(NexKeepAlive.permRecordAudio);
+      if (!granted) {
+        if (mounted) {
+          showSnack(context, 'لم يُمنح إذن الميكروفون', error: true);
+        }
+        return;
+      }
+    }
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/chat_media');
+    await folder.create(recursive: true);
+    final path =
+        '${folder.path}/rec_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    final started = await ChatMedia.startRecording(path);
+    if (!started) {
+      if (mounted) showSnack(context, 'تعذّر بدء التسجيل', error: true);
+      return;
+    }
+    Sfx.click();
+    setState(() {
+      _recording = true;
+      _recordingPath = path;
+      _recordingStart = DateTime.now();
+    });
   }
 
   @override
@@ -191,23 +351,56 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
           ),
           SafeArea(
             child: Container(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
               color: AppColors.surfaceOf(context),
               child: Row(
                 children: [
+                  // مرفقات: صور / فيديو / ملفات بجميع الأنواع.
+                  IconButton(
+                    tooltip: 'إرفاق ملف',
+                    onPressed: _sending || _recording ? null : _pickAttachment,
+                    icon: Icon(Icons.attach_file,
+                        color: AppColors.primaryOf(context)),
+                  ),
                   Expanded(
-                    child: TextField(
-                      controller: _input,
-                      decoration: const InputDecoration(
-                        hintText: 'اكتب رسالة للمجموعة...',
-                        isDense: true,
-                      ),
-                      onSubmitted: (_) => _send(),
+                    child: _recording
+                        ? Row(
+                            children: [
+                              const Icon(Icons.fiber_manual_record,
+                                  color: Colors.red, size: 16),
+                              const SizedBox(width: 8),
+                              Text(
+                                'جارٍ التسجيل… اضغط الميكروفون للإرسال',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.text2Of(context),
+                                ),
+                              ),
+                            ],
+                          )
+                        : TextField(
+                            controller: _input,
+                            decoration: const InputDecoration(
+                              hintText: 'اكتب رسالة للمجموعة...',
+                              isDense: true,
+                            ),
+                            onSubmitted: (_) => _send(),
+                          ),
+                  ),
+                  const SizedBox(width: 6),
+                  // تسجيل صوتي: ضغطة تبدأ، ضغطة ترسل.
+                  IconButton(
+                    tooltip: _recording ? 'إيقاف وإرسال' : 'تسجيل صوتي',
+                    onPressed: _sending ? null : _toggleRecording,
+                    icon: Icon(
+                      _recording ? Icons.stop_circle : Icons.mic_none,
+                      color: _recording
+                          ? Colors.red
+                          : AppColors.primaryOf(context),
                     ),
                   ),
-                  const SizedBox(width: 8),
                   IconButton.filled(
-                    onPressed: _sending ? null : _send,
+                    onPressed: _sending || _recording ? null : _send,
                     icon: _sending
                         ? const SizedBox(
                             width: 18,
@@ -324,10 +517,12 @@ class _GroupBubble extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 3),
-            Text(
-              message.body,
-              style: const TextStyle(fontSize: 13.5, height: 1.5),
-            ),
+            _AttachmentView(message: message),
+            if (message.body.isNotEmpty)
+              Text(
+                message.body,
+                style: const TextStyle(fontSize: 13.5, height: 1.5),
+              ),
             const SizedBox(height: 4),
             Text(
               Fmt.dateTime(message.createdAt),
@@ -337,6 +532,179 @@ class _GroupBubble extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// عرض مرفق الرسالة (صورة/فيديو/صوت/ملف) داخل الفقاعة.
+/// الصور تُعرض مصغّرة والنقر عليها أو على غيرها يفتحها بتطبيق النظام؛
+/// الرسائل الصوتية تعمل بزر تشغيل داخلي مباشر.
+class _AttachmentView extends StatefulWidget {
+  final ChatMessage message;
+  const _AttachmentView({required this.message});
+
+  @override
+  State<_AttachmentView> createState() => _AttachmentViewState();
+}
+
+class _AttachmentViewState extends State<_AttachmentView> {
+  bool _playing = false;
+
+  Map<String, Object?> get _meta {
+    try {
+      final d = jsonDecode(widget.message.payload);
+      return d is Map ? Map<String, Object?>.from(d) : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  String _sizeLabel(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  Future<void> _open(String path) async {
+    final ok = await ChatMedia.openFile(path);
+    if (!ok && mounted) {
+      showSnack(context, 'تعذّر فتح الملف — ربما حُذف من الجهاز', error: true);
+    }
+  }
+
+  Future<void> _togglePlay(String path) async {
+    if (_playing) {
+      await ChatMedia.stopPlayback();
+      setState(() => _playing = false);
+      return;
+    }
+    final ok = await ChatMedia.playFile(path);
+    if (!ok) {
+      if (mounted) showSnack(context, 'تعذّر تشغيل التسجيل', error: true);
+      return;
+    }
+    setState(() => _playing = true);
+    // لا حدث انتهاء من القناة — نعيد الزر بعد مهلة معقولة حسب حجم الملف.
+    final size = (_meta['size'] as num?)?.toInt() ?? 0;
+    final estSeconds = (size / 8000).clamp(2, 300).toInt();
+    Future.delayed(Duration(seconds: estSeconds), () {
+      if (mounted) setState(() => _playing = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = widget.message.kind;
+    if (kind == 'text' || kind == 'statement' || kind == 'voucher') {
+      return const SizedBox.shrink();
+    }
+    final meta = _meta;
+    final path = (meta['path'] ?? '') as String;
+    final name = (meta['name'] ?? 'ملف') as String;
+    final size = (meta['size'] as num?)?.toInt() ?? 0;
+    final exists = path.isNotEmpty && File(path).existsSync();
+
+    // صورة: معاينة مصغّرة قابلة للنقر.
+    if (kind == 'image' && exists) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: GestureDetector(
+          onTap: () => _open(path),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(
+              File(path),
+              width: 200,
+              height: 200,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // صوت: زر تشغيل/إيقاف داخلي.
+    if (kind == 'audio') {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: InkWell(
+          onTap: exists ? () => _togglePlay(path) : null,
+          borderRadius: BorderRadius.circular(10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _playing ? Icons.stop_circle : Icons.play_circle_fill,
+                size: 34,
+                color: exists
+                    ? AppColors.primaryOf(context)
+                    : AppColors.text3Of(context),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('رسالة صوتية 🎙️',
+                      style: TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w700)),
+                  Text(
+                    exists ? _sizeLabel(size) : 'الملف غير متاح',
+                    style: TextStyle(
+                        fontSize: 10.5, color: AppColors.text3Of(context)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // فيديو أو ملف عام: بطاقة باسم الملف تفتح بتطبيق النظام.
+    final (icon, label) = kind == 'video'
+        ? (Icons.videocam, 'فيديو')
+        : (Icons.insert_drive_file_outlined, 'ملف');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: InkWell(
+        onTap: exists ? () => _open(path) : null,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceOf(context),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.borderOf(context)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 28, color: AppColors.infoOf(context)),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      exists ? '$label · ${_sizeLabel(size)}' : 'الملف غير متاح',
+                      style: TextStyle(
+                          fontSize: 10.5, color: AppColors.text3Of(context)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1332,6 +1332,13 @@ class Repo {
     Set<String> perms,
   ) async {
     await _ensureCan('manage_users');
+    // دور «مدير النظام» لا يُمنح لأي عضو إطلاقاً — الوكيل هو أعلى دور
+    // يمكن للمدير منحه (يقوم بعمله أثناء غيابه).
+    if (role == UserRole.admin) {
+      throw StateError(
+        'لا يمكن منح دور المدير لأي عضو — امنح دور «وكيل المدير» بدلاً منه.',
+      );
+    }
     final db = await _db;
     final dev = await db.query(
       'devices',
@@ -1747,6 +1754,103 @@ class Repo {
   /// يستدعيها العضو عندما يكتشف أنه مطرود (من استجابة 410 في /ops).
   Future<void> resetToStandaloneAfterExpulsion() => _resetToStandalone();
 
+  // ==================== تهيئة المجموعة من الصفر (المدير فقط) ====================
+
+  /// مفتاح آخر تهيئة كاملة (يمنع تكرارها قبل شهر).
+  static const _kLastGroupWipe = 'lastGroupWipeAt';
+
+  /// متى تُتاح التهيئة القادمة؟ null = متاحة الآن.
+  Future<DateTime?> groupWipeAvailableAt() async {
+    final st = await settings();
+    final last = DateTime.tryParse(st[_kLastGroupWipe] ?? '');
+    if (last == null) return null;
+    final next = last.add(const Duration(days: 30));
+    return DateTime.now().isBefore(next) ? next : null;
+  }
+
+  /// «تنظيف وحذف كامل لبيانات التطبيق والأعضاء وتهيئة المجموعة من الصفر»:
+  /// - للمدير (owner) فقط، وبعد مصادقة النظام (بصمة/رمز القفل) في الواجهة.
+  /// - يحذف كل بيانات الأعمال (حسابات/عمليات/سندات/أصناف/مخزون/دردشة/سلة/
+  ///   نشاط/إشعارات) من جهاز المدير، ويبث عمليات حذف متزامنة تُفرغ أجهزة
+  ///   الأعضاء كذلك.
+  /// - لا يمسّ الإعدادات ولا الصلاحيات ولا المستخدمين ولا الأجهزة المقترنة —
+  ///   تبقى المجموعة قائمة ببنيتها وتبدأ بدفاتر فارغة.
+  /// - يقفل نفسه شهراً كاملاً بعد التنفيذ.
+  Future<void> wipeGroupData() async {
+    final mode = await workspaceMode();
+    if (mode != 'standalone' && !await isWorkspaceOwner()) {
+      throw StateError('تهيئة المجموعة متاحة لجهاز المدير فقط.');
+    }
+    final nextAt = await groupWipeAvailableAt();
+    if (nextAt != null) {
+      throw StateError(
+        'خيار التهيئة مقفل حتى ${nextAt.toIso8601String().substring(0, 10)} '
+        '(مرة واحدة كل شهر).',
+      );
+    }
+    final db = await _db;
+    final inGroup = mode != 'standalone';
+    // 1) بث عمليات حذف للأعضاء قبل مسح السجلات محلياً (داخل مجموعة فقط):
+    //    delete_ لكل كيان أعمال حتى تنتقل دفاتر الأعضاء إلى سلاتهم ثم تُفرغ.
+    if (inGroup) {
+      final rec = SyncRecorder(
+        db: db,
+        deviceId: requireDeviceId,
+        workspaceId: requireWorkspaceId,
+        userId: _currentUserId,
+      );
+      const wipeTables = <(String, EntityKind)>[
+        ('transactions', EntityKind.tx),
+        ('vouchers', EntityKind.voucher),
+        ('stock_moves', EntityKind.stockMove),
+        ('items', EntityKind.item),
+        ('item_categories', EntityKind.itemCategory),
+        ('accounts', EntityKind.account),
+      ];
+      for (final (table, kind) in wipeTables) {
+        final rows = await db.query(table, columns: ['id']);
+        for (final r in rows) {
+          await rec.record(
+            entityType: kind,
+            entityId: '${r['id']}',
+            opType: OpKind.delete_,
+            payload: {'id': r['id'], '__wipe': 1},
+          );
+        }
+      }
+    }
+    // 2) المسح المحلي الكامل لبيانات الأعمال — الإعدادات والمستخدمون
+    //    والأجهزة والصلاحيات تبقى كما هي.
+    await db.transaction((txn) async {
+      const tables = [
+        'transaction_items',
+        'transactions',
+        'stock_moves',
+        'items',
+        'item_categories',
+        'vouchers',
+        'accounts',
+        'messages',
+        'conversations',
+        'trash',
+        'activity',
+        'notifications',
+      ];
+      for (final t in tables) {
+        await txn.delete(t);
+      }
+      await txn.insert('activity', {
+        'text': 'تهيئة المجموعة: حذف كامل لبيانات التطبيق والأعضاء',
+        'ref_type': 'wipe',
+        'ref_id': '',
+        'user_name': 'المدير',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+    // 3) قفل الخيار شهراً.
+    await setSetting(_kLastGroupWipe, DateTime.now().toIso8601String());
+  }
+
   /// يتحقق العضو مما إذا كان قد طُرِد (بناءً على سجلنا المحلي للأجهزة).
   Future<bool> amIExpelled() async {
     if (_deviceId == null) return false;
@@ -1804,6 +1908,68 @@ class Repo {
       entityId: '$id',
       opType: OpKind.create,
       payload: {...row, 'conv_title': 'دردشة المجموعة'},
+    );
+    return id;
+  }
+
+  /// يرسل مرفقاً (صورة/فيديو/ملف/تسجيل صوتي) في دردشة المجموعة.
+  /// الملف يُحفظ محلياً في documents/chat_media ويُضمّن base64 في حمولة
+  /// المزامنة ليصل لكل أجهزة المجموعة (حد أقصى 6 MB بعد الترميز).
+  /// [kind]: image / video / audio / file — [name]: اسم الملف الأصلي.
+  Future<int> sendGroupAttachment({
+    required List<int> bytes,
+    required String name,
+    required String kind,
+    String caption = '',
+  }) async {
+    if (bytes.isEmpty) throw StateError('الملف فارغ.');
+    // 6 MB خام ≈ 8 MB بعد base64 — حد ناقل LAN.
+    if (bytes.length > 6 * 1024 * 1024) {
+      throw StateError(
+        'حجم الملف يتجاوز الحد المسموح (6 MB) — اختر ملفاً أصغر.',
+      );
+    }
+    final db = await _db;
+    await groupConversation();
+    final now = DateTime.now().toIso8601String();
+    final id = newGlobalId();
+    // حفظ محلي: مجلد chat_media داخل documents.
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/chat_media');
+    await folder.create(recursive: true);
+    final safeName = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final local = File('${folder.path}/${id}_$safeName');
+    await local.writeAsBytes(bytes, flush: true);
+
+    final meta = jsonEncode({
+      'name': name,
+      'size': bytes.length,
+      'path': local.path,
+    });
+    final row = {
+      'id': id,
+      'conversation_id': groupConversationId,
+      'workspace_id': requireWorkspaceId,
+      'sender': requireDeviceId,
+      'body': caption.trim(),
+      'kind': kind,
+      'payload': meta,
+      'created_at': now,
+    };
+    await db.insert('messages', row);
+    await db.update('conversations', {'updated_at': now},
+        where: 'id = ?', whereArgs: [groupConversationId]);
+    // الحمولة المزامنة تتضمن الملف نفسه base64 — يعيد الطرف الآخر بناءه.
+    await queueOperation(
+      entityType: EntityKind.message,
+      entityId: '$id',
+      opType: OpKind.create,
+      payload: {
+        ...row,
+        'conv_title': 'دردشة المجموعة',
+        'file_b64': base64Encode(bytes),
+        'file_name': name,
+      },
     );
     return id;
   }
@@ -2250,9 +2416,22 @@ class Repo {
   Future<int> importAll(Map<String, Object?> backup) async {
     await _ensureCan('manage_backup');
     final db = await _db;
+    final mode = await workspaceMode();
+    // داخل مجموعة: الاستعادة (محلية أو من Google) حكر على جهاز المدير —
+    // العضو يستعيد نسخة قديمة فتتضارب دفاتره مع بقية الأجهزة عند المزامنة.
+    if (mode == 'member') {
+      throw const BackupImportException(
+        'استعادة نسخة احتياطية داخل المجموعة متاحة لجهاز المدير فقط — '
+        'وتُزامن بياناتها تلقائياً إلى بقية الأجهزة.',
+      );
+    }
+    if ((mode == 'host' || mode == 'managed') && !await isWorkspaceOwner()) {
+      throw const BackupImportException(
+        'استعادة نسخة احتياطية متاحة لجهاز المدير فقط.',
+      );
+    }
     // داخل مجموعة: تُرفض أي نسخة غير صادرة من المجموعة نفسها — استيراد
     // بيانات غريبة يفسد دفاتر كل الأجهزة عند أول مزامنة.
-    final mode = await workspaceMode();
     if (mode == 'member' || mode == 'host') {
       final ourFp = await _groupFingerprint();
       final theirFp = (backup['group_fingerprint'] as String?) ?? '';
@@ -2390,6 +2569,57 @@ class Repo {
         'فشلت الاستعادة بالكامل ولم تُطبّق أي تغييرات: $e',
       );
     }
+  }
+
+  /// بعد استعادة المدير لنسخة احتياطية: يعيد تسجيل كل البيانات المستعادة
+  /// كعمليات مزامنة جديدة (upsert) فتُدفع رأساً إلى كل أجهزة المجموعة —
+  /// دون هذا تبقى النسخة المستعادة حبيسة جهاز المدير.
+  /// يعيد عدد السجلات التي جُدولت للمزامنة (0 خارج المجموعة).
+  Future<int> resyncAllToGroup() async {
+    final mode = await workspaceMode();
+    if (mode == 'standalone') return 0;
+    if (!await isWorkspaceOwner()) return 0;
+    final db = await _db;
+    final rec = SyncRecorder(
+      db: db,
+      deviceId: requireDeviceId,
+      workspaceId: requireWorkspaceId,
+      userId: _currentUserId,
+    );
+    // (جدول، كيان) بترتيب يحترم الاعتمادية عند التطبيق على الطرف الآخر.
+    const tables = <(String, EntityKind)>[
+      ('categories', EntityKind.category),
+      ('currencies', EntityKind.currency),
+      ('accounts', EntityKind.account),
+      ('item_categories', EntityKind.itemCategory),
+      ('items', EntityKind.item),
+      ('transactions', EntityKind.tx),
+      ('stock_moves', EntityKind.stockMove),
+      ('vouchers', EntityKind.voucher),
+      ('users', EntityKind.user),
+    ];
+    var queued = 0;
+    for (final (table, kind) in tables) {
+      final rows = await db.query(table);
+      for (final row in rows) {
+        final payload = Map<String, Object?>.from(row);
+        // سطور الفاتورة تُرحّل داخل حمولة العملية المالية نفسها.
+        if (kind == EntityKind.tx) {
+          payload['items'] = await _lineMaps(db, row['id'] as int);
+        }
+        final entityId = kind == EntityKind.currency
+            ? '${row['code']}'
+            : '${row['id']}';
+        await rec.record(
+          entityType: kind,
+          entityId: entityId,
+          opType: OpKind.update, // upsert على الطرف المستقبل
+          payload: payload,
+        );
+        queued++;
+      }
+    }
+    return queued;
   }
 
   /// يحوّل القيم إلى أنواع تقبلها sqflite، ويعيد ربط الصور.

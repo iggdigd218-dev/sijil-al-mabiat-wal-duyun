@@ -582,6 +582,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                 ],
+                // تهيئة المجموعة من الصفر: على جهاز المدير (المالك) فقط —
+                // لا تظهر إطلاقاً في إعدادات الأعضاء ولا الوكيل.
+                if (canEditOrg) ...[
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'منطقة الخطر — تهيئة المجموعة',
+                    icon: Icons.warning_amber_rounded,
+                    color: const Color(0xFFDC2626),
+                    children: [_GroupWipeTile()],
+                  ),
+                ],
                 const SizedBox(height: 18),
                 const UpdateSection(),
                 const SizedBox(height: 18),
@@ -757,6 +768,113 @@ class _Collapsible extends StatelessWidget {
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           children: children,
         ),
+      ),
+    );
+  }
+}
+
+/// خيار «تهيئة المجموعة من الصفر» — جهاز المدير فقط:
+/// حذف كامل لبيانات التطبيق والأعضاء (دون المساس بالإعدادات والصلاحيات)،
+/// ينفَّذ بعد مصادقة النظام (بصمة/رمز قفل الشاشة)، ويُقفل شهراً بعد التنفيذ.
+class _GroupWipeTile extends ConsumerStatefulWidget {
+  @override
+  ConsumerState<_GroupWipeTile> createState() => _GroupWipeTileState();
+}
+
+class _GroupWipeTileState extends ConsumerState<_GroupWipeTile> {
+  DateTime? _lockedUntil;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLock();
+  }
+
+  Future<void> _loadLock() async {
+    final at = await ref.read(repoProvider).groupWipeAvailableAt();
+    if (mounted) setState(() => _lockedUntil = at);
+  }
+
+  Future<void> _wipe() async {
+    // 1) تأكيد نصي واضح.
+    final sure = await confirmDialog(
+      context,
+      title: '⚠️ تهيئة المجموعة من الصفر',
+      message: 'سيُحذف كل شيء نهائياً من جهازك ومن أجهزة كل الأعضاء:\n'
+          'الحسابات، العمليات، السندات، الأصناف، المخزون، الدردشة، '
+          'سلة المهملات، سجل النشاط والإشعارات.\n\n'
+          'تبقى المجموعة قائمة: الأجهزة المقترنة والمستخدمون والصلاحيات '
+          'والإعدادات لا تُمس.\n\n'
+          'بعد التنفيذ يُقفل هذا الخيار لمدة شهر كامل. لا يمكن التراجع!',
+      confirmText: 'متابعة',
+      danger: true,
+    );
+    if (!sure || !mounted) return;
+    // 2) مصادقة النظام: بصمة أو رمز قفل الشاشة — إلزامية للتنفيذ.
+    final authed = await Security.authenticate(
+      reason: 'أكّد هويتك لتهيئة المجموعة وحذف كل البيانات',
+    );
+    if (!authed) {
+      if (mounted) {
+        showSnack(context, 'لم تكتمل المصادقة — أُلغيت التهيئة', error: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(repoProvider).wipeGroupData();
+      // دفع فوري لعمليات الحذف نحو الأعضاء.
+      try {
+        ref.read(syncEngineProvider).notifyNewOperation();
+      } catch (_) {}
+      bump(ref);
+      await _loadLock();
+      if (mounted) {
+        showSnack(context, 'تمت التهيئة — بدأت المجموعة من الصفر 🧹');
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, '$e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = _lockedUntil != null;
+    final lockLabel = locked
+        ? 'مقفل حتى ${_lockedUntil!.toIso8601String().substring(0, 10)} — '
+            'يُتاح مرة واحدة كل شهر'
+        : 'يتطلب بصمة أو رمز قفل الشاشة للتنفيذ';
+    return Card(
+      child: ListTile(
+        enabled: !locked && !_busy,
+        leading: _busy
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                locked ? Icons.lock_clock : Icons.delete_forever,
+                color: locked ? AppColors.text3Of(context) : Colors.red,
+              ),
+        title: Text(
+          'حذف كامل البيانات وتهيئة المجموعة من الصفر',
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: locked ? AppColors.text3Of(context) : Colors.red,
+          ),
+        ),
+        subtitle: Text(
+          'يفرغ دفاتر جهازك وأجهزة الأعضاء دون المساس بالإعدادات '
+          'والصلاحيات.\n$lockLabel',
+          style: const TextStyle(fontSize: 11.5, height: 1.5),
+        ),
+        onTap: locked || _busy ? null : _wipe,
       ),
     );
   }

@@ -20,6 +20,16 @@
     <!-- الاهتزاز: التفاعلات اللمسية (HapticFeedback) عند الحفظ/الدفع/الحذف/الأخطاء -->
     <uses-permission android:name="android.permission.VIBRATE"/>
 
+    <!-- اليقظة داخل المجموعة: خدمة أمامية + قفل يقظة يبقيان المزامنة الفورية
+         واستقبال الإشعارات يعملان حتى أثناء سكون الهاتف والشاشة مطفأة -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- إعادة تشغيل خدمة اليقظة بعد إعادة تشغيل الهاتف (داخل المجموعة فقط) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
     <!-- التحديث بنقرة واحدة: يسمح بفتح شاشة تثبيت النظام لملف APK المنزَّل داخلياً.
          التثبيت النهائي يظل بيد المستخدم (شاشة النظام) — لا تثبيت صامت. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
@@ -65,6 +75,21 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- خدمة اليقظة: تبقي مزامنة المجموعة والإشعارات فورية والشاشة مطفأة -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
+
+        <!-- إعادة تشغيل خدمة اليقظة بعد إقلاع الهاتف إن كان الجهاز داخل مجموعة -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

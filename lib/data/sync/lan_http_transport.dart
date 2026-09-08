@@ -23,7 +23,9 @@ import 'sync_queue.dart';
 import 'workspace_service.dart';
 
 const int kDefaultLanPort = 43053;
-const int kMaxLanPayloadBytes = 1024 * 1024; // 1 MB
+// 8 MB: يسمح بمرفقات الدردشة (صور/فيديو/ملفات/تسجيلات صوتية base64)
+// عبر الشبكة المحلية — الحد السابق 1 MB كان يكفي للعمليات النصية فقط.
+const int kMaxLanPayloadBytes = 8 * 1024 * 1024; // 8 MB
 const Duration kLanRequestTimeout = Duration(seconds: 5);
 
 /// يحوّل استثناء تطبيق عملية واردة إلى نص قصير آمن للإرسال في رد HTTP:
@@ -714,7 +716,17 @@ class LanSyncService implements SyncTransport {
         try {
           final senderName =
               (senderRows.first['name'] as String?) ?? 'جهاز في المجموعة';
-          final body = '${op.payload['body'] ?? ''}';
+          var body = '${op.payload['body'] ?? ''}';
+          // مرفق بلا نص: وصف نوع المرفق في الإشعار.
+          if (body.isEmpty) {
+            body = switch ('${op.payload['kind'] ?? 'text'}') {
+              'image' => '📷 صورة',
+              'video' => '🎬 فيديو',
+              'audio' => '🎙️ رسالة صوتية',
+              'file' => '📎 ملف',
+              _ => '',
+            };
+          }
           if (body.isNotEmpty) onChatMessage?.call(senderName, body);
         } catch (_) {}
       }

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/models.dart';
+import '../core/theme.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
 import 'devices_screen.dart' show DeviceCard;
@@ -148,19 +149,17 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
           void setRole(UserRole r) {
             setDlg(() {
               role = r;
-              if (r == UserRole.admin) {
-                perms = kPerms.map((p) => p.key).toSet();
-              } else {
-                perms = defaultPerms(r)
-                    .entries
-                    .where((e) => e.value)
-                    .map((e) => e.key)
-                    .toSet();
-              }
+              perms = defaultPerms(r)
+                  .entries
+                  .where((e) => e.value)
+                  .map((e) => e.key)
+                  .toSet();
             });
           }
 
-          final isAdmin = role == UserRole.admin;
+          // دور المدير لا يُمنح لأي عضو — الوكيل أعلى دور متاح، يقوم
+          // بعمل المدير أثناء غيابه ويملك كل الصلاحيات افتراضياً.
+          final isAgent = role == UserRole.agent;
           return AlertDialog(
             title: Text('صلاحيات: ${device['name'] ?? 'الجهاز'}'),
             content: SizedBox(
@@ -175,25 +174,33 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                   Wrap(
                     spacing: 8,
                     children: [
+                      // «مدير النظام» محذوف من الخيارات: لا يُمنح لأي عضو.
                       for (final r in UserRole.values)
-                        ChoiceChip(
-                          label: Text(r.label),
-                          selected: role == r,
-                          onSelected: (_) => setRole(r),
-                        ),
+                        if (r != UserRole.admin)
+                          ChoiceChip(
+                            label: Text('${r.icon} ${r.label}'),
+                            selected: role == r,
+                            onSelected: (_) => setRole(r),
+                          ),
                     ],
                   ),
+                  if (isAgent)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        '🛡️ الوكيل يقوم بعمل المدير أثناء غيابه — يملك كل '
+                        'الصلاحيات، ويمكنك تعديلها بدقة أدناه.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.5,
+                          color: AppColors.infoOf(ctx),
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 14),
                   const Text('الصلاحيات التفصيلية',
                       style: TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
-                  if (isAdmin)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                      child: Text('المدير يملك كل الصلاحيات تلقائيًا.',
-                          style: TextStyle(color: Colors.teal)),
-                    )
-                  else
                     for (final p in kPerms)
                       CheckboxListTile(
                         dense: true,
