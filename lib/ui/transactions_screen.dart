@@ -729,6 +729,14 @@ class _TxCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
+            // «عرض العملية» أول الخيارات: نافذة تفاصيل كاملة للقراءة فقط.
+            ListTile(
+              leading: Icon(Icons.visibility_outlined,
+                  color: AppColors.infoOf(context)),
+              title: const Text('عرض العملية'),
+              subtitle: const Text('كل تفاصيل العملية في نافذة واحدة'),
+              onTap: () => Navigator.pop(context, 'view'),
+            ),
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('تعديل العملية'),
@@ -770,6 +778,9 @@ class _TxCard extends ConsumerWidget {
     if (action == null || !context.mounted) return;
 
     switch (action) {
+      case 'view':
+        await showTxDetails(context, ref,
+            tx: tx, account: account, toAccount: toAccount);
       case 'edit':
         await openTxForm(context, ref, existing: tx);
       case 'copy':
@@ -829,4 +840,125 @@ class _Badge extends StatelessWidget {
       ),
     );
   }
+}
+
+/// نافذة «عرض العملية»: كل تفاصيل العملية للقراءة فقط في نافذة واحدة —
+/// النوع والحساب والمبلغ والعملة والبيان والمرجع والملاحظات والتصنيف
+/// والحالة وحالة المزامنة والتواريخ.
+Future<void> showTxDetails(
+  BuildContext context,
+  WidgetRef ref, {
+  required Tx tx,
+  Account? account,
+  Account? toAccount,
+}) async {
+  final isTransfer = tx.type == OpType.transfer;
+  final group = opGroup(tx.type);
+  final color = switch (group) {
+    'inflow' => AppColors.greenOf(context),
+    'outflow' => AppColors.dangerOf(context),
+    'receivable' => AppColors.infoOf(context),
+    'payable' => AppColors.accentOf(context),
+    _ => AppColors.violetOf(context),
+  };
+  final statusLabel = switch (tx.status) {
+    'pending' => 'قيد التنفيذ',
+    'failed' || 'cancelled' => 'فاشلة',
+    _ => 'ناجحة',
+  };
+  final syncLabel = switch (tx.syncState) {
+    'synced' => 'تمت المزامنة ✅',
+    'syncing' => 'جاري المزامنة',
+    'failed' => 'فشلت المزامنة',
+    'pending' => 'بانتظار المزامنة',
+    _ => 'محلية فقط',
+  };
+
+  final rows = <(String, String)>[
+    ('النوع', '${tx.type.icon} ${tx.type.label}'),
+    if (isTransfer)
+      ('من ← إلى', '${account?.name ?? '—'} ← ${toAccount?.name ?? '—'}')
+    else
+      ('الحساب', account?.name ?? '—'),
+    ('المبلغ', '${Fmt.money(tx.amount)} ${tx.currency}'),
+    if (tx.rate != 0 && tx.rate != 1) ('سعر الصرف', '${tx.rate}'),
+    if (tx.description.trim().isNotEmpty) ('البيان', tx.description.trim()),
+    if (tx.reference.trim().isNotEmpty) ('المرجع', tx.reference.trim()),
+    if (tx.category.trim().isNotEmpty) ('التصنيف', tx.category.trim()),
+    if (tx.notes.trim().isNotEmpty) ('ملاحظات', tx.notes.trim()),
+    ('الحالة', statusLabel),
+    ('المزامنة', syncLabel),
+    ('تاريخ العملية', Fmt.date(tx.date)),
+    ('أُنشئت', Fmt.dateTime(tx.createdAt)),
+    if (tx.updatedAt != tx.createdAt) ('آخر تعديل', Fmt.dateTime(tx.updatedAt)),
+    if (tx.id != null) ('رقم السجل', '${tx.id}'),
+  ];
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.center,
+        child: Text(tx.type.icon, style: const TextStyle(fontSize: 22)),
+      ),
+      title: Text('تفاصيل العملية',
+          style: TextStyle(fontSize: 17, color: color)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final r in rows)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 90,
+                      child: Text(
+                        r.$1,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: AppColors.text3Of(ctx),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        r.$2,
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('إغلاق'),
+        ),
+        FilledButton.icon(
+          onPressed: () async {
+            Navigator.pop(ctx);
+            await openTxForm(context, ref, existing: tx);
+          },
+          icon: const Icon(Icons.edit_outlined, size: 16),
+          label: const Text('تعديل'),
+        ),
+      ],
+    ),
+  );
 }

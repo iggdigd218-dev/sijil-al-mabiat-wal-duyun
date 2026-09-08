@@ -4,7 +4,6 @@
 // - الصفوف المكتملة (synced) لا تُلغى.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/database.dart';
-import 'package:nexora_app/data/sync/operation.dart';
 import 'package:nexora_app/data/sync/sync_queue.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
