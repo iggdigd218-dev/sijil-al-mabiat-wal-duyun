@@ -539,6 +539,9 @@ class LanSyncService implements SyncTransport {
   /// ليسحب الـ roster ويعالج الطابور فورًا دون انتظار الدورية).
   void Function()? onPeerNotify;
 
+  /// وصلت رسالة دردشة جماعية من جهاز آخر (اسم المرسل، نص الرسالة).
+  static void Function(String senderName, String body)? onChatMessage;
+
   /// يبثّ إشعارًا فوريًا لكل الأقران المقترنين بأن شيئًا تغيّر
   /// (صلاحية/جهاز/عملية). استدعاء غير متزامن يتجاهل أخطاء الشبكة بصمت.
   Future<void> broadcastNotify({String reason = 'roster'}) async {
@@ -675,9 +678,13 @@ class LanSyncService implements SyncTransport {
         return;
       }
 
+      var appliedThisOp = false;
       await db.transaction((txn) async {
         final ok = await repo.applyRemoteOperation(txn, op, _resolver);
-        if (ok) applied++;
+        if (ok) {
+          applied++;
+          appliedThisOp = true;
+        }
         await txn.insert(
             'sync_queue',
             {
@@ -692,6 +699,17 @@ class LanSyncService implements SyncTransport {
             },
             conflictAlgorithm: ConflictAlgorithm.ignore);
       });
+      // إشعار وصول رسالة دردشة جماعية من جهاز آخر (داخلي + خارجي).
+      if (appliedThisOp &&
+          op.entityType == EntityKind.message &&
+          op.deviceId != ourDeviceId) {
+        try {
+          final senderName =
+              (senderRows.first['name'] as String?) ?? 'جهاز في المجموعة';
+          final body = '${op.payload['body'] ?? ''}';
+          if (body.isNotEmpty) onChatMessage?.call(senderName, body);
+        } catch (_) {}
+      }
       await repo.setSetting('lastLanSync', DateTime.now().toLocal().toString());
       // تحديث last_seen للمرسل.
       await db.update(
@@ -787,10 +805,35 @@ class LanSyncService implements SyncTransport {
     return nowOwner != wasOwner;
   }
 
+  /// إشعار العضو بتغيير يخصه أجراه المدير (تغيير اسم الجهاز، ترقية/تخفيض
+  /// الصلاحيات...) — (عنوان، نص).
+  static void Function(String title, String body)? onMemberNotice;
+
   Future<void> _applyRoster(Database db, Map<String, Object?> roster) async {
     final devices = (roster['devices'] as List?) ?? const [];
     final users = (roster['users'] as List?) ?? const [];
     final mode = (roster['workspaceMode'] as String?) ?? 'managed';
+    // التقط حالتنا قبل التطبيق لكشف تغييرات المدير التي تخصنا.
+    String? oldName;
+    Object? oldUserId;
+    String oldRole = '';
+    String oldPerms = '';
+    try {
+      final me = await db.query('devices',
+          where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+      if (me.isNotEmpty) {
+        oldName = me.first['name'] as String?;
+        oldUserId = me.first['user_id'];
+        if (oldUserId != null) {
+          final u = await db.query('users',
+              where: 'id = ?', whereArgs: [oldUserId], limit: 1);
+          if (u.isNotEmpty) {
+            oldRole = (u.first['role'] as String?) ?? '';
+            oldPerms = (u.first['permissions'] as String?) ?? '';
+          }
+        }
+      }
+    } catch (_) {}
     await db.transaction((txn) async {
       final now = DateTime.now().toIso8601String();
       // حدّث/أدرج سجلات الأجهزة (مع الحفاظ على سرّنا المحلي).
@@ -867,6 +910,56 @@ class LanSyncService implements SyncTransport {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
+    // بعد التطبيق: قارن حالتنا وأبلغ العضو بأي تغيير أجراه المدير عليه.
+    if (onMemberNotice == null) return;
+    try {
+      final me = await db.query('devices',
+          where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+      if (me.isEmpty) return;
+      final newName = me.first['name'] as String?;
+      final newUserId = me.first['user_id'];
+      if (oldName != null &&
+          newName != null &&
+          newName.isNotEmpty &&
+          newName != oldName) {
+        onMemberNotice?.call(
+            'تم تغيير اسم جهازك', 'المدير غيّر اسم جهازك إلى «$newName»');
+      }
+      if (newUserId != null) {
+        final u = await db.query('users',
+            where: 'id = ?', whereArgs: [newUserId], limit: 1);
+        if (u.isNotEmpty) {
+          final newRole = (u.first['role'] as String?) ?? '';
+          final newPerms = (u.first['permissions'] as String?) ?? '';
+          String roleLabel(String r) => switch (r) {
+                'admin' || 'manager' => 'مدير النظام',
+                'accountant' => 'محاسب',
+                'dataentry' => 'موظف إدخال',
+                'viewer' => 'عرض فقط',
+                _ => r,
+              };
+          if (oldUserId == null) {
+            onMemberNotice?.call('تم تفعيل حسابك',
+                'المدير فعّل حسابك بدور «${roleLabel(newRole)}» — يمكنك الآن العمل حسب صلاحياتك');
+          } else if (newRole != oldRole && oldRole.isNotEmpty) {
+            const rank = {
+              'viewer': 0,
+              'dataentry': 1,
+              'accountant': 2,
+              'admin': 3,
+              'manager': 3,
+            };
+            final up = (rank[newRole] ?? 0) > (rank[oldRole] ?? 0);
+            onMemberNotice?.call(
+                up ? 'تمت ترقية صلاحياتك' : 'تم تخفيض صلاحياتك',
+                'المدير غيّر دورك من «${roleLabel(oldRole)}» إلى «${roleLabel(newRole)}»');
+          } else if (newPerms != oldPerms && oldUserId == newUserId) {
+            onMemberNotice?.call(
+                'تم تعديل صلاحياتك', 'المدير حدّث قائمة الصلاحيات الممنوحة لك');
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   /// حاضِر أم غائب؟ يضبطه محرك المزامنة من خدمة الحضور — إن وُجد نستخدمه

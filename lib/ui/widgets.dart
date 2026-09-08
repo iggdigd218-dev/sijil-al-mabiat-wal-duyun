@@ -369,11 +369,16 @@ void showSnack(
   bool error = false,
   bool silent = false,
 }) {
+  // رسائل الخطأ لم تعد شريطاً أحمر صغيراً أسفل الشاشة يختفي خلف النوافذ:
+  // تظهر الآن نافذة منبثقة بارزة وسط الشاشة توضح للمستخدم سبب الخطأ.
+  if (error) {
+    if (!silent) Sfx.error();
+    showProminentError(context, message);
+    return;
+  }
   // ردود فعل صوتية/اهتزازية تلقائية لجميع الرسائل ما لم يُطلب الصمت صراحة.
   if (!silent) {
-    if (error) {
-      Sfx.error();
-    } else if (message.contains('حذف') ||
+    if (message.contains('حذف') ||
         message.contains('أرشفة') ||
         message.contains('طرد')) {
       // إجراءات تدميرية: اهتزاز ثقيل تحذيري.
@@ -403,6 +408,122 @@ void showSnack(
         duration: Duration(seconds: error ? 4 : 3),
       ),
     );
+}
+
+/// يترجم نصوص الأخطاء التقنية إلى شرح عربي مفهوم للمستخدم.
+String friendlyErrorText(String raw) {
+  final r = raw
+      .replaceAll('Exception:', '')
+      .replaceAll('StateError:', '')
+      .replaceAll('Bad state:', '')
+      .trim();
+  final low = r.toLowerCase();
+  if (low.contains('awaiting-offline-peers')) {
+    return 'بعض أجهزة المجموعة غير متصلة الآن — ستصلها التغييرات تلقائياً فور اتصالها.';
+  }
+  if (low.contains('socketexception') ||
+      low.contains('connection refused') ||
+      low.contains('connection timed out') ||
+      low.contains('network is unreachable') ||
+      low.contains('timeoutexception')) {
+    return 'تعذّر الاتصال بالشبكة.\nتأكد أن الجهازين على نفس شبكة Wi-Fi وأن الجهاز الآخر يعمل، ثم أعد المحاولة.\n\n(تفاصيل تقنية: $r)';
+  }
+  if (low.contains('user-not-authorized') || low.contains('not-authorized')) {
+    return 'ليست لديك صلاحية لتنفيذ هذا الإجراء.\nاطلب من المدير منحك الصلاحية المناسبة من شاشة إدارة المجموعة.';
+  }
+  if (low.contains('workspace-mismatch')) {
+    return 'هذا الجهاز يتبع مجموعة مختلفة — لا يمكن المزامنة بين مجموعتين مختلفتين.';
+  }
+  if (low.contains('expelled')) {
+    return 'تم إخراج هذا الجهاز من المجموعة من قِبل المدير.';
+  }
+  if (low.contains('token') && (low.contains('expired') || low.contains('invalid'))) {
+    return 'رمز الاقتران غير صالح أو انتهت مدته.\nاطلب من المدير توليد رمز جديد وأعد المحاولة خلال 5 دقائق.';
+  }
+  if (low.contains('foreign key') || low.contains('constraint')) {
+    return 'تعذّر الحفظ بسبب ارتباط البيانات ببعضها.\nأعد المحاولة، وإن تكرر الخطأ أبلغ الدعم.\n\n(تفاصيل تقنية: $r)';
+  }
+  if (low.contains('permission') && low.contains('denied')) {
+    return 'رفض النظام منح الإذن المطلوب.\nفعّل الإذن من إعدادات النظام ثم أعد المحاولة.';
+  }
+  return r;
+}
+
+/// نافذة خطأ بارزة وسط الشاشة (بدل الشريط الأحمر الصغير أسفل الشاشة
+/// الذي كان يختفي خلف النوافذ): أيقونة تحذير كبيرة + سبب الخطأ موضحاً
+/// بلغة مفهومة + زر إغلاق واضح.
+void showProminentError(
+  BuildContext context,
+  String message, {
+  String title = 'حدث خطأ',
+}) {
+  final friendly = friendlyErrorText(message);
+  showDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    useRootNavigator: true, // فوق كل النوافذ المفتوحة.
+    builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(22, 26, 22, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.red.withValues(alpha: .1),
+                border: Border.all(color: Colors.red.shade400, width: 4),
+              ),
+              alignment: Alignment.center,
+              child: Icon(Icons.priority_high_rounded,
+                  size: 34, color: Colors.red.shade600),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 17,
+                color: Colors.red.shade700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: SingleChildScrollView(
+                child: Text(
+                  friendly,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13.5, height: 1.7),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('حسناً، فهمت',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 /// عرض المبلغ بالحروف العربية تحت حقول إدخال المبالغ.

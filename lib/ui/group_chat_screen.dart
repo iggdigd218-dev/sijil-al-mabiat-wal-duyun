@@ -100,7 +100,7 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
             Text('دردشة المجموعة', style: TextStyle(fontSize: 16)),
             Text(
               'للتواصل بين أجهزة المجموعة فقط',
-              style: TextStyle(fontSize: 11, color: Colors.white70),
+              style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
           ],
         ),
@@ -231,13 +231,16 @@ class _PeerChip extends StatelessWidget {
             : peer.online
                 ? (Colors.green, 'متصل الآن')
                 : (Colors.grey, 'غير متصل');
+    // ألوان متوافقة مع الثيم: شريط التطبيق فاتح فكان النص الأبيض غير مرئي.
+    final onBar = AppColors.textOf(context);
     return Tooltip(
       message: tip,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.15),
+          color: AppColors.surface2Of(context),
           borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.borderOf(context)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -248,15 +251,14 @@ class _PeerChip extends StatelessWidget {
               decoration: BoxDecoration(
                 color: color,
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1),
               ),
             ),
             const SizedBox(width: 5),
             Text(
               peer.isSelf ? '${peer.name} (أنا)' : peer.name,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
-                color: Colors.white,
+                color: onBar,
                 fontWeight: FontWeight.w600,
               ),
             ),

@@ -50,6 +50,14 @@ class SyncEngine {
   /// يُستدعى عند عودة جهاز للاتصال (اسمه) لإظهار إشعار "الجهاز متصل".
   static void Function(String deviceName)? onPeerJoined;
 
+  /// يُستدعى عند اكتمال مزامنة كل العمليات المعلقة مع جهاز معيّن (اسمه).
+  static void Function(String deviceName)? onDeviceSyncComplete;
+
+  /// أجهزة استلمت عمليات مؤخراً — تُفحص بعد مهلة قصيرة لإشعار «اكتملت
+  /// المزامنة مع (الجهاز)» عندما يفرغ الطابور.
+  final Set<String> _recentDelivered = {};
+  Timer? _completeTimer;
+
   /// يُستدعى أي نشاط مزامنة (وصول عملية/تغيّر صلاحيات) لتنبيه الواجهة للتحديث.
   static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
   String? _cloudUrl;
@@ -149,6 +157,27 @@ class SyncEngine {
       try {
         onSyncActivity?.call();
       } catch (_) {}
+      // اكتمال المزامنة مع جهاز: بعد آخر تسليم بثانيتين، إن لم يبق شيء
+      // معلقاً لهدف LAN نُشعر «اكتملت المزامنة مع (اسم الجهاز)».
+      _recentDelivered.add(deviceName);
+      _completeTimer?.cancel();
+      _completeTimer = Timer(const Duration(seconds: 2), () async {
+        final names = List<String>.of(_recentDelivered);
+        _recentDelivered.clear();
+        if (names.isEmpty || onDeviceSyncComplete == null) return;
+        try {
+          final db = await _db;
+          final left = await db.rawQuery(
+            "SELECT COUNT(*) c FROM sync_queue "
+            "WHERE target = 'lan' AND status IN ('pending','syncing','failed')",
+          );
+          if (((left.first['c'] as int?) ?? 0) == 0) {
+            for (final n in names.toSet()) {
+              onDeviceSyncComplete?.call(n);
+            }
+          }
+        } catch (_) {}
+      });
     };
   }
 
@@ -433,6 +462,9 @@ class SyncEngine {
   void stop() {
     _started = false;
     _generation++;
+    _completeTimer?.cancel();
+    _completeTimer = null;
+    _recentDelivered.clear();
     _timer?.cancel();
     _maintenanceTimer?.cancel();
     _rosterTimer?.cancel();

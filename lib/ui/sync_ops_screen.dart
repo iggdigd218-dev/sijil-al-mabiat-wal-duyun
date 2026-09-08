@@ -40,6 +40,7 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
     if (!mounted) return;
     ref.invalidate(syncOpsProvider);
     ref.invalidate(syncCountsProvider);
+    ref.invalidate(deviceSyncStatusProvider);
   }
 
   Future<void> _syncNow() async {
@@ -155,6 +156,39 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
                   withError: withError,
                   syncing: _syncing,
                   onSync: _syncNow,
+                ),
+                const SizedBox(height: 12),
+                // أجهزة المجموعة: المتزامنة بالكامل ✅ وغير المكتملة.
+                Consumer(
+                  builder: (ctx, rref, _) {
+                    final devs =
+                        rref.watch(deviceSyncStatusProvider).valueOrNull ??
+                            const <DeviceSyncStatus>[];
+                    if (devs.isEmpty) return const SizedBox.shrink();
+                    final done = devs.where((d) => d.fullySynced).length;
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.devices_other, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'أجهزة المجموعة ($done/${devs.length} متزامنة بالكامل)',
+                                  style: Theme.of(ctx).textTheme.titleSmall,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            for (final d in devs) _DeviceSyncTile(d: d),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 12),
                 if (active.isEmpty)
@@ -468,6 +502,77 @@ class _Chip extends StatelessWidget {
                   fontSize: 11.5,
                   color: color,
                   fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+}
+
+/// صف جهاز في قسم أجهزة المجموعة: اسم + حالة اتصال + اكتمال المزامنة.
+class _DeviceSyncTile extends StatelessWidget {
+  final DeviceSyncStatus d;
+  const _DeviceSyncTile({required this.d});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: d.online ? Colors.green : Colors.grey,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    d.name,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (d.isOwner) ...[
+                  const SizedBox(width: 4),
+                  const Icon(Icons.security, size: 12, color: Colors.amber),
+                ],
+              ],
+            ),
+          ),
+          if (d.fullySynced)
+            const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle, size: 15, color: Colors.green),
+                SizedBox(width: 4),
+                Text('متزامن بالكامل',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.green,
+                        fontWeight: FontWeight.w700)),
+              ],
+            )
+          else
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.hourglass_bottom,
+                    size: 14, color: Colors.orange),
+                const SizedBox(width: 4),
+                Text('بانتظار ${d.missingOps} عملية',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.orange,
+                        fontWeight: FontWeight.w700)),
+              ],
+            ),
         ],
       ),
     );

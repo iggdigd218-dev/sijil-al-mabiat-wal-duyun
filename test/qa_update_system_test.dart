@@ -56,6 +56,27 @@ void main() {
           reason: 'حدّث kAppBuild في lib/core/app_version.dart');
     });
 
+    test('AppSemVer.current يُشتق من kAppVersion (لا تخلّف يدوي)', () {
+      // كانت current مكتوبة يدوياً (3,20,0) وتخلّفت عن kAppVersion فظل
+      // زر «تحديث الآن» عالقاً يعرض نفس النسخة المثبتة كتحديث جديد.
+      final expected = AppSemVer.tryParse('$kAppVersion+$kAppBuild');
+      expect(AppSemVer.current, expected,
+          reason: 'current يجب أن يساوي kAppVersion+kAppBuild تلقائياً');
+    });
+
+    test('نفس النسخة المثبتة تعرض «لا يوجد تحديث» لا زر تحديث عالق',
+        () async {
+      // بيان الخادم يعلن نفس نسخة الجهاز تماماً — يجب upToDate لا available.
+      final svc = svcReturning(
+        manifest(version: '$kAppVersion+$kAppBuild'),
+        current: AppSemVer.current,
+      );
+      final info = await svc.check();
+      expect(info.status, UpdateStatus.upToDate);
+      expect(info.hasUpdate, isFalse,
+          reason: 'لا يظهر زر «تحديث الآن» عندما تكون النسخة مثبتة فعلاً');
+    });
+
     test('لا توجد أرقام إصدار مكتوبة يدويًا في الواجهة', () {
       final bad = <String>[];
       for (final f in Directory('lib').listSync(recursive: true)) {

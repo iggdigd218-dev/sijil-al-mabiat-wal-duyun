@@ -33,6 +33,7 @@ import 'notifications_sheet.dart';
 import 'app_notice.dart';
 import '../core/sfx.dart';
 import '../data/sync/sync_engine.dart';
+import '../data/sync/lan_http_transport.dart';
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -127,12 +128,51 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             );
       } catch (_) {}
     };
+    // اكتمال المزامنة مع جهاز: إشعار داخلي + خارجي باسم الجهاز.
+    SyncEngine.onDeviceSyncComplete = (deviceName) {
+      Sfx.synced();
+      Sfx.systemNotify(
+        title: 'اكتملت المزامنة',
+        body: 'تمت مزامنة جميع العمليات مع $deviceName بنجاح ✅',
+      );
+      try {
+        ref.read(repoProvider).notify(
+              title: 'اكتملت المزامنة',
+              body: 'تمت مزامنة جميع العمليات مع $deviceName ✅',
+              kind: 'success',
+            );
+      } catch (_) {}
+    };
+    // رسالة دردشة جماعية واردة: إشعار خارجي بصوت مميز + إشعار داخلي.
+    LanSyncService.onChatMessage = (senderName, body) {
+      Sfx.notify();
+      final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
+      Sfx.systemNotify(title: 'رسالة من $senderName', body: short);
+      try {
+        ref.read(repoProvider).notify(
+              title: '💬 رسالة جديدة من $senderName',
+              body: short,
+              kind: 'info',
+            );
+      } catch (_) {}
+    };
+    // تغيير أجراه المدير على هذا العضو (اسم/صلاحيات): داخلي + خارجي.
+    LanSyncService.onMemberNotice = (title, body) {
+      Sfx.notify();
+      Sfx.systemNotify(title: title, body: body);
+      try {
+        ref.read(repoProvider).notify(title: title, body: body, kind: 'info');
+      } catch (_) {}
+    };
   }
 
   /// تحية داخلية موقوتة: «صباح الخير» (5-11:59) و«مساء الخير» (16-21:59)
   /// مرة واحدة لكل فترة يومياً، بصوت هادئ ونافذة منبثقة أنيقة.
   Future<void> _scheduleGreeting() async {
     try {
+      // وضع الاختبار الصامت: لا نوافذ تحية تحجب الشاشة وتكسر اختبارات E2E
+      // (كانت نافذة «مساء الخير» تفتح فوق الشاشة فتحجب كل النقرات).
+      if (Sfx.muted) return;
       final now = DateTime.now();
       final isMorning = now.hour >= 5 && now.hour < 12;
       final isEvening = now.hour >= 16 && now.hour < 22;
@@ -195,6 +235,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     _greetingTimer?.cancel();
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
+    SyncEngine.onDeviceSyncComplete = null;
+    LanSyncService.onChatMessage = null;
+    LanSyncService.onMemberNotice = null;
     super.dispose();
   }
 
@@ -282,17 +325,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         title: Consumer(
           builder: (ctx, rref, _) {
             if (_screen != AppScreen.dashboard) return Text(_screen.title);
-            final mode =
-                rref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
-            final isOwner = rref.watch(isOwnerProvider).valueOrNull ?? true;
-            // جهاز العضو داخل المجموعة يعرض اسمه المعيَّن من المدير
-            // بدل «مدير الحسابات» — المجموعة تعمل كحساب واحد.
-            if (mode != 'standalone' && !isOwner) {
-              final devName =
-                  rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
-              if (devName != null && devName.isNotEmpty) {
-                return Text(devName, overflow: TextOverflow.ellipsis);
-              }
+            // أعلى الرئيسية يظهر اسم الجهاز الذي حدده المستخدم/المدير
+            // (نفس الاسم الظاهر أعلى القائمة الجانبية) بدل «مدير الحسابات».
+            final devName =
+                rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
+            if (devName != null && devName.isNotEmpty) {
+              return Text(devName, overflow: TextOverflow.ellipsis);
             }
             return const Text('مدير الحسابات');
           },
@@ -358,12 +396,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             },
           ),
           // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
+          // الضغط عليه يفتح قسم «العمليات والمزامنة» مباشرة.
           Consumer(
             builder: (ctx, rref, _) {
               final modeAsync = rref.watch(workspaceModeProvider);
-              final isOwnerAsync = rref.watch(isOwnerProvider);
               final mode = modeAsync.valueOrNull ?? 'standalone';
-              final isOwner = isOwnerAsync.valueOrNull ?? true;
               if (mode == 'standalone') return const SizedBox.shrink();
               return FutureBuilder<SyncStatusInfo>(
                 future: _syncFuture,
@@ -371,8 +408,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                   if (!snap.hasData) return const SizedBox.shrink();
                   return SyncStatusBadge(
                     info: snap.data!,
-                    onTap: () =>
-                        _go(isOwner ? AppScreen.group : AppScreen.settings),
+                    onTap: () => _go(AppScreen.syncOps),
                   );
                 },
               );
@@ -517,15 +553,29 @@ class _Drawer extends ConsumerWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              user?.name ?? 'مدير الحسابات',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 16,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            // اسم الجهاز المحدد من المستخدم/المدير — نفس
+                            // الاسم الظاهر أعلى الرئيسية (حذف الاسم السابق).
+                            Consumer(
+                              builder: (ctx, rref, _) {
+                                final devName = rref
+                                    .watch(ownDeviceNameProvider)
+                                    .valueOrNull
+                                    ?.trim();
+                                final label = (devName != null &&
+                                        devName.isNotEmpty)
+                                    ? devName
+                                    : (user?.name ?? 'مدير الحسابات');
+                                return Text(
+                                  label,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                );
+                              },
                             ),
                             const SizedBox(height: 2),
                             Container(
@@ -750,6 +800,8 @@ class _DrawerItems {
           .where((s) => !_HomeShellState._bottomTabs.contains(s))
           .where((s) {
         if (s == AppScreen.group) return isOwner;
+        // قسم العمليات والمزامنة يُفتح من أيقونة المزامنة أعلى الشاشة فقط.
+        if (s == AppScreen.syncOps) return false;
         return true;
       }).toList();
 }

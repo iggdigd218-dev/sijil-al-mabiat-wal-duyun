@@ -6,10 +6,10 @@
 library;
 
 /// إصدار التطبيق المعروض (يطابق pubspec.yaml).
-const String kAppVersion = '3.21.0';
+const String kAppVersion = '3.22.0';
 
 /// رقم البناء (ما بعد + في pubspec.yaml).
-const int kAppBuild = 37;
+const int kAppBuild = 38;
 
 /// النص المعروض للمستخدم.
 String get appVersionLabel => 'الإصدار $kAppVersion';
@@ -39,9 +39,13 @@ class AppSemVer implements Comparable<AppSemVer> {
     );
   }
 
-  /// إصدار التطبيق الحالي.
-  static const AppSemVer current =
-      AppSemVer(3, 20, 0, kAppBuild); // يطابق kAppVersion
+  /// إصدار التطبيق الحالي — يُشتق تلقائياً من kAppVersion/kAppBuild.
+  ///
+  /// كان الرقم مكتوباً يدوياً (3,20,0) وتخلّف عن kAppVersion عند الترقية،
+  /// فظل زر «تحديث الآن» عالقاً يعرض نفس النسخة كتحديث جديد حتى بعد
+  /// التثبيت. الاشتقاق التلقائي + اختبار مطابقة يمنعان تكرارها نهائياً.
+  static final AppSemVer current =
+      tryParse('$kAppVersion+$kAppBuild') ?? const AppSemVer(0, 0, 0);
 
   @override
   int compareTo(AppSemVer o) {

@@ -883,7 +883,9 @@ final ownDeviceNameProvider = FutureProvider<String?>((ref) async {
   );
   if (rows.isEmpty) return null;
   final n = (rows.first['name'] as String?)?.trim();
-  return (n == null || n.isEmpty) ? null : n;
+  // الاسم الافتراضي قبل أي تخصيص لا يُعرض كعنوان — يبقى «مدير الحسابات».
+  if (n == null || n.isEmpty || n == 'جهاز مدير الحسابات') return null;
+  return n;
 });
 
 class GroupPeer {
@@ -956,6 +958,71 @@ final groupMessagesProvider = FutureProvider<List<ChatMessage>>((ref) async {
 });
 
 /// ملخّص أعداد حالات المزامنة (للشارة والبطاقات العلوية).
+/// حالة مزامنة كل جهاز في المجموعة: هل استلم كل عملياتنا أم كم بقي له؟
+/// تُعرض في قسم العمليات والمزامنة (أجهزة متزامنة بالكامل / غير مكتملة).
+class DeviceSyncStatus {
+  final String deviceId;
+  final String name;
+  final bool isOwner;
+  final bool online;
+  final int missingOps; // عمليات محلية لم تصل هذا الجهاز بعد.
+  const DeviceSyncStatus({
+    required this.deviceId,
+    required this.name,
+    required this.isOwner,
+    required this.online,
+    required this.missingOps,
+  });
+  bool get fullySynced => missingOps == 0;
+}
+
+final deviceSyncStatusProvider =
+    FutureProvider<List<DeviceSyncStatus>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final db = await repo.database;
+  final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+  if (ourId.isEmpty) return const [];
+  final peers = await db.query(
+    'devices',
+    where: "is_paired = 1 AND COALESCE(revoked_at,'') = '' "
+        "AND COALESCE(expelled_at,'') = '' AND id <> ?",
+    whereArgs: [ourId],
+    orderBy: 'is_owner DESC, name ASC',
+  );
+  if (peers.isEmpty) return const [];
+  final presence = ref.read(syncEngineProvider).presence;
+  final out = <DeviceSyncStatus>[];
+  for (final d in peers) {
+    final id = d['id'] as String;
+    // عملياتنا التي لم تُسلَّم بعد لهذا الجهاز تحديداً.
+    final missing = await db.rawQuery('''
+      SELECT COUNT(*) c FROM operations o
+      WHERE o.device_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM op_deliveries dl
+          WHERE dl.operation_id = o.id AND dl.device_id = ?
+        )
+    ''', [ourId, id]);
+    bool online;
+    if (presence != null) {
+      online = presence.isOnline(id);
+    } else {
+      final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
+      online = seen != null &&
+          DateTime.now().difference(seen) < const Duration(seconds: 15);
+    }
+    out.add(DeviceSyncStatus(
+      deviceId: id,
+      name: (d['name'] as String?) ?? 'جهاز',
+      isOwner: (d['is_owner'] as int? ?? 0) == 1,
+      online: online,
+      missingOps: (missing.first['c'] as int?) ?? 0,
+    ));
+  }
+  return out;
+});
+
 final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
