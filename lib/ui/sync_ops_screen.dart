@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/providers.dart';
 import '../data/sync/sync_activity.dart';
+import '../data/sync/sync_queue.dart';
 import 'widgets.dart';
 
 class SyncOpsScreen extends ConsumerStatefulWidget {
@@ -21,6 +22,10 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
   Timer? _ticker;
   StreamSubscription<int>? _bus;
   bool _syncing = false;
+
+  /// وضع التحديد لحذف عمليات فاشلة/منتظرة من طابور المزامنة.
+  bool _selectMode = false;
+  final Set<int> _selected = {};
 
   @override
   void initState() {
@@ -52,6 +57,29 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
+  }
+
+  /// يحذف (يلغي) العمليات المحددة من طابور المزامنة بعد تأكيد صريح.
+  /// البيانات نفسها تبقى محفوظة محلياً — الإلغاء يمنع إرسالها للأجهزة فقط.
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty) return;
+    final ok = await confirmDialog(
+      context,
+      title: 'حذف ${_selected.length} من طابور المزامنة',
+      message: 'ستُلغى مزامنة العمليات المحددة نهائياً فلا تُرسل إلى بقية '
+          'الأجهزة، وتبقى بياناتها محفوظة على هذا الجهاز فقط.\n\n'
+          'هل تريد المتابعة؟',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    final db = await ref.read(repoProvider).database;
+    final n = await SyncQueueOps(db).cancelRows(_selected.toList());
+    setState(() {
+      _selected.clear();
+      _selectMode = false;
+    });
+    _refresh();
+    if (mounted) showSnack(context, 'أُلغيت مزامنة $n عملية 🗑️');
   }
 
   String _entityLabel(String t) => switch (t) {
@@ -126,13 +154,37 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('العمليات المتزامنة'),
+        title: Text(_selectMode
+            ? 'المحدد: ${_selected.length}'
+            : 'العمليات المتزامنة'),
         actions: [
-          IconButton(
-            tooltip: 'تحديث',
-            onPressed: _refresh,
-            icon: const Icon(Icons.refresh),
-          ),
+          if (_selectMode) ...[
+            IconButton(
+              tooltip: 'حذف المحدد من الطابور',
+              onPressed: _selected.isEmpty ? null : _deleteSelected,
+              icon: const Icon(Icons.delete_outline),
+              color: Colors.red,
+            ),
+            IconButton(
+              tooltip: 'إلغاء التحديد',
+              onPressed: () => setState(() {
+                _selectMode = false;
+                _selected.clear();
+              }),
+              icon: const Icon(Icons.close),
+            ),
+          ] else ...[
+            IconButton(
+              tooltip: 'تحديد للحذف',
+              onPressed: () => setState(() => _selectMode = true),
+              icon: const Icon(Icons.checklist),
+            ),
+            IconButton(
+              tooltip: 'تحديث',
+              onPressed: _refresh,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
         ],
       ),
       body: RefreshIndicator(
@@ -223,6 +275,19 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
                         _statusLabel(o.status, o.lastError.isNotEmpty),
                     targetLabel: _targetLabel(o.target),
                     time: _time(o.updatedAt),
+                    selectMode: _selectMode,
+                    selected: _selected.contains(o.queueId),
+                    onSelectToggle: (v) => setState(() {
+                      if (v) {
+                        _selected.add(o.queueId);
+                      } else {
+                        _selected.remove(o.queueId);
+                      }
+                    }),
+                    onLongPress: () => setState(() {
+                      _selectMode = true;
+                      _selected.add(o.queueId);
+                    }),
                     onRetry: () async {
                       await ref.read(syncEngineProvider).forceSyncNow();
                       _refresh();
@@ -348,6 +413,10 @@ class _OpCard extends StatelessWidget {
   final String targetLabel;
   final String time;
   final VoidCallback onRetry;
+  final bool selectMode;
+  final bool selected;
+  final ValueChanged<bool> onSelectToggle;
+  final VoidCallback onLongPress;
   const _OpCard({
     required this.o,
     required this.entityLabel,
@@ -358,16 +427,34 @@ class _OpCard extends StatelessWidget {
     required this.targetLabel,
     required this.time,
     required this.onRetry,
+    required this.selectMode,
+    required this.selected,
+    required this.onSelectToggle,
+    required this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
-      child: Padding(
+      color: selected
+          ? Colors.red.withValues(alpha: 0.06)
+          : null,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onLongPress: onLongPress,
+        onTap: selectMode ? () => onSelectToggle(!selected) : null,
+        child: Padding(
         padding: const EdgeInsets.all(10),
         child: Row(
           children: [
+            if (selectMode) ...[
+              Checkbox(
+                value: selected,
+                onChanged: (v) => onSelectToggle(v ?? false),
+              ),
+              const SizedBox(width: 2),
+            ],
             CircleAvatar(
               radius: 20,
               backgroundColor: statusColor.withValues(alpha: 0.12),
@@ -459,13 +546,15 @@ class _OpCard extends StatelessWidget {
                 ],
               ),
             ),
-            IconButton(
-              tooltip: 'إعادة المحاولة الآن',
-              onPressed: onRetry,
-              icon: const Icon(Icons.send),
-              color: statusColor,
-            ),
+            if (!selectMode)
+              IconButton(
+                tooltip: 'إعادة المحاولة الآن',
+                onPressed: onRetry,
+                icon: const Icon(Icons.send),
+                color: statusColor,
+              ),
           ],
+        ),
         ),
       ),
     );

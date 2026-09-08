@@ -168,6 +168,20 @@ class SyncQueueOps {
     );
   }
 
+  /// إلغاء (حذف) صفوف من طابور المزامنة بقرار المستخدم.
+  /// لا نحذف الصف فعلياً بل نعلّمه cancelled: الحذف الفعلي يجعله يعود عند
+  /// أول تشغيل عبر إنقاذ العمليات غير المرسلة (backfill)، بينما الصف
+  /// الملغى يبقى شاهداً يمنع إعادة الإدراج ويختفي من كل القوائم.
+  Future<int> cancelRows(List<int> ids) async {
+    if (ids.isEmpty) return 0;
+    final ph = List.filled(ids.length, '?').join(',');
+    return db.rawUpdate(
+      "UPDATE sync_queue SET status = 'cancelled', updated_at = ? "
+      "WHERE id IN ($ph) AND status <> ?",
+      [DateTime.now().toIso8601String(), ...ids, SyncStatus.synced.name],
+    );
+  }
+
   /// إعادة محاولة يدوية فورية: تصفير وقت الانتظار والأخطاء لتُدفع الآن.
   Future<int> retryNow({int? id}) async {
     final now = DateTime.now().toIso8601String();

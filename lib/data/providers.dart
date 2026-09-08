@@ -1018,6 +1018,11 @@ final deviceSyncStatusProvider =
           SELECT 1 FROM op_deliveries dl
           WHERE dl.operation_id = o.id AND dl.device_id = ?
         )
+        AND NOT EXISTS (
+          -- العمليات التي ألغى المستخدم مزامنتها لا تُحسب ضد الجهاز.
+          SELECT 1 FROM sync_queue cq
+          WHERE cq.operation_id = o.id AND cq.status = 'cancelled'
+        )
     ''', [ourId, id]);
     bool online;
     if (presence != null) {

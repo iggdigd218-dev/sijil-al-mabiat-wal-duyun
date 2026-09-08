@@ -971,7 +971,11 @@ class ActivityScreen extends ConsumerWidget {
             for (final a in items)
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
-                child: Padding(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  // نقرة على أي سطر تعرض نافذة تفاصيل كاملة للنشاط.
+                  onTap: () => showActivityDetails(context, ref, a),
+                  child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
@@ -1017,7 +1021,11 @@ class ActivityScreen extends ConsumerWidget {
                           ),
                         ],
                       ),
+                      const SizedBox(width: 6),
+                      Icon(Icons.chevron_left,
+                          size: 18, color: AppColors.text3Of(context)),
                     ],
+                  ),
                   ),
                 ),
               ),
@@ -1026,4 +1034,163 @@ class ActivityScreen extends ConsumerWidget {
       },
     );
   }
+}
+
+/// نافذة تفاصيل نشاط واحد: النص الكامل، النوع، المنفّذ، الوقت الدقيق،
+/// وبيانات السجل المرتبط إن كان ما يزال موجوداً.
+Future<void> showActivityDetails(
+  BuildContext context,
+  WidgetRef ref,
+  Map<String, Object?> a,
+) async {
+  final refType = '${a['ref_type'] ?? ''}';
+  final refId = '${a['ref_id'] ?? ''}';
+  final created = DateTime.tryParse('${a['created_at'] ?? ''}');
+
+  // اسم الجدول المرتبط بكل نوع مرجع في سجل النشاط.
+  final table = switch (refType) {
+    'account' => 'accounts',
+    'tx' => 'transactions',
+    'voucher' => 'vouchers',
+    'item' => 'items',
+    'item_category' => 'item_categories',
+    'user' => 'users',
+    'stock' => 'stock_moves',
+    _ => null,
+  };
+  final typeLabel = switch (refType) {
+    'account' => 'حساب',
+    'tx' => 'عملية حسابية',
+    'voucher' => 'سند',
+    'item' => 'صنف',
+    'item_category' => 'فئة أصناف',
+    'user' => 'مستخدم',
+    'stock' => 'حركة مخزون',
+    'trash' => 'سلة المهملات',
+    _ => refType.isEmpty ? '—' : refType,
+  };
+
+  // جلب السجل المرتبط (إن وُجد) لعرض أبرز حقوله.
+  Map<String, Object?>? linked;
+  if (table != null && refId.isNotEmpty) {
+    try {
+      final db = await ref.read(repoProvider).database;
+      final rows = await db.query(table,
+          where: 'id = ?', whereArgs: [refId], limit: 1);
+      if (rows.isNotEmpty) linked = rows.first;
+    } catch (_) {}
+  }
+
+  // أبرز الحقول المفهومة للعرض (بالعربية) حسب نوع السجل.
+  final details = <(String, String)>[];
+  void add(String label, Object? v) {
+    final s = '$v'.trim();
+    if (s.isNotEmpty && s != 'null') details.add((label, s));
+  }
+
+  if (linked != null) {
+    add('الاسم', linked['name']);
+    add('الرقم', linked['number']);
+    add('البيان', linked['note'] ?? linked['description']);
+    add('المبلغ', linked['amount']);
+    add('العملة', linked['currency']);
+    add('الكمية', linked['quantity']);
+    add('الحالة', switch ('${linked['status']}') {
+      'approved' => 'معتمد',
+      'draft' => 'مسودة',
+      'cancelled' => 'ملغى',
+      _ => '',
+    });
+    final deleted = '${linked['deleted_at'] ?? ''}';
+    if (deleted.isNotEmpty) details.add(('⚠️', 'هذا السجل محذوف حالياً'));
+  }
+
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(Icons.history, color: AppColors.primaryOf(ctx)),
+      title: const Text('تفاصيل النشاط', style: TextStyle(fontSize: 17)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // النص الكامل للنشاط.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surface2Of(ctx),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '${a['text']}',
+                style:
+                    const TextStyle(fontWeight: FontWeight.w700, height: 1.6),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _DetailRow(label: 'النوع', value: typeLabel),
+            if (refId.isNotEmpty) _DetailRow(label: 'المعرّف', value: refId),
+            _DetailRow(label: 'المنفّذ', value: '${a['user_name'] ?? '—'}'),
+            if (created != null)
+              _DetailRow(label: 'الوقت', value: Fmt.dateTime(created)),
+            if (details.isNotEmpty) ...[
+              const Divider(height: 20),
+              Text('بيانات السجل المرتبط',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.text2Of(ctx),
+                  )),
+              const SizedBox(height: 6),
+              for (final d in details) _DetailRow(label: d.$1, value: d.$2),
+            ] else if (table != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'السجل المرتبط لم يعد موجوداً (حُذف أو استُبدل).',
+                style: TextStyle(
+                    fontSize: 12, color: AppColors.text3Of(ctx)),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// سطر تفاصيل (تسمية: قيمة) داخل نافذة تفاصيل النشاط.
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 70,
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 12.5, color: AppColors.text3Of(context))),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
 }
