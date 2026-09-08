@@ -158,19 +158,7 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
   }
 
   /// يستنتج نوع المرفق من الامتداد (لملفات «جميع الأنواع»).
-  static String _kindFromName(String name) {
-    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-    if (const {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}.contains(ext)) {
-      return 'image';
-    }
-    if (const {'mp4', 'mkv', 'avi', 'mov', '3gp', 'webm'}.contains(ext)) {
-      return 'video';
-    }
-    if (const {'m4a', 'mp3', 'aac', 'wav', 'ogg', 'opus'}.contains(ext)) {
-      return 'audio';
-    }
-    return 'file';
-  }
+  static String _kindFromName(String name) => attachmentKindFromName(name);
 
   /// يبدأ/يوقف تسجيل رسالة صوتية (زر الميكروفون).
   Future<void> _toggleRecording() async {
@@ -517,7 +505,7 @@ class _GroupBubble extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 3),
-            _AttachmentView(message: message),
+            AttachmentView(message: message),
             if (message.body.isNotEmpty)
               Text(
                 message.body,
@@ -538,18 +526,34 @@ class _GroupBubble extends StatelessWidget {
   }
 }
 
+/// يستنتج نوع المرفق (image/video/audio/file) من امتداد اسم الملف.
+/// مشتركة بين دردشة المجموعة والمحادثات الفردية.
+String attachmentKindFromName(String name) {
+  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+  if (const {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}.contains(ext)) {
+    return 'image';
+  }
+  if (const {'mp4', 'mkv', 'avi', 'mov', '3gp', 'webm'}.contains(ext)) {
+    return 'video';
+  }
+  if (const {'m4a', 'mp3', 'aac', 'wav', 'ogg', 'opus'}.contains(ext)) {
+    return 'audio';
+  }
+  return 'file';
+}
+
 /// عرض مرفق الرسالة (صورة/فيديو/صوت/ملف) داخل الفقاعة.
 /// الصور تُعرض مصغّرة والنقر عليها أو على غيرها يفتحها بتطبيق النظام؛
 /// الرسائل الصوتية تعمل بزر تشغيل داخلي مباشر.
-class _AttachmentView extends StatefulWidget {
+class AttachmentView extends StatefulWidget {
   final ChatMessage message;
-  const _AttachmentView({required this.message});
+  const AttachmentView({super.key, required this.message});
 
   @override
-  State<_AttachmentView> createState() => _AttachmentViewState();
+  State<AttachmentView> createState() => AttachmentViewState();
 }
 
-class _AttachmentViewState extends State<_AttachmentView> {
+class AttachmentViewState extends State<AttachmentView> {
   bool _playing = false;
 
   Map<String, Object?> get _meta {

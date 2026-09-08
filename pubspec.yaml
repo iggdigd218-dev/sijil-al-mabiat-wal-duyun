@@ -1,7 +1,7 @@
 name: nexora_app
 description: مدير الحسابات — سجل المبيعات والديون
 publish_to: 'none'
-version: 3.27.0+46
+version: 3.27.1+47
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -37,6 +37,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # لمحاكاة path_provider في اختبارات مرفقات الدردشة.
+  path_provider_platform_interface: ^2.1.2
+  plugin_platform_interface: ^2.1.8
 
 flutter:
   uses-material-design: true

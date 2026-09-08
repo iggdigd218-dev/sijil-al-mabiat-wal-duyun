@@ -1,11 +1,16 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/chat_media.dart';
 import '../core/format.dart';
+import '../core/keep_alive_service.dart';
 import '../core/models.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'group_chat_screen.dart';
@@ -118,6 +123,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   int? _convId;
+  bool _sending = false;
+  bool _recording = false;
+  String? _recordingPath;
+  DateTime? _recordingStart;
 
   @override
   void initState() {
@@ -150,6 +159,151 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         );
     _input.clear();
     bump(ref);
+    await _scrollToEnd();
+  }
+
+  /// قائمة المرفقات: صورة / فيديو / ملف من أي نوع (محلي فقط —
+  /// المحادثات الفردية خارج نطاق المزامنة).
+  Future<void> _pickAttachment() async {
+    if (_convId == null) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: Icon(Icons.image_outlined,
+                  color: AppColors.greenOf(context)),
+              title: const Text('صورة'),
+              onTap: () => Navigator.pop(context, 'image'),
+            ),
+            ListTile(
+              leading: Icon(Icons.videocam_outlined,
+                  color: AppColors.violetOf(context)),
+              title: const Text('فيديو'),
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+            ListTile(
+              leading:
+                  Icon(Icons.attach_file, color: AppColors.infoOf(context)),
+              title: const Text('ملف (جميع الأنواع)'),
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: switch (choice) {
+          'image' => FileType.image,
+          'video' => FileType.video,
+          _ => FileType.any,
+        },
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty || !mounted) return;
+      final f = res.files.single;
+      final bytes = f.bytes ??
+          (f.path != null ? await File(f.path!).readAsBytes() : null);
+      if (bytes == null) {
+        if (mounted) showSnack(context, 'تعذّر قراءة الملف', error: true);
+        return;
+      }
+      setState(() => _sending = true);
+      await ref.read(repoProvider).sendConversationAttachment(
+            conversationId: _convId!,
+            bytes: bytes,
+            name: f.name,
+            kind: choice == 'file' ? attachmentKindFromName(f.name) : choice,
+            caption: _input.text.trim(),
+          );
+      _input.clear();
+      Sfx.success();
+      bump(ref);
+      _scrollToEnd();
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر الإرسال: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// يبدأ/يوقف تسجيل رسالة صوتية (زر الميكروفون).
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      final ok = await ChatMedia.stopRecording();
+      final path = _recordingPath;
+      final started = _recordingStart;
+      setState(() {
+        _recording = false;
+        _recordingPath = null;
+        _recordingStart = null;
+      });
+      if (!ok || path == null || _convId == null) return;
+      final f = File(path);
+      if (!await f.exists() || await f.length() == 0) return;
+      // تسجيلات أقصر من ثانية غالباً ضغطة خاطئة.
+      if (started != null &&
+          DateTime.now().difference(started) < const Duration(seconds: 1)) {
+        try {
+          await f.delete();
+        } catch (_) {}
+        return;
+      }
+      try {
+        setState(() => _sending = true);
+        final bytes = await f.readAsBytes();
+        await ref.read(repoProvider).sendConversationAttachment(
+              conversationId: _convId!,
+              bytes: bytes,
+              name: 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a',
+              kind: 'audio',
+            );
+        Sfx.success();
+        bump(ref);
+        _scrollToEnd();
+      } catch (e) {
+        if (mounted) showSnack(context, 'تعذّر إرسال التسجيل: $e', error: true);
+      } finally {
+        if (mounted) setState(() => _sending = false);
+      }
+      return;
+    }
+    // بدء التسجيل: إذن الميكروفون بنافذة النظام الرسمية أولاً.
+    if (!await NexKeepAlive.hasPermission(NexKeepAlive.permRecordAudio)) {
+      final granted =
+          await NexKeepAlive.requestPermission(NexKeepAlive.permRecordAudio);
+      if (!granted) {
+        if (mounted) {
+          showSnack(context, 'لم يُمنح إذن الميكروفون', error: true);
+        }
+        return;
+      }
+    }
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/chat_media');
+    await folder.create(recursive: true);
+    final path =
+        '${folder.path}/rec_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    final started = await ChatMedia.startRecording(path);
+    if (!started) {
+      if (mounted) showSnack(context, 'تعذّر بدء التسجيل', error: true);
+      return;
+    }
+    Sfx.click();
+    setState(() {
+      _recording = true;
+      _recordingPath = path;
+      _recordingStart = DateTime.now();
+    });
+  }
+
+  Future<void> _scrollToEnd() async {
     await Future<void>.delayed(const Duration(milliseconds: 120));
     if (_scroll.hasClients) {
       _scroll.animateTo(
@@ -253,11 +407,32 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                     color: AppColors.surfaceOf(context),
                     child: Row(
                       children: [
+                        IconButton(
+                          tooltip: 'إرفاق ملف',
+                          onPressed:
+                              _sending || _recording ? null : _pickAttachment,
+                          icon: Icon(Icons.attach_file,
+                              color: AppColors.infoOf(context)),
+                        ),
+                        IconButton(
+                          tooltip: _recording
+                              ? 'إيقاف التسجيل وإرساله'
+                              : 'تسجيل رسالة صوتية',
+                          onPressed: _sending ? null : _toggleRecording,
+                          icon: Icon(
+                            _recording ? Icons.stop_circle : Icons.mic_none,
+                            color: _recording
+                                ? AppColors.dangerOf(context)
+                                : AppColors.primaryOf(context),
+                          ),
+                        ),
                         Expanded(
                           child: TextField(
                             controller: _input,
-                            decoration: const InputDecoration(
-                              hintText: 'اكتب رسالة...',
+                            decoration: InputDecoration(
+                              hintText: _recording
+                                  ? 'جارٍ التسجيل… 🎙️'
+                                  : 'اكتب رسالة...',
                               isDense: true,
                             ),
                             onSubmitted: _send,
@@ -265,8 +440,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                         ),
                         const SizedBox(width: 8),
                         IconButton.filled(
-                          onPressed: () => _send(_input.text),
-                          icon: const Icon(Icons.send, size: 20),
+                          onPressed: _sending || _recording
+                              ? null
+                              : () => _send(_input.text),
+                          icon: _sending
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Icon(Icons.send, size: 20),
                         ),
                       ],
                     ),
@@ -287,6 +471,8 @@ class _Bubble extends StatelessWidget {
     final mine = message.isMine;
     final isStatement = message.kind == 'statement';
     final isVoucher = message.kind == 'voucher';
+    final isAttachment =
+        const {'image', 'video', 'audio', 'file'}.contains(message.kind);
     final isImage = isVoucher &&
         message.payload.trim().isNotEmpty &&
         File(message.payload).existsSync();
@@ -334,6 +520,7 @@ class _Bubble extends StatelessWidget {
                   ),
                 ),
               ),
+            if (isAttachment) AttachmentView(message: message),
             if (message.body.trim().isNotEmpty)
               Text(
                 message.body,

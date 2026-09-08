@@ -3,13 +3,29 @@
 //   setDevicePermissions.
 // - قفل تهيئة المجموعة شهراً (groupWipeAvailableAt).
 // - wipeGroupData يمسح بيانات الأعمال ويبقي المستخدمين والإعدادات والأجهزة.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+/// path_provider وهمي: يوجّه documents إلى مجلد مؤقت للاختبارات.
+class _FakePathProvider extends PathProviderPlatform
+    with MockPlatformInterfaceMixin {
+  final String root;
+  _FakePathProvider(this.root);
+  @override
+  Future<String?> getApplicationDocumentsPath() async => root;
+  @override
+  Future<String?> getApplicationSupportPath() async => root;
+  @override
+  Future<String?> getTemporaryPath() async => root;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -100,5 +116,60 @@ void main() {
     final st = await repo.settings();
     expect(st['orgName'], 'مؤسستي');
     // (قاعدة اختبار في الذاكرة — لا حاجة للإغلاق)
+  });
+
+  test('QA-B29-01 1:1 attachment: saved locally, no sync op queued', () async {
+    final docs = await Directory.systemTemp.createTemp('nexora_docs_');
+    PathProviderPlatform.instance = _FakePathProvider(docs.path);
+    final repo = await makeRepo();
+    final db = await repo.database;
+
+    // conversationFor لا يحتاج حفظ الحساب — يكفي الاسم لإنشاء المحادثة.
+    final acc = Account(
+      name: 'عميل مرفقات',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    final convId = await repo.conversationFor(acc);
+    final opsBefore = (await db.query('operations')).length;
+
+    final bytes = utf8.encode('محتوى ملف تجريبي 123');
+    final msgId = await repo.sendConversationAttachment(
+      conversationId: convId,
+      bytes: bytes,
+      name: 'doc:test?.pdf',
+      kind: 'file',
+      caption: 'تعليق',
+    );
+
+    final rows =
+        await db.query('messages', where: 'id = ?', whereArgs: [msgId]);
+    expect(rows.length, 1);
+    final m = rows.first;
+    expect(m['kind'], 'file');
+    expect(m['sender'], 'me');
+    expect(m['body'], 'تعليق');
+    final meta = jsonDecode(m['payload'] as String) as Map;
+    expect(meta['name'], 'doc:test?.pdf');
+    expect(meta['size'], bytes.length);
+    final saved = File(meta['path'] as String);
+    expect(await saved.exists(), isTrue);
+    expect(await saved.readAsBytes(), bytes);
+    // اسم الملف على القرص نُظِّف من المحارف غير الصالحة.
+    expect(saved.path.contains('?'), isFalse);
+    expect(saved.path.split('/').last.contains(':'), isFalse);
+    // المحادثات الفردية محلية فقط: لا عملية مزامنة جديدة.
+    expect((await db.query('operations')).length, opsBefore);
+    // ملف فارغ يُرفض.
+    expect(
+      () => repo.sendConversationAttachment(
+        conversationId: convId,
+        bytes: const [],
+        name: 'x.bin',
+        kind: 'file',
+      ),
+      throwsStateError,
+    );
+    await docs.delete(recursive: true);
   });
 }

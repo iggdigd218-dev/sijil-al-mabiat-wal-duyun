@@ -1974,6 +1974,47 @@ class Repo {
     return id;
   }
 
+  /// يرسل مرفقاً (صورة/فيديو/ملف/تسجيل صوتي) في محادثة 1:1 مع حساب.
+  /// المحادثات الفردية محلية فقط (خارج نطاق المزامنة) — لذلك يُحفظ الملف
+  /// محلياً في documents/chat_media دون أي عملية مزامنة.
+  Future<int> sendConversationAttachment({
+    required int conversationId,
+    required List<int> bytes,
+    required String name,
+    required String kind,
+    String caption = '',
+  }) async {
+    if (bytes.isEmpty) throw StateError('الملف فارغ.');
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    // حفظ محلي: مجلد chat_media داخل documents (نفس مجلد دردشة المجموعة).
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/chat_media');
+    await folder.create(recursive: true);
+    final safeName = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final local = File(
+        '${folder.path}/c${conversationId}_${DateTime.now().millisecondsSinceEpoch}_$safeName');
+    await local.writeAsBytes(bytes, flush: true);
+
+    final meta = jsonEncode({
+      'name': name,
+      'size': bytes.length,
+      'path': local.path,
+    });
+    final id = await db.insert('messages', {
+      'conversation_id': conversationId,
+      'workspace_id': requireWorkspaceId,
+      'sender': 'me',
+      'body': caption.trim(),
+      'kind': kind,
+      'payload': meta,
+      'created_at': now,
+    });
+    await db.update('conversations', {'updated_at': now},
+        where: 'id = ?', whereArgs: [conversationId]);
+    return id;
+  }
+
   /// رسائل دردشة المجموعة (الأقدم أولاً).
   Future<List<ChatMessage>> groupMessages({int limit = 300}) async {
     final db = await _db;
