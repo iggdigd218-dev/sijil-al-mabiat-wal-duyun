@@ -98,7 +98,13 @@ class CloudFirebaseTransport implements SyncTransport {
   @override
   Future<void> push(SyncOperation op) async {
     final uri = Uri.parse(_opPath(op.id));
-    final body = op.toJson();
+    // ختم وقت الخادم: فيربيس يستبدل {".sv":"timestamp"} بوقت خادمه (ملي
+    // ثانية) لحظة الكتابة — يقضي على ثغرة انحراف ساعات الأجهزة التي كانت
+    // تُسقط عمليات جهازٍ ساعتُه متأخرة عن مؤشر السحب لدى الآخرين.
+    final bodyMap = Map<String, Object?>.from(
+        jsonDecode(op.toJson()) as Map)
+      ..['server_ts'] = {'.sv': 'timestamp'};
+    final body = jsonEncode(bodyMap);
     final auth = await _authQuery();
     final targetUri = auth == null ? uri : uri.replace(query: auth);
     var res = await http
@@ -209,17 +215,22 @@ class CloudFirebaseTransport implements SyncTransport {
         break;
       }
       var entries = decoded.entries.toList();
+      // وقت العملية للمؤشر/الترشيح: نفضّل server_ts (ختم خادم فيربيس،
+      // محصّن ضد انحراف ساعات الأجهزة) ونعود لـ timestamp للعمليات القديمة.
+      int entryMs(Object? v) {
+        if (v is! Map) return 0;
+        final sv = v['server_ts'];
+        if (sv is int && sv > 0) return sv;
+        if (sv is num && sv > 0) return sv.toInt();
+        return DateTime.tryParse('${v['timestamp'] ?? ''}')
+                ?.millisecondsSinceEpoch ??
+            0;
+      }
+
       // في وضع الجلب الكامل (بلا فهرس خادم): رشّح محلياً بنفس شرط startAt
       // حتى لا نعيد معالجة تاريخ كامل في كل دورة (idempotent على أي حال).
       if (!serverFiltered && startAtMs > 0) {
-        entries = entries.where((e) {
-          final v = e.value;
-          if (v is! Map) return false;
-          final ts = DateTime.tryParse('${v['timestamp'] ?? ''}')
-                  ?.millisecondsSinceEpoch ??
-              0;
-          return ts >= startAtMs;
-        }).toList();
+        entries = entries.where((e) => entryMs(e.value) >= startAtMs).toList();
       }
       // فرز محلي حسب timestamp ثم opId لضمان الترتيب.
       entries.sort((a, b) {
@@ -238,9 +249,13 @@ class CloudFirebaseTransport implements SyncTransport {
           if (v is! Map) continue;
           final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
           if (op.workspaceId != workspaceId) continue;
-          // parse timestamp لمللي ثانية.
-          final opMs =
-              DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ?? 0;
+          // المؤشر يطابق وضع الترشيح: في الجلب الكامل نتقدم بـ server_ts
+          // (وقت خادم موثوق)؛ في الترشيح الخادمي (orderBy=timestamp) نتقدم
+          // بـ timestamp نفسه حتى لا يقفز المؤشر فوق عمليات جهاز ساعته
+          // متأخرة فتضيع.
+          final opMs = serverFiltered
+              ? (DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ?? 0)
+              : entryMs(v);
           if (opMs > maxTsMs) maxTsMs = opMs;
           // idempotent: نفس opId موجود مسبقًا -> تجاهل.
           final idempotentQ = await txn.query(

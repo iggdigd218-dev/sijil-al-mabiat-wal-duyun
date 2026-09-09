@@ -9,6 +9,7 @@ import '../core/accounting.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
 import '../core/models.dart';
+import '../core/workspace_mode.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
@@ -160,8 +161,15 @@ class Repo {
       limit: 1,
     );
     if (r.isEmpty) return 'standalone';
-    return (r.first['value'] as String?) ?? 'standalone';
+    // تطبيع القيم القديمة: 'managed' كانت تُستخدم قديماً بمعنى 'host'.
+    final mode =
+        WorkspaceMode.parse(r.first['value'] as String?).storageValue;
+    return mode;
   }
+
+  /// وضع المساحة كـ enum مُطبَّع — الاستخدام المفضّل في الكود الجديد.
+  Future<WorkspaceMode> workspaceModeEnum() async =>
+      WorkspaceMode.parse(await workspaceMode());
 
   Future<bool> isWorkspaceOwner() async {
     if (_deviceId == null) return true; // قبل التهيئة اعتبره مستقلاً.
@@ -233,7 +241,8 @@ class Repo {
         'sync_meta',
         {
           'key': 'workspaceMode',
-          'value': 'managed',
+          // توحيد التسمية: 'host' دائماً (كانت 'managed' قديماً).
+          'value': WorkspaceMode.host.storageValue,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -1020,10 +1029,40 @@ class Repo {
       final maxRef = (r.first['m'] as int?) ?? 0;
       if (maxRef > counter) counter = maxRef;
     }
-    final next = '${counter + 1}';
-    await db.insert('settings', {'key': counterKey, 'value': next},
+    final nextNum = counter + 1;
+    await db.insert('settings', {'key': counterKey, 'value': '$nextNum'},
         conflictAlgorithm: ConflictAlgorithm.replace);
-    return next;
+    // داخل مجموعة: رقم الفاتورة المعروض يسبقه رمز الجهاز حتى لا يتصادم
+    // جهازان أنشآ الفاتورة نفسها بالتوازي (POS1-00142 مقابل POS2-00142).
+    // المعرّف الداخلي (id) يبقى Snowflake عالمي الفرادة — هذا للعرض فقط.
+    if (table == 'transactions') {
+      try {
+        final wm = await db.query('sync_meta',
+            columns: ['value'],
+            where: 'key = ?',
+            whereArgs: ['workspaceMode'],
+            limit: 1);
+        final mode = WorkspaceMode.parse(
+            wm.isEmpty ? null : wm.first['value'] as String?);
+        if (mode.inGroup) {
+          final devRows = await db.query('settings',
+              columns: ['value'],
+              where: 'key = ?',
+              whereArgs: ['sync.deviceId'],
+              limit: 1);
+          final devId =
+              devRows.isEmpty ? '' : '${devRows.first['value'] ?? ''}';
+          final code = devId.replaceFirst('DEVICE-', '');
+          if (code.length >= 4) {
+            final prefix = code.substring(0, 4);
+            return '$prefix-${'$nextNum'.padLeft(5, '0')}';
+          }
+        }
+      } catch (_) {
+        // بيئة اختبار بلا sync_meta — رقم بحت.
+      }
+    }
+    return '$nextNum';
   }
 
   /// الرقم التسلسلي التالي لأي عملية مالية (رقمي بحت).
@@ -2466,7 +2505,7 @@ class Repo {
         'وتُزامن بياناتها تلقائياً إلى بقية الأجهزة.',
       );
     }
-    if ((mode == 'host' || mode == 'managed') && !await isWorkspaceOwner()) {
+    if (WorkspaceMode.parse(mode).isHost && !await isWorkspaceOwner()) {
       throw const BackupImportException(
         'استعادة نسخة احتياطية متاحة لجهاز المدير فقط.',
       );
@@ -2520,6 +2559,18 @@ class Repo {
           'notifications',
         ]) {
           await txn.delete(table);
+        }
+        // استعادة نظيفة: صفوف الطابور المعلقة تشير لعمليات ما قبل الاستعادة
+        // وقد تتضارب مع الحالة المستعادة — تُلغى، وresyncAllToGroup يعيد
+        // جدولة كل البيانات المستعادة كعمليات جديدة. مؤشر السحب السحابي
+        // يُصفَّر أيضاً (السحب idempotent فلا ضرر من إعادة الجلب).
+        try {
+          await txn.delete('sync_queue',
+              where: 'status IN (?, ?)', whereArgs: ['pending', 'syncing']);
+          await txn.delete('sync_meta',
+              where: "key LIKE 'lastCloudTs:%' OR key LIKE 'lastRosterPush:%'");
+        } catch (_) {
+          // قواعد قديمة بلا جداول مزامنة.
         }
 
         var imported = 0;

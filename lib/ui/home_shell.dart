@@ -742,6 +742,10 @@ class _Drawer extends ConsumerWidget {
     if (name == null || name.trim().isEmpty) return;
     try {
       await ref.read(repoProvider).renameSelfDevice(name);
+      // بثّ الاسم الجديد فوراً لكل الأقران (LAN + سحابة) — توحيد الهوية.
+      try {
+        await ref.read(syncEngineProvider).broadcastRosterChange();
+      } catch (_) {}
       bump(ref);
       Sfx.pop();
     } catch (e) {

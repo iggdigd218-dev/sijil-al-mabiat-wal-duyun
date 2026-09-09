@@ -286,6 +286,15 @@ class CloudJoin {
       throw const CloudJoinException(
           'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
     }
+    // إبطال فوري (استخدام لمرة واحدة): نحذف الدعوة الآن — قبل تطبيق
+    // اللقطة — حتى لا يستطيع أي جهاز آخر (أو إعادة تشغيل لنفس الرابط)
+    // استعمال الرمز نفسه أثناء أو بعد الانضمام. فشل الانضمام لاحقاً يتطلب
+    // دعوة جديدة من المدير — أرخص أمنياً من دعوة قابلة لإعادة الاستخدام.
+    try {
+      await _delete('$root/invites/$tok.json');
+    } catch (_) {
+      // فشل الحذف لا يوقف الانضمام؛ ستُحذف مجدداً في النهاية احتياطاً.
+    }
 
     final snapRec = await _getJson('$root/joinSnapshot.json');
     final snapData = snapRec?['data'];
@@ -321,7 +330,7 @@ class CloudJoin {
           {
             'id': ourId,
             'workspace_id': ws2,
-            'name': before['name'] ?? 'جهاز عضو',
+            'name': before['name'] ?? kDefaultMemberName,
             'platform': before['platform'] ?? '',
             'auth_secret': before['auth_secret'] ?? '',
             'ip_address': before['ip_address'] ?? '',
@@ -360,8 +369,10 @@ class CloudJoin {
       } catch (_) {}
     }
 
-    // الدعوة تُستخدم مرة واحدة.
-    await _delete('$root/invites/$tok.json');
+    // الدعوة تُستخدم مرة واحدة (حُذفت مبكراً؛ هذا حذف احتياطي idempotent).
+    try {
+      await _delete('$root/invites/$tok.json');
+    } catch (_) {}
   }
 
   // ==================== سجل الأجهزة السحابي (roster) ====================

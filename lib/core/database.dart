@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 18;
+  static const int _version = 19;
 
   static int get schemaVersion => _version;
 
@@ -875,6 +875,15 @@ class AppDatabase {
     if (from < 18) {
       await _addColumn(db, 'notifications', 'entity_type', "TEXT DEFAULT ''");
       await _addColumn(db, 'notifications', 'entity_id', "TEXT DEFAULT ''");
+    }
+    // ====== v19: توحيد workspaceMode — 'managed' القديمة تصبح 'host' ======
+    if (from < 19) {
+      try {
+        await db.update('sync_meta', {'value': 'host'},
+            where: "key = 'workspaceMode' AND value = 'managed'");
+        await db.update('settings', {'value': 'host'},
+            where: "key = 'workspaceMode' AND value = 'managed'");
+      } catch (_) {}
     }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا

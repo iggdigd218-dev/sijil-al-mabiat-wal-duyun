@@ -55,7 +55,7 @@ extension ApplyRemoteOp on Repo {
         'entity_id': op.entityId,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await txn.insert('operations', op.toMap()..['synced'] = 1,
+      await txn.insert('operations', _storedOpMap(op),
           conflictAlgorithm: ConflictAlgorithm.ignore);
       return false;
     }
@@ -193,9 +193,24 @@ extension ApplyRemoteOp on Repo {
         await _removeTrashMirror(txn, op);
         break;
     }
-    await txn.insert('operations', op.toMap()..['synced'] = 1,
+    await txn.insert('operations', _storedOpMap(op),
         conflictAlgorithm: ConflictAlgorithm.ignore);
     return true;
+  }
+
+  /// صف العملية كما يُخزَّن محلياً: بعد فك مرفق الدردشة وحفظه على القرص
+  /// نحذف حمولة base64 الضخمة من جدول operations (تبقى على السحابة/المرسل
+  /// للأجهزة الأخرى) — تمنع تضخم القاعدة وتسريب الذاكرة عند قراءة العمليات.
+  Map<String, Object?> _storedOpMap(SyncOperation op) {
+    final m = op.toMap()..['synced'] = 1;
+    final b64 = op.payload['file_b64'];
+    if (b64 is String && b64.isNotEmpty) {
+      final slim = Map<String, Object?>.from(op.payload)
+        ..remove('file_b64')
+        ..['file_pruned'] = 1; // عُولج المرفق وحُفظ في chat_media.
+      m['payload'] = jsonEncode(slim);
+    }
+    return m;
   }
 
   /// حذف وارد من جهاز آخر → صف مطابق في سلة المهملات المحلية حتى تعرض

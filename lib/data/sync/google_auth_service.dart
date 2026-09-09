@@ -6,6 +6,8 @@ import 'dart:io';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/token_cipher.dart';
+
 class GoogleUser {
   final String id; // Google sub (subject) ثابت لكل حساب
   final String email;
@@ -61,12 +63,16 @@ class GoogleAuthService {
     final gid = r['google_id'] as String?;
     if (gid == null || gid.isEmpty) return null;
     final signedStr = r['signed_in_at'] as String?;
+    // فك تعمية التوكن المخزّن (القيم القديمة نص صريح تمر كما هي).
+    final storedTok = (r['id_token'] as String?) ?? '';
+    final tok =
+        storedTok.isEmpty ? storedTok : await TokenCipher.reveal(storedTok);
     return GoogleUser(
       id: gid,
       email: (r['email'] as String?) ?? '',
       displayName: r['display_name'] as String?,
       photoUrl: r['photo_url'] as String?,
-      idToken: r['id_token'] as String?,
+      idToken: tok,
       signedInAt: signedStr != null
           ? DateTime.tryParse(signedStr) ?? DateTime.now()
           : DateTime.now(),
@@ -155,6 +161,10 @@ class GoogleAuthService {
   }
 
   Future<void> _persist(GoogleUser u) async {
+    // التوكن يُعمّى قبل التخزين — لا نص صريح في SQLite.
+    final tok = (u.idToken == null || u.idToken!.isEmpty)
+        ? ''
+        : await TokenCipher.protect(u.idToken!);
     await db.insert(
         'google_auth',
         {
@@ -163,7 +173,7 @@ class GoogleAuthService {
           'email': u.email,
           'display_name': u.displayName ?? '',
           'photo_url': u.photoUrl ?? '',
-          'id_token': u.idToken ?? '',
+          'id_token': tok,
           'signed_in_at': u.signedInAt.toIso8601String(),
           'updated_at': DateTime.now().toIso8601String(),
         },

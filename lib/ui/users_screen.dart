@@ -596,9 +596,24 @@ Future<bool> askPassword(BuildContext context, AppUser user) async {
       ),
     ),
   );
+  final typedPassword = ctrl.text.trim();
   ctrl.dispose();
   if (ok != true && context.mounted) {
     showSnack(context, 'كلمة المرور غير صحيحة', error: true);
+  }
+  // ترقية أمنية شفافة: التجزئة القديمة (ملح ثابت) تُعاد كتابتها بالشكل
+  // الجديد (ملح عشوائي لكل مستخدم + جولات متعددة) بعد أول تحقق ناجح.
+  if (ok == true &&
+      context.mounted &&
+      Security.needsRehash(user.password) &&
+      user.id != null) {
+    try {
+      final db = await ProviderScope.containerOf(context, listen: false)
+          .read(repoProvider)
+          .database;
+      await db.update('users', {'password': Security.hash(typedPassword)},
+          where: 'id = ?', whereArgs: [user.id]);
+    } catch (_) {}
   }
   return ok == true;
 }

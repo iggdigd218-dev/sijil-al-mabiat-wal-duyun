@@ -4,10 +4,12 @@
 //   - إعادة المحاولة مع backoff.
 //   - سحب العمليات من الـ Cloud تلقائيًا عند التهيئة.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/token_cipher.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
@@ -328,7 +330,11 @@ class SyncEngine {
           final d = await _db;
           final r = await d.query('google_auth', where: 'id = 1', limit: 1);
           if (r.isEmpty) return null;
-          return r.first['id_token'] as String?;
+          final stored = r.first['id_token'] as String?;
+          if (stored == null || stored.isEmpty) return null;
+          // مخزّن معمّى (enc1:) أو نص صريح قديم — reveal يتعامل مع الحالتين.
+          final tok = await TokenCipher.reveal(stored);
+          return tok.isEmpty ? null : tok;
         } catch (_) {
           return null;
         }
@@ -406,8 +412,19 @@ class SyncEngine {
     // تفقد دوري كل 6 ساعات: هل طرأ طرد لنا، أو هناك أجهزة خاملة لنطرَدها تلقائياً.
     _maintenanceTimer ??= Timer.periodic(
       const Duration(hours: 6),
-      (_) => _checkExpulsionAndAutoPurge(),
+      (_) async {
+        await _checkExpulsionAndAutoPurge();
+        try {
+          await _pruneOperationPayloads();
+        } catch (_) {}
+      },
     );
+    // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة).
+    Future(() async {
+      try {
+        await _pruneOperationPayloads();
+      } catch (_) {}
+    });
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
     // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
     _rosterTimer ??= Timer.periodic(
@@ -533,6 +550,57 @@ class SyncEngine {
     ''', [now, now, ourId]);
   }
 
+  /// صيانة تخزين جدول العمليات (تعمل عند الإقلاع وكل 6 ساعات):
+  /// 1) تجريد حمولات base64 الضخمة (مرفقات الدردشة) من العمليات التي
+  ///    وصلت لكل الأجهزة — الملف محفوظ على القرص، ولا حاجة لنسخة ثانية
+  ///    داخل SQLite تتضخم وتُبطئ كل قراءة.
+  /// 2) حذف عمليات الدردشة القديمة (أقدم من 14 يوماً) المستلمة من الجميع
+  ///    والمرفوعة للسحابة — الرسائل نفسها باقية في جدول messages.
+  Future<void> _pruneOperationPayloads() async {
+    final db = await _db;
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return;
+    final peersR = await db.rawQuery(
+      "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+      "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
+      "AND id <> ?",
+      [ourId],
+    );
+    final totalPeers = (peersR.first['c'] as int?) ?? 0;
+    // (1) تجريد base64: عملياتنا التي سلّمناها لكل الأقران (أو رفعناها
+    // للسحابة إن لم يكن هناك أقران LAN) وحمولتها تتضمن file_b64.
+    final fat = await db.rawQuery('''
+      SELECT id, payload FROM operations
+      WHERE payload LIKE '%"file_b64"%' AND synced = 1
+        AND (SELECT COUNT(*) FROM op_deliveries d
+             WHERE d.operation_id = operations.id) >= ?
+      LIMIT 200
+    ''', [totalPeers]);
+    for (final r in fat) {
+      try {
+        final decoded =
+            jsonDecode((r['payload'] as String?) ?? '{}') as Map;
+        final slim = Map<String, Object?>.from(decoded)
+          ..remove('file_b64')
+          ..['file_pruned'] = 1;
+        await db.update('operations', {'payload': jsonEncode(slim)},
+            where: 'id = ?', whereArgs: [r['id']]);
+      } catch (_) {}
+    }
+    // (2) حذف عمليات الرسائل القديمة كلياً بعد فترة الاحتفاظ.
+    final cutoff = DateTime.now()
+        .subtract(const Duration(days: 14))
+        .toIso8601String();
+    try {
+      await db.rawDelete('''
+        DELETE FROM operations
+        WHERE entity_type = 'message' AND synced = 1 AND timestamp < ?
+          AND (SELECT COUNT(*) FROM op_deliveries d
+               WHERE d.operation_id = operations.id) >= ?
+      ''', [cutoff, totalPeers]);
+    } catch (_) {}
+  }
+
   Future<void> _reconcileRoster() async {
     try {
       if (!_started) return;
@@ -600,6 +668,19 @@ class SyncEngine {
   Future<void> broadcastRosterChange() async {
     try {
       await _lanTransport?.broadcastNotify(reason: 'roster');
+    } catch (_) {}
+    // توحيد الهوية: ادفع سجل الأجهزة فوراً للسحابة أيضاً حتى يظهر الاسم
+    // الجديد على كل الأجهزة المرتبطة سحابياً دون انتظار الدورة (45 ثانية).
+    try {
+      final t = _cloudTransport;
+      if (t != null) {
+        await CloudJoin.syncRoster(
+          repo,
+          await _db,
+          backendUrl: t.backendUrl,
+          workspaceId: t.workspaceId,
+        );
+      }
     } catch (_) {}
     notifyNewOperation();
   }

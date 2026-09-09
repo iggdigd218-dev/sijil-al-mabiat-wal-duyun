@@ -7,6 +7,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import 'repository.dart';
+import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/sync_engine.dart';
 import 'sync/sync_queue.dart';
@@ -884,7 +885,12 @@ final ownDeviceNameProvider = FutureProvider<String?>((ref) async {
   if (rows.isEmpty) return null;
   final n = (rows.first['name'] as String?)?.trim();
   // الاسم الافتراضي قبل أي تخصيص لا يُعرض كعنوان — يبقى «مدير الحسابات».
-  if (n == null || n.isEmpty || n == 'جهاز مدير الحسابات') return null;
+  if (n == null ||
+      n.isEmpty ||
+      n == 'جهاز مدير الحسابات' || // اسم افتراضي قديم.
+      n == kDefaultMemberName) {
+    return null;
+  }
   return n;
 });
 

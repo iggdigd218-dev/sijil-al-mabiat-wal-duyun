@@ -14,9 +14,11 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/models.dart';
+import '../../core/workspace_mode.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'conflict_resolver.dart';
+import 'device_id.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
 import 'sync_queue.dart';
@@ -158,6 +160,12 @@ class LanSyncService implements SyncTransport {
         await _handleNotify(req, cors);
         return;
       }
+      // مرفقات العمليات المالية عند الطلب: بدل تضخيم طابور المزامنة
+      // بالصور، يجلبها الجهاز الآخر عبر LAN عند فتح العملية.
+      if (path.startsWith('/attachments/') && req.method == 'GET') {
+        await _handleAttachment(req, cors);
+        return;
+      }
       cors.statusCode = HttpStatus.notFound;
       await cors.close();
     } catch (e) {
@@ -245,7 +253,9 @@ class LanSyncService implements SyncTransport {
     final devId = (body['deviceId'] as String?) ?? '';
     final ip = (body['ipAddress'] as String?) ?? '';
     final p = body['port'] as int?;
-    final name = (body['name'] as String?) ?? 'جهاز';
+    final name = ((body['name'] as String?)?.trim().isNotEmpty ?? false)
+        ? (body['name'] as String).trim()
+        : kDefaultMemberName;
     final theirSecret = (body['authSecret'] as String?) ?? '';
     if (tok.length < 6 ||
         devId.isEmpty ||
@@ -348,6 +358,62 @@ class LanSyncService implements SyncTransport {
       ourAuthSecret: ourSecret,
       remoteDeviceId: devId,
     );
+  }
+
+  /// GET /attachments/&lt;txId&gt; — يعيد مرفق عملية مالية (صورة إيصال) عند
+  /// الطلب لجهاز مقترن مصادق. لا يقبل مسارات ملفات من العميل إطلاقاً:
+  /// المعرّف يُبحث عنه في transactions.attachment محلياً (منع path traversal).
+  Future<void> _handleAttachment(HttpRequest req, HttpResponse resp) async {
+    final auth = req.headers.value('Authorization') ?? '';
+    final secret = auth.startsWith('Bearer ') ? auth.substring(7).trim() : '';
+    if (secret.isEmpty) {
+      resp.statusCode = HttpStatus.unauthorized;
+      await resp.close();
+      return;
+    }
+    try {
+      final db = await dbProvider();
+      final devRows = await db.query(
+        'devices',
+        where:
+            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [secret],
+        limit: 1,
+      );
+      if (devRows.isEmpty) {
+        resp.statusCode = HttpStatus.forbidden;
+        await resp.close();
+        return;
+      }
+      final txId = Uri.decodeComponent(req.uri.path.split('/').last);
+      if (txId.isEmpty) {
+        resp.statusCode = HttpStatus.badRequest;
+        await resp.close();
+        return;
+      }
+      final rows = await db.query('transactions',
+          columns: ['attachment'], where: 'id = ?', whereArgs: [txId], limit: 1);
+      final path0 =
+          rows.isEmpty ? '' : ((rows.first['attachment'] as String?) ?? '');
+      if (path0.isEmpty) {
+        resp.statusCode = HttpStatus.notFound;
+        await resp.close();
+        return;
+      }
+      final f = File(path0);
+      if (!await f.exists()) {
+        resp.statusCode = HttpStatus.notFound;
+        await resp.close();
+        return;
+      }
+      resp.headers.contentType = ContentType.binary;
+      await resp.addStream(f.openRead());
+    } catch (_) {
+      try {
+        resp.statusCode = HttpStatus.internalServerError;
+      } catch (_) {}
+    }
+    await resp.close();
   }
 
   /// يُرجع لقطة كاملة من جميع الجداول المحلية للعضو الجديد ليستبدل بها بياناته.
@@ -494,7 +560,9 @@ class LanSyncService implements SyncTransport {
         'ok': true,
         'hostDeviceId': ourDeviceId,
         'selfId': selfId,
-        'workspaceMode': modeRows.isEmpty ? 'managed' : modeRows.first['value'],
+        'workspaceMode': WorkspaceMode.parse(
+                modeRows.isEmpty ? 'host' : modeRows.first['value'] as String?)
+            .storageValue,
         'devices': roster,
         'users': users,
       }));
@@ -1245,7 +1313,7 @@ class LanSyncService implements SyncTransport {
             {
               'id': devId,
               'workspace_id': defaultWorkspaceId,
-              'name': 'المضيف',
+              'name': 'المضيف', // يُستبدل فور وصول roster المدير باسمه الحقيقي.
               'platform': 'lan',
               'ip_address': ip,
               'port': port,

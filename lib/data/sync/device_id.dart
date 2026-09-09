@@ -35,10 +35,14 @@ Future<String?> getDeviceIdCached(Repo repo) async {
 Future<void> setDeviceName(Repo repo, String name) =>
     repo.setSetting(_deviceNameKey, name);
 
+/// الاسم الافتراضي الموحّد لأي جهاز/مستخدم جديد لم يحدد اسماً بعد.
+/// (توحيد الهوية: يظهر نفسه في لوحة المدير والقوائم والإشعارات.)
+const String kDefaultMemberName = 'مستخدم جديد';
+
 Future<String> deviceName(Repo repo) async {
   final st = await repo.settings();
   final n = st[_deviceNameKey];
   if (n != null && n.trim().isNotEmpty) return n;
-  // اسم افتراضي بناء على المنصة.
-  return 'جهاز مدير الحسابات';
+  // الاسم الافتراضي الموحّد — لا أسماء عتاد ولا أسماء متفرقة.
+  return kDefaultMemberName;
 }
