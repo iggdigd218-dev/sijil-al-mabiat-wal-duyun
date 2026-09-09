@@ -342,29 +342,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
         entityType: 'sync',
       );
     };
-    // رسالة دردشة جماعية واردة: إشعار خارجي بصوت مميز + إشعار داخلي.
-    LanSyncService.onChatMessage = (senderName, body) {
-      Sfx.notify();
-      final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
-      Sfx.systemNotify(
-        title: 'رسالة من $senderName',
-        body: short,
-        entityType: 'message',
-      );
-      try {
-        ref.read(repoProvider).notify(
-              title: '💬 رسالة جديدة من $senderName',
-              body: short,
-              kind: 'info',
-              entityType: 'message',
-            );
-      } catch (_) {}
-      _showTappableNotice(
-        '💬 رسالة جديدة من $senderName',
-        short,
-        entityType: 'message',
-      );
-    };
+    // رسائل الدردشة الجماعية تتزامن «بصمت» تماماً: بلا صوت ولا اهتزاز
+    // ولا إشعار خارجي/داخلي ولا نافذة منبثقة — شاشة الدردشة تحدّث نفسها
+    // تلقائياً (مؤقّت + SyncActivityBus) فتظهر الرسالة فور وصولها.
+    LanSyncService.onChatMessage = null;
     // تغيير أجراه المدير على هذا العضو (اسم/صلاحيات): داخلي + خارجي.
     LanSyncService.onMemberNotice = (title, body) {
       Sfx.notify();

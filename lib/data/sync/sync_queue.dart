@@ -131,11 +131,18 @@ class SyncQueueOps {
     );
   }
 
+  /// الكيانات «الصامتة»: تتزامن كالمعتاد لكنها لا تُعرض في شاشة المزامنة
+  /// ولا تدخل في العدادات/المؤشرات — رسائل الدردشة ومحادثاتها ضجيج بصري
+  /// لا يعني المستخدم (المزامنة الفعلية لا تتأثر إطلاقاً).
+  static const silentEntities = "('message','conversation')";
+
   /// هل توجد صفوف لها آخر خطأ (فشلت محاولتها الأخيرة) لكنها ما زالت ستُعاد.
   Future<int> countWithError() async {
     final r = await db.rawQuery(
-      "SELECT COUNT(*) AS c FROM sync_queue "
-      "WHERE status IN (?, ?) AND COALESCE(last_error,'') <> ''",
+      "SELECT COUNT(*) AS c FROM sync_queue q "
+      "JOIN operations o ON o.id = q.operation_id "
+      "WHERE q.status IN (?, ?) AND COALESCE(q.last_error,'') <> '' "
+      "AND o.entity_type NOT IN $silentEntities",
       [SyncStatus.pending.name, SyncStatus.syncing.name],
     );
     return (r.first['c'] as int?) ?? 0;
@@ -143,28 +150,29 @@ class SyncQueueOps {
 
   /// قائمة الصفوف ذات الأخطاء (للعرض في شاشة العمليات المتزامنة).
   Future<List<Map<String, Object?>>> rowsWithError({int limit = 50}) async {
-    return db.query(
-      'sync_queue',
-      where:
-          "status IN (?, ?) AND COALESCE(last_error,'') <> ''",
-      whereArgs: [SyncStatus.pending.name, SyncStatus.syncing.name],
-      orderBy: 'updated_at DESC',
-      limit: limit,
+    return db.rawQuery(
+      "SELECT q.* FROM sync_queue q "
+      "JOIN operations o ON o.id = q.operation_id "
+      "WHERE q.status IN (?, ?) AND COALESCE(q.last_error,'') <> '' "
+      "AND o.entity_type NOT IN $silentEntities "
+      "ORDER BY q.updated_at DESC LIMIT $limit",
+      [SyncStatus.pending.name, SyncStatus.syncing.name],
     );
   }
 
   /// كل الصفوف غير المكتملة (معلّقة/قيد المزامنة/لها خطأ) — للعرض والإعادة.
   Future<List<Map<String, Object?>>> activeRows({int limit = 200}) async {
-    return db.query(
-      'sync_queue',
-      where: 'status IN (?, ?, ?)',
-      whereArgs: [
+    return db.rawQuery(
+      "SELECT q.* FROM sync_queue q "
+      "JOIN operations o ON o.id = q.operation_id "
+      "WHERE q.status IN (?, ?, ?) "
+      "AND o.entity_type NOT IN $silentEntities "
+      "ORDER BY q.updated_at DESC LIMIT $limit",
+      [
         SyncStatus.pending.name,
         SyncStatus.syncing.name,
         SyncStatus.failed.name,
       ],
-      orderBy: 'updated_at DESC',
-      limit: limit,
     );
   }
 
@@ -264,7 +272,10 @@ class SyncQueueOps {
 
   Future<int> countPending() async {
     final r = await db.rawQuery(
-      "SELECT COUNT(*) AS c FROM sync_queue WHERE status IN (?, ?)",
+      "SELECT COUNT(*) AS c FROM sync_queue q "
+      "JOIN operations o ON o.id = q.operation_id "
+      "WHERE q.status IN (?, ?) "
+      "AND o.entity_type NOT IN $silentEntities",
       [SyncStatus.pending.name, SyncStatus.syncing.name],
     );
     return (r.first['c'] as int?) ?? 0;
@@ -272,7 +283,10 @@ class SyncQueueOps {
 
   Future<int> countFailed() async {
     final r = await db.rawQuery(
-      "SELECT COUNT(*) AS c FROM sync_queue WHERE status = ?",
+      "SELECT COUNT(*) AS c FROM sync_queue q "
+      "JOIN operations o ON o.id = q.operation_id "
+      "WHERE q.status = ? "
+      "AND o.entity_type NOT IN $silentEntities",
       [SyncStatus.failed.name],
     );
     return (r.first['c'] as int?) ?? 0;

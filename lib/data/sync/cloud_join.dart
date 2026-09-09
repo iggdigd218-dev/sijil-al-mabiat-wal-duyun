@@ -135,14 +135,20 @@ class CloudJoin {
 
   /// يرفع لقطة كاملة + رمز دعوة صالح 24 ساعة، ويعيد بيانات الدعوة للعرض.
   static Future<CloudInviteInfo> createInvite(Repo repo) async {
-    final mode = await repo.workspaceMode();
-    if (mode == 'member') {
-      throw const CloudJoinException(
-          'إنشاء دعوة سحابية متاح لجهاز المدير فقط.');
-    }
-    if (!await repo.isWorkspaceOwner()) {
+    // الملكية الفعلية (is_owner) هي الحكم — لا وضع sync_meta وحده:
+    // خلل سابق كان ينسخ workspaceMode من جهاز عضو أثناء المصالحة فيقلب
+    // جهاز المدير إلى «member» زوراً. إن كنا المالك فعلاً نصلح الوضع ذاتياً.
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
       throw const CloudJoinException(
           'إنشاء دعوة سحابية متاح لجهاز المدير (المالك) فقط.');
+    }
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      final db0 = await repo.database;
+      await db0.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
     final st = await repo.settings();
     final url = (st['cloudBackendUrl'] ?? '').trim();

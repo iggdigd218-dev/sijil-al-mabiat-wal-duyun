@@ -841,7 +841,6 @@ class LanSyncService implements SyncTransport {
   Future<void> _applyRoster(Database db, Map<String, Object?> roster) async {
     final devices = (roster['devices'] as List?) ?? const [];
     final users = (roster['users'] as List?) ?? const [];
-    final mode = (roster['workspaceMode'] as String?) ?? 'managed';
     // التقط حالتنا قبل التطبيق لكشف تغييرات المدير التي تخصنا.
     String? oldName;
     Object? oldUserId;
@@ -939,9 +938,16 @@ class LanSyncService implements SyncTransport {
               conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
+      // وضع المساحة يُشتق من ملكيتنا الفعلية بعد تطبيق سجل الأجهزة —
+      // لا يُنسخ أبداً من وضع القرين: كان نسخه يقلب جهاز المدير إلى
+      // «عضو» عندما تصل المصالحة من جهاز عضو (وضعه هو member).
+      final meRow = await txn.query('devices',
+          where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+      final iAmOwner =
+          meRow.isNotEmpty && ((meRow.first['is_owner'] as int? ?? 0) == 1);
       await txn.insert(
         'sync_meta',
-        {'key': 'workspaceMode', 'value': mode},
+        {'key': 'workspaceMode', 'value': iAmOwner ? 'host' : 'member'},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });

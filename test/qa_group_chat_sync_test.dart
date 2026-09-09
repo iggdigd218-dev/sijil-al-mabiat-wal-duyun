@@ -11,6 +11,7 @@ import 'package:nexora_app/data/sync/recorder.dart';
 import 'package:nexora_app/data/sync/device_id.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
 import 'package:nexora_app/data/sync/sync_engine.dart';
+import 'package:nexora_app/data/sync/sync_queue.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -59,6 +60,23 @@ void main() {
         ['$id']);
     expect(q, hasLength(1));
     expect(q.single['status'], 'pending');
+  });
+
+  test('QA-CHAT-03 رسائل الدردشة صامتة: خارج العدادات والقوائم لكنها تُزامن',
+      () async {
+    await repo.setSetting('lanSyncEnabled', '1');
+    await repo.sendGroupMessage('رسالة صامتة');
+    final ops = SyncQueueOps(db);
+    // العدادات والقوائم المرئية تتجاهل رسائل الدردشة تماماً.
+    expect(await ops.countPending(), 0);
+    expect(await ops.activeRows(), isEmpty);
+    expect(await ops.countWithError(), 0);
+    // لكن صف الطابور موجود فعلاً وسيُدفع للمزامنة كالمعتاد.
+    final raw = await db.rawQuery(
+        "SELECT COUNT(*) c FROM sync_queue WHERE status = 'pending'");
+    expect(raw.first['c'], greaterThan(0));
+    final picked = await ops.pickPending(limit: 10, target: 'lan');
+    expect(picked, isNotEmpty);
   });
 
   test('QA-CHAT-02 تطبيق رسالة واردة ينشئ المحادثة تلقائياً (FK آمن)',

@@ -1014,6 +1014,7 @@ final deviceSyncStatusProvider =
     final missing = await db.rawQuery('''
       SELECT COUNT(*) c FROM operations o
       WHERE o.device_id = ?
+        AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}
         AND NOT EXISTS (
           SELECT 1 FROM op_deliveries dl
           WHERE dl.operation_id = o.id AND dl.device_id = ?
@@ -1051,7 +1052,10 @@ final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
   final pending = await q.countPending();
   final withError = await q.countWithError();
   final syncedR = await db.rawQuery(
-    "SELECT COUNT(*) c FROM sync_queue WHERE status = ?",
+    "SELECT COUNT(*) c FROM sync_queue sq "
+    "JOIN operations o ON o.id = sq.operation_id "
+    "WHERE sq.status = ? "
+    "AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}",
     ['synced'],
   );
   final syncedToday = (syncedR.first['c'] as int?) ?? 0;
