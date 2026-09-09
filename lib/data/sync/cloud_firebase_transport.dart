@@ -19,6 +19,8 @@ import 'package:sqflite/sqflite.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'conflict_resolver.dart';
+import 'device_id.dart';
+import 'lan_http_transport.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
 
@@ -155,6 +157,9 @@ class CloudFirebaseTransport implements SyncTransport {
     final r = resolver ?? ConflictResolver();
     int applied = 0;
     int maxTsMs = lastTsMs;
+    final ourId = await ensureDeviceId(repo);
+    // رسائل دردشة وصلت في هذه السحبة — تُشعر بعد إغلاق المعاملة.
+    final chatOps = <SyncOperation>[];
 
     bool hasMore = true;
     String? startAfterKey;
@@ -225,9 +230,39 @@ class CloudFirebaseTransport implements SyncTransport {
           }
           final ok = await repo.applyRemoteOperation(txn, op, r);
           if (ok) applied++;
+          if (ok &&
+              op.entityType == EntityKind.message &&
+              op.deviceId != ourId) {
+            chatOps.add(op);
+          }
           lastKey = entry.key as String;
         }
       });
+      // إشعار وصول رسائل دردشة جماعية عبر السحابة (نفس سلوك LAN):
+      // خارج المعاملة، وبعد نجاح التطبيق فقط.
+      for (final op in chatOps) {
+        try {
+          final senderRows = await db.query('devices',
+              where: 'id = ?', whereArgs: [op.deviceId], limit: 1);
+          final senderName = senderRows.isNotEmpty
+              ? ((senderRows.first['name'] as String?) ?? 'جهاز في المجموعة')
+              : 'جهاز في المجموعة';
+          var body = '${op.payload['body'] ?? ''}';
+          if (body.isEmpty) {
+            body = switch ('${op.payload['kind'] ?? 'text'}') {
+              'image' => '📷 صورة',
+              'video' => '🎬 فيديو',
+              'audio' => '🎙️ رسالة صوتية',
+              'file' => '📎 ملف',
+              _ => '',
+            };
+          }
+          if (body.isNotEmpty) {
+            LanSyncService.onChatMessage?.call(senderName, body);
+          }
+        } catch (_) {}
+      }
+      chatOps.clear();
       hasMore = entries.length >= kPullPageSize;
       startAfterKey = lastKey;
       // إذا كانت الصفحة تحتوي على عمليات بنفس timestamp نكرر بالصفحة التالية بstartAfter.
