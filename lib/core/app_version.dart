@@ -6,7 +6,7 @@
 library;
 
 /// إصدار التطبيق المعروض (يطابق pubspec.yaml).
-const String kAppVersion = '3.31.3';
+const String kAppVersion = '3.31.4';
 
 /// رقم البناء (ما بعد + في pubspec.yaml).
 const int kAppBuild = 56;

@@ -1021,10 +1021,11 @@ class LanSyncService implements SyncTransport {
     final senderSecret =
         own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
     if (senderSecret.isEmpty) throw StateError('missing-sender-credential');
+    // ملاحظة: لا نشترط ip_address هنا — الأجهزة المنضمة عبر السحابة قد لا
+    // تملك عنوان LAN أبداً، ويجب أن تُحتسب ضمن التسليم (عبر السحابة أدناه).
     final devices = await db.query(
       'devices',
-      where:
-          "is_paired = 1 AND COALESCE(revoked_at, '') = '' AND ip_address <> '' AND id <> ?",
+      where: "is_paired = 1 AND COALESCE(revoked_at, '') = '' AND id <> ?",
       whereArgs: [ourDeviceId],
     );
     if (devices.isEmpty) throw StateError('no-paired-peers');
@@ -1039,6 +1040,36 @@ class LanSyncService implements SyncTransport {
         whereArgs: [op.id]);
     final delivered =
         deliveredRows.map((r) => r['device_id'] as String).toSet();
+    // === التسليم عبر السحابة ===
+    // مجموعات مرتبطة عبر المزامنة السحابية (أجهزة ليست على نفس الشبكة):
+    // إن كانت السحابة مفعّلة وهذه العملية صعدت إليها فعلاً (synced=1)،
+    // فالجهاز غير القابل للوصول عبر LAN سيستلمها حتماً من السحابة
+    // (SSE فوري + سحب دوري + سحب عند الإقلاع). نعتبرها مُسلَّمة له
+    // «عبر السحابة» بدل البقاء pending للأبد بخطأ awaiting-offline-peers.
+    var opOnCloud = false;
+    try {
+      final st = await repo.settings();
+      final cloudConfigured =
+          (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+              (st['cloudAutoSync'] ?? '1') != '0';
+      if (cloudConfigured) {
+        final r = await db.query('operations',
+            columns: ['synced'], where: 'id = ?', whereArgs: [op.id], limit: 1);
+        opOnCloud = r.isNotEmpty && ((r.first['synced'] as int?) ?? 0) == 1;
+      }
+    } catch (_) {}
+    Future<void> markDeliveredViaCloud(String devId) async {
+      await db.insert(
+        'op_deliveries',
+        {
+          'operation_id': op.id,
+          'device_id': devId,
+          'delivered_at': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+
     final errors = <String>[];
     var skippedOffline = 0;
     var reachedAll = true;
@@ -1047,11 +1078,24 @@ class LanSyncService implements SyncTransport {
       final p = d['port'] as int?;
       final devId = d['id'] as String;
       final devName = (d['name'] as String?) ?? 'جهاز';
-      if (ip == null || ip.isEmpty || p == null) continue;
       if (delivered.contains(devId)) continue; // سُلّمت له سابقاً.
-      // جهاز غائب وفق نظام الحضور: تخطَّ بلا محاولة فاشلة — سيُستأنف
-      // الدفع فور عودته (onPeerOnline يستدعي processQueue فوراً).
+      final lanReachable = ip != null && ip.isNotEmpty && p != null;
+      // جهاز بلا عنوان LAN (منضم عبر السحابة/مجموعة سحابية بحتة):
+      // إن كانت العملية على السحابة فهي مُسلَّمة له عبرها؛ وإلا نتخطاه
+      // بصمت كما في السلوك القديم (لا يملك مساراً محلياً أصلاً).
+      if (!lanReachable) {
+        if (opOnCloud) await markDeliveredViaCloud(devId);
+        continue;
+      }
+      // جهاز غائب وفق نظام الحضور: إن كانت العملية على السحابة فستصله
+      // عبرها (SSE/سحب) — نعتبرها مُسلَّمة بدل awaiting-offline-peers
+      // الأبدي لمجموعات مرتبطة سحابياً على شبكات مختلفة. وإلا تخطَّ بلا
+      // محاولة فاشلة — سيُستأنف الدفع فور عودته (onPeerOnline).
       if (isPeerOnline != null && !isPeerOnline!(devId)) {
+        if (opOnCloud) {
+          await markDeliveredViaCloud(devId);
+          continue;
+        }
         skippedOffline++;
         reachedAll = false;
         continue;

@@ -365,6 +365,11 @@ class SyncEngine {
     try {
       await _backfillMissedLanOps();
     } catch (_) {}
+    // إنقاذ سحابي: عمليات سُجّلت قبل تهيئة السحابة (لا صف cloud لها) —
+    // تُدرج الآن لتصعد للسحابة فتصل الأجهزة المرتبطة سحابياً.
+    try {
+      await _backfillMissedCloudOps();
+    } catch (_) {}
     if (!_started || generation != _generation) return;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
     SyncRecorder.onOperationRecorded = notifyNewOperation;
@@ -502,6 +507,32 @@ class SyncEngine {
     ''', [now, ourId, ourId]);
   }
 
+  /// إنقاذ سحابي: كل عملية محلية لم يُدرج لها هدف cloud (سُجّلت قبل ضبط
+  /// السحابة أو أثناء تعطيلها) تُدرج pending الآن. idempotent بالكامل:
+  /// الدفع للسحابة PUT على نفس opId، والصف لا يتكرر (INSERT OR IGNORE).
+  Future<void> _backfillMissedCloudOps() async {
+    final db = await _db;
+    final st = await repo.settings();
+    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+        (st['cloudAutoSync'] ?? '1') != '0';
+    if (!cloudOn) return;
+    final ourId = st['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+    await db.rawInsert('''
+      INSERT OR IGNORE INTO sync_queue
+        (operation_id, status, target, attempts, last_error, next_try_at,
+         created_at, updated_at)
+      SELECT o.id, 'pending', 'cloud', 0, '', '', ?, ?
+      FROM operations o
+      WHERE o.device_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_queue q
+          WHERE q.operation_id = o.id AND q.target = 'cloud'
+        )
+    ''', [now, now, ourId]);
+  }
+
   Future<void> _reconcileRoster() async {
     try {
       if (!_started) return;
@@ -597,7 +628,17 @@ class SyncEngine {
     try {
       final db = await _db;
       final q = _queue ??= SyncQueueOps(db);
-      for (final t in List<SyncTransport>.of(_transports)) {
+      // السحابة أولاً: عند نجاح رفع العملية للسحابة تُعلَّم synced=1،
+      // فيعتبرها هدف LAN (في نفس الدورة) مُسلَّمة عبر السحابة للأجهزة
+      // غير القابلة للوصول محلياً — بدل بقائها awaiting-offline-peers.
+      final ordered = List<SyncTransport>.of(_transports)
+        ..sort((a, b) {
+          if (a.targetId == b.targetId) return 0;
+          if (a.targetId == SyncTarget.cloud) return -1;
+          if (b.targetId == SyncTarget.cloud) return 1;
+          return 0;
+        });
+      for (final t in ordered) {
         List<Map<String, Object?>> rows;
         try {
           rows = await q
