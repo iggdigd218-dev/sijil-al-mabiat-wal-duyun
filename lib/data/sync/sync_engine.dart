@@ -418,12 +418,20 @@ class SyncEngine {
         try {
           await _pruneOperationPayloads();
         } catch (_) {}
+        try {
+          await _lanTransport?.backfillMissingAttachments();
+        } catch (_) {}
       },
     );
-    // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة).
+    // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
+    // الناقصة من الأقران (عمليات وصلت بالمزامنة بلا ملفاتها).
     Future(() async {
       try {
         await _pruneOperationPayloads();
+      } catch (_) {}
+      try {
+        await _ensureLanTransport();
+        await _lanTransport?.backfillMissingAttachments();
       } catch (_) {}
     });
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو

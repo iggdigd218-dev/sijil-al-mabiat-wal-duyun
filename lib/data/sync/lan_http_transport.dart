@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/media_paths.dart';
@@ -918,6 +919,95 @@ class LanSyncService implements SyncTransport {
     final nowOwner =
         after.isNotEmpty && ((after.first['is_owner'] as int? ?? 0) == 1);
     return nowOwner != wasOwner;
+  }
+
+  /// يجلب مرفقات العمليات الناقصة محلياً: عمليات وصلت بالمزامنة ومعها
+  /// attachment_hash لكن الملف نفسه غير موجود على هذا الجهاز (المزامنة
+  /// تنقل البيانات الوصفية فقط، لا الملفات). يطلبها من الأقران عبر
+  /// GET /attachments/&lt;hash&gt; ويتحقق من تطابق SHA-256 قبل الحفظ —
+  /// محتوى لا يطابق تجزئته يُرفض (سلامة + منع تلاعب).
+  /// يعيد عدد الملفات التي جُلبت بنجاح.
+  Future<int> backfillMissingAttachments({int limit = 10}) async {
+    final db = await dbProvider();
+    final docs = await MediaPaths.ensureDocsDir();
+    if (docs == null || docs.isEmpty) return 0;
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
+    final secret =
+        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+    if (secret.isEmpty) return 0;
+    final rows = await db.query(
+      'transactions',
+      columns: ['id', 'attachment', 'image', 'attachment_hash'],
+      where: "COALESCE(attachment_hash,'') <> ''",
+      limit: 200,
+    );
+    final missing = <Map<String, Object?>>[];
+    for (final r in rows) {
+      final att = (r['attachment'] as String?) ?? '';
+      final img = (r['image'] as String?) ?? '';
+      final stored = att.isNotEmpty ? att : img;
+      if (stored.isEmpty || stored.contains('..')) continue;
+      if (!MediaPaths.exists(stored)) missing.add(r);
+      if (missing.length >= limit) break;
+    }
+    if (missing.isEmpty) return 0;
+    final peers = await db.query(
+      'devices',
+      where:
+          "is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' AND ip_address <> '' AND id <> ?",
+      whereArgs: [ourDeviceId],
+    );
+    if (peers.isEmpty) return 0;
+    var fetched = 0;
+    for (final r in missing) {
+      final hash =
+          ((r['attachment_hash'] as String?) ?? '').trim().toLowerCase();
+      if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) continue;
+      final att = (r['attachment'] as String?) ?? '';
+      final img = (r['image'] as String?) ?? '';
+      var stored = att.isNotEmpty ? att : img;
+      // مسار مطلق قديم من جهاز آخر بلا معنى محلياً — نعيد توطينه نسبياً.
+      final isLegacyAbs = stored.startsWith('/') ||
+          RegExp(r'^[A-Za-z]:[\\/]').hasMatch(stored);
+      if (isLegacyAbs) stored = 'images/att-$hash.bin';
+      for (final peer in peers) {
+        final ip = peer['ip_address'] as String?;
+        final p = peer['port'] as int?;
+        if (ip == null || ip.isEmpty || p == null) continue;
+        try {
+          final req = await _httpClient
+              .getUrl(Uri.parse('http://$ip:$p/attachments/$hash'))
+              .timeout(const Duration(seconds: 6));
+          req.headers.set('Authorization', 'Bearer $secret');
+          final resp =
+              await req.close().timeout(const Duration(seconds: 20));
+          if (resp.statusCode != 200) continue;
+          final bytes = <int>[];
+          await for (final chunk in resp) {
+            bytes.addAll(chunk);
+            if (bytes.length > kMaxLanPayloadBytes) break;
+          }
+          if (bytes.isEmpty || bytes.length > kMaxLanPayloadBytes) continue;
+          // التحقق الحاسم: التجزئة الفعلية للمحتوى تطابق المطلوبة.
+          if (sha256.convert(bytes).toString() != hash) continue;
+          final f = File(MediaPaths.toAbsolute(stored));
+          f.parent.createSync(recursive: true);
+          await f.writeAsBytes(bytes, flush: true);
+          if (isLegacyAbs) {
+            // حدّث الصف للمسار النسبي الجديد (إصلاح محلي، لا عملية مزامنة).
+            final col = att.isNotEmpty ? 'attachment' : 'image';
+            await db.update('transactions', {col: stored},
+                where: 'id = ?', whereArgs: [r['id']]);
+          }
+          fetched++;
+          break; // الملف وصل — القرين التالي غير مطلوب.
+        } catch (_) {
+          // القرين غير متاح — جرّب التالي.
+        }
+      }
+    }
+    return fetched;
   }
 
   /// إشعار العضو بتغيير يخصه أجراه المدير (تغيير اسم الجهاز، ترقية/تخفيض

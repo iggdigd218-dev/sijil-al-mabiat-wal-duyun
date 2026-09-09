@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/core/media_paths.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/lan_http_transport.dart';
@@ -244,5 +246,90 @@ void main() {
     expect(result.ok, isTrue, reason: result.error);
     expect(result.remoteDeviceId, bId);
     expect(result.snapshot, isNotNull);
+  });
+
+  test(
+      'QA-LAN-10 attachment fetched by hash from peer, verified, wrong hash rejected',
+      () async {
+    // B (الخادم) لديه عملية بمرفق حقيقي وتجزئته.
+    final docsB = Directory('${tmp.path}/docsB')..createSync();
+    MediaPaths.docsDirForTesting = docsB.path;
+    final bytes = List<int>.generate(2048, (i) => i % 251);
+    File('${docsB.path}/images/rcpt.png')
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(bytes);
+    final hash = sha256.convert(bytes).toString();
+    await b.insert('transactions', {
+      'id': 990001,
+      'workspace_id': 'default',
+      'type': 'debit',
+      'amount': 10,
+      'currency': 'YER',
+      // مسار مطلق (passthrough) لأن MediaPaths جذر واحد مشترك في عملية
+      // الاختبار — على أجهزة حقيقية كل جهاز له جذره الخاص.
+      'image': '${docsB.path}/images/rcpt.png',
+      'attachment_hash': hash,
+      'date': now.toIso8601String(),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    // 1) الجلب بالتجزئة يعيد المحتوى الصحيح.
+    final client = HttpClient();
+    try {
+      final req = await client
+          .getUrl(Uri.parse('http://127.0.0.1:$port/attachments/$hash'));
+      req.headers.set('Authorization', 'Bearer $aSecret');
+      final resp = await req.close();
+      expect(resp.statusCode, 200);
+      final got = <int>[];
+      await for (final c in resp) {
+        got.addAll(c);
+      }
+      expect(got, bytes);
+      // 2) تجزئة غير موجودة → 404. بلا مصادقة → 401.
+      final miss = await (await client.getUrl(Uri.parse(
+              'http://127.0.0.1:$port/attachments/${'0' * 64}'))
+            ..headers.set('Authorization', 'Bearer $aSecret'))
+          .close();
+      expect(miss.statusCode, HttpStatus.notFound);
+      final noAuth = await (await client
+              .getUrl(Uri.parse('http://127.0.0.1:$port/attachments/$hash')))
+          .close();
+      expect(noAuth.statusCode, HttpStatus.unauthorized);
+    } finally {
+      client.close(force: true);
+    }
+    // 3) العميل A: نفس العملية وصلته بالمزامنة لكن الملف ناقص —
+    //    backfillMissingAttachments يجلبه من B ويتحقق من التجزئة.
+    final docsA = Directory('${tmp.path}/docsA')..createSync();
+    MediaPaths.docsDirForTesting = docsA.path;
+    await a.insert('transactions', {
+      'id': 990001,
+      'workspace_id': 'default',
+      'type': 'debit',
+      'amount': 10,
+      'currency': 'YER',
+      'image': 'images/rcpt.png',
+      'attachment_hash': hash,
+      'date': now.toIso8601String(),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    // backfill يستخدم auth_secret الخاص بنا كما هو مخزَّن في صفنا —
+    // والخادم B يقبل سرّ A (aSecret) المسجل لديه.
+    await a.update('devices', {'auth_secret': aSecret},
+        where: 'id = ?', whereArgs: [aId]);
+    final fetched = await sender.backfillMissingAttachments();
+    expect(fetched, 1);
+    final saved = File('${docsA.path}/images/rcpt.png');
+    expect(saved.existsSync(), isTrue);
+    expect(saved.readAsBytesSync(), bytes);
+    // 4) محتوى لا يطابق تجزئته يُرفض: نغيّر التجزئة المطلوبة محلياً.
+    saved.deleteSync();
+    await a.update('transactions', {'attachment_hash': 'f' * 64},
+        where: 'id = ?', whereArgs: [990001]);
+    expect(await sender.backfillMissingAttachments(), 0);
+    expect(saved.existsSync(), isFalse);
+    MediaPaths.docsDirForTesting = null;
   });
 }
