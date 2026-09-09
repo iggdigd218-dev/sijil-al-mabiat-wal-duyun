@@ -273,6 +273,7 @@ class SyncEngine {
     try {
       _cloudUrl = null;
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      await _cloudTransport?.stopListening();
       _cloudTransport = null;
       await _ensureCloudTransport();
       if (_cloudTransport != null) {
@@ -289,6 +290,7 @@ class SyncEngine {
     final autoSync = (st['cloudAutoSync'] ?? '1') != '0';
     if (!autoSync || url.isEmpty) {
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      unawaited(_cloudTransport?.stopListening() ?? Future.value());
       _cloudTransport = null;
       _cloudUrl = null;
       // تنظيف: صفوف cloud القديمة العالقة بلا خادم سحابي مهيأ — كانت تبقى
@@ -333,6 +335,22 @@ class SyncEngine {
     );
     registerTransport(_cloudTransport!);
     _cloudUrl = url;
+    // استماع فوري SSE: أي عملية يكتبها جهاز آخر في السحابة تصلنا لحظياً
+    // (السحب الدوري كل 45 ثانية يبقى شبكة أمان لو انقطعت القناة).
+    _cloudTransport!.onCloudChanged = () {
+      Future(() async {
+        try {
+          final applied =
+              await _cloudTransport?.pull(resolver: ConflictResolver()) ?? 0;
+          if (applied > 0) {
+            try {
+              onSyncActivity?.call();
+            } catch (_) {}
+          }
+        } catch (_) {}
+      });
+    };
+    unawaited(_cloudTransport!.startListening());
   }
 
   Future<void> start() async {
@@ -502,6 +520,7 @@ class SyncEngine {
     _rosterTimer?.cancel();
     _cloudPullTimer?.cancel();
     _cloudPullTimer = null;
+    unawaited(_cloudTransport?.stopListening() ?? Future.value());
     _immediate?.cancel();
     _presence?.dispose();
     _presence = null;

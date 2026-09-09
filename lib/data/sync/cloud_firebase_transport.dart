@@ -7,7 +7,11 @@
 //  - validation لـ URL.
 //  - استخدام startAfter لـ pagination عند تجاوز الدفعات.
 //  - لا نعتمد على ترتيب السيرفر فقط؛ نحتفظ cursor محلي.
+//  - استماع فوري SSE: قناة مفتوحة تُخطرنا لحظة وصول أي عملية جديدة
+//    (المزامنة تصبح شبه فورية بدل انتظار السحب الدوري).
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
@@ -241,5 +245,96 @@ class CloudFirebaseTransport implements SyncTransport {
     }
     await repo.setSetting('lastCloudSync', DateTime.now().toLocal().toString());
     return applied;
+  }
+
+  // ==================== الاستماع الفوري (SSE) ====================
+
+  HttpClient? _sseClient;
+  bool _listening = false;
+  int _sseRetrySeconds = 2;
+
+  /// يُستدعى عند وصول إشعار بتغيير في السحابة — يشغّل pull فوراً.
+  void Function()? onCloudChanged;
+
+  bool get isListening => _listening;
+
+  /// يفتح قناة SSE على مسار العمليات: فيربيس يرسل حدث `put`/`patch`
+  /// لحظة كتابة أي جهاز عملية جديدة، فنستدعي onCloudChanged (الذي يشغّل
+  /// pull تزايدياً). القناة تعيد الاتصال تلقائياً بتراجع أسّي عند الانقطاع.
+  Future<void> startListening() async {
+    if (_listening) return;
+    _listening = true;
+    _sseRetrySeconds = 2;
+    unawaited(_sseLoop());
+  }
+
+  Future<void> stopListening() async {
+    _listening = false;
+    try {
+      _sseClient?.close(force: true);
+    } catch (_) {}
+    _sseClient = null;
+  }
+
+  Future<void> _sseLoop() async {
+    while (_listening) {
+      try {
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 15);
+        _sseClient = client;
+        final tok = await _idToken();
+        // نستمع على مؤشر خفيف (limitToLast=1 مرتب بالمفتاح) — يكفي كجرس
+        // إنذار، والسحب الفعلي يمر عبر pull التزايدي المعتاد.
+        final params = <String, String>{
+          'orderBy': jsonEncode(r'$key'),
+          'limitToLast': '1',
+          if (tok != null) 'auth': tok,
+        };
+        final uri = Uri.parse(_opsPath).replace(queryParameters: params);
+        final req = await client.getUrl(uri);
+        req.headers.set('Accept', 'text/event-stream');
+        req.headers.set('Cache-Control', 'no-cache');
+        final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw StateError('sse-http-${resp.statusCode}');
+        }
+        _sseRetrySeconds = 2; // الاتصال نجح — صفّر التراجع.
+        String? eventName;
+        var skippedInitial = false;
+        await for (final line in resp
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
+          if (!_listening) break;
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (eventName == 'put' || eventName == 'patch') {
+              // أول حدث put هو اللقطة الأولية عند فتح القناة — نتجاهله
+              // (السحب الدوري/الافتتاحي يغطيه) ونتفاعل مع ما بعده فقط.
+              if (!skippedInitial && eventName == 'put') {
+                skippedInitial = true;
+              } else {
+                try {
+                  onCloudChanged?.call();
+                } catch (_) {}
+              }
+            } else if (eventName == 'auth_revoked') {
+              break; // أعد الاتصال بتوكن جديد.
+            }
+          }
+        }
+      } catch (_) {
+        // انقطاع شبكة/خادم — سنعيد المحاولة بعد المهلة.
+      } finally {
+        try {
+          _sseClient?.close(force: true);
+        } catch (_) {}
+        _sseClient = null;
+      }
+      if (!_listening) break;
+      await Future<void>.delayed(Duration(seconds: _sseRetrySeconds));
+      // تراجع أسّي حتى دقيقتين كحد أقصى.
+      _sseRetrySeconds = (_sseRetrySeconds * 2).clamp(2, 120);
+    }
   }
 }

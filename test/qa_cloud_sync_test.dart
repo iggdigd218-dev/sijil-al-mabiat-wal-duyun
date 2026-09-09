@@ -3,6 +3,7 @@
 // - انتهاء صلاحية idToken لا يفشل الطلب إذا كانت القاعدة عامة (إعادة بدون auth).
 // - CloudSync (نسخة كاملة برمز): الرفع لا يكتب فوق نسخة أحدث، والسحب يرفض
 //   الحمولة التالفة، وروابط غير https تُرفض مبكراً.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -221,6 +222,49 @@ void main() {
     final bad =
         await http.runWithClient(() => CloudSync.pull(repoA), cloud.client);
     expect(bad['ok'], false);
+  });
+
+  test('QA-CLOUD-06 SSE listener notifies on new remote op (near-realtime)',
+      () async {
+    // خادم SSE محلي يحاكي فيربيس: يرسل لقطة أولية ثم حدثاً جديداً.
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final gotListener = Completer<void>();
+    server.listen((req) async {
+      req.response.headers.contentType =
+          ContentType('text', 'event-stream', charset: 'utf-8');
+      req.response.bufferOutput = false;
+      // اللقطة الأولية (يجب أن تُتجاهل).
+      req.response.write('event: put\ndata: {"path":"/","data":null}\n\n');
+      await req.response.flush();
+      if (!gotListener.isCompleted) gotListener.complete();
+      // بعد لحظة: عملية جديدة (يجب أن تطلق onCloudChanged).
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      req.response.write(
+          'event: put\ndata: {"path":"/op-9","data":{"id":"op-9"}}\n\n');
+      await req.response.flush();
+      // أبقِ القناة مفتوحة قليلاً.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await req.response.close();
+    });
+
+    final t = CloudFirebaseTransport(
+      repo: repoA,
+      dbProvider: () async => a,
+      backendUrl: 'http://127.0.0.1:${server.port}',
+      workspaceId: 'default',
+    );
+    final changed = Completer<void>();
+    t.onCloudChanged = () {
+      if (!changed.isCompleted) changed.complete();
+    };
+    await t.startListening();
+    await gotListener.future.timeout(const Duration(seconds: 5));
+    // الحدث الجديد يصل خلال أقل من ثانيتين — شبه فوري.
+    await changed.future.timeout(const Duration(seconds: 5),
+        onTimeout: () => fail('لم يصل إشعار SSE خلال المهلة'));
+    await t.stopListening();
+    await server.close(force: true);
+    expect(t.isListening, isFalse);
   });
 
   test('QA-CLOUD-05 non-https backend URL rejected early', () async {
