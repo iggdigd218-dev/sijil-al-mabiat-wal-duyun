@@ -98,7 +98,10 @@ void main() {
       createdAt: now,
       updatedAt: now,
     ));
-    // بيانات محلية على الجهاز المستقل يجب أن تُحذف بالكامل عند الانضمام.
+    // هوية مؤسسة المدير — يجب أن تصل للعضو مع اللقطة.
+    await repoA.setSetting('businessName', 'مؤسسة المجموعة الرسمية');
+    // بيانات محلية على الجهاز المستقل يجب أن تُحذف بالكامل عند الانضمام:
+    // حسابات + قوالب + إشعارات + هوية مؤسسته القديمة.
     await repoB.saveAccount(Account(
       name: 'بيانات قديمة يجب حذفها',
       kind: AccountKind.customer,
@@ -106,6 +109,19 @@ void main() {
       createdAt: now,
       updatedAt: now,
     ));
+    await repoB.setSetting('businessName', 'مؤسستي القديمة');
+    await b.insert('templates', {
+      'name': 'قالب قديم',
+      'body': 'نص',
+      'created_at': now.toIso8601String(),
+    });
+    await b.insert('notifications', {
+      'title': 'إشعار قديم',
+      'body': '-',
+      'kind': 'info',
+      'seen': 0,
+      'created_at': now.toIso8601String(),
+    });
 
     final invite = await http.runWithClient(
         () => CloudJoin.createInvite(repoA), cloud.client);
@@ -137,6 +153,12 @@ void main() {
     final accounts = await b.query('accounts');
     expect(accounts.length, 1);
     expect(accounts.first['name'], 'عميل المجموعة');
+    // الحذف الكامل: قوالبه وإشعاراته القديمة اختفت أيضاً.
+    expect(await b.query('templates'), isEmpty);
+    expect(await b.query('notifications'), isEmpty);
+    // هوية مؤسسته القديمة استُبدلت بهوية المجموعة.
+    final stAfter = await repoB.settings();
+    expect(stAfter['businessName'], 'مؤسسة المجموعة الرسمية');
     // إعدادات السحابة بنفس رابط المدير.
     final st = await repoB.settings();
     expect(st['cloudBackendUrl'], url);

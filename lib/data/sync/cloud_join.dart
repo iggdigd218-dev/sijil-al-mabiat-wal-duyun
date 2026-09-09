@@ -197,6 +197,16 @@ class CloudJoin {
     }
     snapshot['workspaceMode'] = 'member';
     snapshot['hostDeviceId'] = ourId;
+    // إعدادات المؤسسة (اسم/عنوان/تذييل السند...) تُنقل مع اللقطة لتحل
+    // محل إعدادات الجهاز المنضم القديمة — «حذف كامل» يشمل هويته السابقة.
+    try {
+      final orgRows = await db.query('settings',
+          where:
+              "key IN ('businessName','businessNameEn','address','phone','whatsapp','email','managerName','voucherFooter','defaultVoucherNotes')");
+      snapshot['orgSettings'] = {
+        for (final r in orgRows) '${r['key']}': r['value']
+      };
+    } catch (_) {}
 
     final now = DateTime.now();
     final root = _root(url, ws);

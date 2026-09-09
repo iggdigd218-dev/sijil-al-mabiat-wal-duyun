@@ -420,6 +420,15 @@ class LanSyncService implements SyncTransport {
       }
       snapshot['workspaceMode'] = 'member';
       snapshot['hostDeviceId'] = ourDeviceId;
+      // إعدادات المؤسسة تُنقل مع اللقطة لتحل محل إعدادات الجهاز المنضم.
+      try {
+        final orgRows = await db.query('settings',
+            where:
+                "key IN ('businessName','businessNameEn','address','phone','whatsapp','email','managerName','voucherFooter','defaultVoucherNotes')");
+        snapshot['orgSettings'] = {
+          for (final r in orgRows) '${r['key']}': r['value']
+        };
+      } catch (_) {}
       resp.write(jsonEncode({'ok': true, 'data': snapshot}));
       await resp.close();
     } catch (e) {
@@ -1257,7 +1266,11 @@ class LanSyncService implements SyncTransport {
         for (final d in knownDevices) d['id']: d['auth_secret']
       };
       // 1) مسح البيانات المحلية (نُبقي devices/workspaces/sync_meta جزئياً).
+      // «حذف كامل»: يشمل أيضاً القوالب والإشعارات وإعدادات العمل القديمة —
+      // لا يبقى من بيانات الجهاز القديمة أي أثر بعد الانضمام.
       const clearTables = [
+        'templates',
+        'notifications',
         'accounts',
         'transactions',
         'transaction_items',
@@ -1337,6 +1350,36 @@ class LanSyncService implements SyncTransport {
       await insertAll('messages');
       await insertAll('trash');
       await insertAll('activity');
+
+      // 2ب) إعدادات المؤسسة: تُمسح إعدادات العمل القديمة على الجهاز المنضم
+      // (اسم المؤسسة/العنوان/التذييل/الشعار القديم...) وتُستبدل بإعدادات
+      // المجموعة القادمة في اللقطة — فلا يبقى اسم مؤسسته القديمة على السندات.
+      const orgKeys = [
+        'businessName',
+        'businessNameEn',
+        'address',
+        'phone',
+        'whatsapp',
+        'email',
+        'managerName',
+        'voucherFooter',
+        'defaultVoucherNotes',
+        'logo',
+      ];
+      for (final k in orgKeys) {
+        await txn.delete('settings', where: 'key = ?', whereArgs: [k]);
+      }
+      final orgSettings = snap['orgSettings'];
+      if (orgSettings is Map) {
+        for (final e in orgSettings.entries) {
+          final k = '${e.key}';
+          // الشعار ملف محلي على جهاز المضيف — لا معنى لمساره هنا.
+          if (k == 'logo' || !orgKeys.contains(k)) continue;
+          await txn.insert(
+              'settings', {'key': k, 'value': '${e.value ?? ''}'},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
 
       // 3) جهازنا الآن عضو (ليس مالكًا).
       await txn.update(
