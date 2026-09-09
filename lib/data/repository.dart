@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 import '../core/accounting.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
+import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/workspace_mode.dart';
 import 'sync/device_id.dart';
@@ -565,15 +566,20 @@ class Repo {
     await _ensureCan('edit_tx');
     final db = await _db;
     final mode = await workspaceMode();
+    final imgHash = await MediaPaths.fileHash(path);
     await db.transaction((txn) async {
       final rows = await txn.query('transactions',
           where: 'id = ?', whereArgs: [id], limit: 1);
       if (rows.isEmpty) throw StateError('العملية غير موجودة.');
       final patch = <String, Object?>{
-        'image': path,
+        'image': MediaPaths.toRelative(path),
         'updated_at': DateTime.now().toIso8601String(),
         'sync_state': mode == 'standalone' ? 'synced' : 'pending',
       };
+      final hasAtt =
+          ((rows.first['attachment'] as String?) ?? '').isNotEmpty;
+      // لا نطمس تجزئة مرفق أصلي بصورة إيصال مولّدة.
+      if (!hasAtt && imgHash.isNotEmpty) patch['attachment_hash'] = imgHash;
       await txn.update('transactions', patch, where: 'id = ?', whereArgs: [id]);
       await SyncRecorder(
               db: txn,
@@ -670,6 +676,17 @@ class Repo {
       mode = 'standalone';
     }
     final newSync = mode == 'standalone' ? 'synced' : 'pending';
+    // تجزئة SHA-256 للمرفق/صورة الإيصال (إن وجدت) — تُحسب خارج المعاملة
+    // لأنها قراءة ملف، وتُخزَّن في attachment_hash لجلب الملف عبر LAN.
+    var attHash = '';
+    final attSource = t.attachment.isNotEmpty ? t.attachment : t.image;
+    if (attSource.isNotEmpty) {
+      attHash = await MediaPaths.fileHash(attSource);
+    }
+    // نخزّن المسارات نسبيةً من جذر documents حتى تبقى صالحة بعد تحديث
+    // التطبيق ولا تُسرَّب مسارات مطلقة بلا معنى للأجهزة الأخرى في المزامنة.
+    final relAttachment = MediaPaths.toRelative(t.attachment);
+    final relImage = MediaPaths.toRelative(t.image);
     late final int id;
     await db.transaction((txn) async {
       final rec = SyncRecorder(
@@ -684,9 +701,13 @@ class Repo {
         if (ref.isEmpty) {
           ref = await _nextSequence(txn, 'counter_tx', table: 'transactions');
         }
-        final toSave = ref == t.reference
-            ? t.copyWith(syncState: newSync)
-            : t.copyWith(reference: ref, syncState: newSync);
+        final toSave = t.copyWith(
+          reference: ref,
+          syncState: newSync,
+          attachmentHash: attHash,
+          attachment: relAttachment,
+          image: relImage,
+        );
         final map = toSave.toMap();
         map['workspace_id'] = requireWorkspaceId;
         map['id'] = newGlobalId();
@@ -714,7 +735,12 @@ class Repo {
         );
       } else {
         id = t.id!;
-        final toSave = t.copyWith(syncState: newSync);
+        final toSave = t.copyWith(
+          syncState: newSync,
+          attachmentHash: attHash,
+          attachment: relAttachment,
+          image: relImage,
+        );
         final map = toSave.toMap();
         map['workspace_id'] = requireWorkspaceId;
         map.remove('id');
@@ -1980,10 +2006,14 @@ class Repo {
     final local = File('${folder.path}/${id}_$safeName');
     await local.writeAsBytes(bytes, flush: true);
 
+    // المسار يُخزَّن نسبياً (chat_media/...) — المطلق يتغيّر بين الأجهزة
+    // وبعد تحديثات النظام؛ التحويل للمطلق يحدث وقت العرض فقط.
+    await MediaPaths.ensureDocsDir();
+    final storedPath = MediaPaths.toRelative(local.path);
     final meta = jsonEncode({
       'name': name,
       'size': bytes.length,
-      'path': local.path,
+      'path': storedPath,
     });
     final row = {
       'id': id,
@@ -2035,10 +2065,11 @@ class Repo {
         '${folder.path}/c${conversationId}_${DateTime.now().millisecondsSinceEpoch}_$safeName');
     await local.writeAsBytes(bytes, flush: true);
 
+    await MediaPaths.ensureDocsDir();
     final meta = jsonEncode({
       'name': name,
       'size': bytes.length,
-      'path': local.path,
+      'path': MediaPaths.toRelative(local.path),
     });
     final id = await db.insert('messages', {
       'conversation_id': conversationId,
@@ -2425,7 +2456,7 @@ class Repo {
           final path = (row[entry.$2] ?? '') as String? ?? '';
           if (path.isEmpty || images.containsKey(path)) continue;
           try {
-            final f = File(path);
+            final f = File(MediaPaths.toAbsolute(path));
             if (!f.existsSync()) {
               throw StateError('الصورة المشار إليها غير موجودة: $path');
             }

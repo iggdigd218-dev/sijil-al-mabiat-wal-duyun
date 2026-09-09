@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 19;
+  static const int _version = 20;
 
   static int get schemaVersion => _version;
 
@@ -100,6 +100,7 @@ class AppDatabase {
         notes        TEXT DEFAULT '',
         category     TEXT DEFAULT '',
         attachment   TEXT DEFAULT '',
+        attachment_hash TEXT DEFAULT '',
         image        TEXT DEFAULT '',
         status       TEXT NOT NULL DEFAULT 'done',
         sync_state   TEXT NOT NULL DEFAULT 'synced',
@@ -118,6 +119,8 @@ class AppDatabase {
     await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_from ON transactions(from_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_del ON transactions(deleted_at)');
+    // قواعد قديمة أنشأت الجدول قبل v20 بدون عمود التجزئة — أضفه (idempotent).
+    await _addColumn(db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
 
     // ---------- السندات ----------
     await db.execute('''
@@ -884,6 +887,10 @@ class AppDatabase {
         await db.update('settings', {'value': 'host'},
             where: "key = 'workspaceMode' AND value = 'managed'");
       } catch (_) {}
+    }
+    // ====== v20: تجزئة SHA-256 لمرفقات العمليات المالية (جلب عبر LAN) ======
+    if (from < 20) {
+      await _addColumn(db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
     }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا

@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/receipt_image.dart';
 import '../core/theme.dart';
@@ -249,7 +250,7 @@ class TxShare {
       try {
         if (needsFreshReceipt ||
             tx.image.isEmpty ||
-            !File(tx.image).existsSync()) {
+            !MediaPaths.exists(tx.image)) {
           unawaited(
             generate(
               repo: repo,
@@ -281,8 +282,8 @@ class TxShare {
     try {
       if (needsFreshReceipt) {
         path = await generate(repo: repo, tx: tx, account: acc);
-      } else if (tx.image.isNotEmpty && File(tx.image).existsSync()) {
-        path = tx.image;
+      } else if (tx.image.isNotEmpty && MediaPaths.exists(tx.image)) {
+        path = MediaPaths.toAbsolute(tx.image);
       } else {
         path = await generate(repo: repo, tx: tx, account: acc);
       }
@@ -383,7 +384,7 @@ Future<void> showReceiptPreview(
   final repo = ref.read(repoProvider);
   final acc = account ??
       (tx.accountId == null ? null : await repo.account(tx.accountId!));
-  var path = tx.image;
+  var path = MediaPaths.toAbsolute(tx.image);
   final itemLines = tx.id == null
       ? const <InvoiceLine>[]
       : await repo.transactionItems(tx.id!);

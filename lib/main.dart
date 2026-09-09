@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/db_init.dart';
+import 'core/media_paths.dart';
 import 'core/database.dart';
 import 'core/sfx.dart';
 import 'core/theme.dart';
@@ -19,6 +20,10 @@ Future<void> main() async {
   initDbForPlatform();
   await initializeDateFormatting('ar');
   await initializeDateFormatting('en');
+  // جذر documents لمسارات الوسائط النسبية (chat_media/...).
+  try {
+    await MediaPaths.ensureDocsDir();
+  } catch (_) {}
 
   // التقاط أي خطأ غير مُعالج في إطار الـ UI بدل تعليق الشاشة بيضاء.
   FlutterError.onError = (details) {

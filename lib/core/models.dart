@@ -164,6 +164,10 @@ class Tx {
   final String category;
   final String attachment;
 
+  /// تجزئة SHA-256 لملف المرفق/الصورة — تسمح للأجهزة الأخرى بجلب الملف
+  /// عبر LAN عند الطلب (GET /attachments/:hash) بدل تضمينه في المزامنة.
+  final String attachmentHash;
+
   /// مسار صورة الإيصال المولّدة أو المختارة لهذه العملية (واحدة لكل عملية).
   final String image;
   final String status;
@@ -195,6 +199,7 @@ class Tx {
     this.notes = '',
     this.category = '',
     this.attachment = '',
+    this.attachmentHash = '',
     this.image = '',
     this.status = 'done',
     this.syncState = 'synced',
@@ -236,6 +241,7 @@ class Tx {
     String? notes,
     String? category,
     String? attachment,
+    String? attachmentHash,
     String? image,
     String? status,
     String? syncState,
@@ -260,6 +266,7 @@ class Tx {
         notes: notes ?? this.notes,
         category: category ?? this.category,
         attachment: attachment ?? this.attachment,
+        attachmentHash: attachmentHash ?? this.attachmentHash,
         image: image ?? this.image,
         status: status ?? this.status,
         syncState: syncState ?? this.syncState,
@@ -284,6 +291,7 @@ class Tx {
         'notes': notes,
         'category': category,
         'attachment': attachment,
+        'attachment_hash': attachmentHash,
         'image': image,
         'status': status,
         'sync_state': syncState,
@@ -310,6 +318,7 @@ class Tx {
         notes: (m['notes'] ?? '') as String,
         category: (m['category'] ?? '') as String,
         attachment: (m['attachment'] ?? '') as String,
+        attachmentHash: (m['attachment_hash'] ?? '') as String,
         image: (m['image'] ?? '') as String,
         status: (m['status'] ?? 'done') as String,
         syncState: (m['sync_state'] ?? 'synced') as String,

@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/token_cipher.dart';
@@ -556,6 +557,11 @@ class SyncEngine {
   ///    داخل SQLite تتضخم وتُبطئ كل قراءة.
   /// 2) حذف عمليات الدردشة القديمة (أقدم من 14 يوماً) المستلمة من الجميع
   ///    والمرفوعة للسحابة — الرسائل نفسها باقية في جدول messages.
+  /// مدخل للاختبارات فقط — يشغّل صيانة تخزين العمليات مباشرة.
+  @visibleForTesting
+  Future<void> pruneOperationPayloadsForTesting() =>
+      _pruneOperationPayloads();
+
   Future<void> _pruneOperationPayloads() async {
     final db = await _db;
     final ourId = (await repo.settings())['sync.deviceId'] ?? '';
@@ -598,6 +604,45 @@ class SyncEngine {
           AND (SELECT COUNT(*) FROM op_deliveries d
                WHERE d.operation_id = operations.id) >= ?
       ''', [cutoff, totalPeers]);
+    } catch (_) {}
+    // (3) تقليم عام (Compaction): العمليات المتجاوَزة — synced، مسلَّمة لكل
+    // الأقران النشطين، أقدم من 14 يوماً، وليست أحدث نسخة لكيانها.
+    // الإبقاء على أحدث نسخة لكل كيان يحفظ اتساق تسلسل الإصدارات
+    // (nextVersion يقرأ MAX(version)) ويُبقي حاجز idempotency ضد إعادة
+    // تطبيق نسخ قديمة تصل من سحب سحابي كامل.
+    try {
+      await db.transaction((txn) async {
+        await txn.rawDelete('''
+          DELETE FROM operations
+          WHERE synced = 1 AND timestamp < ?
+            AND entity_type <> 'message'
+            AND (SELECT COUNT(*) FROM op_deliveries d
+                 WHERE d.operation_id = operations.id) >= ?
+            AND EXISTS (
+              SELECT 1 FROM operations n
+              WHERE n.entity_type = operations.entity_type
+                AND n.entity_id = operations.entity_id
+                AND n.version > operations.version
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM sync_queue q
+              WHERE q.operation_id = operations.id
+                AND q.status IN ('pending', 'syncing')
+            )
+        ''', [cutoff, totalPeers]);
+        // صفوف الطابور التاريخية (synced) الأقدم من فترة الاحتفاظ.
+        await txn.rawDelete(
+          "DELETE FROM sync_queue WHERE status = 'synced' AND updated_at < ?",
+          [cutoff],
+        );
+        // سجلات تسليم يتيمة (عمليتها حُذفت).
+        await txn.rawDelete('''
+          DELETE FROM op_deliveries
+          WHERE NOT EXISTS (
+            SELECT 1 FROM operations o WHERE o.id = op_deliveries.operation_id
+          )
+        ''');
+      });
     } catch (_) {}
   }
 

@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../core/receipt_image.dart';
@@ -111,7 +112,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         _currency = t.currency;
         _sign = t.sign.isEmpty ? '+' : t.sign;
         _status = t.status;
-        _image = t.image;
+        _image = MediaPaths.toAbsolute(t.image);
         _date = t.date;
         _amount.text = Fmt.money(t.amount, 2).replaceAll(',', '');
         _rate.text = '${t.rate}';

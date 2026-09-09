@@ -13,6 +13,7 @@ import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/media_paths.dart';
 import '../../core/models.dart';
 import '../../core/workspace_mode.dart';
 import '../repository.dart';
@@ -360,9 +361,10 @@ class LanSyncService implements SyncTransport {
     );
   }
 
-  /// GET /attachments/&lt;txId&gt; — يعيد مرفق عملية مالية (صورة إيصال) عند
-  /// الطلب لجهاز مقترن مصادق. لا يقبل مسارات ملفات من العميل إطلاقاً:
-  /// المعرّف يُبحث عنه في transactions.attachment محلياً (منع path traversal).
+  /// GET /attachments/&lt;sha256-hash أو txId&gt; — يعيد مرفق عملية مالية
+  /// (صورة إيصال) عند الطلب لجهاز مقترن مصادق. الصيغة الجديدة تجزئة
+  /// SHA-256 للمحتوى (attachment_hash)، والقديمة معرّف العملية. لا يقبل
+  /// مسارات ملفات من العميل إطلاقاً (منع path traversal).
   Future<void> _handleAttachment(HttpRequest req, HttpResponse resp) async {
     final auth = req.headers.value('Authorization') ?? '';
     final secret = auth.startsWith('Bearer ') ? auth.substring(7).trim() : '';
@@ -385,16 +387,32 @@ class LanSyncService implements SyncTransport {
         await resp.close();
         return;
       }
-      final txId = Uri.decodeComponent(req.uri.path.split('/').last);
-      if (txId.isEmpty) {
+      final key = Uri.decodeComponent(req.uri.path.split('/').last);
+      if (key.isEmpty) {
         resp.statusCode = HttpStatus.badRequest;
         await resp.close();
         return;
       }
-      final rows = await db.query('transactions',
-          columns: ['attachment'], where: 'id = ?', whereArgs: [txId], limit: 1);
-      final path0 =
+      // المفتاح إمّا تجزئة SHA-256 للمحتوى (64 hex — الصيغة الجديدة) أو
+      // معرّف عملية رقمي (توافق خلفي). لا يُقبل مسار ملف من العميل إطلاقاً.
+      final isHash = RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(key);
+      final rows = isHash
+          ? await db.query('transactions',
+              columns: ['attachment', 'image'],
+              where: 'attachment_hash = ?',
+              whereArgs: [key.toLowerCase()],
+              limit: 1)
+          : await db.query('transactions',
+              columns: ['attachment', 'image'],
+              where: 'id = ?',
+              whereArgs: [key],
+              limit: 1);
+      var path0 =
           rows.isEmpty ? '' : ((rows.first['attachment'] as String?) ?? '');
+      if (path0.isEmpty && rows.isNotEmpty) {
+        path0 = (rows.first['image'] as String?) ?? '';
+      }
+      path0 = MediaPaths.toAbsolute(path0);
       if (path0.isEmpty) {
         resp.statusCode = HttpStatus.notFound;
         await resp.close();

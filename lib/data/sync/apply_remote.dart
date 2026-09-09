@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/media_paths.dart';
 import '../repository.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
@@ -109,10 +110,13 @@ extension ApplyRemoteOp on Repo {
           final safeName = rawName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
           final local = File('${folder.path}/${op.entityId}_$safeName');
           await local.writeAsBytes(bytes, flush: true);
+          // مسار نسبي (chat_media/...) لا مطلق — المطلق يتغيّر بين
+          // الأجهزة وتحديثات النظام؛ التحويل يحدث وقت العرض.
+          await MediaPaths.ensureDocsDir();
           row['payload'] = jsonEncode({
             'name': rawName,
             'size': bytes.length,
-            'path': local.path,
+            'path': MediaPaths.toRelative(local.path),
           });
         } catch (_) {
           // فشل حفظ المرفق لا يمنع وصول الرسالة نفسها.

@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/chat_media.dart';
+import '../core/media_paths.dart';
 import '../core/format.dart';
 import '../core/keep_alive_service.dart';
 import '../core/models.dart';
@@ -605,7 +606,8 @@ class AttachmentViewState extends State<AttachmentView> {
       return const SizedBox.shrink();
     }
     final meta = _meta;
-    final path = (meta['path'] ?? '') as String;
+    // المسار المخزن نسبي (chat_media/...) أو مطلق قديم — نحوّله للمطلق هنا.
+    final path = MediaPaths.toAbsolute((meta['path'] ?? '') as String);
     final name = (meta['name'] ?? 'ملف') as String;
     final size = (meta['size'] as num?)?.toInt() ?? 0;
     final exists = path.isNotEmpty && File(path).existsSync();

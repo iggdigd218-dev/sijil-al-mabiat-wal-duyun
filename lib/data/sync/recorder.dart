@@ -8,6 +8,12 @@ import 'workspace_service.dart';
 
 typedef SyncNotifyFn = void Function();
 
+/// الحد الأقصى لحمولة عملية واحدة بعد الترميز JSON.
+/// ناقل LAN يرفض الطلبات فوق 8MB (kMaxLanPayloadBytes) — نفرض الحد هنا
+/// عند التسجيل حتى لا تدخل الطابور عملية لا يمكن تسليمها أبداً
+/// (كانت تعلق pending للأبد وتسد الطابور خلفها).
+const int kMaxOperationPayloadBytes = 8 * 1024 * 1024 - 64 * 1024;
+
 class SyncRecorder {
   /// Callback static يُستدعى بعد تسجيل عملية جديدة — لتحفيز push فوري.
   static SyncNotifyFn? onOperationRecorded;
@@ -76,7 +82,19 @@ class SyncRecorder {
       deviceTime: now.toIso8601String(),
       timestamp: now.toIso8601String(),
     );
-    await db.insert('operations', op.toMap());
+    final opMap = op.toMap();
+    // فحص صارم للحجم قبل الإدراج: حمولة تتجاوز حد ناقل HTTP (8MB) لن
+    // تُسلَّم أبداً — نرفضها هنا فتفشل معاملة الحفظ كلها (ACID) بدل
+    // عملية عالقة pending للأبد تسد الطابور.
+    final payloadStr = opMap['payload'] as String? ?? '';
+    if (payloadStr.length > kMaxOperationPayloadBytes) {
+      throw StateError(
+        'حجم البيانات المرفقة يتجاوز الحد المسموح للمزامنة '
+        '(${(kMaxOperationPayloadBytes / (1024 * 1024)).toStringAsFixed(1)} MB) '
+        '— قلّل حجم المرفق وأعد المحاولة.',
+      );
+    }
+    await db.insert('operations', opMap);
 
     final qnow = now.toIso8601String();
     // لا نضيف هدف Cloud إلا إذا كان خادم سحابي مهيأ فعلاً — إضافته دائماً
