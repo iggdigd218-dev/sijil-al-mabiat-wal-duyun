@@ -95,9 +95,16 @@ class CloudFirebaseTransport implements SyncTransport {
     final body = op.toJson();
     final auth = await _authQuery();
     final targetUri = auth == null ? uri : uri.replace(query: auth);
-    final res = await http
+    var res = await http
         .put(targetUri, body: body, headers: _authHeaders)
         .timeout(const Duration(seconds: 10));
+    if ((res.statusCode == 401 || res.statusCode == 403) && auth != null) {
+      // idToken من Google تنتهي صلاحيته بعد ~ساعة؛ إن كانت قواعد القاعدة
+      // عامة فإرسال توكن منتهٍ يفشل الطلب بلا داعٍ — نعيد المحاولة بدونه.
+      res = await http
+          .put(uri, body: body, headers: _authHeaders)
+          .timeout(const Duration(seconds: 10));
+    }
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw StateError('cloud-auth-failed: ${res.statusCode}');
     }
@@ -157,7 +164,13 @@ class CloudFirebaseTransport implements SyncTransport {
       final tok = await _idToken();
       if (tok != null) params['auth'] = tok;
       final uri = Uri.parse(_opsPath).replace(queryParameters: params);
-      final res = await http.get(uri).timeout(const Duration(seconds: 15));
+      var res = await http.get(uri).timeout(const Duration(seconds: 15));
+      if ((res.statusCode == 401 || res.statusCode == 403) && tok != null) {
+        // التوكن منتهي الصلاحية وقاعدة عامة؟ جرّب بدون auth قبل الفشل.
+        params.remove('auth');
+        final bare = Uri.parse(_opsPath).replace(queryParameters: params);
+        res = await http.get(bare).timeout(const Duration(seconds: 15));
+      }
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw StateError('cloud-auth-failed');
       }

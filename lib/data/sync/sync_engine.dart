@@ -33,6 +33,8 @@ class SyncEngine {
   Timer? _timer;
   Timer? _maintenanceTimer;
   Timer? _rosterTimer;
+  Timer? _cloudPullTimer;
+  bool _cloudPulling = false;
   int _generation = 0;
   bool _running = false;
   bool _started = false;
@@ -388,6 +390,30 @@ class SyncEngine {
       const Duration(seconds: 10),
       (_) => _reconcileRoster(),
     );
+    // سحب سحابي دوري: بدون هذا كان السحب يحدث مرة واحدة فقط عند الإقلاع،
+    // فلا تصل عمليات الأجهزة الأخرى عبر السحابة إلا بعد إعادة تشغيل التطبيق.
+    _cloudPullTimer ??= Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => _periodicCloudPull(),
+    );
+  }
+
+  Future<void> _periodicCloudPull() async {
+    if (_cloudPulling || !_started) return;
+    if (_cloudTransport == null) return;
+    _cloudPulling = true;
+    try {
+      final applied = await _cloudTransport!.pull(resolver: ConflictResolver());
+      if (applied > 0) {
+        try {
+          onSyncActivity?.call();
+        } catch (_) {}
+      }
+    } catch (_) {
+      // شبكة غائبة/خادم بعيد — المحاولة القادمة بعد الدورة التالية.
+    } finally {
+      _cloudPulling = false;
+    }
   }
 
   /// إنقاذ العمليات السابقة (ما قبل الإصلاحات): عمليات محلية سُجّلت أيام
@@ -474,6 +500,8 @@ class SyncEngine {
     _timer?.cancel();
     _maintenanceTimer?.cancel();
     _rosterTimer?.cancel();
+    _cloudPullTimer?.cancel();
+    _cloudPullTimer = null;
     _immediate?.cancel();
     _presence?.dispose();
     _presence = null;

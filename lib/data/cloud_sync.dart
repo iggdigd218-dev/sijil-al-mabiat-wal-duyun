@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+import '../core/app_version.dart';
 import 'repository.dart';
 
 const _alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -32,8 +33,18 @@ class CloudSync {
     );
   }
 
-  static Future<void> setBackendUrl(Repo repo, String url) =>
-      repo.setSetting('cloudBackendUrl', url.trim());
+  static Future<void> setBackendUrl(Repo repo, String url) async {
+    final t = url.trim();
+    // رابط غير https يفشل النقل الفعلي (CloudFirebaseTransport يرفضه) —
+    // نرفضه هنا مبكراً بدل حفظه ثم فشل صامت لاحقاً.
+    if (t.isNotEmpty) {
+      final u = Uri.tryParse(t);
+      if (u == null || !u.hasScheme || !u.isScheme('https')) {
+        throw ArgumentError('رابط قاعدة البيانات يجب أن يبدأ بـ https://');
+      }
+    }
+    await repo.setSetting('cloudBackendUrl', t);
+  }
 
   static String _cleanCode(String c) {
     final clean = c.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
@@ -81,9 +92,14 @@ class CloudSync {
   }) async {
     final uri = Uri.parse(target);
     final headers = {'Content-Type': 'application/json'};
+    // مهلات صريحة: النسخ الكاملة قد تكون كبيرة (رفع أبطأ من القراءة)،
+    // وغياب المهلة كان يترك الواجهة معلّقة للأبد عند شبكة سيئة.
     final res = method == 'PUT'
-        ? await http.put(uri, headers: headers, body: jsonEncode(body))
-        : await http.get(uri, headers: headers);
+        ? await http
+            .put(uri, headers: headers, body: jsonEncode(body))
+            .timeout(const Duration(seconds: 60))
+        : await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 30));
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw StateError('Cloud HTTP ${res.statusCode}');
     }
@@ -164,7 +180,7 @@ class CloudSync {
     final rec = {
       'code': code,
       'app': 'sijil',
-      'appVersion': 'flutter-3.8',
+      'appVersion': '$kAppVersion+$kAppBuild',
       'updatedAt': now.toIso8601String(),
       'updatedAtLocal': now.toLocal().toString(),
       'sizeKb': '$kb KB',

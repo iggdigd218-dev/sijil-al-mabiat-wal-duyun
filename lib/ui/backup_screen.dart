@@ -75,11 +75,22 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _saveCloudConfig() async {
     final repo = ref.read(repoProvider);
-    await CloudSync.setBackendUrl(repo, _cloudUrlCtrl.text);
+    try {
+      await CloudSync.setBackendUrl(repo, _cloudUrlCtrl.text);
+    } on ArgumentError catch (e) {
+      if (mounted) showSnack(context, '${e.message}', error: true);
+      return;
+    }
     var code = _cloudCodeCtrl.text.trim();
     if (code.isEmpty) code = CloudSync.generateCode();
     final clean = await CloudSync.setCode(repo, code);
     _cloudCodeCtrl.text = clean;
+    // إعادة تهيئة ناقل المزامنة السحابية فوراً حتى تسري الإعدادات الجديدة
+    // على طابور العمليات دون انتظار إعادة تشغيل التطبيق.
+    try {
+      final engine = ref.read(syncEngineProvider);
+      if (engine.hasStarted) await engine.reconfigureCloud();
+    } catch (_) {}
     await _loadFirebaseState();
     if (mounted) showSnack(context, 'تم حفظ إعداد المزامنة السحابية ✅');
   }
