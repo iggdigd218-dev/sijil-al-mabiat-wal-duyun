@@ -92,6 +92,9 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
         'user' => 'مستخدم/صلاحية',
         'currency' => 'عملة',
         'setting' => 'إعداد',
+        'message' => 'رسالة دردشة',
+        'conversation' => 'محادثة',
+        'category' => 'تصنيف حسابات',
         _ => t,
       };
 
