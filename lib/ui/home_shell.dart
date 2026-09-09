@@ -503,10 +503,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ),
       AppScreen.transactions => FloatingActionButton.extended(
           onPressed: add
-              ? () async {
-                  final r = await openTxForm(context, ref);
-                  if (r == 'open_pos' && mounted) _go(AppScreen.pos);
-                }
+              // زر «فتح شاشة المبيعات» داخل النموذج يفتحها بنفسه الآن.
+              ? () => openTxForm(context, ref)
               : null,
           icon: const Icon(Icons.add),
           label: const Text('تسجيل عملية'),

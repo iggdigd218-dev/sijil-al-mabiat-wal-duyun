@@ -14,6 +14,7 @@ import '../core/receipt_image.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'calculator.dart';
+import 'pos_screen.dart';
 import 'tx_share.dart';
 import 'widgets.dart';
 
@@ -368,10 +369,25 @@ class _TxFormState extends ConsumerState<TxForm> {
           'تنتقل إلى نقطة البيع لتسجيل الفاتورة كاملة مع العملاء والأصناف',
         ),
         trailing: const Icon(Icons.chevron_left),
-        onTap: () {
-          Sfx.click();
-          Navigator.pop(context, 'open_pos');
-        },
+        onTap: _saving
+            ? null
+            : () {
+                Sfx.click();
+                // افتح شاشة المبيعات مباشرة مهما كانت الجهة التي فتحت النموذج.
+                // الاعتماد سابقاً على إشارة 'open_pos' كان يعمل فقط من زر
+                // «تسجيل عملية» في شاشة العمليات، ويبدو «بلا استجابة» من
+                // بقية الشاشات (تفاصيل الحساب، التعديل، التكرار...).
+                final nav = Navigator.of(context);
+                nav.pop();
+                nav.push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('🛒 المبيعات')),
+                      body: const PosScreen(),
+                    ),
+                  ),
+                );
+              },
       ),
     );
   }
