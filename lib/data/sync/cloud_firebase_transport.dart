@@ -180,6 +180,19 @@ class CloudFirebaseTransport implements SyncTransport {
         final bare = Uri.parse(_opsPath).replace(queryParameters: params);
         res = await http.get(bare).timeout(const Duration(seconds: 15));
       }
+      // قواعد RTDB بلا فهرس ".indexOn": "timestamp" → فيربيس يرفض orderBy
+      // بخطأ 400 فيفشل السحب للأبد رغم نجاح الدفع (البيانات تصعد ولا تنزل
+      // أبداً — أخطر عطل صامت). الحل: جلب كامل بلا orderBy والفرز/الترشيح
+      // محلياً. يعمل على القواعد الافتراضية دون أي إعداد من المستخدم.
+      var serverFiltered = true;
+      if (res.statusCode == 400 &&
+          res.body.contains('Index not defined')) {
+        serverFiltered = false;
+        final bareParams = <String, String>{if (tok != null) 'auth': tok};
+        final bareUri = Uri.parse(_opsPath).replace(
+            queryParameters: bareParams.isEmpty ? null : bareParams);
+        res = await http.get(bareUri).timeout(const Duration(seconds: 30));
+      }
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw StateError('cloud-auth-failed');
       }
@@ -195,7 +208,19 @@ class CloudFirebaseTransport implements SyncTransport {
         hasMore = false;
         break;
       }
-      final entries = decoded.entries.toList();
+      var entries = decoded.entries.toList();
+      // في وضع الجلب الكامل (بلا فهرس خادم): رشّح محلياً بنفس شرط startAt
+      // حتى لا نعيد معالجة تاريخ كامل في كل دورة (idempotent على أي حال).
+      if (!serverFiltered && startAtMs > 0) {
+        entries = entries.where((e) {
+          final v = e.value;
+          if (v is! Map) return false;
+          final ts = DateTime.tryParse('${v['timestamp'] ?? ''}')
+                  ?.millisecondsSinceEpoch ??
+              0;
+          return ts >= startAtMs;
+        }).toList();
+      }
       // فرز محلي حسب timestamp ثم opId لضمان الترتيب.
       entries.sort((a, b) {
         final va = a.value;
@@ -263,7 +288,8 @@ class CloudFirebaseTransport implements SyncTransport {
         } catch (_) {}
       }
       chatOps.clear();
-      hasMore = entries.length >= kPullPageSize;
+      // وضع الجلب الكامل يعيد كل شيء في طلب واحد — لا صفحات تالية.
+      hasMore = serverFiltered && entries.length >= kPullPageSize;
       startAfterKey = lastKey;
       // إذا كانت الصفحة تحتوي على عمليات بنفس timestamp نكرر بالصفحة التالية بstartAfter.
     }

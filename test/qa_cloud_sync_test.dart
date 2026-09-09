@@ -28,6 +28,10 @@ class FakeFirebase {
   bool requireAuth = false;
   String? validToken;
 
+  /// يحاكي القواعد الافتراضية لـ RTDB: orderBy="timestamp" بلا فهرس
+  /// ".indexOn" يُرفض بخطأ 400 (سلوك فيربيس الحقيقي المكتشف في الإنتاج).
+  bool rejectOrderBy = false;
+
   /// http.Response الافتراضية ترمّز بـ latin1 فترفض العربية — نرد UTF-8 دوماً.
   static http.Response _utf8Json(String body, int status) =>
       http.Response.bytes(utf8.encode(body), status, headers: {
@@ -60,6 +64,14 @@ class FakeFirebase {
             return _utf8Json(req.body, 200);
           }
           // GET قائمة العمليات — نتجاهل startAt/startAfter (حجم الاختبار صغير).
+          if (rejectOrderBy &&
+              req.url.queryParameters['orderBy'] == '"timestamp"') {
+            return _utf8Json(
+                '{"error" : "Index not defined, add \\".indexOn\\": '
+                '\\"timestamp\\", for path \\"/workspaces/default/operations\\", '
+                'to the rules"}',
+                400);
+          }
           if (operations.isEmpty) return _utf8Json('null', 200);
           return _utf8Json(jsonEncode(operations), 200);
         }
@@ -146,6 +158,39 @@ void main() {
     final again =
         await http.runWithClient(() => tB.pull(resolver: ConflictResolver()),
             cloud.client);
+    expect(again, 0);
+  });
+
+  test(
+      'QA-CLOUD-07 pull falls back to full fetch when RTDB rejects orderBy '
+      '(Index not defined — default rules)', () async {
+    final cloud = FakeFirebase()..rejectOrderBy = true;
+    final accId = await repoA.saveAccount(Account(
+      name: 'عميل بلا فهرس',
+      kind: AccountKind.customer,
+      notifyChannel: 'none',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final ops = await a.query('operations',
+        where: 'entity_type = ?', whereArgs: ['account']);
+    final op = SyncOperation.fromMap(ops.first);
+    final tA = transport(repoA, a);
+    await http.runWithClient(() => tA.push(op), cloud.client);
+
+    // قبل الإصلاح: pull كان يفشل بـ cloud-http-400 للأبد (دفع بلا سحب).
+    final tB = transport(repoB, b);
+    final applied = await http.runWithClient(
+        () => tB.pull(resolver: ConflictResolver()), cloud.client);
+    expect(applied, greaterThanOrEqualTo(1),
+        reason: 'يجب أن ينجح السحب بالتراجع لجلبٍ كامل بلا orderBy');
+    final bAcc = await b
+        .query('accounts', where: 'id = ?', whereArgs: [accId], limit: 1);
+    expect(bAcc, isNotEmpty);
+    expect(bAcc.first['name'], 'عميل بلا فهرس');
+    // سحب ثانٍ لا يكرر (idempotent) رغم الجلب الكامل.
+    final again = await http.runWithClient(
+        () => tB.pull(resolver: ConflictResolver()), cloud.client);
     expect(again, 0);
   });
 
