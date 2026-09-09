@@ -142,6 +142,11 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
           .where((p) => (current?.permissions[p.key] ?? false))
           .map((p) => p.key)
     };
+    // نلتقط المراجع قبل فتح النافذة: الشاشة الخلفية يُعاد بناؤها مع كل
+    // نشاط مزامنة، وإن أُتلفت أثناء فتح النافذة يصبح ref غير صالح
+    // («Cannot use ref after the widget was disposed») فيفشل الحفظ.
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
 
     await showDialog<void>(
       context: context,
@@ -227,13 +232,14 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
               FilledButton(
                 onPressed: () async {
                   try {
-                    await ref
-                        .read(repoProvider)
-                        .setDevicePermissions(
-                            device['id'] as String, role, perms);
+                    // repo/engine مُلتقطان قبل فتح النافذة — لا نلمس ref
+                    // هنا إطلاقاً: قد تكون الشاشة الخلفية أُتلفت وأُعيد
+                    // بناؤها أثناء بقاء النافذة مفتوحة.
+                    await repo.setDevicePermissions(
+                        device['id'] as String, role, perms);
                     // فرض فوري: نبثّ إشعارًا لكل الأقران ليسحب الجهاز المعني
                     // صلاحياته الجديدة خلال ثوانٍ (<10 ثوانٍ) دون انتظار الدورية.
-                    await ref.read(syncEngineProvider).broadcastRosterChange();
+                    await engine.broadcastRosterChange();
                     if (ctx.mounted) Navigator.pop(ctx);
                     Sfx.success();
                   } catch (e) {
@@ -270,8 +276,17 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                 'اضغط زر + في الأعلى لربط أول جهاز عبر QR أو الرمز أو IP يدوي.',
           );
         }
+        // مراجع مُلتقطة مرة واحدة: كل الاستدعاءات أدناه تحدث بعد await
+        // (نوافذ تأكيد/إدخال) وقد تُتلف الشاشة أثناءها — استعمال ref
+        // بعد الإتلاف يرمي «Cannot use ref after the widget was disposed».
+        final repo = ref.read(repoProvider);
+        final engine = ref.read(syncEngineProvider);
+        void safeBump() {
+          if (mounted) bump(ref);
+        }
+
         return FutureBuilder<Map<String, Object?>?>(
-          future: ref.read(repoProvider).ownDeviceRow(),
+          future: repo.ownDeviceRow(),
           builder: (ctx, snap) {
             final own = snap.data;
             final ownId = own?['id'] as String?;
@@ -298,17 +313,13 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                       isOwnerDevice: d['id'] == hostId,
                       amITheOwner: amITheOwner,
                       onAssign: (uid) async {
-                        await ref
-                            .read(repoProvider)
-                            .assignDeviceUser(d['id'] as String, uid);
-                        await ref
-                            .read(syncEngineProvider)
-                            .broadcastRosterChange();
-                        bump(ref);
+                        await repo.assignDeviceUser(d['id'] as String, uid);
+                        await engine.broadcastRosterChange();
+                        safeBump();
                       },
                       onPermissions: () async {
                         await _editDevicePermissions(context, ref, d);
-                        bump(ref);
+                        safeBump();
                       },
                       onRename: () async {
                         final name = await promptDialog(
@@ -318,10 +329,8 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           label: 'اسم الجهاز',
                         );
                         if (name == null || name.trim().isEmpty) return;
-                        await ref
-                            .read(repoProvider)
-                            .renameDevice(d['id'] as String, name.trim());
-                        bump(ref);
+                        await repo.renameDevice(d['id'] as String, name.trim());
+                        safeBump();
                       },
                       onRevoke: () async {
                         final ok = await confirmDialog(
@@ -333,17 +342,13 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           danger: true,
                         );
                         if (ok == true) {
-                          await ref
-                              .read(repoProvider)
-                              .revokeDevice(d['id'] as String);
-                          bump(ref);
+                          await repo.revokeDevice(d['id'] as String);
+                          safeBump();
                         }
                       },
                       onRestore: () async {
-                        await ref
-                            .read(repoProvider)
-                            .restoreDevice(d['id'] as String);
-                        bump(ref);
+                        await repo.restoreDevice(d['id'] as String);
+                        safeBump();
                       },
                       onExpel: () async {
                         final ok = await confirmDialog(
@@ -355,10 +360,8 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           danger: true,
                         );
                         if (ok == true) {
-                          await ref
-                              .read(repoProvider)
-                              .expelDevice(d['id'] as String);
-                          bump(ref);
+                          await repo.expelDevice(d['id'] as String);
+                          safeBump();
                         }
                       },
                       onTransferOwner: () async {
@@ -372,10 +375,8 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         );
                         if (ok == true) {
                           try {
-                            await ref
-                                .read(repoProvider)
-                                .transferOwnership(d['id'] as String);
-                            bump(ref);
+                            await repo.transferOwnership(d['id'] as String);
+                            safeBump();
                             if (mounted) {
                               showSnack(context, '✅ تم تسليم الإدارة.');
                               Navigator.of(context).popUntil((r) => r.isFirst);
@@ -396,10 +397,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           danger: true,
                         );
                         if (ok == true) {
-                          final s = await ref
-                              .read(repoProvider)
-                              .resetDeviceSecret(d['id'] as String);
-                          bump(ref);
+                          final s =
+                              await repo.resetDeviceSecret(d['id'] as String);
+                          safeBump();
                           if (mounted) {
                             showDialog(
                               context: context,

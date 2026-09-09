@@ -71,6 +71,9 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   }
 
   Future<void> _rename(String deviceId, String current) async {
+    // التقط المرجع قبل النافذة: الشاشة قد تُتلف أثناء فتحها
+    // فيصبح ref غير صالح («Cannot use ref after disposed»).
+    final repo = ref.read(repoProvider);
     final ctl = TextEditingController(text: current);
     final ok = await showDialog<bool>(
       context: context,
@@ -94,8 +97,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       ),
     );
     if (ok == true && ctl.text.trim().isNotEmpty) {
-      await ref.read(repoProvider).renameDevice(deviceId, ctl.text);
-      bump(ref);
+      await repo.renameDevice(deviceId, ctl.text);
+      if (mounted) bump(ref);
     }
   }
 
@@ -165,8 +168,11 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 message: 'اضغط "ربط جهاز جديد" لإضافة أول جهاز.',
               );
             }
+            // مرجع مُلتقط قبل النوافذ: استعمال ref بعد await قد يصادف
+            // شاشة أُتلفت («Cannot use ref after disposed»).
+            final repo = ref.read(repoProvider);
             return FutureBuilder<Map<String, Object?>?>(
-              future: ref.read(repoProvider).ownDeviceRow(),
+              future: repo.ownDeviceRow(),
               builder: (ctx, snap) {
                 final own = snap.data;
                 final ownId = own?['id'] as String?;
@@ -251,11 +257,11 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                           );
                           if (ok == true) {
                             try {
-                              await ref.read(repoProvider).transferOwnership(
-                                    d['id'] as String,
-                                    newUserRoleForMe: 'viewer',
-                                  );
-                              bump(ref);
+                              await repo.transferOwnership(
+                                d['id'] as String,
+                                newUserRoleForMe: 'viewer',
+                              );
+                              if (mounted) bump(ref);
                               if (mounted) {
                                 showSnack(
                                   context,

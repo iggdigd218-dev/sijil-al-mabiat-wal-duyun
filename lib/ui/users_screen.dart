@@ -529,9 +529,12 @@ class _UserFormState extends ConsumerState<_UserForm> {
             createdAt: now,
             updatedAt: now,
           );
-      await ref.read(repoProvider).saveUser(u);
-      bump(ref);
+      // نلتقط repo قبل await ونفحص mounted قبل لمس ref بعده —
+      // وإلا انفجر «Cannot use ref after the widget was disposed».
+      final repo = ref.read(repoProvider);
+      await repo.saveUser(u);
       if (!mounted) return;
+      bump(ref);
       Navigator.pop(context);
       showSnack(context, 'تم حفظ المستخدم ✅');
     } catch (e) {
