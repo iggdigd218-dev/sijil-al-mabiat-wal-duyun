@@ -10,6 +10,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
+import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
 import 'lan_http_transport.dart';
@@ -427,6 +428,22 @@ class SyncEngine {
           onSyncActivity?.call();
         } catch (_) {}
       }
+      // سجل الأجهزة السحابي: يرى المدير أجهزة الأعضاء البعيدة (المنضمة عبر
+      // السحابة) ويعيّن لها مستخدمين، وتصل التعيينات/الحظر/الطرد للأعضاء.
+      try {
+        final t = _cloudTransport!;
+        final changed = await CloudJoin.syncRoster(
+          repo,
+          await _db,
+          backendUrl: t.backendUrl,
+          workspaceId: t.workspaceId,
+        );
+        if (changed) {
+          try {
+            onSyncActivity?.call();
+          } catch (_) {}
+        }
+      } catch (_) {}
     } catch (_) {
       // شبكة غائبة/خادم بعيد — المحاولة القادمة بعد الدورة التالية.
     } finally {

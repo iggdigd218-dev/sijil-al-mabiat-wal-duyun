@@ -13,6 +13,7 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import 'update_section.dart';
 import 'appearance_screen.dart';
+import 'cloud_sync_section.dart';
 import 'widgets.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
@@ -556,6 +557,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               bump(ref);
                             },
                     ),
+                  ],
+                ),
+                // المزامنة السحابية — تظهر للجميع:
+                // المدير/المستقل يضبط الرابط وينشئ دعوات، والعضو يرى الحالة
+                // ويستطيع إدخال الرابط يدوياً إن لم يصله من المدير.
+                const SizedBox(height: 18),
+                _Collapsible(
+                  title: 'المزامنة السحابية (Firebase)',
+                  icon: Icons.cloud_sync_outlined,
+                  color: const Color(0xFF0EA5E9),
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: CloudSyncSettingsSection(
+                          isManager: canEditOrg,
+                        ),
+                      ),
+                    ),
+                    // جهاز مستقل (ليس عضواً): يمكنه الانضمام لمجموعة عبر السحابة.
+                    if (wsMode == 'standalone')
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.group_add_outlined,
+                              color: Color(0xFF7C3AED)),
+                          title: const Text('الانضمام إلى مجموعة عبر السحابة'),
+                          subtitle: const Text(
+                            'أدخل رابط المدير ورمز الدعوة — ستُحذف بيانات هذا '
+                            'الجهاز وتُستبدل بنسخة المجموعة.',
+                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                          ),
+                          trailing: const Icon(Icons.chevron_left),
+                          onTap: () => showCloudJoinDialog(context, ref),
+                        ),
+                      ),
                   ],
                 ),
                 // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،

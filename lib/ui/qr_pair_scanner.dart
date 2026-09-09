@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../data/sync/cloud_join.dart';
 import '../data/sync/qr_pairing.dart';
 
 class PairingData {
@@ -12,12 +13,24 @@ class PairingData {
   final String ip;
   final int port;
   final String tok;
+
+  /// نوع الاقتران: 'lan' (شبكة محلية) أو 'cloud' (دعوة سحابية).
+  final String kind;
+
+  /// لدعوات السحابة: رابط قاعدة البيانات ورمز النسخة السحابية.
+  final String cloudUrl;
+  final String cloudCode;
   const PairingData({
     required this.ws,
     required this.ip,
     required this.port,
     required this.tok,
+    this.kind = 'lan',
+    this.cloudUrl = '',
+    this.cloudCode = '',
   });
+
+  bool get isCloud => kind == 'cloud';
 }
 
 Future<PairingData?> scanQrPair(BuildContext context) async {
@@ -61,6 +74,23 @@ class _QrPairScannerState extends State<_QrPairScanner> {
     for (final b in cap.barcodes) {
       final raw = b.rawValue;
       if (raw == null) continue;
+      // دعوة سحابية؟ nexora://cloudjoin?...
+      final cloud = CloudInviteInfo.parseQr(raw);
+      if (cloud != null &&
+          (cloud['url'] ?? '').isNotEmpty &&
+          (cloud['tok'] ?? '').isNotEmpty) {
+        _handled = true;
+        Navigator.of(context).pop(PairingData(
+          ws: cloud['ws'] ?? 'default',
+          ip: '',
+          port: 0,
+          tok: cloud['tok'] ?? '',
+          kind: 'cloud',
+          cloudUrl: cloud['url'] ?? '',
+          cloudCode: cloud['code'] ?? '',
+        ));
+        return;
+      }
       final parsed = QrPairingService.parseQr(raw);
       if (parsed == null) continue;
       final ws = parsed['ws'] ?? '';

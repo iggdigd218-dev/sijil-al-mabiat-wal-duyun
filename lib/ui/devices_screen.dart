@@ -8,6 +8,7 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'cloud_sync_section.dart';
 import 'widgets.dart';
 
 /// شاشة إدارة الأجهزة المرتبطة: عرض/ربط/إلغاء/تحديد الصلاحيات.
@@ -320,6 +321,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                             }
                           }
                         },
+                        onCloudLink: () =>
+                            showCloudInviteDialog(context, ref),
                       ),
                   ],
                 );
@@ -474,6 +477,7 @@ class DeviceCard extends StatelessWidget {
   final VoidCallback onTransferOwner;
   final VoidCallback onResetSecret;
   final VoidCallback? onPermissions;
+  final VoidCallback? onCloudLink;
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
@@ -488,6 +492,7 @@ class DeviceCard extends StatelessWidget {
     required this.onTransferOwner,
     required this.onResetSecret,
     this.onPermissions,
+    this.onCloudLink,
     required this.isSelf,
     required this.isOwnerDevice,
     required this.amITheOwner,
@@ -671,76 +676,111 @@ class DeviceCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  if (!expelled && !isSelf && amITheOwner && onPermissions != null)
-                    IconButton(
-                      tooltip: 'إدارة صلاحيات الجهاز',
-                      onPressed: inactive ? null : onPermissions,
-                      icon: const Icon(Icons.verified_user_outlined,
-                          size: 20, color: Colors.teal),
-                    ),
-                  IconButton(
-                    tooltip: 'إعادة التسمية',
-                    onPressed: isSelf || inactive ? null : onRename,
-                    icon: const Icon(Icons.edit_outlined, size: 20),
+                  // كل إجراءات الجهاز مجمّعة في قائمة ثلاث نقاط واحدة
+                  // بدل صف الأيقونات الصغيرة المبعثرة.
+                  _buildActionsMenu(
+                    context,
+                    expelled: expelled,
+                    revoked: revoked,
+                    inactive: inactive,
                   ),
-                  if (expelled)
-                    const SizedBox.shrink() // أجهزة مطرودة لا إجراء عليها.
-                  else if (revoked)
-                    IconButton(
-                      tooltip: 'إعادة السماح (إلغاء الحظر)',
-                      onPressed: isSelf ? null : onRestore,
-                      icon: const Icon(
-                        Icons.verified_user_outlined,
-                        size: 20,
-                        color: Colors.green,
-                      ),
-                    )
-                  else
-                    IconButton(
-                      tooltip: 'حظر مؤقت',
-                      onPressed: isSelf ? null : onRevoke,
-                      icon: const Icon(
-                        Icons.block,
-                        size: 20,
-                        color: Colors.orange,
-                      ),
-                    ),
-                  if (!expelled && !isSelf && amITheOwner)
-                    IconButton(
-                      tooltip: 'إعادة تعيين رمز الجهاز (يُلزم إعادة الاقتران)',
-                      onPressed: onResetSecret,
-                      icon: const Icon(
-                        Icons.lock_reset,
-                        size: 20,
-                        color: Colors.blueAccent,
-                      ),
-                    ),
-                  if (!expelled && !isSelf && !isOwnerDevice && amITheOwner)
-                    IconButton(
-                      tooltip: 'تسليم الإدارة (نقل الملكية) لهذا الجهاز',
-                      onPressed: onTransferOwner,
-                      icon: const Icon(
-                        Icons.swap_horiz,
-                        size: 20,
-                        color: Colors.purple,
-                      ),
-                    ),
-                  if (!expelled && !isSelf && !isOwnerDevice)
-                    IconButton(
-                      tooltip: 'طرد من المجموعة',
-                      onPressed: onExpel,
-                      icon: const Icon(
-                        Icons.person_remove,
-                        size: 20,
-                        color: Colors.red,
-                      ),
-                    ),
                 ],
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// قائمة ثلاث نقاط تجمع كل إجراءات الجهاز في مكان واحد مرتب:
+  /// صلاحيات/تسمية/حظر-سماح/إعادة رمز/تسليم إدارة/طرد + ربط العضو عبر السحابة.
+  Widget _buildActionsMenu(
+    BuildContext context, {
+    required bool expelled,
+    required bool revoked,
+    required bool inactive,
+  }) {
+    final items = <PopupMenuEntry<String>>[];
+
+    void add(String value, IconData icon, Color color, String label,
+        {bool enabled = true}) {
+      items.add(PopupMenuItem<String>(
+        value: value,
+        enabled: enabled,
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: enabled ? color : Colors.grey),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(label, style: const TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ));
+    }
+
+    if (!expelled && !isSelf && amITheOwner && onPermissions != null) {
+      add('perms', Icons.verified_user_outlined, Colors.teal,
+          'إدارة صلاحيات الجهاز',
+          enabled: !inactive);
+    }
+    if (!isSelf) {
+      add('rename', Icons.edit_outlined, Colors.blueGrey, 'إعادة التسمية',
+          enabled: !inactive);
+    }
+    if (!expelled) {
+      if (revoked) {
+        add('restore', Icons.verified_user_outlined, Colors.green,
+            'إعادة السماح (إلغاء الحظر)',
+            enabled: !isSelf);
+      } else {
+        add('revoke', Icons.block, Colors.orange, 'حظر مؤقت',
+            enabled: !isSelf);
+      }
+    }
+    if (!expelled && !isSelf && amITheOwner && onCloudLink != null) {
+      add('cloudlink', Icons.cloud_sync_outlined, const Color(0xFF0EA5E9),
+          'ربط العضو عبر السحابة');
+    }
+    if (!expelled && !isSelf && amITheOwner) {
+      add('resetsecret', Icons.lock_reset, Colors.blueAccent,
+          'إعادة تعيين رمز الجهاز');
+    }
+    if (!expelled && !isSelf && !isOwnerDevice && amITheOwner) {
+      add('transfer', Icons.swap_horiz, Colors.purple,
+          'تسليم الإدارة لهذا الجهاز');
+    }
+    if (!expelled && !isSelf && !isOwnerDevice) {
+      add('expel', Icons.person_remove, Colors.red, 'طرد من المجموعة');
+    }
+
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return PopupMenuButton<String>(
+      tooltip: 'إجراءات الجهاز',
+      icon: const Icon(Icons.more_vert, size: 22),
+      itemBuilder: (_) => items,
+      onSelected: (v) {
+        switch (v) {
+          case 'perms':
+            onPermissions?.call();
+          case 'rename':
+            onRename();
+          case 'restore':
+            onRestore();
+          case 'revoke':
+            onRevoke();
+          case 'cloudlink':
+            onCloudLink?.call();
+          case 'resetsecret':
+            onResetSecret();
+          case 'transfer':
+            onTransferOwner();
+          case 'expel':
+            onExpel();
+        }
+      },
     );
   }
 

@@ -14,6 +14,7 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
+import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
 import 'join_group_flow.dart';
 import 'qr_pair_scanner.dart' show scanQrPair;
@@ -417,11 +418,12 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                                     child: const Text('تم'),
                                   ),
                                 ],
-                              ),
-                            );
+                            ),
+                          );
                           }
                         }
                       },
+                      onCloudLink: () => showCloudInviteDialog(context, ref),
                     ),
                 ],
               ),
@@ -666,6 +668,20 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
               onTap: _scanQr,
             ),
             const _HubManualTile(),
+            _HubTile(
+              icon: Icons.cloud_sync_outlined,
+              color: const Color(0xFF0EA5E9),
+              title: 'ربط عضو عبر السحابة (عبر الإنترنت)',
+              subtitle:
+                  'لجهاز بعيد خارج شبكة Wi-Fi: يُنشئ دعوة سحابية (QR + رمز صالح 24 ساعة) بنفس رابط حسابك السحابي — تُحذف بيانات جهاز العضو وتُستبدل بنسخة المجموعة.',
+              onTap: () {
+                final rootContext =
+                    Navigator.of(context, rootNavigator: true).context;
+                Navigator.pop(context);
+                Sfx.click();
+                showCloudInviteDialog(rootContext, ref);
+              },
+            ),
             _HubTile(
               icon: Icons.vpn_key_outlined,
               color: const Color(0xFF9C27B0),

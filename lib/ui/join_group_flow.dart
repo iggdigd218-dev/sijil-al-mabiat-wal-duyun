@@ -8,6 +8,7 @@ import '../core/sfx.dart';
 import '../data/providers.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/lan_http_transport.dart';
+import 'cloud_sync_section.dart' show performCloudJoin;
 import 'qr_pair_scanner.dart' show PairingData;
 import 'widgets.dart';
 
@@ -18,6 +19,19 @@ Future<void> joinGroupFromScan(
   ProviderContainer container,
   PairingData data,
 ) async {
+  // باركود دعوة سحابية؟ الانضمام يمر عبر مسار السحابة بالكامل
+  // (حذف البيانات ← لقطة من فيربيس ← عضو يتزامن برابط المدير نفسه).
+  if (data.isCloud) {
+    await performCloudJoin(
+      context,
+      container,
+      backendUrl: data.cloudUrl,
+      token: data.tok,
+      workspaceId: data.ws.isEmpty ? 'default' : data.ws,
+      cloudCode: data.cloudCode,
+    );
+    return;
+  }
   // 1) تأكيد صريح: الانضمام يمسح البيانات المحلية.
   final confirm = await showDialog<bool>(
     context: context,
