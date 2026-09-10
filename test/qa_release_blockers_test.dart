@@ -114,8 +114,8 @@ void main() {
   });
 
   test(
-      'QA-BLOCKER-04 Firebase cursor uses the same ISO timestamp type as stored operations',
-      () async {
+      'QA-BLOCKER-04 Firebase cursor filters by numeric server_ts '
+      '(clock-drift immune), accepts legacy ISO cursor values', () async {
     final ms = now.millisecondsSinceEpoch;
     await a.insert('sync_meta', {'key': 'lastCloudTs:default', 'value': '$ms'});
     Uri? requested;
@@ -130,9 +130,22 @@ void main() {
               requested = request.url;
               return http.Response('null', 200);
             }));
-    expect(
-        requested!.queryParameters['startAt'],
-        jsonEncode(
-            DateTime.fromMillisecondsSinceEpoch(ms - 2000).toIso8601String()));
+    // منذ المرحلة 5: الترشيح بختم خادم فيربيس الرقمي حصراً — لا ISO من
+    // ساعات الهواتف (overlap ثانيتين كما كان).
+    expect(requested!.queryParameters['orderBy'], jsonEncode('server_ts'));
+    expect(requested!.queryParameters['startAt'], '${ms - 2000}');
+
+    // التوافق الخلفي: مؤشر قديم بصيغة ISO يُقرأ ويُحوَّل رقمياً.
+    final iso = DateTime.fromMillisecondsSinceEpoch(ms).toIso8601String();
+    await a.update('sync_meta', {'value': iso},
+        where: 'key = ?', whereArgs: ['lastCloudTs:default']);
+    await http.runWithClient(
+        () => transport.pull(),
+        () => MockClient((request) async {
+              requested = request.url;
+              return http.Response('null', 200);
+            }));
+    expect(requested!.queryParameters['startAt'], '${ms - 2000}',
+        reason: 'قيمة ISO قديمة تُفهم وتتحول لملي ثانية');
   });
 }

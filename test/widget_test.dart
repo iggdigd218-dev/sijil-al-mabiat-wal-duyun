@@ -825,9 +825,12 @@ void main() {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
     });
 
-    test('التجزئة ثابتة والتحقق يقبل الصحيح فقط', () {
+    test('التجزئة مملّحة عشوائياً والتحقق يقبل الصحيح فقط', () {
       final h = Security.hash('1234');
-      expect(h, Security.hash('1234'));
+      // ملح عشوائي فريد لكل استدعاء: تجزئتا نفس الكلمة تختلفان (v2)،
+      // والتحقق الصحيح يكون بـ verify وليس بمقارنة النصوص.
+      expect(h, isNot(equals(Security.hash('1234'))));
+      expect(h, startsWith('v2\$'));
       expect(h, isNot(equals('1234')));
       expect(Security.verify('1234', h), isTrue);
       expect(Security.verify('9999', h), isFalse);
