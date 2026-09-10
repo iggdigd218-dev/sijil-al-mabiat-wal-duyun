@@ -47,6 +47,8 @@ class UpdateInstaller {
 
   /// هل منح المستخدم إذن «تثبيت التطبيقات غير المعروفة» لهذا التطبيق؟
   Future<bool> canInstall() async {
+    // ويندوز لا يحتاج إذناً مسبقاً: تشغيل المُثبّت يُظهر حوار UAC للنظام.
+    if (Platform.isWindows) return true;
     if (!Platform.isAndroid) return false;
     try {
       return await _channel.invokeMethod<bool>('canInstall') ?? false;
@@ -103,9 +105,13 @@ class UpdateInstaller {
   /// ينزّل APK من [url] ويبث التقدم، ثم يفتح شاشة تثبيت النظام.
   /// لا يرمي استثناءً — يبث InstallPhase.failed مع سبب عربي مفهوم.
   Stream<InstallProgress> downloadAndInstall(String url) async* {
+    if (Platform.isWindows) {
+      yield* _windowsDownloadAndInstall(url);
+      return;
+    }
     if (!Platform.isAndroid) {
       yield const InstallProgress(InstallPhase.failed,
-          error: 'التحديث المباشر متاح على أندرويد فقط.');
+          error: 'التحديث المباشر متاح على أندرويد وويندوز فقط.');
       return;
     }
 
@@ -239,16 +245,64 @@ class UpdateInstaller {
     }
   }
 
+  // ------------------------- مسار ويندوز -------------------------
+
+  /// ويندوز: ينزّل مُثبّت NexoraSetup.exe (أو الملف المتاح) داخل التطبيق
+  /// ثم يشغّله — معالج التثبيت يحدّث النسخة فوق الحالية مع بقاء البيانات.
+  Stream<InstallProgress> _windowsDownloadAndInstall(String url) async* {
+    yield const InstallProgress(InstallPhase.downloading, progress: 0);
+    final segs = Uri.tryParse(url)?.pathSegments ?? const <String>[];
+    final name = segs.isEmpty ? '' : segs.last;
+    final isExe = name.toLowerCase().endsWith('.exe');
+    final fileName = isExe ? 'NexoraSetup.exe' : 'nexora-update.zip';
+    yield* _httpDownload(url, fileName, (file) async* {
+      if (file.lengthSync() < 512 * 1024) {
+        yield const InstallProgress(InstallPhase.failed,
+            error: 'الملف المنزَّل غير مكتمل. أعد المحاولة.');
+        return;
+      }
+      yield const InstallProgress(InstallPhase.launchingInstaller,
+          progress: 1);
+      try {
+        if (isExe) {
+          // تشغيل المُثبّت منفصلاً — سيطلب النظام إذن المسؤول (UAC).
+          await Process.start(file.path, const [], mode: ProcessStartMode.detached);
+        } else {
+          // نسخة zip محمولة: نفتح مجلدها ليستخرجها المستخدم.
+          await Process.start('explorer.exe', ['/select,', file.path],
+              mode: ProcessStartMode.detached);
+        }
+        yield const InstallProgress(InstallPhase.done, progress: 1);
+        if (isExe) {
+          // نغلق التطبيق بعد لحظة حتى لا تبقى ملفاته مقفلة أثناء التثبيت.
+          Future.delayed(const Duration(milliseconds: 1500), () => exit(0));
+        }
+      } catch (e) {
+        yield InstallProgress(InstallPhase.failed,
+            error: 'تعذّر تشغيل المُثبّت: $e');
+      }
+    });
+  }
+
   /// مسار احتياطي: تنزيل http داخل التطبيق (كما في السابق) إذا تعذّر
   /// استخدام مدير تنزيلات النظام.
   Stream<InstallProgress> _fallbackHttpDownload(String url) async* {
+    yield* _httpDownload(url, 'nexora-update.apk', (f) => _install(f.path));
+  }
+
+  /// تنزيل http عام إلى ملف مؤقت ثم تمرير الملف لخطوة ما بعد التنزيل.
+  Stream<InstallProgress> _httpDownload(
+    String url,
+    String fileName,
+    Stream<InstallProgress> Function(File file) onDone,
+  ) async* {
     final File apk;
     try {
       final cache = await getTemporaryDirectory();
       final dir = Directory('${cache.path}/updates');
       if (dir.existsSync()) dir.deleteSync(recursive: true);
       dir.createSync(recursive: true);
-      apk = File('${dir.path}/nexora-update.apk');
+      apk = File('${dir.path}/$fileName');
     } catch (e) {
       yield InstallProgress(InstallPhase.failed,
           error: 'تعذّر تجهيز مجلد التنزيل: $e');
@@ -298,6 +352,6 @@ class UpdateInstaller {
       } catch (_) {}
       client.close();
     }
-    yield* _install(apk.path);
+    yield* onDone(apk);
   }
 }

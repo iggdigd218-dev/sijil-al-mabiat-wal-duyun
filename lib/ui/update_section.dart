@@ -40,15 +40,17 @@ Future<bool> openUpdateLink(UpdateInfo info) async {
   }
 }
 
-/// يبدأ التحديث بنقرة واحدة: تنزيل مباشر داخل التطبيق ثم شاشة تثبيت النظام.
-/// على غير أندرويد (أو بلا رابط مباشر) يتراجع تلقائياً لفتح المتصفح.
+/// يبدأ التحديث بنقرة واحدة: تنزيل مباشر داخل التطبيق ثم شاشة تثبيت النظام
+/// (أندرويد) أو تشغيل مُثبّت ويندوز. على المنصات الأخرى (أو بلا رابط مباشر)
+/// يتراجع تلقائياً لفتح المتصفح.
 Future<void> startOneClickUpdate(
   BuildContext context,
   WidgetRef ref,
   UpdateInfo info,
 ) async {
   final url = info.downloadUrl;
-  if (!Platform.isAndroid || url == null) {
+  final oneClick = Platform.isAndroid || Platform.isWindows;
+  if (!oneClick || url == null) {
     final ok = await openUpdateLink(info);
     if (!ok && context.mounted) showSnack(context, 'تعذّر فتح رابط التحديث');
     return;
@@ -118,14 +120,22 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
         ),
       InstallPhase.downloading => (
           'جارٍ تنزيل التحديث…',
-          _state.progress != null
-              ? '${(_state.progress! * 100).round()}٪ — التنزيل يستمر في '
-                  'الخلفية حتى لو خرجت من التطبيق'
-              : 'التنزيل يستمر في الخلفية حتى لو خرجت من التطبيق',
+          Platform.isWindows
+              ? (_state.progress != null
+                  ? '${(_state.progress! * 100).round()}٪ — أبقِ التطبيق '
+                      'مفتوحاً حتى يكتمل التنزيل'
+                  : 'أبقِ التطبيق مفتوحاً حتى يكتمل التنزيل')
+              : (_state.progress != null
+                  ? '${(_state.progress! * 100).round()}٪ — التنزيل يستمر في '
+                      'الخلفية حتى لو خرجت من التطبيق'
+                  : 'التنزيل يستمر في الخلفية حتى لو خرجت من التطبيق'),
         ),
       InstallPhase.launchingInstaller || InstallPhase.done => (
           'اكتمل التنزيل ✅',
-          'اضغط «تثبيت» في شاشة النظام لإتمام التحديث. بياناتك محفوظة.',
+          Platform.isWindows
+              ? 'سيُفتح معالج التثبيت الآن — اتبع خطواته وسيُغلق التطبيق '
+                  'تلقائياً لإتمام التحديث. بياناتك محفوظة.'
+              : 'اضغط «تثبيت» في شاشة النظام لإتمام التحديث. بياناتك محفوظة.',
         ),
       InstallPhase.failed => ('تعذّر التحديث', _state.error ?? ''),
       InstallPhase.idle => ('لحظة…', ''),
@@ -153,7 +163,9 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
           ],
         ),
         actions: [
-          if (downloading)
+          // على أندرويد يواصل مدير تنزيلات النظام في الخلفية؛ على ويندوز
+          // التنزيل داخل التطبيق فلا نعرض زر «متابعة في الخلفية».
+          if (downloading && !Platform.isWindows)
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('متابعة في الخلفية'),

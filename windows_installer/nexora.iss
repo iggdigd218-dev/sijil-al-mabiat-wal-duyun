@@ -4,6 +4,7 @@
 ; قائمة ابدأ وسطح المكتب، وله برنامج إلغاء تثبيت — ويعمل رغم تحذير SmartScreen.
 
 #define MyAppName "مدير الحسابات"
+; يُستبدل رقم الإصدار تلقائياً في CI من pubspec.yaml قبل الترجمة.
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Nexora"
 #define MyAppExeName "nexora_app.exe"
@@ -27,6 +28,9 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 AppCopyright=Nexora
+; عند التحديث فوق نسخة مثبتة: أغلق التطبيق الجاري تلقائياً وأعد تشغيله.
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

@@ -64,9 +64,9 @@ jobs:
         run: |
           VER=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
           NAME="${VER%%+*}"; BUILD="${VER##*+}"
-          # ملاحظات الإصدار تُقرأ من release_notes.txt (سطر واحد) حتى
-          # تتحدث مع كل إصدار بدل نص قديم مضمّن في الـ workflow.
-          NOTES=$(head -c 1200 release_notes.txt | tr -d '\n' | sed 's/"/\\"/g')
+          # ملاحظات الإصدار تُقرأ من release_notes.txt وتُهرَّب كسلسلة JSON
+          # عبر python (قصّ عند حدود المحارف لا البايتات + تهريب آمن).
+          NOTES=$(python3 -c "import json; t=open('release_notes.txt',encoding='utf-8').read().strip(); t=(t[:2500].rstrip()+'…') if len(t)>2500 else t; print(json.dumps(t,ensure_ascii=False)[1:-1])")
           echo "إصدار البناء: $NAME (build $BUILD)"
           cat > version.json <<EOF
           {
@@ -75,7 +75,7 @@ jobs:
             "releaseUrl": "https://github.com/${{ github.repository }}/releases/tag/latest",
             "downloads": {
               "android": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-arm64.apk",
-              "windows": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-windows.zip"
+              "windows": "https://github.com/${{ github.repository }}/releases/download/latest/NexoraSetup.exe"
             },
             "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "notes": "$NOTES"
@@ -93,13 +93,13 @@ jobs:
       - name: Preserve other-platform assets (windows)
         if: github.ref == 'refs/heads/main'
         run: |
-          # لا نحذف ملف ويندوز الموجود مسبقًا: ننزّله ليعاد رفعه مع ملفات الأندرويد.
-          for f in nexora-windows.zip; do
+          # لا نحذف ملفات ويندوز الموجودة مسبقًا: ننزّلها لتُعاد رفعها مع ملفات الأندرويد.
+          for f in nexora-windows.zip NexoraSetup.exe README-install.txt; do
             code=$(curl -sL -o "$f" -w "%{http_code}" \
               "https://github.com/${{ github.repository }}/releases/download/latest/$f" || true)
             if [ "$code" != "200" ]; then echo "لا يوجد $f بعد — سيتخطاه الرفع"; rm -f "$f"; fi
           done
-          ls -lh nexora-windows.zip 2>/dev/null || true
+            ls -lh nexora-windows.zip NexoraSetup.exe README-install.txt 2>/dev/null || true
 
       - name: Update unified latest release (APK + version.json)
         uses: softprops/action-gh-release@v2
@@ -117,14 +117,16 @@ jobs:
             - يعمل على أجهزة أندرويد الحديثة (معمارية 64 بت).
 
             ### 🖥️ لويندوز
-            - يُرفع ملف الويندوز تلقائيًا هنا بعد انتهاء بناء ويندوز (قد يتأخر بضع دقائق بعد رفع الأندرويد).
-            - فك ضغط الملف ثم شغّل `nexora.exe`.
+            - **الأسهل:** حمّل `NexoraSetup.exe` وثبّته كأي برنامج.
+            - أو النسخة المحمولة `nexora-windows.zip`: فك الضغط ثم شغّل `Run.bat`.
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
           files: |
             nexora-arm64.apk
             version.json
             nexora-windows.zip
+            NexoraSetup.exe
+            README-install.txt
           fail_on_unmatched_files: false
           prerelease: false
           make_latest: true

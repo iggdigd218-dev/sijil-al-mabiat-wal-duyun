@@ -86,6 +86,12 @@ jobs:
       - name: Build Inno Setup installer (NexoraSetup.exe)
         shell: pwsh
         run: |
+          # حقن رقم الإصدار الحقيقي من pubspec.yaml في سكربت المُثبّت.
+          $ver = (Select-String -Path "pubspec.yaml" -Pattern '^version:\s*([0-9.]+)\+').Matches[0].Groups[1].Value
+          if ($ver) {
+            (Get-Content "windows_installer\nexora.iss") -replace '#define MyAppVersion "[^"]*"', "#define MyAppVersion `"$ver`"" | Set-Content "windows_installer\nexora.iss"
+            Write-Host "Installer version: $ver"
+          }
           $rel = "build\windows\x64\runner\Release"
           # جهّز مجلد staging الذي يقرأه سكربت Inno Setup.
           $staging = "windows_installer\staging"
