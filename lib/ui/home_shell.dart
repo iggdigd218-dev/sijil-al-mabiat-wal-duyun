@@ -702,14 +702,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// على الشاشات الكبيرة: أيقونات واضحة + عناوين، قابل للطي، وفي RTL
   /// يظهر على يمين الشاشة تلقائياً (بداية الاتجاه).
   Widget _desktopRail() {
+    // في الوضع المستقل تُخفى «حالة المزامنة والأجهزة» — لا شبكات إطلاقاً.
+    final standalone =
+        (ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone') ==
+            'standalone';
     final entries = <(AppScreen, IconData, String)>[
       (AppScreen.pos, Icons.point_of_sale_outlined, 'نقطة البيع'),
       (AppScreen.accounts, Icons.menu_book_outlined, 'دفتر الحسابات والديون'),
       (AppScreen.transactions, Icons.receipt_long_outlined,
           'سجل الفواتير اليومية'),
       (AppScreen.inventory, Icons.inventory_2_outlined, 'المخزون والأصناف'),
-      (AppScreen.syncOps, Icons.cloud_sync_outlined,
-          'حالة المزامنة والأجهزة'),
+      if (!standalone)
+        (AppScreen.syncOps, Icons.cloud_sync_outlined,
+            'حالة المزامنة والأجهزة'),
       (AppScreen.settings, Icons.settings_outlined, 'الإعدادات'),
     ];
     final selectedIdx =
@@ -1108,7 +1113,10 @@ class _Drawer extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider).valueOrNull;
     final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
-    final items = _DrawerItems.of(user: user, isOwner: isOwner);
+    final wsMode =
+        ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+    final items =
+        _DrawerItems.of(user: user, isOwner: isOwner, workspaceMode: wsMode);
     final dark = Theme.of(context).brightness == Brightness.dark;
 
     return Drawer(
@@ -1425,10 +1433,20 @@ class _DrawerTile extends StatelessWidget {
 /// عناصر الدرج: كل الشاشات ما عدا الموجودة في الشريط السفلي، حتى لا تتكرر
 /// الأيقونة نفسها في مكانين. إدارة المجموعة للمدير فقط.
 class _DrawerItems {
-  static List<AppScreen> of({AppUser? user, required bool isOwner}) =>
+  static List<AppScreen> of({
+    AppUser? user,
+    required bool isOwner,
+    String workspaceMode = 'standalone',
+  }) =>
       AppScreen.values
           .where((s) => !_HomeShellState._bottomTabs.contains(s))
           .where((s) {
+        final standalone = workspaceMode == 'standalone';
+        // العزل الكامل للوضع المستقل: لا دردشة ولا إدارة مجموعة —
+        // الجهاز الفردي لا يرى أي أثر للشبكات. الترقية من الإعدادات.
+        if (standalone && (s == AppScreen.chat || s == AppScreen.group)) {
+          return false;
+        }
         // المدير يرى كل شيء؛ العضو يرى فقط ما تسمح به صلاحياته —
         // الأيقونات بلا صلاحية تُخفى من حساب العضو بالكامل.
         bool can(String p) => isOwner || (user?.can(p) ?? false);

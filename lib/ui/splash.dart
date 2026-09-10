@@ -1,9 +1,13 @@
 // شاشة البداية: شعار متحرك يظهر لحظة فتح التطبيق ثم ينتقل للتطبيق.
+// عند أول تشغيل (قاعدة فارغة بلا إعداد سابق) تُعرض شاشة الإعداد الأول.
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme.dart';
+import '../data/providers.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
+import 'onboarding_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -37,12 +41,28 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _go() async {
-    await Future.delayed(const Duration(milliseconds: 1900));
+    // فحص الإعداد الأول بالتوازي مع مدة الشعار حتى لا يتأخر الانتقال.
+    var showOnboarding = false;
+    await Future.wait([
+      Future.delayed(const Duration(milliseconds: 1900)),
+      () async {
+        try {
+          final container = ProviderScope.containerOf(context, listen: false);
+          showOnboarding = await shouldShowOnboarding(
+            container.read(repoProvider),
+          ).timeout(const Duration(seconds: 5), onTimeout: () => false);
+        } catch (_) {
+          showOnboarding = false;
+        }
+      }(),
+    ]);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 500),
-        pageBuilder: (_, __, ___) => const LockGate(child: HomeShell()),
+        pageBuilder: (_, __, ___) => showOnboarding
+            ? const OnboardingScreen()
+            : const LockGate(child: HomeShell()),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
       ),

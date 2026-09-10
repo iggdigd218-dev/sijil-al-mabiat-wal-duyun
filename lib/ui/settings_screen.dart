@@ -14,6 +14,7 @@ import '../data/providers.dart';
 import 'update_section.dart';
 import 'appearance_screen.dart';
 import 'cloud_sync_section.dart';
+import 'group_management_screen.dart';
 import 'widgets.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
@@ -603,6 +604,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                   ],
                 ),
+                // مسار الترقية من الوضع المستقل: تفعيل المزامنة وربط أجهزة —
+                // يفتح معالج إنشاء المجموعة (يصبح هذا الجهاز مضيفاً) دون أي
+                // فقدان للبيانات المحلية القائمة.
+                if (wsMode == 'standalone') ...[
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'المزامنة وربط الأجهزة',
+                    icon: Icons.hub_outlined,
+                    color: const Color(0xFF7C3AED),
+                    children: [
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.sync_alt_rounded,
+                              color: Color(0xFF7C3AED)),
+                          title: const Text(
+                              'تفعيل المزامنة وربط أجهزة أخرى'),
+                          subtitle: const Text(
+                            'حوّل هذا الجهاز إلى مضيف مجموعة واربط أجهزة '
+                            'الكاشير والمحاسبين — كل بياناتك الحالية تبقى '
+                            'كما هي وتُزامَن للأجهزة الجديدة.',
+                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                          ),
+                          trailing: const Icon(Icons.chevron_left),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const GroupManagementScreen(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 // المزامنة السحابية — تظهر للجميع:
                 // المدير/المستقل يضبط الرابط وينشئ دعوات، والعضو يرى الحالة
                 // ويستطيع إدخال الرابط يدوياً إن لم يصله من المدير.
