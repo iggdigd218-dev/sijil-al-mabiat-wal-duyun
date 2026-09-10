@@ -34,6 +34,7 @@ import 'notifications_sheet.dart';
 import 'app_notice.dart';
 import '../core/sfx.dart';
 import '../core/keep_alive_service.dart';
+import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/lan_http_transport.dart';
 import 'widgets.dart' show showSnack;
@@ -279,7 +280,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// ربط أحداث المزامنة بالإشعارات: «تمت مزامنة العملية» عند التسليم،
   /// و«الجهاز متصل» عند عودة قرين — إشعار خارجي بصوت مميز + صوت داخلي.
   void _wireSyncNotices() {
-    SyncEngine.onOpDelivered = (opDesc, deviceName, entityType, entityId) {
+    SyncEngine.onOpDelivered = (opDesc, deviceName0, entityType, entityId) {
+      // الاسم الموحد: جهاز بلا اسم يظهر «مستخدم جديد» في كل الإشعارات.
+      final deviceName =
+          deviceName0.trim().isEmpty ? kDefaultMemberName : deviceName0;
       Sfx.synced();
       // لا نغرق المستخدم: إشعار خارجي واحد كحد أقصى كل 20 ثانية.
       final now = DateTime.now();
@@ -311,7 +315,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
     // جهاز عاد للاتصال: حدث تشغيلي عابر — صوت + بانر داخلي فقط،
     // لا يلوث جدول الإشعارات الداخلية (المخصص للمالي والإداري المهم).
-    SyncEngine.onPeerJoined = (deviceName) {
+    SyncEngine.onPeerJoined = (deviceName0) {
+      final deviceName =
+          deviceName0.trim().isEmpty ? kDefaultMemberName : deviceName0;
       Sfx.pair();
       _showTappableNotice(
         'جهاز متصل',
@@ -321,7 +327,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
     // اكتمال المزامنة مع جهاز: حدث تشغيلي عابر — إشعار نظام خارجي
     // (نصه مرافق للصوت، لا صوت معزول) + بانر داخلي، بلا صف في الجدول.
-    SyncEngine.onDeviceSyncComplete = (deviceName) {
+    SyncEngine.onDeviceSyncComplete = (deviceName0) {
+      final deviceName =
+          deviceName0.trim().isEmpty ? kDefaultMemberName : deviceName0;
       Sfx.synced();
       Sfx.systemNotify(
         title: 'اكتملت المزامنة',
@@ -338,7 +346,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // الخارجي بصوته المرفق بالنص و(2) شارة العداد على أيقونة الدردشة.
     // يُمنع إدراجها في جدول notifications الداخلي (مخصص للمالي/الإداري)،
     // والبانر الداخلي يظهر فقط إن كان المستخدم على شاشة أخرى غير الدردشة.
-    LanSyncService.onChatMessage = (senderName, body) {
+    LanSyncService.onChatMessage = (senderName0, body) {
+      final senderName =
+          senderName0.trim().isEmpty ? kDefaultMemberName : senderName0;
       final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
       // إشعار النظام يحمل النص والصوت معاً — لا صوت معزولاً بلا محتوى.
       Sfx.systemNotify(

@@ -20,6 +20,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 class FakeCloudStore {
   final Map<String, Object?> store = {};
 
+  /// محاكاة خادم يرفض DELETE (لاختبار الإبطال الحتمي للدعوات).
+  bool failDeletes = false;
+
   static http.Response _utf8Json(String body, int status) =>
       http.Response.bytes(utf8.encode(body), status, headers: {
         'content-type': 'application/json; charset=utf-8',
@@ -32,6 +35,9 @@ class FakeCloudStore {
           return _utf8Json(req.body, 200);
         }
         if (req.method == 'DELETE') {
+          if (failDeletes) {
+            return _utf8Json('{"error":"Permission denied"}', 401);
+          }
           store.remove(key);
           return _utf8Json('null', 200);
         }
@@ -211,5 +217,40 @@ void main() {
                 workspaceId: invite.workspaceId),
             cloud.client),
         throwsA(isA<CloudJoinException>()));
+  });
+
+  test(
+      'QA-JOIN-03 invite revocation is strict: join aborts when cloud '
+      'DELETE fails (no silent error swallowing)', () async {
+    final cloud = FakeCloudStore();
+    final invite = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+    // السحابة ترفض الحذف → يجب أن يفشل الانضمام كله (لا نترك توكناً حياً).
+    cloud.failDeletes = true;
+    await expectLater(
+        http.runWithClient(
+            () => CloudJoin.join(repoB,
+                backendUrl: url,
+                token: invite.token,
+                workspaceId: invite.workspaceId),
+            cloud.client),
+        throwsA(isA<CloudJoinException>()));
+    // ولم تُمس بيانات العضو (الانضمام أُجهض قبل تطبيق اللقطة).
+    expect(await repoB.workspaceMode(), isNot('member'),
+        reason: 'فشل إبطال الدعوة يجب أن يوقف الانضمام قبل أي تغيير');
+    // بعد عودة السحابة للعمل: نفس الدعوة ما تزال صالحة وينجح الانضمام.
+    cloud.failDeletes = false;
+    await http.runWithClient(
+        () => CloudJoin.join(repoB,
+            backendUrl: url,
+            token: invite.token,
+            workspaceId: invite.workspaceId),
+        cloud.client);
+    expect(await repoB.workspaceMode(), 'member');
+    // والدعوة أُبطلت فعلاً بعد النجاح.
+    final inviteKey = cloud.store.keys
+        .where((k) => k.contains('/invites/'))
+        .toList();
+    expect(inviteKey, isEmpty, reason: 'التوكن حُذف حتمياً بعد الانضمام');
   });
 }

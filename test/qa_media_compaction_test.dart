@@ -176,6 +176,58 @@ void main() {
     });
   });
 
+  group('حماية التعارض: استعادة نسخة كاملة (المرحلة 5.2)', () {
+    test('QA-RESTORE-01 importAll يفرغ طابور المزامنة ويصفّر مؤشر السحب '
+        'داخل معاملة واحدة', () async {
+      final tmp = await Directory.systemTemp.createTemp('nexora_rst_');
+      final db = await databaseFactory.openDatabase('${tmp.path}/rst.db');
+      await AppDatabase.createSchema(db);
+      final repo = Repo(databaseProvider: () async => db);
+      await repo.setSetting('sync.deviceId', 'DEVICE-RESTORE-1');
+      await repo.initSyncInfra();
+      // نسخة للاستعادة (خذها قبل تلويث الحالة).
+      final backup = await repo.exportAll(withImages: false);
+      // حالة ما قبل الاستعادة: عملية معلقة + مؤشر سحب سحابي قديم.
+      final nowIso = DateTime.now().toIso8601String();
+      await db.insert('operations', {
+        'id': 'OP-STALE-1',
+        'device_id': 'DEVICE-RESTORE-1',
+        'workspace_id': 'default',
+        'entity_type': 'account',
+        'entity_id': '42',
+        'op_type': 'create',
+        'version': 1,
+        'parent_op_id': '',
+        'payload': '{}',
+        'device_time': nowIso,
+        'timestamp': nowIso,
+        'synced': 0,
+      });
+      await db.insert('sync_queue', {
+        'operation_id': 'OP-STALE-1',
+        'status': 'pending',
+        'target': 'cloud',
+        'created_at': nowIso,
+        'updated_at': nowIso,
+      });
+      await db.insert(
+          'sync_meta', {'key': 'lastCloudTs:default', 'value': '999999'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      // الاستعادة.
+      await repo.importAll(backup);
+      // الطابور المعلق أُفرغ والمؤشر صُفِّر — لا تضارب طابور قديم مع
+      // قاعدة مسترجعة، والسحب القادم idempotent يعيد الجلب بأمان.
+      final pending = await db.query('sync_queue',
+          where: "status IN ('pending','syncing')");
+      expect(pending, isEmpty, reason: 'طابور ما قبل الاستعادة يُلغى');
+      final cursor = await db.query('sync_meta',
+          where: 'key = ?', whereArgs: ['lastCloudTs:default']);
+      expect(cursor, isEmpty, reason: 'مؤشر السحب يُصفَّر مع الاستعادة');
+      await db.close();
+      await tmp.delete(recursive: true);
+    });
+  });
+
   group('التقليم العام لجدول operations', () {
     test('QA-GC-01 يحذف النسخ المتجاوزة ويُبقي الأحدث والمعلّق', () async {
       final tmp = await Directory.systemTemp.createTemp('nexora_gc_');
