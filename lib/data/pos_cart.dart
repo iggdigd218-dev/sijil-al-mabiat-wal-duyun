@@ -150,7 +150,14 @@ class PosDraftNotifier extends StateNotifier<PosDraft> {
   void setNotes(String t) => state = state.copyWith(notesText: t);
 
   void clear() => state = const PosDraft();
+
+  /// استعادة مسودة كاملة (استئناف فاتورة معلّقة — F12 على سطح المكتب).
+  void restore(PosDraft d) => state = d;
 }
+
+/// فواتير معلّقة (تعليق/استئناف — F12): الأحدث آخر القائمة.
+final heldInvoicesProvider =
+    StateProvider<List<PosDraft>>((ref) => const []);
 
 /// مسودة نقطة البيع الحية — تبقى عبر التنقل بين التبويبات.
 final posDraftProvider =

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 /// ألوان نكسورا — منقولة حرفيًا من متغيّرات CSS في `css/style.css`
@@ -112,6 +114,17 @@ class AppTheme {
   static ThemeData light() => _build(false);
   static ThemeData dark() => _build(true);
 
+  /// منصة سطح مكتب أصلية؟ (تُحدد نمط حدود/ظلال الألواح في الثيم).
+  /// بيئة flutter test تُستثنى حتى تحافظ الاختبارات على النمط المحمول.
+  static bool get _desktop {
+    try {
+      if (Platform.environment.containsKey('FLUTTER_TEST')) return false;
+      return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static ThemeData _build(bool dark) {
     final primary = dark ? AppColors.dPrimary : AppColors.primary;
     final bg = dark ? AppColors.dBg : AppColors.bg;
@@ -173,11 +186,20 @@ class AppTheme {
       cardTheme: CardThemeData(
         color: surface,
         surfaceTintColor: Colors.transparent,
-        elevation: 0,
+        // سطح المكتب: ألواح محددة بوضوح — حد أبرز + ظل خفيف بدل
+        // التسطيح الكامل؛ الهاتف يبقى مسطحاً كما كان.
+        elevation: _desktop ? 1.5 : 0,
+        shadowColor: _desktop ? Colors.black26 : null,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: border),
+          borderRadius: BorderRadius.circular(_desktop ? 12 : 16),
+          side: _desktop
+              ? BorderSide(
+                  color: (dark ? Colors.white : Colors.black)
+                      .withValues(alpha: 0.18),
+                  width: 1.2,
+                )
+              : BorderSide(color: border),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(

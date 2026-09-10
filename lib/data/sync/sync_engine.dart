@@ -64,6 +64,15 @@ class SyncEngine {
   /// يُستدعى عند اكتمال مزامنة كل العمليات المعلقة مع جهاز معيّن (اسمه).
   static void Function(String deviceName)? onDeviceSyncComplete;
 
+  /// «نافذة الخطر»: تُستدعى عندما يكتشف المحرك حالة تباين خطيرة —
+  /// عمليات عالقة طويلاً مع فشل متكرر، أو انقطاع مديد عن كل الأقران.
+  /// الوسيط رسالة عربية توضح المشكلة. null = زالت الحالة (أمان).
+  static void Function(String? message)? onSyncDanger;
+
+  /// آخر رسالة خطر مبثوثة (لتجنب التكرار) — '' تعني لا خطر.
+  String _lastDangerMsg = '';
+  DateTime? _oldestStuckSince;
+
   /// أجهزة استلمت عمليات مؤخراً — تُفحص بعد مهلة قصيرة لإشعار «اكتملت
   /// المزامنة مع (الجهاز)» عندما يفرغ الطابور.
   final Set<String> _recentDelivered = {};
@@ -148,10 +157,13 @@ class SyncEngine {
       _presence =
           PresenceService(dbProvider: dbProvider, ourDeviceId: svc.ourDeviceId)
             ..onPeerOnline = (id, name) {
-              // جهاز عاد للاتصال: دفع فوري لكل المعلّق + إشعار.
-              try {
-                onPeerJoined?.call(name);
-              } catch (_) {}
+              // جهاز عاد للاتصال: دفع فوري لكل المعلّق + إشعار بلقب الدور.
+              Future(() async {
+                final display = await roleDisplayNameOf(id, name);
+                try {
+                  onPeerJoined?.call(display);
+                } catch (_) {}
+              });
               notifyNewOperation();
             }
             ..start();
@@ -161,22 +173,25 @@ class SyncEngine {
       // إشعار "تمت مزامنة العملية" للعمليات المهمة فقط (مالية/مخزون/سندات).
       const important = {'tx', 'stockMove', 'voucher', 'account', 'item'};
       if (important.contains(op.entityType.name)) {
-        try {
-          onOpDelivered?.call(
-              _describeOp(op), deviceName, op.entityType.name, op.entityId);
-        } catch (_) {}
+        Future(() async {
+          final display = await roleDisplayNameOf(deviceId, deviceName);
+          try {
+            onOpDelivered?.call(
+                _describeOp(op), display, op.entityType.name, op.entityId);
+          } catch (_) {}
+        });
       }
       try {
         onSyncActivity?.call();
       } catch (_) {}
       // اكتمال المزامنة مع جهاز: بعد آخر تسليم بثانيتين، إن لم يبق شيء
-      // معلقاً لهدف LAN نُشعر «اكتملت المزامنة مع (اسم الجهاز)».
-      _recentDelivered.add(deviceName);
+      // معلقاً لهدف LAN نُشعر «اكتملت المزامنة مع [الدور (اسم الجهاز)]».
+      _recentDelivered.add(deviceId);
       _completeTimer?.cancel();
       _completeTimer = Timer(const Duration(seconds: 2), () async {
-        final names = List<String>.of(_recentDelivered);
+        final ids = List<String>.of(_recentDelivered);
         _recentDelivered.clear();
-        if (names.isEmpty || onDeviceSyncComplete == null) return;
+        if (ids.isEmpty || onDeviceSyncComplete == null) return;
         try {
           final db = await _db;
           final left = await db.rawQuery(
@@ -184,13 +199,131 @@ class SyncEngine {
             "WHERE target = 'lan' AND status IN ('pending','syncing','failed')",
           );
           if (((left.first['c'] as int?) ?? 0) == 0) {
-            for (final n in names.toSet()) {
-              onDeviceSyncComplete?.call(n);
+            for (final id in ids.toSet()) {
+              final display = await roleDisplayNameOf(id, '');
+              onDeviceSyncComplete?.call(display);
             }
+            // بثّ حدث الاكتمال لكل أقران المجموعة المتصلين ليعلموا أن
+            // هذا الجهاز أصبح محدّثاً (يُنعش قوائم حالة المزامنة لديهم).
+            try {
+              await _lanTransport?.broadcastNotify(reason: 'sync-complete');
+            } catch (_) {}
           }
         } catch (_) {}
       });
     };
+  }
+
+  /// اللقب الموحد للجهاز بحسب دور مستخدمه: «المدير (اسم الجهاز)»،
+  /// «الكاشير (…)»، «مدخل البيانات (…)»، «الشريك / الوكيل (…)».
+  /// يُستخدم في كل تنبيهات المزامنة وحالات الأقران.
+  Future<String> roleDisplayNameOf(
+      String deviceId, String fallbackName) async {
+    var name = fallbackName.trim();
+    var role = '';
+    var isOwner = false;
+    try {
+      final db = await _db;
+      final rows = await db.rawQuery('''
+        SELECT d.name, d.is_owner, COALESCE(u.role, '') AS role
+        FROM devices d LEFT JOIN users u ON u.id = d.user_id
+        WHERE d.id = ? LIMIT 1
+      ''', [deviceId]);
+      if (rows.isNotEmpty) {
+        final r = rows.first;
+        final dbName = (r['name'] as String?)?.trim() ?? '';
+        if (dbName.isNotEmpty) name = dbName;
+        role = (r['role'] as String?) ?? '';
+        isOwner = ((r['is_owner'] as int?) ?? 0) == 1;
+      }
+    } catch (_) {}
+    if (name.isEmpty) name = 'جهاز';
+    final label = isOwner
+        ? 'المدير'
+        : switch (role) {
+            'admin' || 'manager' => 'المدير',
+            'agent' => 'الشريك / الوكيل',
+            'accountant' => 'الكاشير',
+            'dataentry' => 'مدخل البيانات',
+            _ => '',
+          };
+    return label.isEmpty ? name : '$label ($name)';
+  }
+
+  /// حارس تباين السجلات («نافذة الخطر»): يفحص دورياً وجود عمليات مالية
+  /// عالقة منذ فترة طويلة (فشل متكرر أو انقطاع مديد عن كل الأقران).
+  /// عند اكتشاف الحالة يبثّ رسالة عربية عالية الأولوية تتكرر حتى تزول،
+  /// وعند زوالها يبثّ null لإخفاء التنبيه.
+  Future<void> _checkDangerState() async {
+    if (onSyncDanger == null) return;
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'standalone') {
+        _clearDanger();
+        return;
+      }
+      final db = await _db;
+      // عمليات معلقة/فاشلة في الطابور (أي هدف).
+      final rows = await db.rawQuery(
+        "SELECT COUNT(*) c, MIN(created_at) oldest, MAX(attempts) att "
+        "FROM sync_queue WHERE status IN ('pending','failed','syncing')",
+      );
+      final stuck = (rows.first['c'] as int?) ?? 0;
+      if (stuck == 0) {
+        _clearDanger();
+        return;
+      }
+      final oldest = DateTime.tryParse('${rows.first['oldest'] ?? ''}');
+      final attempts = (rows.first['att'] as int?) ?? 0;
+      _oldestStuckSince ??= oldest ?? DateTime.now();
+      final stuckFor = DateTime.now().difference(_oldestStuckSince!);
+      // عتبة الخطر: عالقة ≥ 10 دقائق مع محاولات متكررة، أو ≥ 30 دقيقة مطلقاً.
+      final danger = (stuckFor >= const Duration(minutes: 10) &&
+              attempts >= 5) ||
+          stuckFor >= const Duration(minutes: 30);
+      if (!danger) return;
+      // هل المدير (المالك) غير متصل؟ نخصص الرسالة.
+      var ownerOffline = false;
+      try {
+        final own = await db.query('devices',
+            columns: ['id'],
+            where: "is_owner = 1 AND is_paired = 1 "
+                "AND COALESCE(revoked_at,'') = ''",
+            limit: 1);
+        if (own.isNotEmpty && _presence != null) {
+          ownerOffline = !_presence!.isOnline(own.first['id'] as String);
+        }
+      } catch (_) {}
+      final mins = stuckFor.inMinutes;
+      final msg = ownerOffline
+          ? 'تنبيه خطير: تعذّر مطابقة الحركات المالية مع جهاز المدير منذ '
+              '$mins دقيقة ($stuck عملية معلقة). يرجى فحص الاتصال لتفادي '
+              'تباين الأرصدة بين الأجهزة.'
+          : 'تنبيه خطير: $stuck عملية مالية لم تصل بقية الأجهزة منذ '
+              '$mins دقيقة رغم إعادة المحاولة. يرجى فحص اتصال الشبكة أو '
+              'السحابة لتفادي تباين الأرصدة.';
+      if (msg != _lastDangerMsg) {
+        _lastDangerMsg = msg;
+      }
+      // نبثّ في كل دورة فحص (تكرار مقصود عبر الشاشات حتى تُحل).
+      try {
+        onSyncDanger?.call(msg);
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  /// للاختبارات: تشغيل فحص الخطر مباشرة بلا انتظار المؤقّت الدوري.
+  @visibleForTesting
+  Future<void> debugCheckDangerState() => _checkDangerState();
+
+  void _clearDanger() {
+    _oldestStuckSince = null;
+    if (_lastDangerMsg.isNotEmpty) {
+      _lastDangerMsg = '';
+      try {
+        onSyncDanger?.call(null);
+      } catch (_) {}
+    }
   }
 
   static String _describeOp(SyncOperation op) {
@@ -394,7 +527,10 @@ class SyncEngine {
     }
     _timer ??= Timer.periodic(
       const Duration(seconds: 8),
-      (_) => processQueue(),
+      (_) async {
+        await processQueue();
+        await _checkDangerState();
+      },
     );
 
     Future(() async {

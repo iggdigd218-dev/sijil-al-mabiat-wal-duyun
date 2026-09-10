@@ -10,19 +10,14 @@ class SyncStatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // لا عدادات عمليات خام في الواجهة — المزامنة صامتة وتُعاد تلقائياً؛
+    // نعرض حالة عالية المستوى فقط (متزامن / تجري المزامنة / غير فعّال).
     final (icon, color, label) = switch (info.state) {
       SyncState.synced => (Icons.cloud_done, Colors.green, 'متزامن'),
-      SyncState.syncing => (Icons.sync, Colors.amber, 'جاري المزامنة'),
-      SyncState.pending => (
-          Icons.cloud_upload,
-          Colors.orange,
-          'في الانتظار (${info.pending})',
-        ),
-      SyncState.failed => (
-          Icons.error_outline,
-          Colors.red,
-          'فشل (${info.failed})',
-        ),
+      SyncState.syncing ||
+      SyncState.pending ||
+      SyncState.failed =>
+        (Icons.sync, Colors.amber, 'تجري المزامنة في الخلفية'),
       SyncState.offline => (Icons.cloud_off, Colors.grey, 'غير فعّال'),
     };
     return Tooltip(
@@ -32,19 +27,7 @@ class SyncStatusBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              if (info.pending > 0 || info.failed > 0) ...[
-                const SizedBox(width: 4),
-                Text(
-                  '${info.pending + info.failed}',
-                  style: TextStyle(fontSize: 11, color: color),
-                ),
-              ],
-            ],
-          ),
+          child: Icon(icon, size: 16, color: color),
         ),
       ),
     );

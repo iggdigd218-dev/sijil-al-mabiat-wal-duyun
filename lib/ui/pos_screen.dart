@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../core/accounting.dart';
+import '../core/desktop.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
@@ -101,6 +103,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.dispose();
     _discountCtrl.dispose();
     _notesCtrl.dispose();
+    _shortcutFocus.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -161,11 +165,106 @@ class _PosScreenState extends ConsumerState<PosScreen>
     setState(() {});
   }
 
+  // ---------------- اختصارات لوحة مفاتيح سطح المكتب ----------------
+  // F1 دفع نقدي فوري • F2 آجل • F3 تركيز بحث العميل/الأصناف •
+  // F12 تعليق الفاتورة • Esc إفراغ السلة / إغلاق النافذة النشطة.
+  final FocusNode _shortcutFocus = FocusNode();
+  final FocusNode _searchFocus = FocusNode();
+
+  KeyEventResult _handleDesktopKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.f1) {
+      _quickSettle(_PosPayment.cash);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f2) {
+      _quickSettle(_PosPayment.credit);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f3) {
+      _searchFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f12) {
+      _holdInvoice();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      if (_cart.isNotEmpty) {
+        _clearCart();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// تسوية سريعة من الاختصار: نقدي ينفّذ فوراً؛ آجل يتطلب عميلاً —
+  /// إن لم يُحدد نفتح درج الدفع على وضع الآجل ليختار.
+  void _quickSettle(_PosPayment mode) {
+    if (_cart.isEmpty) {
+      Sfx.reject();
+      showSnack(context, 'السلة فارغة — أضف أصنافاً أولاً', error: true);
+      return;
+    }
+    _cartCtl.setPayment(mode.code);
+    if (mode == _PosPayment.cash) {
+      _executeSale(null);
+    } else if (_selectedCustomerId != null) {
+      _executeSale(null);
+    } else {
+      _openCheckoutSheet();
+    }
+  }
+
+  /// تعليق الفاتورة الحالية (F12) — تُحفظ في قائمة المعلّقات وتُفرغ السلة.
+  void _holdInvoice() {
+    if (_cart.isEmpty) {
+      Sfx.reject();
+      showSnack(context, 'لا توجد فاتورة لتعليقها', error: true);
+      return;
+    }
+    final held = ref.read(heldInvoicesProvider);
+    ref.read(heldInvoicesProvider.notifier).state = [...held, _draft];
+    _clearCart();
+    Sfx.pop();
+    showSnack(context, 'عُلّقت الفاتورة ⏸️ — استأنفها من زر المعلّقات');
+  }
+
+  /// استئناف فاتورة معلّقة (تحل محل السلة الحالية إن كانت فارغة).
+  void _resumeHeld(int index) {
+    final held = List<PosDraft>.of(ref.read(heldInvoicesProvider));
+    if (index < 0 || index >= held.length) return;
+    if (_cart.isNotEmpty) {
+      Sfx.reject();
+      showSnack(context, 'أفرغ السلة الحالية أو علّقها أولاً', error: true);
+      return;
+    }
+    final d = held.removeAt(index);
+    ref.read(heldInvoicesProvider.notifier).state = held;
+    _cartCtl.restore(d);
+    _paidCtrl.text = d.paidText;
+    _discountCtrl.text = d.discountText;
+    _notesCtrl.text = d.notesText;
+    setState(() {});
+    Sfx.pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     // مراقبة المسودة: أي تغيير في السلة (حتى من جلسة سابقة قبل تنقل
     // عرضي بين التبويبات) يعيد بناء الشريط السفلي فوراً.
     ref.watch(posDraftProvider);
+    // سطح المكتب (>900dp): مركز قيادة ثنائي اللوحين مع اختصارات لوحة
+    // المفاتيح؛ الهاتف يبقى على التبويبات المعتادة.
+    if (isDesktopLayout(context)) {
+      return Focus(
+        focusNode: _shortcutFocus,
+        onKeyEvent: _handleDesktopKey,
+        autofocus: true,
+        child: _buildDesktopPos(),
+      );
+    }
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(48),
@@ -189,6 +288,345 @@ class _PosScreenState extends ConsumerState<PosScreen>
           : null,
     );
   }
+
+  /// تخطيط سطح المكتب: يمين (60%) كتالوج الأصناف والبحث؛ يسار (40%)
+  /// لوح الفاتورة الحية بإطار بارز مع الملخص المالي وأزرار التسوية.
+  Widget _buildDesktopPos() {
+    final currencies =
+        ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
+    final cur = currencies.first;
+    final held = ref.watch(heldInvoicesProvider);
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ---- اللوح الأيمن في RTL (الأول): الكتالوج 60% ----
+            Expanded(
+              flex: 6,
+              child: DesktopPanel(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.point_of_sale_outlined, size: 20),
+                          const SizedBox(width: 8),
+                          Text('نقطة البيع',
+                              style:
+                                  Theme.of(context).textTheme.titleMedium),
+                          const Spacer(),
+                          if (held.isNotEmpty)
+                            TextButton.icon(
+                              onPressed: () => _showHeldSheet(),
+                              icon: const Icon(Icons.pause_circle_outline,
+                                  size: 18),
+                              label: Text('معلّقة (${held.length})'),
+                            ),
+                          TextButton.icon(
+                            onPressed: () => showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              builder: (_) => const FractionallySizedBox(
+                                heightFactor: 0.85,
+                                child: _PosHistoryTab(),
+                              ),
+                            ),
+                            icon: const Icon(Icons.history_edu_outlined,
+                                size: 18),
+                            label: const Text('سجل المبيعات'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(child: _buildPosSaleTab()),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // ---- اللوح الأيسر: الفاتورة الحية 40% ----
+            Expanded(
+              flex: 4,
+              child: DesktopPanel(
+                padding: EdgeInsets.zero,
+                child: _buildDesktopInvoicePane(cur),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// قائمة الفواتير المعلّقة (استئناف بنقرة).
+  void _showHeldSheet() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final held = ref.read(heldInvoicesProvider);
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (var i = 0; i < held.length; i++)
+                ListTile(
+                  leading: const Icon(Icons.pause_circle_outline),
+                  title: Text(
+                      'فاتورة معلّقة ${i + 1} — ${held[i].itemCount} صنف'),
+                  subtitle: Text('الإجمالي: ${Fmt.money(held[i].netTotal)}'),
+                  trailing: FilledButton.tonal(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _resumeHeld(i);
+                    },
+                    child: const Text('استئناف'),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// لوح الفاتورة المكتبي: بنود السلة + محددات كمية مباشرة + ملخص مالي
+  /// حي (الإجمالي/الخصم/الصافي) + أزرار تسوية عريضة مع قفل فوري.
+  Widget _buildDesktopInvoicePane(CurrencyDef cur) {
+    final entries = _cart.values.toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: AppColors.primaryOf(context).withValues(alpha: 0.06),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(12)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.receipt_long_outlined, size: 20),
+              const SizedBox(width: 8),
+              Text('الفاتورة الحالية',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              Text('$_itemCount صنف',
+                  style: TextStyle(
+                      fontSize: 12.5, color: AppColors.text2Of(context))),
+              if (_cart.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'إفراغ السلة (Esc)',
+                  icon: const Icon(Icons.delete_sweep_outlined,
+                      color: AppColors.red, size: 20),
+                  onPressed: _clearCart,
+                ),
+              ],
+            ],
+          ),
+        ),
+        Expanded(
+          child: entries.isEmpty
+              ? const EmptyState(
+                  icon: Icons.shopping_cart_outlined,
+                  title: 'السلة فارغة',
+                  message: 'انقر أصنافاً من الكتالوج لإضافتها للفاتورة.',
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.all(10),
+                  itemCount: entries.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (c, i) {
+                    final e = entries[i];
+                    return HoverLift(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(e.item.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13.5)),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${Fmt.money(e.unitPrice)} × ${Fmt.money(e.quantity)} = ${Fmt.money(e.total)} ${cur.symbol}',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color:
+                                            AppColors.text2Of(context)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // محدد كمية مباشر: − / كمية قابلة للنقر / +
+                            IconButton(
+                              tooltip: 'إنقاص',
+                              iconSize: 19,
+                              icon: const Icon(
+                                  Icons.remove_circle_outline),
+                              onPressed: () {
+                                _cartCtl.setQuantity(
+                                    e.item.id!, e.quantity - 1,
+                                    allowNegative: _allowNegative);
+                                setState(() {});
+                              },
+                            ),
+                            InkWell(
+                              onTap: () async {
+                                await _editQuantity(e);
+                                setState(() {});
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primaryOf(context)
+                                      .withValues(alpha: 0.1),
+                                  borderRadius:
+                                      BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  Fmt.money(e.quantity),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'زيادة',
+                              iconSize: 19,
+                              icon:
+                                  const Icon(Icons.add_circle_outline),
+                              onPressed: () => _addItem(e.item),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        // الملخص المالي الحي.
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            border: BorderDirectional(
+              top: BorderSide(
+                color:
+                    Theme.of(context).dividerColor.withValues(alpha: 0.18),
+                width: 1.2,
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _summaryRow('الإجمالي', _subtotal, cur),
+              if (_discount > 0) _summaryRow('الخصم', -_discount, cur),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('الصافي',
+                      style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    '${Fmt.money(_netTotal)} ${cur.symbol}',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.primaryOf(context),
+                        ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // أزرار تسوية عريضة + تلميحات الاختصارات.
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                      onPressed: _saving || _cart.isEmpty
+                          ? null
+                          : () => _quickSettle(_PosPayment.cash),
+                      icon: const Icon(Icons.payments_outlined),
+                      label: const Text('دفع نقدي (F1)'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                      onPressed: _saving || _cart.isEmpty
+                          ? null
+                          : () => _quickSettle(_PosPayment.credit),
+                      icon: const Icon(Icons.schedule_outlined),
+                      label: const Text('آجل (F2)'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed:
+                    _saving || _cart.isEmpty ? null : _openCheckoutSheet,
+                icon: const Icon(Icons.tune),
+                label: const Text('خيارات الدفع الكاملة (خصم/جزئي)'),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'F3 بحث • F12 تعليق الفاتورة • Esc إفراغ',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 11, color: AppColors.text3Of(context)),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryRow(String label, double value, CurrencyDef cur) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13.5, color: AppColors.text2Of(context))),
+            Text(
+              '${Fmt.money(value)} ${cur.symbol}',
+              style: const TextStyle(
+                  fontSize: 13.5, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      );
 
   Widget _buildPosSaleTab() {
     final categories = ref.watch(itemCategoriesProvider).valueOrNull ?? [];
@@ -222,8 +660,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
           child: TextField(
             controller: _searchCtrl,
+            focusNode: _searchFocus,
+            // على سطح المكتب: تركيز تلقائي لحقل الباركود/البحث — قارئ
+            // الباركود يكتب مباشرة بلا نقرة.
+            autofocus: isDesktopLayout(context),
             decoration: InputDecoration(
-              hintText: 'ابحث باسم الصنف أو الباركود...',
+              hintText: 'ابحث باسم الصنف أو الباركود... (F3)',
               prefixIcon: const Icon(Icons.search),
               isDense: true,
               suffixIcon: Row(
@@ -1041,8 +1483,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
     }
   }
 
-  Future<void> _executeSale(BuildContext sheetCtx) async {
-    if (_cart.isEmpty) return;
+  /// ينفّذ البيع. [sheetCtx] سياق درج الدفع ليُغلق بعد النجاح —
+  /// null عند التنفيذ المباشر (اختصارات سطح المكتب F1/F2) بلا درج.
+  Future<void> _executeSale(BuildContext? sheetCtx) async {
+    if (_cart.isEmpty || _saving) return;
 
     if ((_payment == _PosPayment.credit || _payment == _PosPayment.partial) &&
         _selectedCustomerId == null) {
@@ -1239,7 +1683,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
       }
 
       if (mounted) {
-        Navigator.pop(sheetCtx);
+        if (sheetCtx != null && sheetCtx.mounted) Navigator.pop(sheetCtx);
         Sfx.opCreated(); // صوت الدفع + اهتزاز طويل (1.5 ث) عند إنشاء العملية.
         _showSuccessDialog(txId, refNum, lines);
         _clearCart();

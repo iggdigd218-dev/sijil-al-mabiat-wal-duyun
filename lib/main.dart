@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/db_init.dart';
+import 'core/desktop.dart';
 import 'core/media_paths.dart';
 import 'core/database.dart';
 import 'core/sfx.dart';
@@ -100,6 +101,16 @@ class NexoraApp extends ConsumerWidget {
     return MaterialApp(
       title: 'مدير الحسابات',
       debugShowCheckedModeBanner: false,
+      // سطح المكتب: تمرير طبيعي بعجلة الفأرة وبالسحب بالماوس معاً
+      // في كل القوائم والصفوف الأفقية.
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        dragDevices: {
+          PointerDeviceKind.touch,
+          PointerDeviceKind.mouse,
+          PointerDeviceKind.stylus,
+          PointerDeviceKind.trackpad,
+        },
+      ),
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ref.watch(themeModeProvider),
@@ -110,10 +121,23 @@ class NexoraApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      builder: (context, child) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: child ?? const SizedBox.shrink(),
-      ),
+      builder: (context, child) {
+        Widget w = Directionality(
+          textDirection: TextDirection.rtl,
+          child: child ?? const SizedBox.shrink(),
+        );
+        // سطح المكتب/الشاشات الكبيرة: تكبير الخط الأساسي ~15% لراحة
+        // العين في الجداول المالية وبنود الفواتير وحقول الإدخال.
+        final mq = MediaQuery.maybeOf(context);
+        if (mq != null &&
+            (isDesktopPlatform || mq.size.width > kDesktopBreakpoint)) {
+          w = MediaQuery(
+            data: mq.copyWith(textScaler: const TextScaler.linear(1.15)),
+            child: w,
+          );
+        }
+        return w;
+      },
       home: const SplashScreen(),
     );
   }

@@ -1005,14 +1005,43 @@ class DeviceSyncStatus {
   final bool isOwner;
   final bool online;
   final int missingOps; // عمليات محلية لم تصل هذا الجهاز بعد.
+  final String roleCode; // دور مستخدم الجهاز (admin/agent/…) — للقب الدور.
+  final String lastSyncAt; // آخر تسليم ناجح لهذا الجهاز (ISO) أو ''.
   const DeviceSyncStatus({
     required this.deviceId,
     required this.name,
     required this.isOwner,
     required this.online,
     required this.missingOps,
+    this.roleCode = '',
+    this.lastSyncAt = '',
   });
   bool get fullySynced => missingOps == 0;
+
+  /// اللقب الموحد بحسب الدور: «المدير (اسم الجهاز)» وهكذا — يُستخدم في
+  /// كل واجهات المزامنة والتنبيهات.
+  String get displayName => roleDisplayName(
+      roleCode: roleCode, isOwner: isOwner, deviceName: name);
+}
+
+/// يبني الاسم المعروض الموحّد «اللقب (اسم الجهاز)» بحسب دور الجهاز.
+/// المالك دائماً «المدير» حتى لو لم يُربط بمستخدم.
+String roleDisplayName({
+  required String roleCode,
+  required bool isOwner,
+  required String deviceName,
+}) {
+  final label = isOwner
+      ? 'المدير'
+      : switch (roleCode) {
+          'admin' || 'manager' => 'المدير',
+          'agent' => 'الشريك / الوكيل',
+          'accountant' => 'الكاشير',
+          'dataentry' => 'مدخل البيانات',
+          _ => '',
+        };
+  final name = deviceName.trim().isEmpty ? 'جهاز' : deviceName.trim();
+  return label.isEmpty ? name : '$label ($name)';
 }
 
 final deviceSyncStatusProvider =
@@ -1022,13 +1051,15 @@ final deviceSyncStatusProvider =
   final db = await repo.database;
   final ourId = (await repo.settings())['sync.deviceId'] ?? '';
   if (ourId.isEmpty) return const [];
-  final peers = await db.query(
-    'devices',
-    where: "is_paired = 1 AND COALESCE(revoked_at,'') = '' "
-        "AND COALESCE(expelled_at,'') = '' AND id <> ?",
-    whereArgs: [ourId],
-    orderBy: 'is_owner DESC, name ASC',
-  );
+  // نضمّ دور المستخدم المرتبط بالجهاز لعرض اللقب «المدير (اسم الجهاز)».
+  final peers = await db.rawQuery('''
+    SELECT d.*, COALESCE(u.role, '') AS peer_role
+    FROM devices d
+    LEFT JOIN users u ON u.id = d.user_id
+    WHERE d.is_paired = 1 AND COALESCE(d.revoked_at,'') = ''
+      AND COALESCE(d.expelled_at,'') = '' AND d.id <> ?
+    ORDER BY d.is_owner DESC, d.name ASC
+  ''', [ourId]);
   if (peers.isEmpty) return const [];
   final presence = ref.read(syncEngineProvider).presence;
   final out = <DeviceSyncStatus>[];
@@ -1057,12 +1088,23 @@ final deviceSyncStatusProvider =
       online = seen != null &&
           DateTime.now().difference(seen) < const Duration(seconds: 15);
     }
+    // آخر تسليم ناجح لهذا الجهاز — «آخر مزامنة» في قائمة الأجهزة.
+    String lastSync = '';
+    try {
+      final ls = await db.rawQuery(
+        'SELECT MAX(delivered_at) t FROM op_deliveries WHERE device_id = ?',
+        [id],
+      );
+      lastSync = (ls.first['t'] as String?) ?? '';
+    } catch (_) {}
     out.add(DeviceSyncStatus(
       deviceId: id,
       name: (d['name'] as String?) ?? 'جهاز',
       isOwner: (d['is_owner'] as int? ?? 0) == 1,
       online: online,
       missingOps: (missing.first['c'] as int?) ?? 0,
+      roleCode: (d['peer_role'] as String?) ?? '',
+      lastSyncAt: lastSync,
     ));
   }
   return out;

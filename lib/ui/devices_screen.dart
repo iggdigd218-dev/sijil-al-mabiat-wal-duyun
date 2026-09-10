@@ -506,7 +506,12 @@ class DeviceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = (data['name'] ?? 'جهاز') as String;
+    // اسم العرض الموحد بلقب الدور: «المدير (اسم الجهاز)» وهكذا.
+    final name = roleDisplayName(
+      roleCode: (data['user_role'] as String?) ?? '',
+      isOwner: ((data['is_owner'] as int?) ?? 0) == 1,
+      deviceName: (data['name'] ?? 'جهاز') as String,
+    );
     final platform = (data['platform'] ?? '') as String;
     final expelled = ((data['expelled_at'] ?? '') as String).isNotEmpty;
     final revoked =
@@ -538,6 +543,8 @@ class DeviceCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,

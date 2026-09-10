@@ -114,8 +114,9 @@ void main() {
         expect(rows.single.accountId, accountId);
         expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
       });
-      await tester.tap(find.descendant(
-          of: find.byType(NavigationBar), matching: find.text('الحسابات')));
+      // عرض 1000 > عتبة سطح المكتب (900): الشريط السفلي استُبدل بشريط
+      // جانبي (Rail) — ننقر عنوان «دفتر الحسابات والديون» فيه.
+      await tester.tap(find.text('دفتر الحسابات والديون'));
       await _drain(tester);
       expect(find.textContaining('1,500'), findsWidgets);
       expect(tester.takeException(), isNull);

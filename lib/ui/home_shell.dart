@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/accounting.dart';
+import '../core/desktop.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
@@ -78,12 +79,35 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
   AppScreen _screen = AppScreen.dashboard;
+
+  /// سطح المكتب يقلع مباشرة على نقطة البيع (مركز القيادة الأساسي) —
+  /// يُحسم مرة واحدة عند أول قياس للشاشة.
+  bool _landingDecided = false;
+
+  /// الشريط الجانبي المكتبي: مطوي (أيقونات) أو موسّع (أيقونات + عناوين).
+  bool _railExtended = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_landingDecided) {
+      _landingDecided = true;
+      // منصة سطح مكتب حقيقية (خارج بيئة الاختبار): الإقلاع على POS.
+      if (isRealDesktop &&
+          MediaQuery.sizeOf(context).width > kDesktopBreakpoint) {
+        _screen = AppScreen.pos;
+      }
+    }
+  }
   Future<SyncStatusInfo>? _syncFuture;
   Timer? _syncTimer;
   bool _updatePrompted = false;
 
   Timer? _greetingTimer;
   DateTime _lastDeliveredNotice = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// هل بانر «نافذة الخطر» ظاهر حالياً؟ (لمنع تكرار الصوت مع كل فحص).
+  bool _dangerShown = false;
 
   @override
   void initState() {
@@ -326,22 +350,68 @@ class _HomeShellState extends ConsumerState<HomeShell>
         entityType: 'sync',
       );
     };
-    // اكتمال المزامنة مع جهاز: حدث تشغيلي عابر — إشعار نظام خارجي
-    // (نصه مرافق للصوت، لا صوت معزول) + بانر داخلي، بلا صف في الجدول.
+    // اكتمال المزامنة مع جهاز: حدث تشغيلي عابر — توست سفلي خفيف يختفي
+    // وحده، لا يُخزَّن أبداً في جدول notifications الداخلي (قاعدة صارمة).
     SyncEngine.onDeviceSyncComplete = (deviceName0) {
       final deviceName =
           deviceName0.trim().isEmpty ? kDefaultMemberName : deviceName0;
       Sfx.synced();
-      Sfx.systemNotify(
-        title: 'اكتملت المزامنة',
-        body: 'تمت مزامنة جميع العمليات مع $deviceName بنجاح ✅',
-        entityType: 'sync',
-      );
-      _showTappableNotice(
-        'اكتملت المزامنة',
-        'تمت مزامنة جميع العمليات مع $deviceName ✅',
-        entityType: 'sync',
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          content: Text('تم اكتمال المزامنة مع $deviceName ✅'),
+        ));
+    };
+    // «نافذة الخطر»: تباين خطير محتمل في السجلات — بانر مثبّت أعلى
+    // الشاشة يتكرر مع كل فحص حتى تُستعاد سلامة المزامنة، ثم يُزال.
+    SyncEngine.onSyncDanger = (message) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      if (message == null) {
+        if (_dangerShown) {
+          _dangerShown = false;
+          messenger.hideCurrentMaterialBanner();
+        }
+        return;
+      }
+      if (!_dangerShown) Sfx.error();
+      _dangerShown = true;
+      messenger
+        ..hideCurrentMaterialBanner()
+        ..showMaterialBanner(MaterialBanner(
+          backgroundColor: AppColors.dangerOf(context).withValues(alpha: .1),
+          leading: Icon(Icons.warning_amber_rounded,
+              color: AppColors.dangerOf(context)),
+          content: Text(
+            message,
+            style: TextStyle(
+              color: AppColors.dangerOf(context),
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                messenger.hideCurrentMaterialBanner();
+                _dangerShown = false;
+                _go(AppScreen.syncOps);
+              },
+              child: const Text('فحص الحالة'),
+            ),
+            TextButton(
+              onPressed: () {
+                messenger.hideCurrentMaterialBanner();
+                _dangerShown = false;
+              },
+              child: const Text('إخفاء'),
+            ),
+          ],
+        ));
     };
     // رسالة دردشة واردة — قاعدة صارمة: مكانها الوحيد (1) إشعار النظام
     // الخارجي بصوته المرفق بالنص و(2) شارة العداد على أيقونة الدردشة.
@@ -448,6 +518,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
     SyncEngine.onDeviceSyncComplete = null;
+    SyncEngine.onSyncDanger = null;
     LanSyncService.onChatMessage = null;
     LanSyncService.onMemberNotice = null;
     super.dispose();
@@ -627,10 +698,88 @@ class _HomeShellState extends ConsumerState<HomeShell>
       ));
   }
 
+  /// الشريط الجانبي المكتبي (Navigation Rail) — يحل محل الشريط السفلي
+  /// على الشاشات الكبيرة: أيقونات واضحة + عناوين، قابل للطي، وفي RTL
+  /// يظهر على يمين الشاشة تلقائياً (بداية الاتجاه).
+  Widget _desktopRail() {
+    final entries = <(AppScreen, IconData, String)>[
+      (AppScreen.pos, Icons.point_of_sale_outlined, 'نقطة البيع'),
+      (AppScreen.accounts, Icons.menu_book_outlined, 'دفتر الحسابات والديون'),
+      (AppScreen.transactions, Icons.receipt_long_outlined,
+          'سجل الفواتير اليومية'),
+      (AppScreen.inventory, Icons.inventory_2_outlined, 'المخزون والأصناف'),
+      (AppScreen.syncOps, Icons.cloud_sync_outlined,
+          'حالة المزامنة والأجهزة'),
+      (AppScreen.settings, Icons.settings_outlined, 'الإعدادات'),
+    ];
+    final selectedIdx =
+        entries.indexWhere((e) => e.$1 == _screen).clamp(-1, entries.length);
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: BorderDirectional(
+          end: BorderSide(
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.18),
+            width: 1.2,
+          ),
+        ),
+      ),
+      child: SafeArea(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: _railExtended ? 218 : 68,
+          child: Column(
+            children: [
+              const SizedBox(height: 6),
+              // زر الطي/التوسيع.
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: IconButton(
+                  tooltip: _railExtended ? 'طيّ الشريط' : 'توسيع الشريط',
+                  icon: Icon(_railExtended
+                      ? Icons.menu_open_rounded
+                      : Icons.menu_rounded),
+                  onPressed: () =>
+                      setState(() => _railExtended = !_railExtended),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  children: [
+                    for (var i = 0; i < entries.length; i++)
+                      _RailTile(
+                        icon: entries[i].$2,
+                        label: entries[i].$3,
+                        selected: i == selectedIdx,
+                        extended: _railExtended,
+                        onTap: () => _go(entries[i].$1),
+                      ),
+                    const Divider(height: 20),
+                    // «المزيد» يفتح القائمة الجانبية بكل الأقسام الأخرى.
+                    _RailTile(
+                      icon: Icons.apps_rounded,
+                      label: 'كل الأقسام',
+                      selected: false,
+                      extended: _railExtended,
+                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final hidden = ref.watch(hideBalancesProvider);
     final tabIndex = _bottomTabs.indexOf(_screen);
+    final desktop = isDesktopLayout(context);
 
     return PopScope(
       canPop: false,
@@ -771,9 +920,20 @@ class _HomeShellState extends ConsumerState<HomeShell>
           ],
         ),
         drawer: _Drawer(current: _screen, onSelect: _go),
-        body: _body(),
+        // سطح المكتب (>900dp): شريط جانبي قابل للطي على يمين الشاشة (RTL)
+        // بدل الشريط السفلي؛ الهاتف يبقى على الشريط السفلي كما هو.
+        body: desktop
+            ? Row(
+                children: [
+                  _desktopRail(),
+                  Expanded(child: _body()),
+                ],
+              )
+            : _body(),
         floatingActionButton: _fab(),
-        bottomNavigationBar: NavigationBar(
+        bottomNavigationBar: desktop
+            ? null
+            : NavigationBar(
           selectedIndex: tabIndex < 0 ? 0 : tabIndex,
           onDestinationSelected: (i) {
             if (i < _bottomTabs.length) {
@@ -808,6 +968,68 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ),
       ),
     );
+  }
+}
+
+/// عنصر واحد في الشريط الجانبي المكتبي — hover ناعم + تمييز واضح للمحدد.
+class _RailTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final bool extended;
+  final VoidCallback onTap;
+  const _RailTile({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.extended,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final color = selected ? primary : AppColors.text2Of(context);
+    final tile = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: HoverLift(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: selected
+                ? primary.withValues(alpha: 0.1)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 22, color: color),
+              if (extended) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight:
+                          selected ? FontWeight.w800 : FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    return extended ? tile : Tooltip(message: label, child: tile);
   }
 }
 

@@ -747,10 +747,12 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                             ? '...'
                             : switch (info.state) {
                                 SyncState.synced => '🟢 متزامن',
-                                SyncState.syncing => '🟡 جاري المزامنة',
-                                SyncState.pending =>
-                                  '🟠 عمليات معلقة (${info.pending})',
-                                SyncState.failed => '🔴 فشل (${info.failed})',
+                                // لا عدادات عمليات خام — المزامنة صامتة
+                                // وتُعاد تلقائياً حتى تكتمل.
+                                SyncState.syncing ||
+                                SyncState.pending ||
+                                SyncState.failed =>
+                                  '🟡 تجري المزامنة في الخلفية',
                                 SyncState.offline =>
                                   '⚪ المزامنة السحابية غير مُفعّلة',
                               },
