@@ -79,6 +79,43 @@ class _State extends ConsumerState<AccountFormScreen> {
     _currency = a?.currency ?? 'YER';
     _archived = a?.archived ?? false;
     _notifyChannel = a?.notifyChannel ?? 'whatsapp';
+    _initialSnapshot = _formSnapshot();
+  }
+
+  /// بصمة قيم النموذج — لاكتشاف التغييرات غير المحفوظة عند الرجوع.
+  late String _initialSnapshot;
+  String _formSnapshot() => [
+        _name.text,
+        _opening.text,
+        _phone.text,
+        _address.text,
+        _notes.text,
+        _category.text,
+        _limit.text,
+        _tags.text,
+        _kind.name,
+        _currency,
+        '$_archived',
+        _notifyChannel,
+      ].join('\u0001');
+
+  bool get _dirty => _formSnapshot() != _initialSnapshot;
+
+  /// حارس التغييرات: يسأل قبل تجاهل تعديلات لم تُحفظ.
+  Future<void> _guardedPop(bool didPop) async {
+    if (didPop || _saving) return;
+    if (!_dirty) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    final discard = await confirmDialog(
+      context,
+      title: 'تغييرات غير محفوظة',
+      message: 'هل تريد تجاهل التغييرات؟',
+      confirmText: 'تجاهل',
+      danger: true,
+    );
+    if (discard && mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -154,15 +191,13 @@ class _State extends ConsumerState<AccountFormScreen> {
       // بعض الأجهزة تشترط إذن جهات الاتصال لقراءة بيانات الجهة المختارة
       // بعد عودتها من المنتقي الخارجي. نطلبه مرة واحدة بنافذة شرح ودّية،
       // فيظهر بعدها ضمن «الأذونات المسموح بها» في إعدادات النظام.
-      final granted =
-          await FlutterContacts.requestPermission(readonly: true);
+      final granted = await FlutterContacts.requestPermission(readonly: true);
       if (!granted) {
         if (!mounted) return;
-        final retry =
-            await showPermissionRationale(context, PermissionRationale.contacts);
+        final retry = await showPermissionRationale(
+            context, PermissionRationale.contacts);
         if (!retry) return;
-        final second =
-            await FlutterContacts.requestPermission(readonly: true);
+        final second = await FlutterContacts.requestPermission(readonly: true);
         if (!second) {
           if (mounted) {
             showSnack(
@@ -203,184 +238,190 @@ class _State extends ConsumerState<AccountFormScreen> {
     final curs =
         ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
 
-    return Scaffold(
-      appBar: AppBar(title: Text(_isEdit ? 'تعديل حساب' : 'حساب جديد')),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            12,
-            16,
-            100 + MediaQuery.of(context).viewInsets.bottom,
-          ),
-          children: [
-            // زر جلب بيانات العميل (اسم + رقم) من تطبيق جهات الاتصال.
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _name,
-                    decoration:
-                        const InputDecoration(labelText: 'اسم الحساب *'),
-                    textInputAction: TextInputAction.next,
-                    validator: (v) =>
-                        (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: IconButton.filledTonal(
-                    tooltip: 'جلب من جهات الاتصال',
-                    style: IconButton.styleFrom(
-                      backgroundColor: Colors.blue.withValues(alpha: 0.12),
-                      foregroundColor: Colors.blue.shade700,
-                      minimumSize: const Size(48, 48),
-                    ),
-                    icon: const Icon(Icons.contacts_rounded),
-                    onPressed: _pickContact,
-                  ),
-                ),
-              ],
+    return PopScope(
+      // منع الرجوع المباشر إذا كانت هناك تغييرات لم تُحفظ.
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, _) => _guardedPop(didPop),
+      child: Scaffold(
+        appBar: AppBar(title: Text(_isEdit ? 'تعديل حساب' : 'حساب جديد')),
+        body: Form(
+          key: _formKey,
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              12,
+              16,
+              100 + MediaQuery.of(context).viewInsets.bottom,
             ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest
-                    .withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
+            children: [
+              // زر جلب بيانات العميل (اسم + رقم) من تطبيق جهات الاتصال.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'نوع الحساب:',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey,
+                  Expanded(
+                    child: TextFormField(
+                      controller: _name,
+                      decoration:
+                          const InputDecoration(labelText: 'اسم الحساب *'),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) =>
+                          (v ?? '').trim().isEmpty ? 'الاسم مطلوب' : null,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(
-                    child: Wrap(
-                      spacing: 5,
-                      children: AccountKind.values
-                          .map(
-                            (k) => ChoiceChip(
-                              label: Text(
-                                '${k.icon} ${k.label}',
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                                vertical: 0,
-                              ),
-                              selected: _kind == k,
-                              showCheckmark: false,
-                              onSelected: (_) => setState(() => _kind = k),
-                            ),
-                          )
-                          .toList(),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: IconButton.filledTonal(
+                      tooltip: 'جلب من جهات الاتصال',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.blue.withValues(alpha: 0.12),
+                        foregroundColor: Colors.blue.shade700,
+                        minimumSize: const Size(48, 48),
+                      ),
+                      icon: const Icon(Icons.contacts_rounded),
+                      onPressed: _pickContact,
                     ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 15),
-            TextFormField(
-              controller: _opening,
-              decoration: InputDecoration(
-                labelText: 'الرصيد الافتتاحي (اختياري)',
-                hintText: '0.00',
-              ),
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-                signed: true,
-              ),
-              validator: (v) {
-                if ((v ?? '').trim().isEmpty) return null;
-                return Fmt.parseAmount(v!) == null ? 'مبلغ غير صالح' : null;
-              },
-            ),
-            AmountWords(controller: _opening, decimals: 2),
-            const SizedBox(height: 13),
-            DropdownButtonFormField<String>(
-              initialValue:
-                  curs.any((c) => c.code == _currency) ? _currency : null,
-              decoration: const InputDecoration(labelText: 'العملة'),
-              items: curs
-                  .map(
-                    (c) => DropdownMenuItem(
-                      value: c.code,
-                      child: Text('${c.name} (${c.symbol})'),
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'نوع الحساب:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey,
+                      ),
                     ),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _currency = v ?? 'YER'),
-            ),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _phone,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(
-                labelText: 'رقم الجوال',
-                hintText: '7xxxxxxxx',
-                prefixIcon: Icon(Icons.phone_android),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Wrap(
+                        spacing: 5,
+                        children: AccountKind.values
+                            .map(
+                              (k) => ChoiceChip(
+                                label: Text(
+                                  '${k.icon} ${k.label}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 0,
+                                ),
+                                selected: _kind == k,
+                                showCheckmark: false,
+                                onSelected: (_) => setState(() => _kind = k),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _address,
-              decoration: const InputDecoration(labelText: 'العنوان'),
-            ),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _limit,
-              decoration: const InputDecoration(
-                labelText: 'حد ائتماني (اختياري)',
-                hintText: '0.00',
+              const SizedBox(height: 15),
+              TextFormField(
+                controller: _opening,
+                decoration: const InputDecoration(
+                  labelText: 'الرصيد الافتتاحي (اختياري)',
+                  hintText: '0.00',
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                  signed: true,
+                ),
+                validator: (v) {
+                  if ((v ?? '').trim().isEmpty) return null;
+                  return Fmt.parseAmount(v!) == null ? 'مبلغ غير صالح' : null;
+                },
               ),
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-            ),
-            AmountWords(controller: _limit, decimals: 2),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _tags,
-              decoration: const InputDecoration(
-                labelText: 'علامات',
-                hintText: 'افصل بينها بفاصلة',
-              ),
-            ),
-            const SizedBox(height: 13),
-            TextFormField(
-              controller: _notes,
-              decoration: const InputDecoration(labelText: 'ملاحظات'),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+              AmountWords(controller: _opening, decimals: 2),
+              const SizedBox(height: 13),
+              DropdownButtonFormField<String>(
+                initialValue:
+                    curs.any((c) => c.code == _currency) ? _currency : null,
+                decoration: const InputDecoration(labelText: 'العملة'),
+                items: curs
+                    .map(
+                      (c) => DropdownMenuItem(
+                        value: c.code,
+                        child: Text('${c.name} (${c.symbol})'),
                       ),
                     )
-                  : const Icon(Icons.check),
-              label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
-            ),
-          ],
+                    .toList(),
+                onChanged: (v) => setState(() => _currency = v ?? 'YER'),
+              ),
+              const SizedBox(height: 13),
+              TextFormField(
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'رقم الجوال',
+                  hintText: '7xxxxxxxx',
+                  prefixIcon: Icon(Icons.phone_android),
+                ),
+              ),
+              const SizedBox(height: 13),
+              TextFormField(
+                controller: _address,
+                decoration: const InputDecoration(labelText: 'العنوان'),
+              ),
+              const SizedBox(height: 13),
+              TextFormField(
+                controller: _limit,
+                decoration: const InputDecoration(
+                  labelText: 'حد ائتماني (اختياري)',
+                  hintText: '0.00',
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+              ),
+              AmountWords(controller: _limit, decimals: 2),
+              const SizedBox(height: 13),
+              TextFormField(
+                controller: _tags,
+                decoration: const InputDecoration(
+                  labelText: 'علامات',
+                  hintText: 'افصل بينها بفاصلة',
+                ),
+              ),
+              const SizedBox(height: 13),
+              TextFormField(
+                controller: _notes,
+                decoration: const InputDecoration(labelText: 'ملاحظات'),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check),
+                label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
+              ),
+            ],
+          ),
         ),
       ),
     );

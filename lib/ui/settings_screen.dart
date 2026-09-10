@@ -504,6 +504,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         bump(ref);
                       },
                     ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(Icons.trending_down_rounded),
+                      title:
+                          const Text('السماح بالبيع عند نفاد الرصيد الدفتري'),
+                      subtitle: const Text(
+                        'تفعيل: يسمح ببيع صنف نفد رصيده (حركة سالبة مع '
+                        'تنبيه). تعطيل: نقطة البيع تمنع الإضافة عند النفاد.',
+                      ),
+                      value: (st['allowNegativeStock'] ?? '0') == '1',
+                      onChanged: (v) async {
+                        await ref
+                            .read(repoProvider)
+                            .setSetting('allowNegativeStock', v ? '1' : '0');
+                        bump(ref);
+                      },
+                    ),
+                    // القفل التاريخي للتدقيق: منع غير المدير من تعديل/حذف
+                    // سجلات مالية أقدم من المدة المحددة (0 = معطل).
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.lock_clock_outlined),
+                      title: const Text('قفل السجلات المالية القديمة'),
+                      subtitle: Text(
+                        (int.tryParse(st['auditLockDays'] ?? '0') ?? 0) <= 0
+                            ? 'معطل — كل السجلات قابلة للتعديل حسب الصلاحيات'
+                            : 'السجلات الأقدم من ${st['auditLockDays']} يوماً '
+                                'مقفلة ضد التعديل والحذف لغير المدير',
+                      ),
+                      trailing: const Icon(Icons.chevron_left),
+                      onTap: () async {
+                        final v = await showQuickAmountPad(
+                          context,
+                          title: 'مدة القفل بالأيام (0 = تعطيل)',
+                          initial: double.tryParse(
+                              st['auditLockDays'] ?? '0'),
+                          hint: 'مثال: 30',
+                        );
+                        if (v == null) return;
+                        await ref.read(repoProvider).setSetting(
+                            'auditLockDays', '${v.toInt().clamp(0, 3650)}');
+                        bump(ref);
+                      },
+                    ),
                   ],
                 ),
                 _Collapsible(

@@ -12,12 +12,23 @@ import 'tx_form.dart';
 import 'widgets.dart';
 
 /// كشف حساب: الرصيد والسجل الزمني وأدوات التواصل.
-class AccountDetailScreen extends ConsumerWidget {
+class AccountDetailScreen extends ConsumerStatefulWidget {
   final int accountId;
   const AccountDetailScreen({super.key, required this.accountId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AccountDetailScreen> createState() =>
+      _AccountDetailScreenState();
+}
+
+class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
+  int get accountId => widget.accountId;
+
+  /// فلتر كبسولة العملة: null = عرض كل العملات.
+  String? _capsuleCur;
+
+  @override
+  Widget build(BuildContext context) {
     ref.watch(refreshProvider);
     final curs =
         ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
@@ -36,22 +47,44 @@ class AccountDetailScreen extends ConsumerWidget {
             ),
           );
         }
-        final c = curs.firstWhere(
-          (x) => x.code == a.currency,
-          orElse: () => kDefaultCurrencies.first,
-        );
-        final txs = ref.watch(accountTxProvider(accountId)).valueOrNull ?? [];
+        final allTxs =
+            ref.watch(accountTxProvider(accountId)).valueOrNull ?? [];
 
-        // الرصيد يُحسب من السجل دائمًا، لا يُخزَّن.
-        var balance = a.openingBalance;
-        for (final t in txs) {
+        // فصل الأرصدة لكل عملة: لا دمج بقيمة محوّلة واحدة — الحساب
+        // متعدد العملات يعرض رصيداً مستقلاً لكل عملة (كبسولات).
+        final balByCur = <String, double>{a.currency: a.openingBalance};
+        for (final t in allTxs) {
           final e = t.effectOn(accountId);
-          if (e != null) balance += e;
+          if (e == null) continue;
+          balByCur[t.currency] = (balByCur[t.currency] ?? 0.0) + e;
         }
+        // العملات مرتبة: عملة الحساب أولاً ثم البقية.
+        final curCodes = balByCur.keys.toList()
+          ..sort((x, y) {
+            if (x == a.currency) return -1;
+            if (y == a.currency) return 1;
+            return x.compareTo(y);
+          });
+        CurrencyDef defOf(String code) => curs.firstWhere(
+              (x) => x.code == code,
+              orElse: () => kDefaultCurrencies.first,
+            );
+        // إن اختفت العملة المفلترة (حذف عملياتها) نعود للعرض الكامل.
+        if (_capsuleCur != null && !balByCur.containsKey(_capsuleCur)) {
+          _capsuleCur = null;
+        }
+        final activeCur = _capsuleCur ?? a.currency;
+        final c = defOf(activeCur);
+        // السجل المعروض: كل العمليات أو عملة الكبسولة المختارة فقط.
+        final txs = _capsuleCur == null
+            ? allTxs
+            : allTxs.where((t) => t.currency == _capsuleCur).toList();
+        final balance = balByCur[activeCur] ?? 0.0;
 
         var totalDebit = 0.0;
         var totalCredit = 0.0;
         for (final t in txs) {
+          if (t.currency != activeCur) continue;
           final e = t.effectOn(accountId);
           if (e == null) continue;
           if (e > 0) {
@@ -139,8 +172,37 @@ class AccountDetailScreen extends ConsumerWidget {
                       const SizedBox(height: 16),
                       const Divider(height: 1),
                       const SizedBox(height: 14),
+                      // كبسولات العملات: رصيد مستقل لكل عملة، والنقر
+                      // يفلتر السجل أدناه على تلك العملة فقط.
+                      if (curCodes.length > 1) ...[
+                        SizedBox(
+                          height: 40,
+                          child: ListView(
+                            scrollDirection: Axis.horizontal,
+                            children: [
+                              for (final code in curCodes)
+                                Padding(
+                                  padding:
+                                      const EdgeInsetsDirectional.only(end: 7),
+                                  child: _CurrencyCapsule(
+                                    code: code,
+                                    def: defOf(code),
+                                    balance: balByCur[code] ?? 0.0,
+                                    hidden: hidden,
+                                    selected: _capsuleCur == code,
+                                    onTap: () => setState(() => _capsuleCur =
+                                        _capsuleCur == code ? null : code),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       Text(
-                        'الرصيد الحالي',
+                        _capsuleCur == null
+                            ? 'الرصيد الحالي'
+                            : 'الرصيد الحالي (${c.name})',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: Theme.of(context).hintColor,
@@ -224,11 +286,13 @@ class AccountDetailScreen extends ConsumerWidget {
                 ),
               ],
               const SizedBox(height: 6),
-              SectionTitle('سجل العمليات (${txs.length})'),
+              SectionTitle(_capsuleCur == null
+                  ? 'سجل العمليات (${txs.length})'
+                  : 'سجل عمليات ${c.name} (${txs.length})'),
               if (txs.isEmpty)
-                Card(
+                const Card(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    padding: EdgeInsets.symmetric(vertical: 28),
                     child: EmptyState(
                       icon: Icons.receipt_long_outlined,
                       title: 'لا عمليات على هذا الحساب',
@@ -241,7 +305,13 @@ class AccountDetailScreen extends ConsumerWidget {
                     children: [
                       for (var i = 0; i < txs.length; i++) ...[
                         if (i > 0) const Divider(height: 1, indent: 52),
-                        _TxTile(tx: txs[i], accountId: accountId, currency: c),
+                        // كل سطر يعرض عملته الحقيقية لا عملة الحساب —
+                        // فصل صارم للعملات في الكشف.
+                        _TxTile(
+                          tx: txs[i],
+                          accountId: accountId,
+                          currency: defOf(txs[i].currency),
+                        ),
                       ],
                     ],
                   ),
@@ -410,11 +480,84 @@ class _TxTile extends StatelessWidget {
         style: const TextStyle(fontSize: 11.5),
       ),
       trailing: Text(
-        '${effect > 0 ? '+' : '−'}${Fmt.money(effect.abs(), currency.decimal)}',
+        '${effect > 0 ? '+' : '−'}${Fmt.money(effect.abs(), currency.decimal)} ${currency.symbol}',
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 13.5,
           fontWeight: FontWeight.w800,
           color: color,
+        ),
+      ),
+    );
+  }
+}
+
+/// كبسولة عملة: رصيد مستقل بعملة واحدة + طبيعة الرصيد (له/عليه).
+/// النقر يفلتر كشف الحساب على هذه العملة، ونقرة ثانية تلغي الفلتر.
+class _CurrencyCapsule extends StatelessWidget {
+  final String code;
+  final CurrencyDef def;
+  final double balance;
+  final bool hidden;
+  final bool selected;
+  final VoidCallback onTap;
+  const _CurrencyCapsule({
+    required this.code,
+    required this.def,
+    required this.balance,
+    required this.hidden,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = balance > 0
+        ? AppColors.green
+        : (balance < 0 ? AppColors.red : Theme.of(context).hintColor);
+    final nature = balance > 0 ? 'عليه' : (balance < 0 ? 'له' : '—');
+    final amount =
+        hidden ? '••••' : Fmt.money(balance.abs(), def.decimal);
+    return Material(
+      color: selected
+          ? color.withValues(alpha: 0.16)
+          : Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: selected ? color : Theme.of(context).dividerColor,
+              width: selected ? 1.6 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$amount ${def.symbol}',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                nature,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).hintColor,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

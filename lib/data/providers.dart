@@ -103,17 +103,22 @@ final accountsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
   final all = await repo.accounts(includeArchived: f.showArchived);
   final balances = await repo.allBalances(all);
 
-  final q = f.query.trim().toLowerCase();
+  final q = f.query.trim();
+  final numericQ = q.isNotEmpty && Fmt.isNumericQuery(q);
   final out = <AccountWithBalance>[];
   for (final a in all) {
     if (f.showArchived && !a.archived) continue;
     if (f.kind != null && a.kind != f.kind) continue;
     if (f.currency != null && a.currency != f.currency) continue;
     if (q.isNotEmpty) {
-      final hay = '${a.name} ${a.phone} ${a.whatsapp} ${a.notes} '
-              '${a.tags.join(' ')}'
-          .toLowerCase();
-      if (!hay.contains(q)) continue;
+      // بحث ذكي: الاستعلام الرقمي يستهدف الهاتف/المبالغ؛ والنصي يمر
+      // بتطبيع عربي (تجاهل التشكيل، أ/إ/آ→ا، ة→ه، ى→ي).
+      final hay = numericQ
+          ? '${a.phone} ${a.whatsapp} '
+              '${balances[a.id]?.abs().toStringAsFixed(0) ?? ''}'
+          : '${a.name} ${a.phone} ${a.whatsapp} ${a.notes} '
+              '${a.tags.join(' ')}';
+      if (!Fmt.smartContains(hay, q)) continue;
     }
     out.add(AccountWithBalance(a, balances[a.id] ?? a.openingBalance));
   }
@@ -364,15 +369,18 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
   final accs = await repo.accounts(includeArchived: true);
   final byId = {for (final a in accs) a.id!: a};
 
-  final q = f.query.trim().toLowerCase();
+  final q = f.query.trim();
+  final numericQ = q.isNotEmpty && Fmt.isNumericQuery(q);
   var list = all.where((t) {
     if (f.currency != null && t.currency != f.currency) return false;
     if (q.isEmpty) return true;
     final accName =
         t.type == OpType.transfer ? 'تحويل' : (byId[t.accountId]?.name ?? '');
-    final hay =
-        '${t.description} ${t.reference} $accName ${t.notes}'.toLowerCase();
-    return hay.contains(q);
+    // الاستعلام الرقمي يبحث في المرجع والمبلغ أيضاً؛ النصي بتطبيع عربي.
+    final hay = numericQ
+        ? '${t.reference} ${t.amount.toStringAsFixed(0)} ${t.description}'
+        : '${t.description} ${t.reference} $accName ${t.notes}';
+    return Fmt.smartContains(hay, q);
   }).toList();
 
   switch (f.sort) {

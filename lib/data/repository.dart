@@ -665,6 +665,8 @@ class Repo {
     }
     await _ensureCan(t.id == null ? 'add_tx' : 'edit_tx')
         .timeout(const Duration(seconds: 4));
+    // القفل التاريخي: تعديل سجل قديم محظور على غير المدير.
+    if (t.id != null) await _ensureNotAuditLocked(t.id!);
     final db = await _db;
     String mode;
     try {
@@ -805,8 +807,31 @@ class Repo {
     return rows.map(InvoiceLine.fromMap).toList();
   }
 
+  /// القفل التاريخي للتدقيق: إعداد `auditLockDays` (0 = معطل) يمنع غير
+  /// المدير من تعديل/حذف عملية مالية أقدم من المدة المحددة — حماية دفترية
+  /// من العبث بالسجلات المُقفلة محاسبياً.
+  Future<void> _ensureNotAuditLocked(int txId) async {
+    final st = await settings();
+    final days = int.tryParse(st['auditLockDays'] ?? '0') ?? 0;
+    if (days <= 0) return;
+    final me = await currentUser();
+    if (me == null || me.role == UserRole.admin) return; // المدير مستثنى.
+    final db = await _db;
+    final rows = await db.query('transactions',
+        columns: ['date'], where: 'id = ?', whereArgs: [txId], limit: 1);
+    if (rows.isEmpty) return;
+    final d = DateTime.tryParse('${rows.first['date']}');
+    if (d == null) return;
+    if (DateTime.now().difference(d).inDays >= days) {
+      throw StateError(
+          'هذا السجل أقدم من $days يوماً ومقفل ضد التعديل والحذف. '
+          'يتطلب صلاحية المدير.');
+    }
+  }
+
   Future<void> deleteTx(int id) async {
     await _ensureCan('delete_tx');
+    await _ensureNotAuditLocked(id);
     final db = await _db;
     final now = DateTime.now().toIso8601String();
     final rows = await db.query(
@@ -3127,6 +3152,21 @@ class Repo {
   Future<int> saveItem(Item it) async {
     await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
+    // فرادة الباركود/SKU: صنفان بنفس الباركود يفسدان مسح نقطة البيع.
+    final sku = it.sku.trim();
+    if (sku.isNotEmpty) {
+      final dup = await db.query('items',
+          columns: ['id', 'name'],
+          where: "sku = ? AND COALESCE(deleted_at,'') = ''"
+              "${it.id != null ? ' AND id != ?' : ''}",
+          whereArgs: it.id != null ? [sku, it.id] : [sku],
+          limit: 1);
+      if (dup.isNotEmpty) {
+        throw StateError(
+            'الباركود «$sku» مستخدم مسبقاً للصنف «${dup.first['name']}». '
+            'كل صنف يجب أن يملك باركوداً فريداً.');
+      }
+    }
     late final int id;
     if (it.id == null) {
       id = await db.insert('items', it.toMap()..['id'] = newGlobalId());

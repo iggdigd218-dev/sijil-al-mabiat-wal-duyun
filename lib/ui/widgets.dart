@@ -586,3 +586,104 @@ class _AmountWordsState extends State<AmountWords> {
     );
   }
 }
+
+/// لوحة إدخال رقمية سريعة (حوار سفلي): حقل رقمي بفواصل آلاف حية + أزرار
+/// «+00» و«+000» لتسريع إدخال المبالغ والكميات الكبيرة بلا نقرات متكررة.
+Future<double?> showQuickAmountPad(
+  BuildContext context, {
+  required String title,
+  double? initial,
+  String? hint,
+}) {
+  final ctl = TextEditingController(
+    text: initial == null || initial == 0
+        ? ''
+        : (initial == initial.roundToDouble()
+            ? Fmt.money(initial)
+            : '$initial'),
+  );
+  return showModalBottomSheet<double>(
+    context: context,
+    isScrollControlled: true,
+    builder: (ctx) {
+      void appendZeros(String zeros) {
+        final raw = ThousandsFormatter.strip(ctl.text);
+        if (raw.isEmpty || raw == '0') return;
+        final v = double.tryParse(raw);
+        if (v == null) return;
+        final next = '$raw$zeros';
+        ctl.value = const ThousandsFormatter().formatEditUpdate(
+          ctl.value,
+          TextEditingValue(text: next),
+        );
+        Sfx.click();
+      }
+
+      void submit() {
+        final v = Fmt.parseAmount(ThousandsFormatter.strip(ctl.text));
+        Navigator.pop(ctx, v);
+      }
+
+      return Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          left: 16,
+          right: 16,
+          top: 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(title,
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctl,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: const [ThousandsFormatter()],
+              textAlign: TextAlign.center,
+              style:
+                  const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+              decoration: InputDecoration(hintText: hint, isDense: true),
+              onSubmitted: (_) => submit(),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => appendZeros('00'),
+                    child: const Text('+00',
+                        style: TextStyle(fontWeight: FontWeight.w800)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => appendZeros('000'),
+                    child: const Text('+000',
+                        style: TextStyle(fontWeight: FontWeight.w800)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton.icon(
+                    onPressed: submit,
+                    icon: const Icon(Icons.check),
+                    label: const Text('تم'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      );
+    },
+  );
+}

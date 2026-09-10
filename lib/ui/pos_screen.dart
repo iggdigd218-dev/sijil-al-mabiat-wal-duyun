@@ -9,39 +9,32 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
+import '../data/pos_cart.dart';
 import '../data/providers.dart';
 import 'barcode_scanner.dart';
 import 'tx_share.dart';
 import 'widgets.dart';
 
-/// عنصر في سلة نقطة البيع
-class _CartEntry {
-  final Item item;
-  double quantity;
-  double unitPrice;
-
-  _CartEntry({
-    required this.item,
-    this.quantity = 1.0,
-    required this.unitPrice,
-  });
-
-  double get total => quantity * unitPrice;
-}
-
 enum _PosPayment {
   cash('نقداً 💵', 'cash'),
-  credit('آجل (على الحساب) 📑', 'credit'),
-  partial('جزئي (مقدم + آجل) ⚖️', 'partial');
+  credit('آجل 📑', 'credit'),
+  partial('جزئي ⚖️', 'partial');
 
   final String label;
   final String code;
   const _PosPayment(this.label, this.code);
+
+  static _PosPayment fromCode(String c) => _PosPayment.values
+      .firstWhere((p) => p.code == c, orElse: () => _PosPayment.cash);
 }
 
 /// شاشة نقطة البيع ونظام المبيعات المتكامل
 class PosScreen extends ConsumerStatefulWidget {
   const PosScreen({super.key});
+
+  /// جسر الزر المركزي (Omni): عندما تكون شاشة POS ظاهرة يفتح زر
+  /// الإجراء الموحد درج الدفع مباشرة عبر هذا المرجع.
+  static void Function()? openCheckoutBridge;
 
   @override
   ConsumerState<PosScreen> createState() => _PosScreenState();
@@ -50,27 +43,59 @@ class PosScreen extends ConsumerStatefulWidget {
 class _PosScreenState extends ConsumerState<PosScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
-  final Map<int, _CartEntry> _cart = {};
   int? _selectedCategoryId;
   String _searchQuery = '';
   final TextEditingController _searchCtrl = TextEditingController();
-
-  // إعدادات الفاتورة
-  int? _selectedCustomerId;
-  _PosPayment _payment = _PosPayment.cash;
-  final TextEditingController _paidCtrl = TextEditingController();
-  final TextEditingController _discountCtrl = TextEditingController();
-  final TextEditingController _notesCtrl = TextEditingController();
   bool _saving = false;
+
+  /// «السماح بالبيع عند نفاد الرصيد الدفتري» — إعداد المخزون.
+  bool get _allowNegative =>
+      (ref.read(settingsProvider).valueOrNull ?? const {})['allowNegativeStock'] ==
+      '1';
+
+  // السلة الحية تعيش في Riverpod (pos_cart.dart) — التنقل لا يفقدها.
+  PosDraft get _draft => ref.read(posDraftProvider);
+  PosDraftNotifier get _cartCtl => ref.read(posDraftProvider.notifier);
+
+  // جسور قراءة من المسودة — تبقي بقية الشيفرة كما هي.
+  Map<int, CartEntry> get _cart => _draft.cart;
+  int? get _selectedCustomerId => _draft.customerId;
+  _PosPayment get _payment => _PosPayment.fromCode(_draft.payment);
+  double get _subtotal => _draft.subtotal;
+  double get _discount => _draft.discountValue;
+  double get _netTotal => _draft.netTotal;
+  int get _itemCount => _draft.itemCount;
+  // حقول نصية تُستعاد من المسودة عند إعادة بناء الشاشة (تُهيأ في
+  // initState — التهيئة الكسولة تنفجر لو أول وصول كان في dispose).
+  late final TextEditingController _paidCtrl;
+  late final TextEditingController _discountCtrl;
+  late final TextEditingController _notesCtrl;
 
   @override
   void initState() {
     super.initState();
+    final d = ref.read(posDraftProvider);
+    _paidCtrl = TextEditingController(text: d.paidText);
+    _discountCtrl = TextEditingController(text: d.discountText);
+    _notesCtrl = TextEditingController(text: d.notesText);
     _tabController = TabController(length: 2, vsync: this);
+    // ربط الزر المركزي الموحد: على شاشة POS يفتح درج الدفع مباشرة.
+    PosScreen.openCheckoutBridge = () {
+      if (!mounted) return;
+      if (_draft.cart.isEmpty) {
+        Sfx.reject();
+        showSnack(context, 'السلة فارغة — أضف أصنافاً أولاً', error: true);
+        return;
+      }
+      _openCheckoutSheet();
+    };
   }
 
   @override
   void dispose() {
+    if (PosScreen.openCheckoutBridge != null) {
+      PosScreen.openCheckoutBridge = null;
+    }
     _tabController.dispose();
     _searchCtrl.dispose();
     _paidCtrl.dispose();
@@ -79,24 +104,15 @@ class _PosScreenState extends ConsumerState<PosScreen>
     super.dispose();
   }
 
-  double get _subtotal =>
-      _cart.values.fold<double>(0.0, (sum, e) => sum + e.total);
-
-  double get _discount => double.tryParse(_discountCtrl.text.trim()) ?? 0.0;
-
-  double get _netTotal => (_subtotal - _discount).clamp(0.0, double.infinity);
-
-  int get _itemCount =>
-      _cart.values.fold<int>(0, (sum, e) => sum + e.quantity.toInt());
-
   void _addItem(Item item) {
-    final inCart = _cart[item.id]?.quantity ?? 0.0;
-    if (item.quantity <= 0) {
+    final allowNeg = _allowNegative;
+    if (!allowNeg && item.quantity <= 0) {
       Sfx.reject();
       showSnack(context, 'الصنف «${item.name}» نفد من المخزون', error: true);
       return;
     }
-    if (inCart + 1 > item.quantity) {
+    final ok = _cartCtl.addItem(item, allowNegative: allowNeg);
+    if (!ok) {
       Sfx.reject();
       showSnack(
         context,
@@ -105,39 +121,51 @@ class _PosScreenState extends ConsumerState<PosScreen>
       );
       return;
     }
-    setState(() {
-      if (_cart.containsKey(item.id)) {
-        _cart[item.id]!.quantity += 1.0;
-      } else {
-        _cart[item.id!] = _CartEntry(
-          item: item,
-          quantity: 1.0,
-          unitPrice: item.sellPrice > 0 ? item.sellPrice : item.buyPrice,
-        );
-      }
-    });
+    if (allowNeg && item.quantity - (_draft.cart[item.id]?.quantity ?? 0) < 0) {
+      showSnack(context,
+          '⚠️ «${item.name}»: البيع تجاوز الرصيد الدفتري (رصيد سالب)',
+          error: true, silent: true);
+    }
     Sfx.click();
   }
 
-  void _removeItem(int itemId) {
-    setState(() {
-      _cart.remove(itemId);
-    });
+  /// إدخال كمية مباشر: نقرة على رقم الكمية تفتح لوحة إدخال سريعة بدل
+  /// تكرار «+» للأعداد الكبيرة.
+  Future<void> _editQuantity(CartEntry entry) async {
+    final qty = await showQuickAmountPad(
+      context,
+      title: 'كمية «${entry.item.name}»',
+      initial: entry.quantity,
+      hint: 'المتاح: ${Fmt.money(entry.item.quantity)} ${entry.item.unit}',
+    );
+    if (qty == null) return;
+    final ok = _cartCtl.setQuantity(entry.item.id!, qty,
+        allowNegative: _allowNegative);
+    if (!ok) {
+      Sfx.reject();
+      if (mounted) {
+        showSnack(
+          context,
+          'الكمية المتاحة: ${entry.item.quantity.toStringAsFixed(0)} ${entry.item.unit} فقط',
+          error: true,
+        );
+      }
+    }
   }
 
   void _clearCart() {
-    setState(() {
-      _cart.clear();
-      _selectedCustomerId = null;
-      _payment = _PosPayment.cash;
-      _paidCtrl.clear();
-      _discountCtrl.clear();
-      _notesCtrl.clear();
-    });
+    _cartCtl.clear();
+    _paidCtrl.clear();
+    _discountCtrl.clear();
+    _notesCtrl.clear();
+    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
+    // مراقبة المسودة: أي تغيير في السلة (حتى من جلسة سابقة قبل تنقل
+    // عرضي بين التبويبات) يعيد بناء الشريط السفلي فوراً.
+    ref.watch(posDraftProvider);
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(48),
@@ -175,10 +203,14 @@ class _PosScreenState extends ConsumerState<PosScreen>
         return false;
       }
       if (_searchQuery.isNotEmpty) {
-        final q = _searchQuery.toLowerCase();
-        final matchName = item.name.toLowerCase().contains(q);
-        final matchCode = item.sku.toLowerCase().contains(q);
-        return matchName || matchCode;
+        // بحث ذكي: استعلام رقمي → باركود/SKU أولاً؛ نصي → تطبيع عربي
+        // (تجاهل التشكيل وتوحيد أ/إ/آ→ا، ة→ه، ى→ي).
+        if (Fmt.isNumericQuery(_searchQuery)) {
+          final q = Fmt.normArabic(_searchQuery);
+          return item.sku.contains(q) || Fmt.smartContains(item.name, q);
+        }
+        return Fmt.smartContains(item.name, _searchQuery) ||
+            Fmt.smartContains(item.sku, _searchQuery);
       }
       return true;
     }).toList();
@@ -295,7 +327,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       ),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        onTap: isOut ? null : () => _addItem(item),
+                        // السماح بالبيع رغم النفاد إن فُعِّل الإعداد
+                        // (حركة سالبة مع تنبيه بصري بدل الحظر).
+                        onTap: isOut && !_allowNegative
+                            ? null
+                            : () => _addItem(item),
                         child: Padding(
                           padding: const EdgeInsets.all(10),
                           child: Column(
@@ -465,6 +501,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     );
   }
 
+  /// درج الدفع المنزلق (Slide-to-Pay): قائمة الأصناف تبقى ملء الشاشة،
+  /// وكل الإدخال المالي في درج سفلي موسع — لا تغطية من لوحة المفاتيح.
   void _openCheckoutSheet() {
     showModalBottomSheet(
       context: context,
@@ -491,6 +529,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
                         a.kind == AccountKind.general,
                   )
                   .toList();
+              final needsAccount = _payment != _PosPayment.cash;
+              final accountMissing = needsAccount && _selectedCustomerId == null;
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -501,7 +541,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          'تفاصيل فاتورة المبيعات 🛒',
+                          'إتمام الفاتورة 🛒',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -515,12 +555,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     ),
                     const Divider(),
 
-                    // قائمة أصناف السلة
-                    const Text(
-                      'الأصناف المختارة:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
+                    // قائمة أصناف السلة — الكمية قابلة للنقر لإدخال مباشر.
                     for (final entry in _cart.values) ...[
                       Row(
                         children: [
@@ -530,6 +565,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                               children: [
                                 Text(
                                   entry.item.name,
+                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -553,20 +589,36 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   size: 20,
                                 ),
                                 onPressed: () {
-                                  setSheetState(() {
-                                    if (entry.quantity > 1) {
-                                      entry.quantity -= 1;
-                                    } else {
-                                      _removeItem(entry.item.id!);
-                                    }
-                                  });
+                                  final q = entry.quantity - 1;
+                                  _cartCtl.setQuantity(entry.item.id!, q,
+                                      allowNegative: _allowNegative);
+                                  setSheetState(() {});
                                   setState(() {});
                                 },
                               ),
-                              Text(
-                                '${entry.quantity.toInt()}',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
+                              // نقرة على الكمية = لوحة إدخال رقمي سريعة.
+                              InkWell(
+                                onTap: () async {
+                                  await _editQuantity(entry);
+                                  setSheetState(() {});
+                                  setState(() {});
+                                },
+                                borderRadius: BorderRadius.circular(8),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                        color: AppColors.primaryOf(context)
+                                            .withValues(alpha: .4)),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    Fmt.money(entry.quantity),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ),
                               ),
                               IconButton(
@@ -575,8 +627,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                   size: 20,
                                 ),
                                 onPressed: () {
-                                  if (entry.quantity + 1 >
-                                      entry.item.quantity) {
+                                  final ok = _cartCtl.setQuantity(
+                                      entry.item.id!, entry.quantity + 1,
+                                      allowNegative: _allowNegative);
+                                  if (!ok) {
                                     Sfx.reject();
                                     showSnack(
                                       context,
@@ -585,9 +639,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                     );
                                     return;
                                   }
-                                  setSheetState(() {
-                                    entry.quantity += 1;
-                                  });
+                                  setSheetState(() {});
                                   setState(() {});
                                 },
                               ),
@@ -598,6 +650,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             child: Text(
                               '${Fmt.money(entry.total)} ${cur.symbol}',
                               textAlign: TextAlign.end,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                               ),
@@ -608,47 +661,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       const Divider(height: 12),
                     ],
 
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
 
-                    // اختيار العميل
-                    const Text(
-                      'العميل:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
-                    DropdownButtonFormField<int?>(
-                      initialValue: _selectedCustomerId,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        prefixIcon: Icon(Icons.person_outline),
-                      ),
-                      items: [
-                        const DropdownMenuItem<int?>(
-                          value: null,
-                          child: Text('عميل نقدي (بدون حساب)'),
-                        ),
-                        for (final c in customers)
-                          DropdownMenuItem<int?>(
-                            value: c.id,
-                            child: Text(
-                              '${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})',
-                            ),
-                          ),
-                      ],
-                      onChanged: (val) {
-                        setSheetState(() => _selectedCustomerId = val);
-                        setState(() => _selectedCustomerId = val);
-                      },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // نوع السداد
-                    const Text(
-                      'طريقة الدفع:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
+                    // طريقة الدفع أولاً — تحدد هل نحتاج حساب عميل.
                     SegmentedButton<_PosPayment>(
                       segments: _PosPayment.values
                           .map(
@@ -658,22 +673,168 @@ class _PosScreenState extends ConsumerState<PosScreen>
                           .toList(),
                       selected: {_payment},
                       onSelectionChanged: (set) {
-                        setSheetState(() => _payment = set.first);
-                        setState(() => _payment = set.first);
+                        _cartCtl.setPayment(set.first.code);
+                        setSheetState(() {});
+                        setState(() {});
                       },
                     ),
+
+                    const SizedBox(height: 12),
+
+                    // اختيار العميل — يتوهج بالأحمر إذا كان الدفع آجلاً
+                    // بلا حساب محدد (تنبيه بصري لا نصي فقط).
+                    Container(
+                      decoration: accountMissing
+                          ? BoxDecoration(
+                              border: Border.all(
+                                  color: AppColors.dangerOf(context),
+                                  width: 2),
+                              borderRadius: BorderRadius.circular(10),
+                            )
+                          : null,
+                      padding:
+                          accountMissing ? const EdgeInsets.all(6) : null,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (accountMissing)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                '⚠️ البيع الآجل يتطلب اختيار حساب العميل',
+                                style: TextStyle(
+                                  color: AppColors.dangerOf(context),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                          // آخر 3 مدينين — اختيار بنقرة واحدة في وضع الآجل.
+                          if (needsAccount)
+                            FutureBuilder<List<Account>>(
+                              future: _recentDebtors(customers),
+                              builder: (c, snap) {
+                                final recents = snap.data ?? const <Account>[];
+                                if (recents.isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: SizedBox(
+                                    height: 38,
+                                    child: ListView(
+                                      scrollDirection: Axis.horizontal,
+                                      children: [
+                                        for (final a in recents)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                left: 6),
+                                            child: ChoiceChip(
+                                              label: Text(a.name,
+                                                  overflow:
+                                                      TextOverflow.ellipsis),
+                                              selected:
+                                                  _selectedCustomerId == a.id,
+                                              onSelected: (_) {
+                                                _cartCtl.setCustomer(a.id);
+                                                setSheetState(() {});
+                                                setState(() {});
+                                              },
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          DropdownButtonFormField<int?>(
+                            initialValue: _selectedCustomerId,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              labelText: 'العميل',
+                              prefixIcon: Icon(Icons.person_outline),
+                            ),
+                            items: [
+                              const DropdownMenuItem<int?>(
+                                value: null,
+                                child: Text('عميل نقدي (بدون حساب)'),
+                              ),
+                              for (final c in customers)
+                                DropdownMenuItem<int?>(
+                                  value: c.id,
+                                  child: Text(
+                                    '${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: (val) {
+                              _cartCtl.setCustomer(val);
+                              setSheetState(() {});
+                              setState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // تحذير تجاوز حد الائتمان — قبل السماح بالتأكيد.
+                    if (needsAccount && _selectedCustomerId != null)
+                      FutureBuilder<_CreditCheck?>(
+                        future: _checkCreditLimit(),
+                        builder: (c, snap) {
+                          final chk = snap.data;
+                          if (chk == null || !chk.exceeded) {
+                            return const SizedBox.shrink();
+                          }
+                          return Container(
+                            margin: const EdgeInsets.only(top: 10),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.dangerOf(context)
+                                  .withValues(alpha: .1),
+                              border: Border.all(
+                                  color: AppColors.dangerOf(context)),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '🚨 هذه الفاتورة تتجاوز حد الائتمان للعميل!\n'
+                              'الحد: ${Fmt.money(chk.limit)} ${cur.symbol} — '
+                              'الدين الحالي: ${Fmt.money(chk.currentDebt)} ${cur.symbol}\n'
+                              'المتبقي من الحد: ${Fmt.money(chk.remaining)} ${cur.symbol}',
+                              style: TextStyle(
+                                color: AppColors.dangerOf(context),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12.5,
+                                height: 1.6,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
 
                     if (_payment == _PosPayment.partial) ...[
                       const SizedBox(height: 12),
                       TextField(
                         controller: _paidCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        inputFormatters: const [ThousandsFormatter()],
+                        decoration: InputDecoration(
                           labelText: 'المبلغ المدفوع مقدماً',
-                          prefixIcon: Icon(Icons.payments_outlined),
+                          prefixIcon: const Icon(Icons.payments_outlined),
                           isDense: true,
+                          // أزرار الأصفار السريعة داخل الحقل.
+                          suffixIcon: _ZeroButtons(controller: _paidCtrl,
+                              onChanged: () {
+                            _cartCtl.setPaid(_paidCtrl.text);
+                            setSheetState(() {});
+                            setState(() {});
+                          }),
                         ),
-                        onChanged: (_) {
+                        onChanged: (v) {
+                          _cartCtl.setPaid(v);
                           setSheetState(() {});
                           setState(() {});
                         },
@@ -683,21 +844,52 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
                     const SizedBox(height: 12),
 
-                    // الخصم
-                    TextField(
-                      controller: _discountCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'مبلغ الخصم (اختياري)',
-                        prefixIcon: Icon(Icons.discount_outlined),
-                        isDense: true,
-                      ),
-                      onChanged: (_) {
-                        setSheetState(() {});
-                        setState(() {});
-                      },
+                    // الخصم المزدوج: نسبة % أو مبلغ مقطوع.
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _discountCtrl,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                                    decimal: true),
+                            inputFormatters: _draft.discountIsPercent
+                                ? null
+                                : const [ThousandsFormatter()],
+                            decoration: InputDecoration(
+                              labelText: _draft.discountIsPercent
+                                  ? 'نسبة الخصم %'
+                                  : 'مبلغ الخصم',
+                              prefixIcon:
+                                  const Icon(Icons.discount_outlined),
+                              isDense: true,
+                            ),
+                            onChanged: (v) {
+                              _cartCtl.setDiscount(v);
+                              setSheetState(() {});
+                              setState(() {});
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SegmentedButton<bool>(
+                          style: const ButtonStyle(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          segments: const [
+                            ButtonSegment(value: false, label: Text('مبلغ')),
+                            ButtonSegment(value: true, label: Text('٪')),
+                          ],
+                          selected: {_draft.discountIsPercent},
+                          onSelectionChanged: (set) {
+                            _cartCtl.setDiscountIsPercent(set.first);
+                            setSheetState(() {});
+                            setState(() {});
+                          },
+                        ),
+                      ],
                     ),
-                    AmountWords(controller: _discountCtrl),
 
                     const SizedBox(height: 16),
 
@@ -722,9 +914,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text(
-                                  'الخصم:',
-                                  style: TextStyle(color: AppColors.red),
+                                Text(
+                                  _draft.discountIsPercent
+                                      ? 'الخصم (${_draft.discountText.trim()}٪):'
+                                      : 'الخصم:',
+                                  style:
+                                      const TextStyle(color: AppColors.red),
                                 ),
                                 Text(
                                   '-${Fmt.money(_discount)} ${cur.symbol}',
@@ -760,8 +955,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
                     const SizedBox(height: 20),
 
-                    const SizedBox(height: 10),
-                    // زر إتمام البيع
+                    // زر تأكيد عريض مع قفل فوري ضد النقر المزدوج.
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -796,6 +990,57 @@ class _PosScreenState extends ConsumerState<PosScreen>
     );
   }
 
+  /// أحدث 3 عملاء لهم مبيعات آجلة — للاختيار بنقرة واحدة.
+  Future<List<Account>> _recentDebtors(List<Account> customers) async {
+    try {
+      final repo = ref.read(repoProvider);
+      final txs = await repo.transactions();
+      final seen = <int>{};
+      final out = <Account>[];
+      for (final t in txs) {
+        if (t.type != OpType.debit || t.accountId == null) continue;
+        if (!seen.add(t.accountId!)) continue;
+        final a = customers.where((c) => c.id == t.accountId).firstOrNull;
+        if (a != null) out.add(a);
+        if (out.length >= 3) break;
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// فحص حد الائتمان للعميل المحدد مقابل صافي الفاتورة الحالية.
+  Future<_CreditCheck?> _checkCreditLimit() async {
+    final id = _selectedCustomerId;
+    if (id == null) return null;
+    try {
+      final repo = ref.read(repoProvider);
+      final acc = await repo.account(id);
+      if (acc == null || acc.creditLimit == null || acc.creditLimit! <= 0) {
+        return null;
+      }
+      final balance = await repo.balanceOf(acc);
+      // الرصيد الموجب = دين على العميل. الجزئي يضيف المتبقي فقط.
+      final debt = balance > 0 ? balance : 0.0;
+      var added = _netTotal;
+      if (_payment == _PosPayment.partial) {
+        final paid =
+            Fmt.parseAmount(ThousandsFormatter.strip(_paidCtrl.text)) ?? 0.0;
+        added = (_netTotal - paid).clamp(0.0, double.infinity);
+      }
+      final limit = acc.creditLimit!;
+      return _CreditCheck(
+        limit: limit,
+        currentDebt: debt,
+        exceeded: debt + added > limit,
+        remaining: (limit - debt).clamp(0.0, double.infinity),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _executeSale(BuildContext sheetCtx) async {
     if (_cart.isEmpty) return;
 
@@ -821,15 +1066,18 @@ class _PosScreenState extends ConsumerState<PosScreen>
       final refNum = await repo.nextTxNumber();
 
       // 0. تحقق نهائي من توفر المخزون (دفاع ضد بيانات تغيّرت أثناء الجلسة).
-      for (final e in _cart.values) {
-        if (e.item.id == null) continue;
-        final fresh = await repo.item(e.item.id!);
-        final available = fresh?.quantity ?? e.item.quantity;
-        if (available < e.quantity) {
-          throw StateError(
-            'الكمية المطلوبة من «${e.item.name}» غير متوفرة. '
-            'المتاح: ${available.toStringAsFixed(0)} ${e.item.unit}.',
-          );
+      // إعداد «السماح بالبيع عند نفاد الرصيد» يتخطى الحظر مع تنبيه بصري.
+      if (!_allowNegative) {
+        for (final e in _cart.values) {
+          if (e.item.id == null) continue;
+          final fresh = await repo.item(e.item.id!);
+          final available = fresh?.quantity ?? e.item.quantity;
+          if (available < e.quantity) {
+            throw StateError(
+              'الكمية المطلوبة من «${e.item.name}» غير متوفرة. '
+              'المتاح: ${available.toStringAsFixed(0)} ${e.item.unit}.',
+            );
+          }
         }
       }
 
@@ -881,7 +1129,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
         txId = await repo.saveTx(tx, items: lines);
       } else {
         // مبيعات جزئية: قيد بالباقي + قبض بالمقدم
-        final paid = double.tryParse(_paidCtrl.text.trim()) ?? 0.0;
+        final paid =
+            Fmt.parseAmount(ThousandsFormatter.strip(_paidCtrl.text)) ?? 0.0;
         final remainder = (_netTotal - paid).clamp(0.0, double.infinity);
 
         // تسجيل المبلغ الكامل كمدين
@@ -1303,6 +1552,65 @@ class _PosHistoryTab extends ConsumerWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// نتيجة فحص حد الائتمان للعميل قبل تأكيد فاتورة آجلة.
+class _CreditCheck {
+  final double limit;
+  final double currentDebt;
+  final double remaining;
+  final bool exceeded;
+  const _CreditCheck({
+    required this.limit,
+    required this.currentDebt,
+    required this.remaining,
+    required this.exceeded,
+  });
+}
+
+/// زرا «+00» و«+000» المدمجان في حقول المبالغ لتسريع الإدخال.
+class _ZeroButtons extends StatelessWidget {
+  final TextEditingController controller;
+  final VoidCallback onChanged;
+  const _ZeroButtons({required this.controller, required this.onChanged});
+
+  void _append(String zeros) {
+    final raw = ThousandsFormatter.strip(controller.text);
+    if (raw.isEmpty || raw == '0' || raw.contains('.')) return;
+    controller.value = const ThousandsFormatter().formatEditUpdate(
+      controller.value,
+      TextEditingValue(text: '$raw$zeros'),
+    );
+    Sfx.click();
+    onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextButton(
+          style: TextButton.styleFrom(
+            minimumSize: const Size(38, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+          ),
+          onPressed: () => _append('00'),
+          child: const Text('+00',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(
+            minimumSize: const Size(38, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+          ),
+          onPressed: () => _append('000'),
+          child: const Text('+000',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+        ),
+      ],
     );
   }
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import 'accounting.dart';
@@ -81,6 +82,43 @@ class Fmt {
     return d.startsWith('+') ? '+${d.substring(1).replaceAll('+', '')}' : d;
   }
 
+  // ==================== البحث العربي الذكي ====================
+
+  static final _diacritics = RegExp('[\u064B-\u0652\u0670\u0640]');
+
+  /// تطبيع عربي للبحث: إزالة التشكيل والتطويل، توحيد الهمزات
+  /// (أ/إ/آ/ٱ → ا)، (ة → ه)، (ى/ئ → ي)، (ؤ → و)، وأرقام عربية → إنجليزية.
+  static String normArabic(String s) {
+    var t = s.toLowerCase().replaceAll(_diacritics, '');
+    const map = {
+      'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ٱ': 'ا',
+      'ة': 'ه',
+      'ى': 'ي', 'ئ': 'ي',
+      'ؤ': 'و',
+    };
+    map.forEach((k, v) => t = t.replaceAll(k, v));
+    const ar = '٠١٢٣٤٥٦٧٨٩';
+    const fa = '۰۱۲۳۴۵۶۷۸۹';
+    for (var i = 0; i < 10; i++) {
+      t = t.replaceAll(ar[i], '$i').replaceAll(fa[i], '$i');
+    }
+    return t.trim();
+  }
+
+  /// هل الاستعلام رقمي بحت؟ (بعد تحويل الأرقام العربية) — يوجه البحث
+  /// نحو SKU / الهاتف / المبالغ بدل الأسماء.
+  static bool isNumericQuery(String s) {
+    final n = normArabic(s).replaceAll(RegExp(r'[\s,+\-.]'), '');
+    return n.isNotEmpty && RegExp(r'^\d+$').hasMatch(n);
+  }
+
+  /// مطابقة ذكية: تطبيع عربي للطرفين ثم احتواء.
+  static bool smartContains(String haystack, String query) {
+    final q = normArabic(query);
+    if (q.isEmpty) return true;
+    return normArabic(haystack).contains(q);
+  }
+
   /// رقم دولي لواتساب: يمني بلا صفر بادئ ← 967…
   static String waNumber(String s) {
     const ar = '٠١٢٣٤٥٦٧٨٩';
@@ -94,5 +132,43 @@ class Fmt {
     if (d.startsWith('0')) d = d.replaceFirst(RegExp(r'^0+'), '');
     if (d.length == 9) return '967$d';
     return d;
+  }
+}
+
+/// فواصل آلاف حيّة أثناء الكتابة في حقول المبالغ: 1000000 → 1,000,000
+/// يحافظ على موضع المؤشر ويقبل الأرقام العربية (تُحوَّل للإنجليزية فوراً).
+class ThousandsFormatter extends TextInputFormatter {
+  const ThousandsFormatter();
+
+  static final _grouper = NumberFormat('#,##0', 'en');
+
+  /// إزالة الفواصل قبل التحليل — قيمة الحقل النقية.
+  static String strip(String s) => s.replaceAll(',', '');
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    var text = newValue.text;
+    // أرقام عربية/فارسية → إنجليزية.
+    const ar = '٠١٢٣٤٥٦٧٨٩';
+    const fa = '۰۱۲۳۴۵۶۷۸۹';
+    for (var i = 0; i < 10; i++) {
+      text = text.replaceAll(ar[i], '$i').replaceAll(fa[i], '$i');
+    }
+    text = text.replaceAll('٫', '.').replaceAll('٬', '');
+    // تجاهل أي محارف غير رقمية عدا النقطة العشرية الأولى.
+    final raw = strip(text);
+    if (raw.isEmpty) return newValue.copyWith(text: '');
+    if (!RegExp(r'^\d*\.?\d*$').hasMatch(raw)) return oldValue;
+    final dot = raw.indexOf('.');
+    final intPart = dot < 0 ? raw : raw.substring(0, dot);
+    final decPart = dot < 0 ? '' : raw.substring(dot);
+    final groupedInt =
+        intPart.isEmpty ? '' : _grouper.format(int.parse(intPart));
+    final out = '$groupedInt$decPart';
+    return TextEditingValue(
+      text: out,
+      selection: TextSelection.collapsed(offset: out.length),
+    );
   }
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -78,6 +77,10 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   List<Account> _accounts = [];
   List<CurrencyDef> _currencies = [];
+
+  /// العملة الأساسية = الأولى في قائمة العملات (سعرها 1 دوماً).
+  String get _baseCurrencyCode =>
+      _currencies.isNotEmpty ? _currencies.first.code : 'YER';
   List<InvoiceLine> _invoiceLines = [];
   bool _loading = true;
   bool _saving = false;
@@ -933,9 +936,8 @@ class _TxFormState extends ConsumerState<TxForm> {
           child: TextFormField(
             controller: _amount,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹.,٫٬+-]')),
-            ],
+            // فواصل آلاف حية أثناء الكتابة: 1000000 → 1,000,000.
+            inputFormatters: const [ThousandsFormatter()],
             decoration: InputDecoration(
               labelText: 'المبلغ *',
               hintText: '0.00',
@@ -983,10 +985,25 @@ class _TxFormState extends ConsumerState<TxForm> {
                   ),
                 )
                 .toList(),
-            onChanged: (v) => setState(() => _currency = v ?? _currency),
+            onChanged: (v) async {
+              setState(() => _currency = v ?? _currency);
+              // اختيار عملة غير أساسية يقترح سعرها المعتمد (إعداد
+              // rate_<code>) كنقطة بداية قابلة للتجاوز لهذه العملية فقط.
+              if (!_isTransfer && _currency != _baseCurrencyCode) {
+                try {
+                  final st = await ref.read(repoProvider).settings();
+                  final r = st['rate_$_currency'];
+                  if (r != null && mounted) {
+                    setState(() => _rate.text = r);
+                  }
+                } catch (_) {}
+              }
+            },
           ),
         ),
-        if (_isTransfer) ...[
+        // سعر الصرف: للتحويلات دائماً، ولأي عملية بعملة غير أساسية —
+        // تجاوز محلي على مستوى العملية لا يمس إعدادات العملات العالمية.
+        if (_isTransfer || _currency != _baseCurrencyCode) ...[
           const SizedBox(width: 10),
           Expanded(
             flex: 2,
@@ -995,7 +1012,11 @@ class _TxFormState extends ConsumerState<TxForm> {
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: const InputDecoration(labelText: 'سعر الصرف'),
+              decoration: const InputDecoration(
+                labelText: 'سعر الصرف',
+                helperText: 'لهذه العملية فقط',
+                helperMaxLines: 1,
+              ),
             ),
           ),
         ],

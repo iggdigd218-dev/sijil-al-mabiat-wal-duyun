@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -502,15 +503,30 @@ class _HomeShellState extends ConsumerState<HomeShell>
         AppScreen.settings => const SettingsScreen(),
       };
 
+  /// زر الإجراء الموحد (Omni): يتحول حسب السياق — إجراء سريع على
+  /// الرئيسية، درج الدفع المباشر على POS، سند جديد على الحسابات.
   Widget? _fab() {
     final me = ref.watch(currentUserProvider).valueOrNull;
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
     return switch (_screen) {
+      AppScreen.dashboard => FloatingActionButton.extended(
+          heroTag: 'omni',
+          onPressed: add ? _quickActionSheet : null,
+          icon: const Icon(Icons.bolt_rounded),
+          label: const Text('إجراء سريع'),
+        ),
+      AppScreen.pos => FloatingActionButton.extended(
+          heroTag: 'omni',
+          onPressed: () => PosScreen.openCheckoutBridge?.call(),
+          icon: const Icon(Icons.shopping_cart_checkout_rounded),
+          label: const Text('الدفع'),
+        ),
       AppScreen.accounts => FloatingActionButton.extended(
-          onPressed: add ? () => openAccountForm(context, ref) : null,
-          icon: const Icon(Icons.add),
-          label: const Text('حساب جديد'),
+          heroTag: 'omni',
+          onPressed: add ? () => openVoucherForm(context, ref) : null,
+          icon: const Icon(Icons.receipt_outlined),
+          label: const Text('سند جديد'),
         ),
       AppScreen.transactions => FloatingActionButton.extended(
           onPressed: add
@@ -534,177 +550,262 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
   }
 
+  /// ورقة الإجراء السريع من زر Omni على الرئيسية: أكثر 4 مهام تكراراً
+  /// بلا تشتيت — عملية، سند، حساب، فتح نقطة البيع.
+  void _quickActionSheet() {
+    Sfx.click();
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: const Text('تسجيل عملية مالية'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openTxForm(context, ref);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.receipt_outlined),
+              title: const Text('سند قبض / صرف'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openVoucherForm(context, ref);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.person_add_alt_outlined),
+              title: const Text('حساب جديد'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openAccountForm(context, ref);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.point_of_sale_outlined),
+              title: const Text('فتح نقطة البيع'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _go(AppScreen.pos);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// آخر ضغطة رجوع على لوحة التحكم — للخروج بنقرتين متتاليتين.
+  DateTime? _lastBackTap;
+
+  /// زر رجوع النظام: من أي شاشة فرعية نعود للوحة التحكم بدل قتل التطبيق؛
+  /// وعلى لوحة التحكم نطلب نقرتين خلال ثانيتين للخروج (مع تنبيه).
+  void _handleRootPop(bool didPop) {
+    if (didPop) return;
+    if (_screen != AppScreen.dashboard) {
+      _go(AppScreen.dashboard);
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastBackTap != null &&
+        now.difference(_lastBackTap!) < const Duration(seconds: 2)) {
+      // نقرة ثانية خلال المهلة → خروج فعلي.
+      SystemNavigator.pop();
+      return;
+    }
+    _lastBackTap = now;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(
+        content: Text('اضغط رجوع مرة أخرى للخروج من التطبيق'),
+        duration: Duration(seconds: 2),
+      ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final hidden = ref.watch(hideBalancesProvider);
     final tabIndex = _bottomTabs.indexOf(_screen);
 
-    return Scaffold(
-      key: _scaffoldKey,
-      appBar: AppBar(
-        title: Consumer(
-          builder: (ctx, rref, _) {
-            if (_screen != AppScreen.dashboard) return Text(_screen.title);
-            // أعلى الرئيسية يظهر اسم الجهاز الذي حدده المستخدم/المدير
-            // (نفس الاسم الظاهر أعلى القائمة الجانبية) بدل «مدير الحسابات».
-            final devName =
-                rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
-            if (devName != null && devName.isNotEmpty) {
-              return Text(devName, overflow: TextOverflow.ellipsis);
-            }
-            return const Text('مدير الحسابات');
-          },
-        ),
-        actions: [
-          // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
-          Consumer(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
+      child: Scaffold(
+        key: _scaffoldKey,
+        appBar: AppBar(
+          title: Consumer(
             builder: (ctx, rref, _) {
-              final modeAsync = rref.watch(workspaceModeProvider);
-              final roleAsync = rref.watch(deviceRoleProvider);
-              final mode = modeAsync.valueOrNull ?? 'standalone';
-              if (mode == 'standalone') return const SizedBox.shrink();
-              final role = roleAsync.valueOrNull;
-              final (label, color, icon) = switch (role?.role) {
-                UserRole.admin => (
-                    'مدير',
-                    Colors.amber.shade700,
-                    Icons.security,
-                  ),
-                UserRole.agent => (
-                    'وكيل المدير',
-                    Colors.green.shade700,
-                    Icons.verified_user,
-                  ),
-                UserRole.accountant => ('محاسب', Colors.blue, Icons.calculate),
-                UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
-                UserRole.viewer => (
-                    'عرض فقط',
-                    Colors.grey,
-                    Icons.visibility_outlined,
-                  ),
-                _ => ('بلا صلاحية', Colors.red, Icons.block),
-              };
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Tooltip(
-                  message: mode == 'host'
-                      ? 'أنت مدير هذه المجموعة'
-                      : 'دورك في المجموعة: $label',
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
+              if (_screen != AppScreen.dashboard) return Text(_screen.title);
+              // أعلى الرئيسية يظهر اسم الجهاز الذي حدده المستخدم/المدير
+              // (نفس الاسم الظاهر أعلى القائمة الجانبية) بدل «مدير الحسابات».
+              final devName =
+                  rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
+              if (devName != null && devName.isNotEmpty) {
+                return Text(devName, overflow: TextOverflow.ellipsis);
+              }
+              return const Text('مدير الحسابات');
+            },
+          ),
+          actions: [
+            // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
+            Consumer(
+              builder: (ctx, rref, _) {
+                final modeAsync = rref.watch(workspaceModeProvider);
+                final roleAsync = rref.watch(deviceRoleProvider);
+                final mode = modeAsync.valueOrNull ?? 'standalone';
+                if (mode == 'standalone') return const SizedBox.shrink();
+                final role = roleAsync.valueOrNull;
+                final (label, color, icon) = switch (role?.role) {
+                  UserRole.admin => (
+                      'مدير',
+                      Colors.amber.shade700,
+                      Icons.security,
                     ),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: color.withValues(alpha: .3)),
+                  UserRole.agent => (
+                      'وكيل المدير',
+                      Colors.green.shade700,
+                      Icons.verified_user,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(icon, size: 13, color: color),
-                        const SizedBox(width: 4),
-                        Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: color,
+                  UserRole.accountant => (
+                      'محاسب',
+                      Colors.blue,
+                      Icons.calculate
+                    ),
+                  UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
+                  UserRole.viewer => (
+                      'عرض فقط',
+                      Colors.grey,
+                      Icons.visibility_outlined,
+                    ),
+                  _ => ('بلا صلاحية', Colors.red, Icons.block),
+                };
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Tooltip(
+                    message: mode == 'host'
+                        ? 'أنت مدير هذه المجموعة'
+                        : 'دورك في المجموعة: $label',
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: color.withValues(alpha: .3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(icon, size: 13, color: color),
+                          const SizedBox(width: 4),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: color,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
-          // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
-          // الضغط عليه يفتح قسم «العمليات والمزامنة» مباشرة.
-          Consumer(
-            builder: (ctx, rref, _) {
-              final modeAsync = rref.watch(workspaceModeProvider);
-              final mode = modeAsync.valueOrNull ?? 'standalone';
-              if (mode == 'standalone') return const SizedBox.shrink();
-              return FutureBuilder<SyncStatusInfo>(
-                future: _syncFuture,
-                builder: (ctx, snap) {
-                  if (!snap.hasData) return const SizedBox.shrink();
-                  return SyncStatusBadge(
-                    info: snap.data!,
-                    onTap: () => _go(AppScreen.syncOps),
-                  );
-                },
-              );
-            },
-          ),
-          // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
-          Consumer(
-            builder: (ctx, rref, _) {
-              final unread = rref.watch(unreadCountProvider).valueOrNull ?? 0;
-              return IconButton(
-                tooltip: 'الإشعارات',
-                icon: Badge(
-                  isLabelVisible: unread > 0,
-                  label: Text('$unread'),
-                  child: const Icon(Icons.notifications_outlined),
-                ),
-                onPressed: () => openNotifications(
-                  context,
-                  ref,
-                  onOpenEntity: openNotificationEntity,
-                ),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
-            icon: Icon(
-              hidden
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
+                );
+              },
             ),
-            onPressed: () =>
-                ref.read(hideBalancesProvider.notifier).state = !hidden,
-          ),
-        ],
-      ),
-      drawer: _Drawer(current: _screen, onSelect: _go),
-      body: _body(),
-      floatingActionButton: _fab(),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tabIndex < 0 ? 0 : tabIndex,
-        onDestinationSelected: (i) {
-          if (i < _bottomTabs.length) {
-            _go(_bottomTabs[i]);
-          } else {
-            // وجهة «المزيد» — تفتح القائمة الجانبية بكل الأقسام.
-            _scaffoldKey.currentState?.openDrawer();
-          }
-        },
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.home_outlined),
-            selectedIcon: const Icon(Icons.home_rounded),
-            label: 'الرئيسية',
-          ),
-          NavigationDestination(
-            icon: Icon(AppScreen.pos.icon),
-            selectedIcon: Icon(AppScreen.pos.activeIcon),
-            label: 'المبيعات',
-          ),
-          NavigationDestination(
-            icon: Icon(AppScreen.accounts.icon),
-            selectedIcon: Icon(AppScreen.accounts.activeIcon),
-            label: 'الحسابات',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.apps_rounded),
-            selectedIcon: Icon(Icons.grid_view_rounded),
-            label: 'المزيد',
-          ),
-        ],
+            // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
+            // الضغط عليه يفتح قسم «العمليات والمزامنة» مباشرة.
+            Consumer(
+              builder: (ctx, rref, _) {
+                final modeAsync = rref.watch(workspaceModeProvider);
+                final mode = modeAsync.valueOrNull ?? 'standalone';
+                if (mode == 'standalone') return const SizedBox.shrink();
+                return FutureBuilder<SyncStatusInfo>(
+                  future: _syncFuture,
+                  builder: (ctx, snap) {
+                    if (!snap.hasData) return const SizedBox.shrink();
+                    return SyncStatusBadge(
+                      info: snap.data!,
+                      onTap: () => _go(AppScreen.syncOps),
+                    );
+                  },
+                );
+              },
+            ),
+            // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
+            Consumer(
+              builder: (ctx, rref, _) {
+                final unread = rref.watch(unreadCountProvider).valueOrNull ?? 0;
+                return IconButton(
+                  tooltip: 'الإشعارات',
+                  icon: Badge(
+                    isLabelVisible: unread > 0,
+                    label: Text('$unread'),
+                    child: const Icon(Icons.notifications_outlined),
+                  ),
+                  onPressed: () => openNotifications(
+                    context,
+                    ref,
+                    onOpenEntity: openNotificationEntity,
+                  ),
+                );
+              },
+            ),
+            IconButton(
+              tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
+              icon: Icon(
+                hidden
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+              ),
+              onPressed: () =>
+                  ref.read(hideBalancesProvider.notifier).state = !hidden,
+            ),
+          ],
+        ),
+        drawer: _Drawer(current: _screen, onSelect: _go),
+        body: _body(),
+        floatingActionButton: _fab(),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: tabIndex < 0 ? 0 : tabIndex,
+          onDestinationSelected: (i) {
+            if (i < _bottomTabs.length) {
+              _go(_bottomTabs[i]);
+            } else {
+              // وجهة «المزيد» — تفتح القائمة الجانبية بكل الأقسام.
+              _scaffoldKey.currentState?.openDrawer();
+            }
+          },
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.home_outlined),
+              selectedIcon: const Icon(Icons.home_rounded),
+              label: 'الرئيسية',
+            ),
+            NavigationDestination(
+              icon: Icon(AppScreen.pos.icon),
+              selectedIcon: Icon(AppScreen.pos.activeIcon),
+              label: 'المبيعات',
+            ),
+            NavigationDestination(
+              icon: Icon(AppScreen.accounts.icon),
+              selectedIcon: Icon(AppScreen.accounts.activeIcon),
+              label: 'الحسابات',
+            ),
+            const NavigationDestination(
+              icon: Icon(Icons.apps_rounded),
+              selectedIcon: Icon(Icons.grid_view_rounded),
+              label: 'المزيد',
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -837,10 +938,10 @@ class _Drawer extends ConsumerWidget {
                                     .watch(ownDeviceNameProvider)
                                     .valueOrNull
                                     ?.trim();
-                                final label = (devName != null &&
-                                        devName.isNotEmpty)
-                                    ? devName
-                                    : (user?.name ?? 'مدير الحسابات');
+                                final label =
+                                    (devName != null && devName.isNotEmpty)
+                                        ? devName
+                                        : (user?.name ?? 'مدير الحسابات');
                                 // نقرة على القلم = المستخدم يحدد اسمه بنفسه.
                                 return Row(
                                   children: [
@@ -880,7 +981,9 @@ class _Drawer extends ConsumerWidget {
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
-                                user == null ? 'المدير' : '${user.role.icon} ${user.role.label}',
+                                user == null
+                                    ? 'المدير'
+                                    : '${user.role.icon} ${user.role.label}',
                                 style: const TextStyle(
                                     color: Colors.white, fontSize: 11),
                               ),
@@ -909,8 +1012,7 @@ class _Drawer extends ConsumerWidget {
                       dark: dark,
                       onTap: () {
                         Navigator.pop(context);
-                        scheduleMicrotask(
-                            () => onSelect(AppScreen.dashboard));
+                        scheduleMicrotask(() => onSelect(AppScreen.dashboard));
                       },
                     ),
                   for (final s in items)
@@ -947,8 +1049,8 @@ class _Drawer extends ConsumerWidget {
                     }
                   },
                   child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
                     child: Row(
                       children: [
                         Container(
@@ -990,8 +1092,8 @@ class _Drawer extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(14),
                   onTap: () => Navigator.pop(context),
                   child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
                     child: Row(
                       children: [
                         Icon(Icons.logout_rounded,
@@ -1044,9 +1146,7 @@ class _DrawerTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Material(
-        color: active
-            ? AppColors.infoSoftOf(context)
-            : Colors.transparent,
+        color: active ? AppColors.infoSoftOf(context) : Colors.transparent,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),

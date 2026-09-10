@@ -598,6 +598,8 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
+                          // فواصل آلاف حية أثناء الكتابة.
+                          inputFormatters: const [ThousandsFormatter()],
                           decoration: const InputDecoration(
                             labelText: 'المبلغ *',
                             prefixIcon: Icon(Icons.payments_outlined),
