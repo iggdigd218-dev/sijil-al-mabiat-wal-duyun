@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../core/keep_alive_service.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -41,6 +42,10 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
   late TextEditingController _pairTokenPortCtrl;
   bool _autoSync = true;
   bool _lanEnabled = true;
+
+  /// «المزامنة في الخلفية وأثناء السكون»: خدمة يقظة + قفل يقظة جزئي +
+  /// إعفاء البطارية — يبقى خادم LAN ومستمع SSE أحياء والشاشة مطفأة.
+  bool _bgKeepAlive = true;
 
   @override
   void initState() {
@@ -83,6 +88,7 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
         _cloudUrlCtrl.text = st['cloudBackendUrl'] ?? '';
         _autoSync = (st['cloudAutoSync'] ?? '1') != '0';
         _lanEnabled = (st['lanSyncEnabled'] ?? '0') == '1';
+        _bgKeepAlive = (st['bgKeepAlive'] ?? '1') != '0';
         _lanPortCtrl.text = st['lanSyncPort'] ?? '43053';
         _info = info;
         _googleUser = gu;
@@ -318,6 +324,38 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
       );
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// تفعيل/تعطيل «المزامنة في الخلفية وأثناء السكون».
+  /// التفعيل: خدمة يقظة أمامية (إشعار خفيف دائم) + قفل يقظة جزئي +
+  /// طلب إعفاء البطارية عبر نافذة النظام الرسمية إن لم يكن ممنوحاً.
+  /// التعطيل: إيقاف الخدمة وتحرير الأقفال لحفظ طاقة الجهاز.
+  Future<void> _toggleBgKeepAlive(bool on) async {
+    setState(() => _bgKeepAlive = on);
+    try {
+      final repo = ref.read(repoProvider);
+      await repo.setSetting('bgKeepAlive', on ? '1' : '0');
+      if (on) {
+        final mode = await repo.workspaceMode();
+        // الخدمة تعمل فعلياً داخل مجموعة فقط (لا معنى لها standalone).
+        if (mode != 'standalone') await NexKeepAlive.setEnabled(true);
+        if (!await NexKeepAlive.isBatteryExempt()) {
+          await NexKeepAlive.requestBatteryExempt();
+        }
+      } else {
+        await NexKeepAlive.setEnabled(false);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(on
+              ? 'ستبقى المزامنة الفورية نشطة حتى أثناء سكون الجهاز'
+              : 'أُوقفت خدمة الخلفية — المزامنة تعمل أثناء فتح التطبيق فقط'),
+        ),
+      );
+    } catch (_) {
+      // الخدمة كمالية — لا نكسر شاشة الإعدادات.
     }
   }
 
@@ -835,6 +873,15 @@ class _SyncSettingsSectionState extends ConsumerState<SyncSettingsSection> {
                   value: _lanEnabled,
                   onChanged:
                       _busy ? null : (v) => setState(() => _lanEnabled = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('المزامنة في الخلفية وأثناء السكون'),
+                  subtitle: const Text(
+                    'إبقاء الاتصال والمزامنة الفورية نشطة حتى عند قفل الشاشة أو خروج التطبيق',
+                  ),
+                  value: _bgKeepAlive,
+                  onChanged: _busy ? null : _toggleBgKeepAlive,
                 ),
                 Row(
                   children: [

@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/core/media_paths.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -152,7 +153,13 @@ void main() {
     final meta = jsonDecode(m['payload'] as String) as Map;
     expect(meta['name'], 'doc:test?.pdf');
     expect(meta['size'], bytes.length);
-    final saved = File(meta['path'] as String);
+    // منذ دفعة 43: المسار يخزَّن نسبياً من جذر documents (chat_media/...)
+    // ويُحل للمطلق وقت الاستخدام عبر MediaPaths.
+    final storedPath = meta['path'] as String;
+    expect(storedPath.startsWith('/'), isFalse,
+        reason: 'المسار في الحمولة يجب أن يكون نسبياً');
+    MediaPaths.docsDirForTesting = docs.path;
+    final saved = File(MediaPaths.toAbsolute(storedPath));
     expect(await saved.exists(), isTrue);
     expect(await saved.readAsBytes(), bytes);
     // اسم الملف على القرص نُظِّف من المحارف غير الصالحة.
@@ -170,6 +177,7 @@ void main() {
       ),
       throwsStateError,
     );
+    MediaPaths.docsDirForTesting = null;
     await docs.delete(recursive: true);
   });
 }

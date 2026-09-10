@@ -110,10 +110,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// الرسمية — إذن الإشعارات (أندرويد 13+) والإعفاء من تحسينات البطارية.
   Future<void> _ensureGroupKeepAlive() async {
     try {
-      final mode = await ref.read(repoProvider).workspaceMode();
+      final repo0 = ref.read(repoProvider);
+      final mode = await repo0.workspaceMode();
+      final st0 = await repo0.settings();
+      // إعداد المستخدم «المزامنة في الخلفية وأثناء السكون» (افتراضي: مفعّل).
+      final wantBg = (st0['bgKeepAlive'] ?? '1') != '0';
       final inGroup = mode != 'standalone';
-      await NexKeepAlive.setEnabled(inGroup);
-      if (!inGroup) return;
+      await NexKeepAlive.setEnabled(inGroup && wantBg);
+      if (!inGroup || !wantBg) return;
       // إذن الإشعارات: نافذة النظام مباشرة (لا نافذة مصطنعة).
       if (!await NexKeepAlive.hasPermission(NexKeepAlive.permNotifications)) {
         await NexKeepAlive.requestPermission(NexKeepAlive.permNotifications);
@@ -288,6 +292,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           entityId: entityId,
         );
       }
+      // حدث مالي مهم → يُسجَّل في جدول الإشعارات الداخلية (الجرس) أيضاً.
       try {
         ref.read(repoProvider).notify(
               title: 'تمت مزامنة العملية',
@@ -304,23 +309,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
         entityId: entityId,
       );
     };
+    // جهاز عاد للاتصال: حدث تشغيلي عابر — صوت + بانر داخلي فقط،
+    // لا يلوث جدول الإشعارات الداخلية (المخصص للمالي والإداري المهم).
     SyncEngine.onPeerJoined = (deviceName) {
       Sfx.pair();
-      try {
-        ref.read(repoProvider).notify(
-              title: 'جهاز متصل',
-              body: '$deviceName عاد للاتصال — تجري المزامنة الفورية الآن',
-              kind: 'info',
-              entityType: 'sync',
-            );
-      } catch (_) {}
       _showTappableNotice(
         'جهاز متصل',
         '$deviceName عاد للاتصال — تجري المزامنة الفورية الآن',
         entityType: 'sync',
       );
     };
-    // اكتمال المزامنة مع جهاز: إشعار داخلي + خارجي باسم الجهاز.
+    // اكتمال المزامنة مع جهاز: حدث تشغيلي عابر — إشعار نظام خارجي
+    // (نصه مرافق للصوت، لا صوت معزول) + بانر داخلي، بلا صف في الجدول.
     SyncEngine.onDeviceSyncComplete = (deviceName) {
       Sfx.synced();
       Sfx.systemNotify(
@@ -328,48 +328,36 @@ class _HomeShellState extends ConsumerState<HomeShell>
         body: 'تمت مزامنة جميع العمليات مع $deviceName بنجاح ✅',
         entityType: 'sync',
       );
-      try {
-        ref.read(repoProvider).notify(
-              title: 'اكتملت المزامنة',
-              body: 'تمت مزامنة جميع العمليات مع $deviceName ✅',
-              kind: 'success',
-              entityType: 'sync',
-            );
-      } catch (_) {}
       _showTappableNotice(
         'اكتملت المزامنة',
         'تمت مزامنة جميع العمليات مع $deviceName ✅',
         entityType: 'sync',
       );
     };
-    // رسالة دردشة جماعية واردة: إشعار خارجي بصوت مميز + إشعار داخلي
-    // + نافذة منبثقة قابلة للنقر — أما «الصمت» فيقتصر على شاشة عمليات
-    // المزامنة وعداداتها (رسائل الدردشة لا تُحسب هناك).
+    // رسالة دردشة واردة — قاعدة صارمة: مكانها الوحيد (1) إشعار النظام
+    // الخارجي بصوته المرفق بالنص و(2) شارة العداد على أيقونة الدردشة.
+    // يُمنع إدراجها في جدول notifications الداخلي (مخصص للمالي/الإداري)،
+    // والبانر الداخلي يظهر فقط إن كان المستخدم على شاشة أخرى غير الدردشة.
     LanSyncService.onChatMessage = (senderName, body) {
-      Sfx.notify();
       final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
+      // إشعار النظام يحمل النص والصوت معاً — لا صوت معزولاً بلا محتوى.
       Sfx.systemNotify(
         title: 'رسالة من $senderName',
         body: short,
         entityType: 'message',
       );
-      try {
-        ref.read(repoProvider).notify(
-              title: '💬 رسالة جديدة من $senderName',
-              body: short,
-              kind: 'info',
-              entityType: 'message',
-            );
-      } catch (_) {}
-      _showTappableNotice(
-        '💬 رسالة جديدة من $senderName',
-        short,
-        entityType: 'message',
-      );
+      bump(ref); // تحديث شارة العداد غير المقروء فوراً.
+      if (_screen != AppScreen.chat) {
+        _showTappableNotice(
+          '💬 رسالة جديدة من $senderName',
+          short,
+          entityType: 'message',
+        );
+      }
     };
-    // تغيير أجراه المدير على هذا العضو (اسم/صلاحيات): داخلي + خارجي.
+    // تغيير أجراه المدير على هذا العضو (اسم/دور/صلاحيات): حدث إداري
+    // مهم → إشعار داخلي (الجرس) + خارجي + بانر.
     LanSyncService.onMemberNotice = (title, body) {
-      Sfx.notify();
       Sfx.systemNotify(title: title, body: body);
       try {
         ref.read(repoProvider).notify(title: title, body: body, kind: 'info');
@@ -473,7 +461,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  void _go(AppScreen s) => setState(() => _screen = s);
+  void _go(AppScreen s) {
+    setState(() => _screen = s);
+    // فتح شاشة الدردشة يوسم الرسائل كمقروءة ويصفّر شارتها.
+    if (s == AppScreen.chat) {
+      Future(() async {
+        try {
+          await ref.read(repoProvider).markChatSeen();
+          bump(ref);
+        } catch (_) {}
+      });
+    }
+  }
 
   Widget _body() => switch (_screen) {
         AppScreen.pos => const PosScreen(),
@@ -1052,9 +1051,23 @@ class _DrawerTile extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(active ? screen.activeIcon : screen.icon,
-                    color: active ? AppColors.infoOf(context) : color,
-                    size: 22),
+                // أيقونة الدردشة تحمل شارة عدد الرسائل غير المقروءة —
+                // المكان الرسمي لإشعار الرسائل داخل التطبيق.
+                if (screen == AppScreen.chat)
+                  Consumer(builder: (ctx, rref, _) {
+                    final n = rref.watch(unreadChatProvider).valueOrNull ?? 0;
+                    return Badge(
+                      isLabelVisible: n > 0,
+                      label: Text('$n'),
+                      child: Icon(active ? screen.activeIcon : screen.icon,
+                          color: active ? AppColors.infoOf(context) : color,
+                          size: 22),
+                    );
+                  })
+                else
+                  Icon(active ? screen.activeIcon : screen.icon,
+                      color: active ? AppColors.infoOf(context) : color,
+                      size: 22),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(

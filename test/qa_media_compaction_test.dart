@@ -125,6 +125,57 @@ void main() {
     });
   });
 
+  group('عداد رسائل الدردشة غير المقروءة', () {
+    test('QA-CHAT-BADGE-01 يعد الوارد فقط ويصفّر بعد markChatSeen', () async {
+      final tmp = await Directory.systemTemp.createTemp('nexora_badge_');
+      final db = await databaseFactory.openDatabase('${tmp.path}/badge.db');
+      await AppDatabase.createSchema(db);
+      final repo = Repo(databaseProvider: () async => db);
+      await repo.setSetting('sync.deviceId', 'DEVICE-BADGE-001');
+      await repo.initSyncInfra();
+      final nowIso = DateTime.now().toIso8601String();
+      await db.insert('conversations', {
+        'id': 500100,
+        'title': 'دردشة المجموعة',
+        'created_at': nowIso,
+        'updated_at': nowIso,
+      });
+      // رسالتان واردتان من عضو آخر + واحدة منا: العداد يجب أن يكون 2.
+      for (final (id, sender) in [
+        (600001, 'DEVICE-PEER-XYZ'),
+        (600002, 'DEVICE-PEER-XYZ'),
+        (600003, 'DEVICE-BADGE-001'),
+      ]) {
+        await db.insert('messages', {
+          'id': id,
+          'conversation_id': 500100,
+          'sender': sender,
+          'body': 'رسالة $id',
+          'kind': 'text',
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      }
+      expect(await repo.unreadChatMessages(), 2,
+          reason: 'رسائلنا لا تُحسب ضمن غير المقروء');
+      // فتح شاشة الدردشة يوسم الكل كمقروء.
+      await repo.markChatSeen();
+      expect(await repo.unreadChatMessages(), 0);
+      // رسالة جديدة بعد الوسم تُحسب من جديد.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await db.insert('messages', {
+        'id': 600004,
+        'conversation_id': 500100,
+        'sender': 'DEVICE-PEER-XYZ',
+        'body': 'رسالة متأخرة',
+        'kind': 'text',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      expect(await repo.unreadChatMessages(), 1);
+      await db.close();
+      await tmp.delete(recursive: true);
+    });
+  });
+
   group('التقليم العام لجدول operations', () {
     test('QA-GC-01 يحذف النسخ المتجاوزة ويُبقي الأحدث والمعلّق', () async {
       final tmp = await Directory.systemTemp.createTemp('nexora_gc_');

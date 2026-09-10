@@ -154,12 +154,11 @@ class CloudFirebaseTransport implements SyncTransport {
       lastTsMs = DateTime.tryParse(v)?.millisecondsSinceEpoch ??
           (int.tryParse(v) ?? 0);
     }
-    // overlap بثانيتين لالتقاط العمليات التي وصلت متأخرة أو بنفس الوقت.
+    // overlap بثانيتين لالتقاط العمليات التي كُتبت أثناء سحبنا السابق.
+    // المؤشر و startAt كلاهما بتوقيت خادم فيربيس (server_ts) — لا اعتماد
+    // على ساعات الهواتف النصية (ISO) إطلاقاً، فجهاز ساعته متأخرة دقائق
+    // لن تسقط عملياته من سحب بقية الأجهزة (Clock Drift).
     final startAtMs = lastTsMs > 2000 ? lastTsMs - 2000 : 0;
-    // مهم: عمود timestamp مخزّن كنص ISO في Firebase، لذلك يجب أن يكون
-    // startAt نصًا ISO أيضًا وإلا لن يطابق أي عملية (مقارنة نصية).
-    final startAtIso =
-        DateTime.fromMillisecondsSinceEpoch(startAtMs).toIso8601String();
     final r = resolver ?? ConflictResolver();
     int applied = 0;
     int maxTsMs = lastTsMs;
@@ -171,9 +170,12 @@ class CloudFirebaseTransport implements SyncTransport {
     String? startAfterKey;
     while (hasMore) {
       final params = <String, String>{
-        'orderBy': jsonEncode('timestamp'),
+        // الترشيح بختم الخادم الرقمي (server_ts) وليس timestamp النصي:
+        // فيربيس يكتب server_ts بساعته هو عند الرفع، فالمؤشر محصّن ضد
+        // انحراف ساعات الأجهزة كلياً.
+        'orderBy': jsonEncode('server_ts'),
         'limitToFirst': '$kPullPageSize',
-        if (startAtMs > 0) 'startAt': jsonEncode(startAtIso),
+        if (startAtMs > 0) 'startAt': '$startAtMs',
         if (startAfterKey != null) 'startAfter': jsonEncode(startAfterKey),
       };
       final tok = await _idToken();
@@ -232,14 +234,13 @@ class CloudFirebaseTransport implements SyncTransport {
       if (!serverFiltered && startAtMs > 0) {
         entries = entries.where((e) => entryMs(e.value) >= startAtMs).toList();
       }
-      // فرز محلي حسب timestamp ثم opId لضمان الترتيب.
+      // فرز محلي حسب ختم الخادم (server_ts) ثم opId لضمان الترتيب —
+      // ساعة الخادم مصدر الحقيقة الوحيد، لا ساعات الأجهزة.
       entries.sort((a, b) {
         final va = a.value;
         final vb = b.value;
         if (va is! Map || vb is! Map) return 0;
-        final ta = (va['timestamp'] as String? ?? '');
-        final tb = (vb['timestamp'] as String? ?? '');
-        final c = ta.compareTo(tb);
+        final c = entryMs(va).compareTo(entryMs(vb));
         return c != 0 ? c : (a.key as String).compareTo(b.key as String);
       });
       String? lastKey;
@@ -249,13 +250,10 @@ class CloudFirebaseTransport implements SyncTransport {
           if (v is! Map) continue;
           final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
           if (op.workspaceId != workspaceId) continue;
-          // المؤشر يطابق وضع الترشيح: في الجلب الكامل نتقدم بـ server_ts
-          // (وقت خادم موثوق)؛ في الترشيح الخادمي (orderBy=timestamp) نتقدم
-          // بـ timestamp نفسه حتى لا يقفز المؤشر فوق عمليات جهاز ساعته
-          // متأخرة فتضيع.
-          final opMs = serverFiltered
-              ? (DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ?? 0)
-              : entryMs(v);
+          // المؤشر يتقدم دائماً بـ server_ts (ختم خادم فيربيس الموثوق) —
+          // في الحالتين (ترشيح خادمي بـ orderBy=server_ts أو جلب كامل).
+          // العمليات القديمة جداً بلا server_ts تسقط لـ timestamp كاحتياط.
+          final opMs = entryMs(v);
           if (opMs > maxTsMs) maxTsMs = opMs;
           // idempotent: نفس opId موجود مسبقًا -> تجاهل.
           final idempotentQ = await txn.query(
@@ -284,9 +282,11 @@ class CloudFirebaseTransport implements SyncTransport {
         try {
           final senderRows = await db.query('devices',
               where: 'id = ?', whereArgs: [op.deviceId], limit: 1);
-          final senderName = senderRows.isNotEmpty
-              ? ((senderRows.first['name'] as String?) ?? 'جهاز في المجموعة')
-              : 'جهاز في المجموعة';
+          // الاسم الموحد: الافتراضي «مستخدم جديد» حتى يسميه المدير.
+          var senderName = senderRows.isNotEmpty
+              ? ((senderRows.first['name'] as String?) ?? '')
+              : '';
+          if (senderName.trim().isEmpty) senderName = kDefaultMemberName;
           var body = '${op.payload['body'] ?? ''}';
           if (body.isEmpty) {
             body = switch ('${op.payload['kind'] ?? 'text'}') {
@@ -310,12 +310,13 @@ class CloudFirebaseTransport implements SyncTransport {
     }
 
     if (maxTsMs > lastTsMs) {
+      // المؤشر يُخزَّن كملي ثانية خادم (رقم) — الشكل القياسي الجديد.
+      // القارئ أعلاه يقبل الرقم و ISO القديم معاً (توافق خلفي).
       await db.insert(
           'sync_meta',
           {
             'key': 'lastCloudTs:$workspaceId',
-            'value':
-                DateTime.fromMillisecondsSinceEpoch(maxTsMs).toIso8601String(),
+            'value': '$maxTsMs',
           },
           conflictAlgorithm: ConflictAlgorithm.replace);
     }

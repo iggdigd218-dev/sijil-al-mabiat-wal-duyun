@@ -247,6 +247,16 @@ final unreadCountProvider = FutureProvider<int>((ref) async {
       .timeout(const Duration(seconds: 8), onTimeout: () => 0);
 });
 
+/// عدد رسائل الدردشة غير المقروءة (شارة أيقونة الدردشة) —
+/// المكان الرسمي الوحيد لعدّ رسائل الدردشة (لا تدخل جدول الإشعارات).
+final unreadChatProvider = FutureProvider<int>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .unreadChatMessages()
+      .timeout(const Duration(seconds: 8), onTimeout: () => 0);
+});
+
 /// سجل النشاط.
 final activityProvider = FutureProvider<List<Map<String, Object?>>>((
   ref,

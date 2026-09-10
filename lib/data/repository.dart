@@ -2098,6 +2098,27 @@ class Repo {
     return rows.map(ChatMessage.fromMap).toList();
   }
 
+  /// محادثة فردية مع عضو مجموعة (جهاز مقترن) — تُنشأ عند أول فتح.
+  /// المحادثات الفردية محصورة بأعضاء المجموعة فقط (لا عملاء خارجيين)،
+  /// مفتاح التمييز معرف الجهاز peer:<deviceId> ثابت حتى لو تغيّر الاسم.
+  Future<int> conversationForPeer(String deviceId, String name) async {
+    final db = await _db;
+    final key = 'peer:$deviceId';
+    final r = await db.query(
+      'conversations',
+      where: 'title = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (r.isNotEmpty) return r.first['id'] as int;
+    final now = DateTime.now().toIso8601String();
+    return db.insert('conversations', {
+      'title': key,
+      'created_at': now,
+      'updated_at': now,
+    });
+  }
+
   /// محادثة لكل حساب، تُنشأ عند أول رسالة.
   Future<int> conversationFor(Account a) async {
     final db = await _db;
@@ -3365,6 +3386,27 @@ class Repo {
       'entity_id': entityId,
       'created_at': DateTime.now().toIso8601String(),
     });
+  }
+
+  /// عدد رسائل الدردشة الواردة غير المقروءة (لشارة أيقونة الدردشة).
+  /// «غير مقروءة» = وصلت بعد آخر فتح لشاشة الدردشة (chatLastSeenAt)
+  /// وليست من إرسالنا (sender ليس جهازنا ولا 'me').
+  Future<int> unreadChatMessages() async {
+    final db = await _db;
+    final st = await settings();
+    final lastSeen = st['chatLastSeenAt'] ?? '';
+    final ourId = requireDeviceId;
+    return Sqflite.firstIntValue(await db.rawQuery(
+          "SELECT COUNT(*) FROM messages WHERE sender <> 'me' AND sender <> ? "
+          'AND created_at > ?',
+          [ourId, lastSeen],
+        )) ??
+        0;
+  }
+
+  /// يوسم كل رسائل الدردشة كمقروءة (يُستدعى عند فتح شاشة الدردشة).
+  Future<void> markChatSeen() async {
+    await setSetting('chatLastSeenAt', DateTime.now().toIso8601String());
   }
 
   /// آخر الإشعارات الداخلية (الأحدث أولًا).

@@ -114,6 +114,25 @@ class CloudJoin {
     } catch (_) {}
   }
 
+  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم (يُعاد المحاولة
+  /// مرة واحدة). يُستخدم لإبطال توكن الدعوة — تركه حياً ثغرة أمنية.
+  static Future<void> _deleteStrict(String url) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final res = await http
+            .delete(Uri.parse(url))
+            .timeout(const Duration(seconds: 20));
+        // فيربيس يرد 200 على حذف مسار (حتى غير الموجود) — أي 2xx يكفي.
+        if (res.statusCode >= 200 && res.statusCode < 300) return;
+      } catch (_) {
+        // خطأ شبكة — جرّب مرة أخيرة.
+      }
+    }
+    throw const CloudJoinException(
+        'تعذّر إبطال رمز الدعوة على السحابة — أُلغي الانضمام حفاظاً على الأمان. '
+        'تحقق من الاتصال وأعد المحاولة بدعوة جديدة.');
+  }
+
   static void _validateHttps(String url) {
     final u = Uri.tryParse(url.trim());
     if (u == null || !u.hasScheme || !u.isScheme('https')) {
@@ -286,15 +305,13 @@ class CloudJoin {
       throw const CloudJoinException(
           'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
     }
-    // إبطال فوري (استخدام لمرة واحدة): نحذف الدعوة الآن — قبل تطبيق
+    // إبطال فوري وحتمي (استخدام لمرة واحدة): تُحذف الدعوة الآن — قبل تطبيق
     // اللقطة — حتى لا يستطيع أي جهاز آخر (أو إعادة تشغيل لنفس الرابط)
-    // استعمال الرمز نفسه أثناء أو بعد الانضمام. فشل الانضمام لاحقاً يتطلب
-    // دعوة جديدة من المدير — أرخص أمنياً من دعوة قابلة لإعادة الاستخدام.
-    try {
-      await _delete('$root/invites/$tok.json');
-    } catch (_) {
-      // فشل الحذف لا يوقف الانضمام؛ ستُحذف مجدداً في النهاية احتياطاً.
-    }
+    // استعمال الرمز نفسه أثناء أو بعد الانضمام. الحذف شرط للمتابعة:
+    // إن تعذّر إبطال الدعوة يُلغى الانضمام كله (لا نترك رمزاً حياً قابلاً
+    // لإعادة الاستخدام). فشل الانضمام يتطلب دعوة جديدة من المدير —
+    // أرخص أمنياً من دعوة مفتوحة.
+    await _deleteStrict('$root/invites/$tok.json');
 
     final snapRec = await _getJson('$root/joinSnapshot.json');
     final snapData = snapRec?['data'];

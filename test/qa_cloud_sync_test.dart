@@ -65,7 +65,8 @@ class FakeFirebase {
           }
           // GET قائمة العمليات — نتجاهل startAt/startAfter (حجم الاختبار صغير).
           if (rejectOrderBy &&
-              req.url.queryParameters['orderBy'] == '"timestamp"') {
+              (req.url.queryParameters['orderBy'] == '"server_ts"' ||
+                  req.url.queryParameters['orderBy'] == '"timestamp"')) {
             return _utf8Json(
                 '{"error" : "Index not defined, add \\".indexOn\\": '
                 '\\"timestamp\\", for path \\"/workspaces/default/operations\\", '
@@ -310,6 +311,73 @@ void main() {
     await t.stopListening();
     await server.close(force: true);
     expect(t.isListening, isFalse);
+  });
+
+  test(
+      'QA-CLOUD-08 clock drift: op from device with slow clock still pulled '
+      '(cursor uses server_ts, not device ISO time)', () async {
+    final cloud = FakeFirebase();
+    // عمليتان: جهاز ساعته مضبوطة (اليوم) وجهاز ساعته متأخرة 3 أيام.
+    // ختم الخادم server_ts هو الحقيقي لكليهما (متقاربان).
+    final serverNow = DateTime.now().millisecondsSinceEpoch;
+    cloud.operations['OP-ONTIME'] = {
+      'id': 'OP-ONTIME',
+      'device_id': 'DEV-ONTIME',
+      'workspace_id': 'default',
+      'entity_type': 'account',
+      'entity_id': '111222333',
+      'op_type': 'create',
+      'version': 1,
+      'parent_op_id': '',
+      'payload': jsonEncode({
+        'id': 111222333,
+        'name': 'حساب ساعة مضبوطة',
+        'kind': 'customer',
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      }),
+      'device_time': now.toIso8601String(),
+      'timestamp': now.toIso8601String(),
+      'server_ts': serverNow,
+      'synced': 1,
+    };
+    cloud.operations['OP-SLOWCLOCK'] = {
+      'id': 'OP-SLOWCLOCK',
+      'device_id': 'DEV-SLOWCLOCK',
+      'workspace_id': 'default',
+      'entity_type': 'account',
+      'entity_id': '444555666',
+      'op_type': 'create',
+      'version': 1,
+      'parent_op_id': '',
+      'payload': jsonEncode({
+        'id': 444555666,
+        'name': 'حساب ساعة متأخرة',
+        'kind': 'customer',
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      }),
+      // ساعة الهاتف متأخرة 3 أيام — قبل الإصلاح كان المؤشر النصي يتخطاها.
+      'device_time':
+          now.subtract(const Duration(days: 3)).toIso8601String(),
+      'timestamp': now.subtract(const Duration(days: 3)).toIso8601String(),
+      'server_ts': serverNow + 500, // وصلت للخادم بعد الأولى بنصف ثانية.
+      'synced': 1,
+    };
+    final tB = transport(repoB, b);
+    final applied = await http.runWithClient(
+        () => tB.pull(resolver: ConflictResolver()), cloud.client);
+    expect(applied, 2, reason: 'العمليتان تُطبَّقان معاً');
+    // المؤشر تقدم بختم الخادم الأكبر (رقم ملي ثانية)، لا بتوقيت الجهاز.
+    final cur = await b.query('sync_meta',
+        where: 'key = ?', whereArgs: ['lastCloudTs:default'], limit: 1);
+    expect(cur, isNotEmpty);
+    expect(int.tryParse('${cur.first['value']}'), serverNow + 500,
+        reason: 'المؤشر = أكبر server_ts، وليس ISO من ساعة هاتف');
+    // عملية الجهاز المتأخر وصلت رغم انحراف ساعته.
+    final acc = await b.query('accounts',
+        where: 'id = ?', whereArgs: [444555666], limit: 1);
+    expect(acc, isNotEmpty);
   });
 
   test('QA-CLOUD-05 non-https backend URL rejected early', () async {

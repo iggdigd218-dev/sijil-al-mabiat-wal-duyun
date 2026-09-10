@@ -810,8 +810,9 @@ class LanSyncService implements SyncTransport {
           op.entityType == EntityKind.message &&
           op.deviceId != ourDeviceId) {
         try {
-          final senderName =
-              (senderRows.first['name'] as String?) ?? 'جهاز في المجموعة';
+          // الاسم الموحد: الافتراضي «مستخدم جديد» حتى يسميه المدير.
+          var senderName = (senderRows.first['name'] as String?) ?? '';
+          if (senderName.trim().isEmpty) senderName = kDefaultMemberName;
           var body = '${op.payload['body'] ?? ''}';
           // مرفق بلا نص: وصف نوع المرفق في الإشعار.
           if (body.isEmpty) {

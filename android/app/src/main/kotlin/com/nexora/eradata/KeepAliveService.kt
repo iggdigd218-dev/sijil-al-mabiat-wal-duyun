@@ -19,6 +19,7 @@ import android.os.PowerManager
  */
 class KeepAliveService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +34,19 @@ class KeepAliveService : Service() {
                 ).apply { setReferenceCounted(false); acquire() }
             } catch (_: Exception) { /* اليقظة كمالية */ }
         }
+        // قفل Wi-Fi: يمنع النظام من إسبات راديو الشبكة أثناء السكون —
+        // بدونه يبقى المعالج حياً لكن خادم LAN ومستمع SSE بلا شبكة.
+        if (wifiLock == null) {
+            try {
+                val wm = applicationContext
+                    .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                @Suppress("DEPRECATION")
+                wifiLock = wm.createWifiLock(
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "nexora:groupSyncWifi"
+                ).apply { setReferenceCounted(false); acquire() }
+            } catch (_: Exception) { /* كمالية */ }
+        }
         // START_STICKY: النظام يعيد تشغيل الخدمة إذا قتلها لضغط الذاكرة.
         return START_STICKY
     }
@@ -40,6 +54,8 @@ class KeepAliveService : Service() {
     override fun onDestroy() {
         try { wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
+        try { wifiLock?.release() } catch (_: Exception) {}
+        wifiLock = null
         super.onDestroy()
     }
 

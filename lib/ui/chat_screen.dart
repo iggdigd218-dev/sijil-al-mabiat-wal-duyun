@@ -4,7 +4,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../core/chat_media.dart';
 import '../core/format.dart';
@@ -16,95 +15,108 @@ import '../data/providers.dart';
 import 'group_chat_screen.dart';
 import 'widgets.dart';
 
-/// الدردشة — محادثة لكل حساب، مع إرسال كشف الحساب ومشاركة عبر واتساب.
-/// نقل شاشة `chat.js`.
+/// الدردشة — فريق العمل فقط: دردشة المجموعة + محادثات فردية بين الأعضاء.
+/// شاشة الدردشة — محصورة بفريق العمل حصراً:
+/// دردشة المجموعة + محادثات فردية بين أعضاء المجموعة (الأجهزة المقترنة)
+/// فقط. لا عملاء ولا جهات اتصال خارجية هنا — التواصل مع العملاء يتم من
+/// شاشة الحسابات (واتساب/رسائل).
 class ChatScreen extends ConsumerWidget {
   const ChatScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final accounts = ref.watch(accountsProvider);
     final mode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
     final peers = ref.watch(groupPeersProvider).valueOrNull ?? const [];
     final online = peers.where((p) => p.online).length;
 
-    // بطاقة دردشة المجموعة — تظهر فقط في الوضع المُدار (host/member).
-    final groupTile = mode == 'standalone'
-        ? null
-        : Card(
-            color: AppColors.primarySoftOf(context),
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: AppColors.primaryOf(context),
-                child: const Icon(Icons.groups, color: Colors.white),
-              ),
-              title: const Text(
-                'دردشة المجموعة',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
-              subtitle: Text(
-                'بين أجهزة المجموعة فقط · $online/${peers.length} متصل',
-                style: const TextStyle(fontSize: 12),
-              ),
-              trailing: const Icon(Icons.chevron_left),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const GroupChatScreen()),
-              ),
+    if (mode == 'standalone') {
+      return const EmptyState(
+        icon: Icons.forum_outlined,
+        title: 'الدردشة خاصة بفريق العمل',
+        message: 'انضم لمجموعة مزامنة أو أنشئ مجموعتك حتى تتمكن من '
+            'مراسلة أعضاء الفريق والأجهزة المقترنة.',
+      );
+    }
+
+    // بطاقة دردشة المجموعة (الجماعية).
+    final groupTile = Card(
+      color: AppColors.primarySoftOf(context),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: AppColors.primaryOf(context),
+          child: const Icon(Icons.groups, color: Colors.white),
+        ),
+        title: const Text(
+          'دردشة المجموعة',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          'بين أجهزة المجموعة فقط · $online/${peers.length} متصل',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: const Icon(Icons.chevron_left),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const GroupChatScreen()),
+        ),
+      ),
+    );
+
+    // أعضاء الفريق (بلا جهازنا وبلا الموقوفين) — قائمة المحادثات الفردية.
+    final members = peers.where((p) => !p.isSelf && !p.suspended).toList();
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 96),
+      itemCount: members.length + 2,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, i) {
+        if (i == 0) return groupTile;
+        if (i == 1) {
+          return const Padding(
+            padding: EdgeInsets.only(top: 6, bottom: 2),
+            child: Text(
+              'محادثات فردية — أعضاء الفريق',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
             ),
           );
-
-    return accounts.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => EmptyState(
-        icon: Icons.error_outline,
-        title: 'تعذّر تحميل المحادثات',
-        message: '$e',
-      ),
-      data: (list) {
-        if (list.isEmpty && groupTile == null) {
-          return const EmptyState(
-            icon: Icons.forum_outlined,
-            title: 'لا توجد محادثات',
-            message: 'أضف حسابًا لتبدأ محادثة معه.',
-          );
         }
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 96),
-          itemCount: list.length + (groupTile == null ? 0 : 1),
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) {
-            if (groupTile != null) {
-              if (i == 0) return groupTile;
-              i -= 1;
-            }
-            final a = list[i].account;
-            return Card(
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: AppColors.primarySoftOf(context),
-                  child: Text(a.kind.icon),
-                ),
-                title: Text(
-                  a.name,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  a.contactNumber.isEmpty
-                      ? a.kind.label
-                      : '${a.kind.label} · ${a.contactNumber}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                trailing: const Icon(Icons.chevron_left),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatThreadScreen(account: a),
-                  ),
+        final p = members[i - 2];
+        return Card(
+          child: ListTile(
+            leading: Badge(
+              alignment: Alignment.bottomLeft,
+              backgroundColor: p.online
+                  ? const Color(0xFF22C55E)
+                  : Colors.grey,
+              smallSize: 10,
+              child: CircleAvatar(
+                backgroundColor: AppColors.primarySoftOf(context),
+                child: Icon(
+                  p.isOwner ? Icons.workspace_premium : Icons.person,
+                  color: AppColors.primaryOf(context),
                 ),
               ),
-            );
-          },
+            ),
+            title: Text(
+              p.name.isEmpty ? 'مستخدم جديد' : p.name,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${p.isOwner ? 'المدير' : 'عضو'} · ${p.online ? 'متصل الآن' : 'غير متصل'}',
+              style: const TextStyle(fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChatThreadScreen(
+                  peerDeviceId: p.deviceId,
+                  peerName: p.name.isEmpty ? 'مستخدم جديد' : p.name,
+                  peerOnline: p.online,
+                ),
+              ),
+            ),
+          ),
         );
       },
     );
@@ -112,8 +124,16 @@ class ChatScreen extends ConsumerWidget {
 }
 
 class ChatThreadScreen extends ConsumerStatefulWidget {
-  final Account account;
-  const ChatThreadScreen({super.key, required this.account});
+  /// محادثة فردية مع عضو مجموعة (جهاز مقترن) — لا عملاء خارجيين.
+  final String peerDeviceId;
+  final String peerName;
+  final bool peerOnline;
+  const ChatThreadScreen({
+    super.key,
+    required this.peerDeviceId,
+    required this.peerName,
+    this.peerOnline = false,
+  });
 
   @override
   ConsumerState<ChatThreadScreen> createState() => _ChatThreadScreenState();
@@ -135,7 +155,9 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   }
 
   Future<void> _open() async {
-    final id = await ref.read(repoProvider).conversationFor(widget.account);
+    final id = await ref
+        .read(repoProvider)
+        .conversationForPeer(widget.peerDeviceId, widget.peerName);
     if (mounted) setState(() => _convId = id);
   }
 
@@ -314,65 +336,20 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     }
   }
 
-  /// يبني نص كشف الحساب ويرسله في المحادثة.
-  Future<void> _sendStatement() async {
-    final repo = ref.read(repoProvider);
-    final bal = await repo.balanceOf(widget.account);
-    final txs = await repo.transactions(accountId: widget.account.id);
-    final label = bal > 0 ? 'عليه' : (bal < 0 ? 'له' : 'متساوٍ');
-    final b = StringBuffer()
-      ..writeln('📊 كشف حساب: ${widget.account.name}')
-      ..writeln('الرصيد الحالي: ${Fmt.money(bal.abs())} ($label)')
-      ..writeln('عدد العمليات: ${txs.length}')
-      ..writeln('التاريخ: ${Fmt.date(DateTime.now())}');
-    await _send(b.toString(), kind: 'statement');
-  }
-
-  Future<void> _shareWhatsApp() async {
-    final number = Fmt.waNumber(widget.account.contactNumber);
-    if (number.isEmpty) {
-      showSnack(context, 'لا يوجد رقم واتساب لهذا الحساب', error: true);
-      return;
-    }
-    final repo = ref.read(repoProvider);
-    final bal = await repo.balanceOf(widget.account);
-    final label = bal > 0 ? 'عليه' : (bal < 0 ? 'له' : 'متساوٍ');
-    final text = 'مرحبًا ${widget.account.name}\n'
-        'الرصيد الحالي: ${Fmt.money(bal.abs())} ($label)';
-    final uri = Uri.parse(
-      'https://wa.me/$number?text=${Uri.encodeComponent(text)}',
-    );
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final a = widget.account;
-
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(a.name, style: const TextStyle(fontSize: 16)),
+            Text(widget.peerName, style: const TextStyle(fontSize: 16)),
             Text(
-              a.kind.label,
+              widget.peerOnline ? 'متصل الآن' : 'عضو المجموعة',
               style: TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'إرسال كشف الحساب',
-            onPressed: _sendStatement,
-            icon: const Icon(Icons.description_outlined),
-          ),
-          IconButton(
-            tooltip: 'مشاركة عبر واتساب',
-            onPressed: _shareWhatsApp,
-            icon: const Icon(Icons.share_outlined),
-          ),
-        ],
       ),
       body: _convId == null
           ? const Center(child: CircularProgressIndicator())
@@ -388,7 +365,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                             return const EmptyState(
                               icon: Icons.chat_bubble_outline,
                               title: 'ابدأ المحادثة',
-                              message: 'اكتب رسالة أو أرسل كشف الحساب مباشرة.',
+                              message: 'اكتب أول رسالة لهذا العضو — تُحفظ محلياً على جهازك.',
                             );
                           }
                           return ListView.builder(
