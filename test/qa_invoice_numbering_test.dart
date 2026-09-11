@@ -26,6 +26,7 @@ void main() {
             onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON')));
     await AppDatabase.createSchema(db);
     repo = Repo(databaseProvider: () async => db);
+    await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية قبل الكتابة.
   });
   tearDown(() async {
     await db.close();

@@ -50,6 +50,7 @@ void main() {
           ));
       await AppDatabase.createSchema(db);
       repo = Repo(databaseProvider: () async => db);
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية قبل الكتابة.
       final now = DateTime(2026, 9, 9);
       await repo.saveAccount(Account(
         name: 'عميل الاختبار',

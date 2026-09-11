@@ -91,9 +91,42 @@ class CloudFirebaseTransport implements SyncTransport {
     return 'auth=${Uri.encodeQueryComponent(tok)}';
   }
 
+  // (دفعة 57) تتبع انتهاء صلاحية JWT استباقياً: نفك حقل exp من التوكن
+  // ونرفض إرفاق توكن منتهٍ (أو على وشك الانتهاء خلال 60 ثانية) بدل
+  // إهدار طلب كامل ينتظر 401/403 ثم يُعاد. نتيجة الفك مُخبأة لكل توكن.
+  String? _expCachedToken;
+  int _expCachedMs = 0;
+
+  static int jwtExpiryMs(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return 0;
+      var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      while (payload.length % 4 != 0) {
+        payload += '=';
+      }
+      final m = jsonDecode(utf8.decode(base64Decode(payload)));
+      if (m is! Map) return 0;
+      final exp = (m['exp'] as num?)?.toInt() ?? 0;
+      return exp * 1000;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<String?> _idToken() async {
     final tok = await _idTokenProvider();
     if (tok == null || tok.isEmpty) return null;
+    if (!identical(tok, _expCachedToken) && tok != _expCachedToken) {
+      _expCachedToken = tok;
+      _expCachedMs = jwtExpiryMs(tok);
+    }
+    if (_expCachedMs > 0 &&
+        DateTime.now().millisecondsSinceEpoch > _expCachedMs - 60000) {
+      // توكن منتهٍ/يوشك: لا نرفقه — القواعد العامة تمرّر الطلب بلا auth،
+      // وإرسال توكن ميت يفشل الطلب بلا داعٍ (كان يكلف جولة 401 كاملة).
+      return null;
+    }
     return tok;
   }
 

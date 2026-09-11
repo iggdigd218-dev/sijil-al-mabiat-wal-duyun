@@ -8,9 +8,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/token_cipher.dart';
+import '../../core/secret_store.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
@@ -132,6 +134,11 @@ class SyncEngine {
       _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
       _lanTransport = null;
       _lanEnabled = false;
+      // (دفعة 57) إخماد كامل لطبقة LAN في وضع السحابة الحصري: مسبار
+      // الحضور (مناداة كل 3 ثوانٍ على ip:port) يتوقف أيضاً — لا حركة
+      // شبكية محلية ولا محاولات فاشلة ضد عناوين قديمة.
+      _presence?.dispose();
+      _presence = null;
       return;
     }
     if (_lanEnabled && _lanTransport?.port == port) return;
@@ -157,7 +164,7 @@ class SyncEngine {
         'platform': Platform.operatingSystem,
         'port': port,
         'is_paired': 1,
-        'auth_secret': generateLanSecret(),
+        'auth_secret': await SecretStore.protect(generateLanSecret()),
         'revoked_at': '',
         'ip_address': '',
         'created_at': now,
@@ -894,6 +901,28 @@ class SyncEngine {
     try {
       if (await repo.isWorkspaceOwner()) {
         await repo.autoExpireStaleDevices();
+        // (دفعة 57) صيانة سحابية للمدير في نفس الدورة:
+        //  1) تقليم شواهد الطرد المنتهية (TTL 7 أيام) — لا ركام أبدياً.
+        //  2) ضغط سجل العمليات السحابي (أقدم من 30 يوماً ومغطاة باللقطة).
+        try {
+          final st = await repo.settings();
+          final url = (st['cloudBackendUrl'] ?? '').trim();
+          if (url.isNotEmpty) {
+            final ws = _cloudTransport?.workspaceId ?? 'default';
+            try {
+              await CloudJoin.pruneExpiredEvictions(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            try {
+              await compactCloudOperations(backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            // 3) زوال اللقطة: دعوة منتهية بلا أخرى حية → حذف joinSnapshot.
+            try {
+              await CloudJoin.purgeStaleInviteArtifacts(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+          }
+        } catch (_) {}
         return;
       }
       if (await repo.amIExpelled()) {
@@ -1018,6 +1047,84 @@ class SyncEngine {
   ///     تصل المستهدف عبر قناته المخصصة لحظياً.
   ///  2) حذف عقدته من /roster نهائياً (محفّز الدفاع الثاني).
   /// يُستدعى بعد expelDevice/revokeDevice المحليتين مباشرة.
+  /// (دفعة 57) قياس سحابي حي لواجهة الإعدادات — بديل عرض ip:port القديم:
+  /// حالة قناة SSE، كمون السحابة (رحلة GET خفيفة)، اسم مساحة العمل،
+  /// وعدد العمليات المنتظرة في طابور الدفع السحابي.
+  Future<Map<String, Object?>> cloudTelemetry() async {
+    final t = _cloudTransport;
+    final db = await _db;
+    var pending = 0;
+    try {
+      final r = await db.rawQuery(
+          "SELECT COUNT(*) c FROM sync_queue WHERE target = 'cloud' "
+          "AND status IN ('pending','syncing','failed')");
+      pending = (r.first['c'] as int?) ?? 0;
+    } catch (_) {}
+    String wsName = '';
+    try {
+      final w = await db.query('workspaces', limit: 1);
+      if (w.isNotEmpty) {
+        wsName = '${w.first['name'] ?? w.first['id'] ?? ''}';
+      }
+    } catch (_) {}
+    int latencyMs = -1;
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        final ws = t?.workspaceId ?? 'default';
+        final sw = Stopwatch()..start();
+        final res = await http
+            .get(Uri.parse(
+                '${url.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}/roster.json?shallow=true'))
+            .timeout(const Duration(seconds: 8));
+        sw.stop();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          latencyMs = sw.elapsedMilliseconds;
+        }
+      }
+    } catch (_) {}
+    return {
+      'sse': t?.isListening ?? false,
+      'evicted': t?.isEvicted ?? false,
+      'workspace': wsName,
+      'pending': pending,
+      'latency_ms': latencyMs,
+    };
+  }
+
+  /// (دفعة 57 — للمدير فقط) ضغط سجل العمليات السحابي:
+  /// يحذف من /workspaces/$ws/operations كل عملية:
+  ///   • أقدم من 30 يوماً (بختم خادم فيربيس server_ts)، و
+  ///   • مغطاة بلقطة موثّقة (server_ts ≤ snapshotThroughTs المسجلة عند
+  ///     آخر createInvite) — المنضمون الجدد يرتوون من اللقطة فلا يحتاجون
+  ///     إعادة تشغيل التاريخ القديم.
+  /// بدون علامة لقطة مسجلة لا يُحذف شيء (أمان مطلق). يعيد عدد المحذوف.
+  Future<int> compactCloudOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    Duration olderThan = const Duration(days: 30),
+  }) async {
+    if (!await repo.isWorkspaceOwner()) return 0;
+    final db = await _db;
+    final row = await db.query('sync_meta',
+        where: 'key = ?',
+        whereArgs: ['snapshotThroughTs:$workspaceId'],
+        limit: 1);
+    final snapTs =
+        row.isEmpty ? 0 : (int.tryParse('${row.first['value']}') ?? 0);
+    if (snapTs <= 0) return 0; // لا لقطة موثّقة → لا ضغط.
+    final cutoff = DateTime.now().subtract(olderThan).millisecondsSinceEpoch;
+    // الحد الآمن: الأقدم من (30 يوماً) والمغطى باللقطة معاً.
+    final limitTs = snapTs < cutoff ? snapTs : cutoff;
+    if (limitTs <= 0) return 0;
+    return CloudJoin.compactOperations(
+      backendUrl: backendUrl,
+      workspaceId: workspaceId,
+      throughTsMs: limitTs,
+    );
+  }
+
   /// (دفعة 56) «حذف نهائي من السجل»: محو جهاز مطرود محلياً وسحابياً —
   /// devices + مستخدم الظل اليتيم محلياً، وroster/evictions/joinRequest
   /// سحابياً. البطاقة تختفي نهائياً من كل الشاشات.

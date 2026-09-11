@@ -30,22 +30,41 @@ class GroupManagementScreen extends ConsumerStatefulWidget {
 }
 
 class _State extends ConsumerState<GroupManagementScreen> {
-  Timer? _joinReqTimer;
+  // (دفعة 57) قناة SSE حيّة على /joinRequests بدل استطلاع كل 5 ثوانٍ —
+  // طلب الاقتران يصل للمدير لحظياً بصفر كمون وبلا ضجيج شبكي دوري.
+  JoinRequestWatcher? _joinReqWatcher;
 
   @override
   void initState() {
     super.initState();
-    // استطلاع طلبات الانضمام المعلّقة كل 5 ثوانٍ (المدير فقط).
-    _joinReqTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _checkJoinRequests(),
-    );
+    _startJoinRequestWatcher();
     _checkJoinRequests();
+  }
+
+  Future<void> _startJoinRequestWatcher() async {
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty || !mounted) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws =
+          wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      _joinReqWatcher = JoinRequestWatcher(
+        backendUrl: url,
+        workspaceId: ws,
+        onRequestsChanged: () {
+          if (mounted) _checkJoinRequests();
+        },
+      )..start();
+    } catch (_) {}
   }
 
   @override
   void dispose() {
-    _joinReqTimer?.cancel();
+    _joinReqWatcher?.stop();
     super.dispose();
   }
 
@@ -59,7 +78,11 @@ class _State extends ConsumerState<GroupManagementScreen> {
       final st = await repo.settings();
       final url = (st['cloudBackendUrl'] ?? '').trim();
       if (url.isEmpty) return;
-      final reqs = await CloudJoin.fetchJoinRequests(repo, backendUrl: url);
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final reqs = await CloudJoin.fetchJoinRequests(repo,
+          backendUrl: url, workspaceId: ws);
       if (reqs.isEmpty || !mounted) return;
       _joinSheetOpen = true;
       await showJoinApprovalSheet(context, ref, reqs.first, backendUrl: url);

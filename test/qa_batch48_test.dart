@@ -34,6 +34,9 @@ void main() {
       ),
     );
     repo = Repo(databaseProvider: () async => db);
+    // (دفعة 57) requireDeviceId لم يعد يتراجع صامتاً إلى 'DEVICE-UNKNOWN' —
+    // أي كتابة تتطلب هوية جهاز مهيأة عبر initSyncInfra.
+    await repo.initSyncInfra();
   });
 
   tearDown(() async {

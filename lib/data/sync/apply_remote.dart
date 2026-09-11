@@ -48,6 +48,7 @@ extension ApplyRemoteOp on Repo {
     );
     if (decision.conflict) {
       await txn.insert('notifications', {
+        'workspace_id': op.workspaceId, // (دفعة 57) عزل بالمساحة.
         'title': 'تعارض في المزامنة',
         'body': '${op.entityType.name}:${op.entityId} (device ${op.deviceId})',
         'kind': 'warning',
@@ -169,10 +170,38 @@ extension ApplyRemoteOp on Repo {
               table,
               {
                 'deleted_at': op.deviceTime,
+                // (دفعة 57) حذف متماثل: من حذف؟ + وسم الحالة synced —
+                // العملية وصلتنا من السجل فلا يعاد بثها من هنا.
+                // deleted_by يُختم بهوية الجهاز الحاذف لجداول الدردشة فقط
+                // (النوع TEXT فيها) — في الجداول القديمة العمود INTEGER
+                // لمعرّف مستخدم فلا نلوثه بنص.
+                if (columns.contains('deleted_by') &&
+                    (op.entityType == EntityKind.message ||
+                        op.entityType == EntityKind.conversation))
+                  'deleted_by': op.payload['deleted_by']?.toString() ??
+                      op.deviceId,
+                if (columns.contains('sync_state')) 'sync_state': 'synced',
                 if (columns.contains('updated_at')) 'updated_at': now,
               },
               where: '$primaryKey = ?',
               whereArgs: [op.entityId]);
+          // (دفعة 57) حذف محادثة وارد يسوّم رسائلها أيضاً — تناظر كامل
+          // مع سلوك deleteConversation المحلي.
+          if (op.entityType == EntityKind.conversation) {
+            try {
+              await txn.update(
+                  'messages',
+                  {
+                    'deleted_at': op.deviceTime,
+                    'deleted_by':
+                        op.payload['deleted_by']?.toString() ?? op.deviceId,
+                    'sync_state': 'synced',
+                  },
+                  where:
+                      "conversation_id = ? AND COALESCE(deleted_at,'') = ''",
+                  whereArgs: [op.entityId]);
+            } catch (_) {}
+          }
         } else {
           await txn.delete(table,
               where: '$primaryKey = ?', whereArgs: [op.entityId]);

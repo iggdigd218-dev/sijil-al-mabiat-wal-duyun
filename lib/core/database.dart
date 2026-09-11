@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 20;
+  static const int _version = 21;
 
   static int get schemaVersion => _version;
 
@@ -150,14 +150,17 @@ class AppDatabase {
     // ---------- العملات ----------
     await db.execute('''
       CREATE TABLE IF NOT EXISTS currencies (
-        code    TEXT PRIMARY KEY,
+        code    TEXT NOT NULL,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name    TEXT NOT NULL,
         symbol  TEXT NOT NULL,
         decimal INTEGER NOT NULL DEFAULT 0,
         rate    REAL NOT NULL DEFAULT 1,
-        deleted_at TEXT DEFAULT ''
+        deleted_at TEXT DEFAULT '',
+        PRIMARY KEY (code, workspace_id)
       )''');
+    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_curr_pk_v21 '
+        'ON currencies(code, workspace_id)');
 
     // ---------- التصنيفات ----------
     await db.execute('''
@@ -200,6 +203,9 @@ class AppDatabase {
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         title      TEXT NOT NULL,
+        deleted_at TEXT DEFAULT '',
+        deleted_by TEXT DEFAULT '',
+        sync_state TEXT DEFAULT 'synced',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )''');
@@ -212,6 +218,9 @@ class AppDatabase {
         body            TEXT DEFAULT '',
         kind            TEXT NOT NULL DEFAULT 'text',
         payload         TEXT DEFAULT '',
+        deleted_at      TEXT DEFAULT '',
+        deleted_by      TEXT DEFAULT '',
+        sync_state      TEXT DEFAULT 'synced',
         created_at      TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
       )''');
@@ -244,6 +253,7 @@ class AppDatabase {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS notifications (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
         title       TEXT NOT NULL,
         body        TEXT DEFAULT '',
         kind        TEXT DEFAULT 'info',
@@ -255,6 +265,8 @@ class AppDatabase {
     // قواعد قديمة أنشأت الجدول بدون عمودَي الربط — أضفهما (idempotent).
     await _addColumn(db, 'notifications', 'entity_type', "TEXT DEFAULT ''");
     await _addColumn(db, 'notifications', 'entity_id', "TEXT DEFAULT ''");
+    await _addColumn(db, 'notifications', 'workspace_id',
+        "TEXT NOT NULL DEFAULT 'default'");
 
     // ---------- قوالب الرسائل ----------
     await db.execute('''
@@ -298,6 +310,12 @@ class AppDatabase {
       await createSchema(db);
     } catch (_) {
       // حتى لو فشل السكربت متعدد الجُمل، لا تنهار الباقي.
+    }
+    try {
+      // (دفعة 57) قواعد قديمة فُتحت بلا onUpgrade (نفس الرقم) لكن ناقصة
+      // أعمدة v21 — الهجرة idempotent فتصلح أي نقص عند كل فتح.
+      await migrateToV21(db);
+    } catch (_) {
     }
   }
 
@@ -892,6 +910,10 @@ class AppDatabase {
     if (from < 20) {
       await _addColumn(db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
     }
+    // ====== v21 (دفعة 57): عزل المساحات + حذف ناعم للدردشة ======
+    if (from < 21) {
+      await migrateToV21(db);
+    }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا
     // خطأ "table workspaces already exists" و"تعذّر تحميل الفئات/الإعدادات".
@@ -900,12 +922,69 @@ class AppDatabase {
         'sync_meta',
         {
           'key': 'schemaVersion',
-          'value': '17',
+          // (دفعة 57) كان مثبتاً '17' يدوياً — يتبع _version تلقائياً الآن.
+          'value': '$_version',
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   /// Migration v4 → v5: إضافة جداول المزامنة + أعمدة workspace/deleted للجداول القديمة.
+  /// Migration v20 → v21 (دفعة 57 — التحصين الشامل):
+  ///  1) notifications.workspace_id — عزل الإشعارات بين المساحات (كانت
+  ///     تتسرب نظرياً عند تبديل المجموعة على نفس الجهاز).
+  ///  2) currencies: مفتاح مركّب (code, workspace_id) بدل code وحده —
+  ///     تعديل سعر صرف في مجموعة لا يلوّث الأخرى.
+  ///  3) messages/conversations: أعمدة deleted_at/deleted_by/sync_state —
+  ///     حذف الدردشة يصبح ناعماً قابلاً للمزامنة المتماثلة بين الأجهزة.
+  /// عامة (public) لأن ensureFullSchema تستدعيها أيضاً للقواعد الجديدة.
+  static Future<void> migrateToV21(Database db) async {
+    // 1) عزل الإشعارات.
+    await _addColumn(db, 'notifications', 'workspace_id',
+        "TEXT NOT NULL DEFAULT 'default'");
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_notif_ws ON notifications(workspace_id)');
+
+    // 2) currencies بمفتاح مركّب: SQLite لا يدعم تعديل PK — إعادة بناء.
+    //    idempotent: إن كان الجدول الجديد مبنياً (فهرس التحقق موجود) نتخطى.
+    final already = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_curr_pk_v21'");
+    if (already.isEmpty) {
+      await db.transaction((txn) async {
+        await txn.execute('''
+          CREATE TABLE IF NOT EXISTS currencies_v21 (
+            code    TEXT NOT NULL,
+            workspace_id TEXT NOT NULL DEFAULT 'default',
+            name    TEXT NOT NULL,
+            symbol  TEXT NOT NULL,
+            decimal INTEGER NOT NULL DEFAULT 0,
+            rate    REAL NOT NULL DEFAULT 1,
+            deleted_at TEXT DEFAULT '',
+            PRIMARY KEY (code, workspace_id)
+          )''');
+        await txn.execute('''
+          INSERT OR IGNORE INTO currencies_v21
+            (code, workspace_id, name, symbol, decimal, rate, deleted_at)
+          SELECT code, COALESCE(workspace_id,'default'), name, symbol,
+                 decimal, rate, COALESCE(deleted_at,'')
+          FROM currencies''');
+        await txn.execute('DROP TABLE currencies');
+        await txn.execute('ALTER TABLE currencies_v21 RENAME TO currencies');
+        await txn.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_curr_pk_v21 '
+            'ON currencies(code, workspace_id)');
+      });
+    }
+
+    // 3) حذف ناعم للدردشة.
+    await _addColumn(db, 'messages', 'deleted_at', "TEXT DEFAULT ''");
+    await _addColumn(db, 'messages', 'deleted_by', "TEXT DEFAULT ''");
+    await _addColumn(db, 'messages', 'sync_state', "TEXT DEFAULT 'synced'");
+    await _addColumn(db, 'conversations', 'deleted_at', "TEXT DEFAULT ''");
+    await _addColumn(db, 'conversations', 'deleted_by', "TEXT DEFAULT ''");
+    await _addColumn(
+        db, 'conversations', 'sync_state', "TEXT DEFAULT 'synced'");
+  }
+
   static Future<void> _migrate4to5(Database db) async {
     // 1) إنشاء الجداول الجديدة (workspaces, devices, operations, sync_queue, sync_meta, google_auth).
     await execSchemaScript(db, createSyncSchemaSql);

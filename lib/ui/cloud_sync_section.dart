@@ -41,11 +41,22 @@ class _CloudSyncSettingsSectionState
   bool _busy = false;
   bool _loaded = false;
   String _lastSync = '';
+  // (دفعة 57) قياس سحابي حي: حالة SSE + كمون + طابور + اسم المساحة.
+  Map<String, Object?>? _telemetry;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadTelemetry();
+  }
+
+  Future<void> _loadTelemetry() async {
+    try {
+      final engine = ref.read(syncEngineProvider);
+      final t = await engine.cloudTelemetry();
+      if (mounted) setState(() => _telemetry = t);
+    } catch (_) {}
   }
 
   @override
@@ -156,6 +167,55 @@ class _CloudSyncSettingsSectionState
             ),
           ],
         ),
+        // (دفعة 57) بطاقة القياس السحابي — بديل عرض ip:port القديم:
+        // قناة SSE، كمون السحابة، مساحة العمل، والعمليات المنتظرة.
+        if (_telemetry != null && connected)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Builder(builder: (_) {
+              final t = _telemetry!;
+              final sse = t['sse'] == true;
+              final lat = (t['latency_ms'] as int?) ?? -1;
+              final pend = (t['pending'] as int?) ?? 0;
+              final ws = '${t['workspace'] ?? ''}';
+              Widget chip(IconData ic, String label, Color c) => Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: c.withValues(alpha: .08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: c.withValues(alpha: .3)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(ic, size: 13, color: c),
+                      const SizedBox(width: 4),
+                      Text(label,
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: c,
+                              fontWeight: FontWeight.w700)),
+                    ]),
+                  );
+              return Wrap(spacing: 6, runSpacing: 6, children: [
+                chip(
+                    sse ? Icons.bolt : Icons.bolt_outlined,
+                    sse ? 'استقبال لحظي (SSE) نشط' : 'قناة SSE متوقفة',
+                    sse ? Colors.green : Colors.orange),
+                if (lat >= 0)
+                  chip(Icons.speed, 'الكمون: $lat مللي ثانية',
+                      lat < 500 ? Colors.green : Colors.orange),
+                chip(
+                    pend == 0
+                        ? Icons.check_circle_outline
+                        : Icons.hourglass_top,
+                    pend == 0 ? 'لا عمليات منتظرة' : 'بالانتظار: $pend',
+                    pend == 0 ? Colors.green : Colors.orange),
+                if (ws.isNotEmpty)
+                  chip(Icons.workspaces_outline, 'المساحة: $ws',
+                      Colors.blueGrey),
+              ]);
+            }),
+          ),
         // (دفعة 52) عرض خطأ الشبكة الدقيق بدل الفشل الصامت:
         // SocketException/HandshakeException/مهلة — يُحدَّث حياً من ناقل
         // السحابة ويختفي تلقائياً فور نجاح الاتصال.

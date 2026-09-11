@@ -83,6 +83,7 @@ void main() {
     await AppDatabase.createSchema(db);
     AppDatabase.overrideForTest(db);
     repo = Repo();
+    await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية قبل الكتابة.
     SyncRecorder.onOperationRecorded = null;
     accountId = await repo.saveAccount(_account());
     engine = SyncEngine(repo: repo, dbProvider: () async => db);

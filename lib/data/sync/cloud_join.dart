@@ -12,6 +12,7 @@
 //    (هو المرجع في التعيين/الحظر/الطرد). عند كل سحب سحابي تُدمج السجلات
 //    بالأحدث (updated_at) فيرى المدير جهاز العضو البعيد ويعيّن له مستخدماً
 //    وصلاحيات، ويصل التعيين/الطرد للعضو خلال دورة سحب واحدة.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -81,6 +82,95 @@ class CloudInviteInfo {
       };
     } catch (_) {
       return null;
+    }
+  }
+}
+
+/// (دفعة 57) مراقب SSE لطلبات الانضمام — يستبدل استطلاع الـ 5 ثوانٍ:
+/// قناة بث حيّة على /workspaces/$ws/joinRequests.json تُنبّه المدير
+/// لحظياً (صفر كمون) عند وصول طلب اقتران جديد. أول حدث put يحمل
+/// اللقطة الحالية فيلتقط الطلبات المعلقة سلفاً أيضاً. إعادة اتصال
+/// بتراجع أسّي 4→180 ثانية عند انقطاع الشبكة.
+class JoinRequestWatcher {
+  final String backendUrl;
+  final String workspaceId;
+  final void Function() onRequestsChanged;
+
+  JoinRequestWatcher({
+    required this.backendUrl,
+    this.workspaceId = 'default',
+    required this.onRequestsChanged,
+  });
+
+  bool _running = false;
+  HttpClient? _client;
+  int _retrySeconds = 4;
+
+  bool get isRunning => _running;
+
+  void start() {
+    if (_running) return;
+    _running = true;
+    unawaited(_loop());
+  }
+
+  void stop() {
+    _running = false;
+    try {
+      _client?.close(force: true);
+    } catch (_) {}
+    _client = null;
+  }
+
+  Future<void> _loop() async {
+    final root =
+        '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(workspaceId)}';
+    while (_running) {
+      try {
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 15);
+        _client = client;
+        final req = await client
+            .getUrl(Uri.parse('$root/joinRequests.json'));
+        req.headers.set('Accept', 'text/event-stream');
+        req.headers.set('Cache-Control', 'no-cache');
+        final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw StateError('join-sse-http-${resp.statusCode}');
+        }
+        _retrySeconds = 4;
+        String? eventName;
+        await for (final line in resp
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
+          if (!_running) break;
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (eventName == 'put' || eventName == 'patch') {
+              final raw = line.substring(5).trim();
+              try {
+                final m = jsonDecode(raw);
+                if (m is Map && m['data'] != null) {
+                  onRequestsChanged();
+                }
+              } catch (_) {}
+            } else if (eventName == 'auth_revoked') {
+              break; // أعد الاتصال.
+            }
+          }
+        }
+      } catch (_) {
+        // شبكة — تراجع ثم إعادة محاولة.
+      } finally {
+        try {
+          _client?.close(force: true);
+        } catch (_) {}
+        _client = null;
+      }
+      if (!_running) break;
+      await Future<void>.delayed(Duration(seconds: _retrySeconds));
+      _retrySeconds = (_retrySeconds * 2).clamp(4, 180);
     }
   }
 }
@@ -255,8 +345,23 @@ class CloudJoin {
     await _putJson('$root/joinSnapshot.json', {
       'createdAt': now.toIso8601String(),
       'hostDeviceId': ourId,
+      // (دفعة 57) علامة الضغط: كل عمليات السحابة الأقدم من هذه اللحظة
+      // أصبحت مادةً مجسّدة داخل هذه اللقطة — روتين الضغط الدوري يحذفها
+      // بأمان (المنضمون الجدد يرتوون من اللقطة لا من إعادة تشغيل السجل).
+      'compacted_through_ts': now.millisecondsSinceEpoch,
       'data': snapshot,
     });
+    // نسجّل العلامة محلياً أيضاً ليعتمدها روتين الضغط.
+    try {
+      final db2 = await repo.database;
+      await db2.insert(
+          'sync_meta',
+          {
+            'key': 'snapshotThroughTs:$ws',
+            'value': '${now.millisecondsSinceEpoch}',
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (_) {}
 
     final token = _newToken();
     final pin = newPairPin();
@@ -866,6 +971,12 @@ class CloudJoin {
       'deviceId': deviceId,
       'expelled_at': {'.sv': 'timestamp'},
       'reason': reason,
+      // (دفعة 57) TTL: بعد 7 أيام تُقلَّم الشاهدة تلقائياً في دورة صيانة
+      // المدير — لا ركام أبدياً في /evictions، والمستهدف المطفأ لديه
+      // أسبوع كامل ليلتقطها عند أول إقلاع.
+      'expires_at': DateTime.now()
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch,
     }, timeout: const Duration(seconds: 20));
     // 2) إزالة العقدة من السجل نهائياً (لا مجرد وسمها).
     try {
@@ -921,6 +1032,9 @@ class CloudJoin {
           'deviceId': id,
           'expelled_at': {'.sv': 'timestamp'},
           'reason': 'group_dissolved',
+          'expires_at': DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
         }, timeout: const Duration(seconds: 15));
         broadcast++;
       } catch (_) {}
@@ -943,6 +1057,133 @@ class CloudJoin {
       } catch (_) {}
     }
     return broadcast;
+  }
+
+  /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،
+  /// وإن لم تبق أي دعوة حيّة يحذف joinSnapshot.json نهائياً — لقطة
+  /// الأعمال الكاملة لا تبقى معلقة بمسار قابل للتخمين بعد انتهاء
+  /// نافذة الانضمام (15 دقيقة). يعيد true إن حُذفت اللقطة.
+  static Future<bool> purgeStaleInviteArtifacts({
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? invites;
+    try {
+      invites = await _getJson('$root/invites.json');
+    } catch (_) {
+      return false; // شبكة — لا نحذف اللقطة على عمى.
+    }
+    final now = DateTime.now();
+    var liveInvite = false;
+    if (invites != null) {
+      for (final e in invites.entries) {
+        final v = e.value;
+        if (v is! Map) continue;
+        final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+        if (exp != null && now.isBefore(exp)) {
+          liveInvite = true; // دعوة سارية — اللقطة ما تزال مطلوبة.
+          continue;
+        }
+        // دعوة منتهية → تُحذف.
+        try {
+          await _delete('$root/invites/${Uri.encodeComponent(e.key)}.json');
+        } catch (_) {}
+      }
+    }
+    if (liveInvite) return false;
+    // لا دعوات حية: هل توجد لقطة أصلاً؟ احذفها.
+    try {
+      final snap = await _getJson('$root/joinSnapshot.json');
+      if (snap == null) return false;
+      await _delete('$root/joinSnapshot.json');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (المدير — دفعة 57) ضغط سجل العمليات السحابي: يحذف كل عملية
+  /// server_ts ≤ [throughTsMs] — تُستدعى فقط من SyncEngine بعد التحقق
+  /// من أن الحد مغطى بلقطة موثّقة. تحذف على دفعات (استعلام مرشّح
+  /// بالفهرس، وتراجع «جلب كامل» عند غياب .indexOn). تعيد عدد المحذوف.
+  static Future<int> compactOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required int throughTsMs,
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      // ترشيح خادمي إن توفر الفهرس.
+      final uri = Uri.parse('$root/operations.json').replace(
+        queryParameters: {
+          'orderBy': jsonEncode('server_ts'),
+          'endAt': '$throughTsMs',
+        },
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if (res.statusCode == 400 && res.body.contains('Index not defined')) {
+        all = await _getJson('$root/operations.json');
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
+        final d = jsonDecode(res.body);
+        all = d is Map ? Map<String, dynamic>.from(d) : null;
+      }
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    var removed = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final ts = (v['server_ts'] as num?)?.toInt() ?? 0;
+      if (ts == 0 || ts > throughTsMs) continue;
+      try {
+        await _delete(
+            '$root/operations/${Uri.encodeComponent(e.key)}.json');
+        removed++;
+      } catch (_) {}
+    }
+    return removed;
+  }
+
+  /// (المدير — دفعة 57) تقليم شواهد الطرد المنتهية (TTL 7 أيام):
+  /// يقرأ /evictions كاملة ويحذف كل شاهدة تجاوزت expires_at.
+  /// الشواهد القديمة (قبل الدفعة، بلا expires_at) تُمنح مهلة سماح شهراً
+  /// من expelled_at ثم تُقلَّم. يعيد عدد الشواهد المحذوفة.
+  static Future<int> pruneExpiredEvictions({
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      all = await _getJson('$root/evictions.json');
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    var pruned = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      var expMs = (v['expires_at'] as num?)?.toInt() ?? 0;
+      if (expMs == 0) {
+        // شاهدة قديمة بلا TTL: مهلة شهر من وقت الطرد ثم تقليم.
+        final at = (v['expelled_at'] as num?)?.toInt() ?? 0;
+        if (at == 0) continue; // شكل مجهول — لا نلمسها.
+        expMs = at + const Duration(days: 30).inMilliseconds;
+      }
+      if (nowMs < expMs) continue;
+      try {
+        await _delete(
+            '$root/evictions/${Uri.encodeComponent(e.key)}.json');
+        pruned++;
+      } catch (_) {}
+    }
+    return pruned;
   }
 
   /// (المدير — دفعة 56) «حذف نهائي من السجل»: محو كل أثر سحابي لجهاز

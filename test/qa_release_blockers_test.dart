@@ -43,6 +43,9 @@ void main() {
     await AppDatabase.createSchema(b);
     repoA = Repo(databaseProvider: () async => a);
     repoB = Repo(databaseProvider: () async => b);
+    // (دفعة 57) هوية الجهاز إلزامية قبل الكتابة.
+    await repoA.initSyncInfra();
+    await repoB.initSyncInfra();
   });
   tearDown(() async {
     await a.close();

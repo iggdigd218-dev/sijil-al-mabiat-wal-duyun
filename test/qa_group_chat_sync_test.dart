@@ -30,6 +30,7 @@ void main() {
     await AppDatabase.createSchema(db);
     AppDatabase.overrideForTest(db);
     repo = Repo();
+    await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية قبل الكتابة.
     SyncRecorder.onOperationRecorded = null;
     await repo.settings(); // يهيئ deviceId/workspaceId الداخلية.
     await db.delete('sync_queue');

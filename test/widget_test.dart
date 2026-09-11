@@ -144,6 +144,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -329,6 +330,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -443,6 +445,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -546,6 +549,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -635,6 +639,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -818,6 +823,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {
@@ -912,6 +918,7 @@ void main() {
       await AppDatabase.createSchema(db);
       AppDatabase.overrideForTest(db);
       repo = Repo();
+      await repo.initSyncInfra(); // (دفعة 57) هوية الجهاز إلزامية.
     });
 
     tearDown(() async {

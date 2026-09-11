@@ -15,6 +15,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/media_paths.dart';
+import '../../core/secret_store.dart';
 import '../../core/models.dart';
 import '../../core/workspace_mode.dart';
 import '../repository.dart';
@@ -285,15 +286,15 @@ class LanSyncService implements SyncTransport {
       whereArgs: [ourDeviceId],
       limit: 1,
     );
-    var ourSecret = (ourDevRows.isNotEmpty
+    var ourSecret = await SecretStore.reveal((ourDevRows.isNotEmpty
             ? ourDevRows.first['auth_secret'] as String?
             : null) ??
-        '';
+        '');
     if (ourSecret.isEmpty) {
       ourSecret = generateLanSecret();
       await db.update(
         'devices',
-        {'auth_secret': ourSecret},
+        {'auth_secret': await SecretStore.protect(ourSecret)},
         where: 'id = ?',
         whereArgs: [ourDeviceId],
       );
@@ -321,7 +322,7 @@ class LanSyncService implements SyncTransport {
           'platform': 'lan',
           'ip_address': ip,
           'port': p,
-          'auth_secret': theirSecret,
+          'auth_secret': await SecretStore.protect(theirSecret),
           'is_paired': 1,
           'is_owner': 0,
           'revoked_at': '',
@@ -379,8 +380,8 @@ class LanSyncService implements SyncTransport {
       final devRows = await db.query(
         'devices',
         where:
-            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
-        whereArgs: [secret],
+            "auth_secret IN (?, ?) AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: await SecretStore.matchForms(secret),
         limit: 1,
       );
       if (devRows.isEmpty) {
@@ -452,8 +453,8 @@ class LanSyncService implements SyncTransport {
       final devRows = await db.query(
         'devices',
         where:
-            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
-        whereArgs: [secret],
+            "auth_secret IN (?, ?) AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: await SecretStore.matchForms(secret),
         limit: 1,
       );
       if (devRows.isEmpty) {
@@ -484,7 +485,8 @@ class LanSyncService implements SyncTransport {
       ];
       for (final t in tables) {
         final rows = await db.query(t);
-        snapshot[t] = rows.map((source) {
+        final out = <Map<String, Object?>>[];
+        for (final source in rows) {
           final row = Map<String, Object?>.from(source);
           if (t == 'users') {
             row['pin'] = '';
@@ -496,12 +498,20 @@ class LanSyncService implements SyncTransport {
             final active =
                 ((row['revoked_at'] as String?) ?? '').isEmpty &&
                     ((row['expelled_at'] as String?) ?? '').isEmpty;
-            if (!active) row['auth_secret'] = '';
+            if (!active) {
+              row['auth_secret'] = '';
+            } else {
+              // (دفعة 57) نفك تعميتنا المحلية قبل الإرسال — مفتاحنا لا
+              // يغادر الجهاز، والقرين يعيد تعميته بمفتاحه عند التخزين.
+              row['auth_secret'] = await SecretStore.reveal(
+                  (row['auth_secret'] as String?) ?? '');
+            }
             row['pair_token'] = '';
             row['pair_token_exp'] = '';
           }
-          return row;
-        }).toList();
+          out.add(row);
+        }
+        snapshot[t] = out;
       }
       snapshot['workspaceMode'] = 'member';
       snapshot['hostDeviceId'] = ourDeviceId;
@@ -541,8 +551,8 @@ class LanSyncService implements SyncTransport {
       final dev = await db.query(
         'devices',
         where:
-            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
-        whereArgs: [secret],
+            "auth_secret IN (?, ?) AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: await SecretStore.matchForms(secret),
         limit: 1,
       );
       if (dev.isEmpty) {
@@ -553,19 +563,26 @@ class LanSyncService implements SyncTransport {
       }
       final selfId = dev.first['id'] as String;
       final devices = await db.query('devices');
-      final roster = devices.map((d) {
+      // أسرار المصادقة تُوزَّع لكل جهاز مقترن موثّق (طلب الـ roster نفسه
+      // محمي بسر الجهاز): بدونها لا يستطيع عضو التحقق من عمليات عضو آخر
+      // فتتعطل مزامنة الأعضاء بغياب المدير. الأجهزة الموقوفة/المطرودة
+      // لا سر لها أصلاً (يُمسح عند الإيقاف/الطرد).
+      final roster = <Map<String, Object?>>[];
+      for (final d in devices) {
         final m = Map<String, Object?>.from(d);
         m['pair_token'] = '';
         m['pair_token_exp'] = '';
-        // أسرار المصادقة تُوزَّع لكل جهاز مقترن موثّق (طلب الـ roster نفسه
-        // محمي بسر الجهاز): بدونها لا يستطيع عضو التحقق من عمليات عضو آخر
-        // فتتعطل مزامنة الأعضاء بغياب المدير. الأجهزة الموقوفة/المطرودة
-        // لا سر لها أصلاً (يُمسح عند الإيقاف/الطرد).
         final active = ((d['revoked_at'] as String?) ?? '').isEmpty &&
             ((d['expelled_at'] as String?) ?? '').isEmpty;
-        if (!active) m['auth_secret'] = '';
-        return m;
-      }).toList();
+        if (!active) {
+          m['auth_secret'] = '';
+        } else {
+          // (دفعة 57) فك التعمية قبل التوزيع — القرين يعمّيها بمفتاحه.
+          m['auth_secret'] = await SecretStore.reveal(
+              (m['auth_secret'] as String?) ?? '');
+        }
+        roster.add(m);
+      }
       // أدوار المستخدمين (للمصالحة) دون أسرار.
       final users = (await db.query('users')).map((u) {
         final m = Map<String, Object?>.from(u);
@@ -610,8 +627,8 @@ class LanSyncService implements SyncTransport {
       final dev = await db.query(
         'devices',
         where:
-            "auth_secret = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
-        whereArgs: [secret],
+            "auth_secret IN (?, ?) AND is_paired = 1 AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''",
+        whereArgs: await SecretStore.matchForms(secret),
         limit: 1,
       );
       if (dev.isEmpty) {
@@ -658,8 +675,8 @@ class LanSyncService implements SyncTransport {
           where: 'id = ?',
           whereArgs: [ourDeviceId],
           limit: 1);
-      final secret =
-          own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+      final secret = await SecretStore.reveal(
+          own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? ''));
       if (secret.isEmpty) return;
       final devices = await db.query(
         'devices',
@@ -715,11 +732,13 @@ class LanSyncService implements SyncTransport {
         error = 'device-expelled';
         return;
       }
+      // (دفعة 57) قبول الشكلين: صريح قديم أو معمّى enc1 — توافق خلفي.
+      final secretForms = await SecretStore.matchForms(secret);
       final senderRows = await db.query(
         'devices',
         where:
-            "id = ? AND is_paired = 1 AND COALESCE(revoked_at, '') = '' AND COALESCE(expelled_at,'') = '' AND auth_secret = ?",
-        whereArgs: [op.deviceId, secret],
+            "id = ? AND is_paired = 1 AND COALESCE(revoked_at, '') = '' AND COALESCE(expelled_at,'') = '' AND auth_secret IN (?, ?)",
+        whereArgs: [op.deviceId, ...secretForms],
         limit: 1,
       );
       if (senderRows.isEmpty) {
@@ -874,7 +893,7 @@ class LanSyncService implements SyncTransport {
         where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
     if (ownRows.isEmpty) return false;
     final own = ownRows.first;
-    final secret = (own['auth_secret'] as String?) ?? '';
+    final secret = await SecretStore.reveal((own['auth_secret'] as String?) ?? '');
     final wasOwner = (own['is_owner'] as int? ?? 0) == 1;
     if (secret.isEmpty) return false;
 
@@ -934,8 +953,8 @@ class LanSyncService implements SyncTransport {
     if (docs == null || docs.isEmpty) return 0;
     final own = await db.query('devices',
         where: 'id = ?', whereArgs: [ourDeviceId], limit: 1);
-    final secret =
-        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+    final secret = await SecretStore.reveal(
+        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? ''));
     if (secret.isEmpty) return 0;
     final rows = await db.query(
       'transactions',
@@ -1069,18 +1088,22 @@ class LanSyncService implements SyncTransport {
         // أسرار الأقران الواردة من المصدر الموثوق: نلتقطها إن كانت لدينا
         // ناقصة — بها يستطيع الأعضاء التحقق من عمليات بعضهم بغياب المدير.
         // سرّنا نحن لا يُكتب أبداً من بيانات واردة.
+        // (دفعة 57) السر الوارد صريح على السلك — يُعمّى بمفتاحنا قبل القرص.
         final incomingSecret = (d['auth_secret'] as String?) ?? '';
+        final incomingProtected = incomingSecret.isEmpty
+            ? ''
+            : await SecretStore.protect(incomingSecret);
         if (existing.isNotEmpty) {
           final haveSecret =
               ((existing.first['auth_secret'] as String?) ?? '').isNotEmpty;
           if (!isSelf && !haveSecret && incomingSecret.isNotEmpty) {
-            map['auth_secret'] = incomingSecret;
+            map['auth_secret'] = incomingProtected;
           }
           await txn.update('devices', map,
               where: 'id = ?', whereArgs: [id]);
         } else {
           map['id'] = id;
-          map['auth_secret'] = isSelf ? '' : incomingSecret;
+          map['auth_secret'] = isSelf ? '' : incomingProtected;
           map['created_at'] = now;
           await txn.insert('devices', map,
               conflictAlgorithm: ConflictAlgorithm.replace);
@@ -1195,8 +1218,8 @@ class LanSyncService implements SyncTransport {
         where: 'id = ?',
         whereArgs: [ourDeviceId],
         limit: 1);
-    final senderSecret =
-        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? '');
+    final senderSecret = await SecretStore.reveal(
+        own.isEmpty ? '' : (own.first['auth_secret'] as String? ?? ''));
     if (senderSecret.isEmpty) throw StateError('missing-sender-credential');
     // ملاحظة: لا نشترط ip_address هنا — الأجهزة المنضمة عبر السحابة قد لا
     // تملك عنوان LAN أبداً، ويجب أن تُحتسب ضمن التسليم (عبر السحابة أدناه).
@@ -1371,15 +1394,15 @@ class LanSyncService implements SyncTransport {
           ? (localDev.first['name'] as String? ?? 'Nexora')
           : 'Nexora';
       final localPort = ourPort ?? port;
-      var ourSecret = (localDev.isNotEmpty
+      var ourSecret = await SecretStore.reveal((localDev.isNotEmpty
               ? localDev.first['auth_secret'] as String?
               : null) ??
-          '';
+          '');
       if (ourSecret.isEmpty) {
         ourSecret = generateLanSecret();
         await db.update(
           'devices',
-          {'auth_secret': ourSecret},
+          {'auth_secret': await SecretStore.protect(ourSecret)},
           where: 'id = ?',
           whereArgs: [ourDeviceId],
         );
@@ -1426,7 +1449,7 @@ class LanSyncService implements SyncTransport {
               'platform': 'lan',
               'ip_address': ip,
               'port': port,
-              'auth_secret': remoteSecret,
+              'auth_secret': await SecretStore.protect(remoteSecret),
               'is_paired': 1,
               'is_owner': 1, // المضيف هو المالك.
               'revoked_at': '',
@@ -1538,6 +1561,11 @@ class LanSyncService implements SyncTransport {
                 // سرّنا لا يُكتب أبداً من لقطة واردة؛ وعند غياب السر في
                 // اللقطة نحتفظ بما تعلمناه سابقاً عبر الاقتران.
                 map['auth_secret'] = knownSecrets[map['id']] ?? '';
+              } else {
+                // (دفعة 57) سر قرين وارد صريحاً في اللقطة — يُعمّى
+                // بمفتاحنا المحلي قبل أن يلمس القرص.
+                map['auth_secret'] = await SecretStore.protect(
+                    (map['auth_secret'] as String?) ?? '');
               }
               if (map['id'] == ourDeviceId) {
                 // سجلنا كما يعرفه المضيف — لسنا مالكين.

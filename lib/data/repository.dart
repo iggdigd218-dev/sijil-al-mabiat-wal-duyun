@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +9,7 @@ import 'package:sqflite/sqflite.dart';
 import '../core/accounting.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
+import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/workspace_mode.dart';
@@ -65,7 +67,8 @@ class Repo {
           'platform': Platform.operatingSystem,
           'is_paired': 1,
           'is_owner': 1, // الجهاز المحلي في الوضع المستقل هو المالك.
-          'auth_secret': generateLanSecret(),
+          // (دفعة 57) السر يُخزَّن معمّى — لا نص صريح على القرص.
+          'auth_secret': await SecretStore.protect(generateLanSecret()),
           'revoked_at': '',
           'ip_address': '',
           'port': kDefaultLanPort,
@@ -142,9 +145,14 @@ class Repo {
 
   String get requireDeviceId {
     if (_deviceId == null) {
-      // لا نرمي خطأ قاتل؛ في أسوأ الحالات نستخدم معرفًا مؤقتًا.
-      // هذا يمنع انهيار التطبيق في شاشات لا تمر عبر initSyncInfra مباشرة.
-      return 'DEVICE-UNKNOWN';
+      // (دفعة 57) إنهاء التراجع الصامت 'DEVICE-UNKNOWN': معرف زائف كان
+      // يتسرب إلى سجل العمليات ويكسر نسب العمليات بين الأجهزة.
+      // نطلق إصلاحاً ذاتياً في الخلفية ثم نفشل بصوت عالٍ — أي عملية
+      // كتابة قبل اكتمال تهيئة المزامنة يجب أن تُرفض لا أن تُزوَّر.
+      unawaited(initSyncInfra().catchError((_) {}));
+      throw StateError(
+          'هوية الجهاز غير مهيأة بعد — أعد المحاولة خلال لحظات '
+          '(initSyncInfra لم يكتمل).');
     }
     return _deviceId!;
   }
@@ -303,7 +311,7 @@ class Repo {
     final adminPerms = defaultPerms(UserRole.admin);
     final permStr =
         adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    final newSecret = generateLanSecret();
+    final newSecret = await SecretStore.protect(generateLanSecret());
     await db.transaction((txn) async {
       const tables = [
         'accounts',
@@ -991,14 +999,21 @@ class Repo {
 
   Future<List<CurrencyDef>> currencies() async {
     final db = await _db;
-    final rows = await db.query('currencies');
+    // (دفعة 57) عزل بالمساحة النشطة: أسعار صرف مجموعة لا تلوّث الأخرى.
+    final rows = await db.query('currencies',
+        where: 'workspace_id = ?', whereArgs: [requireWorkspaceId]);
     if (rows.isEmpty) return kDefaultCurrencies;
     return rows.map(CurrencyDef.fromMap).toList();
   }
 
   Future<void> saveCurrency(CurrencyDef c, {double rate = 1}) async {
     final db = await _db;
-    final payload = {...c.toMap(), 'rate': rate};
+    final payload = {
+      ...c.toMap(),
+      'rate': rate,
+      // (دفعة 57) المفتاح المركّب (code, workspace_id) — ختم المساحة.
+      'workspace_id': requireWorkspaceId,
+    };
     await db.insert(
       'currencies',
       payload,
@@ -1014,7 +1029,9 @@ class Repo {
 
   Future<void> deleteCurrency(String code) async {
     final db = await _db;
-    await db.delete('currencies', where: 'code = ?', whereArgs: [code]);
+    await db.delete('currencies',
+        where: 'code = ? AND workspace_id = ?',
+        whereArgs: [code, requireWorkspaceId]);
     await queueOperation(
       entityType: EntityKind.currency,
       entityId: code,
@@ -1502,30 +1519,64 @@ class Repo {
   Future<void> assignDeviceUser(String deviceId, int? userId) async =>
       assignDeviceToUser(deviceId, userId);
 
-  Future<void> assignDeviceToUser(String deviceId, int? userId) async {
-    await _ensureCan('manage_users');
-    final db = await _db;
-    await db.update(
-      'devices',
-      {
-        'user_id': userId,
-        'paired_by': _currentUserId,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [deviceId],
-    );
-  }
+  /// (دفعة 57) توحيد مسار الهوية: ربط الجهاز بمستخدم أصبح معاملة واحدة
+  /// تُحدّث السجل وتبثّ عملية device متزامنة — لا انفصال بعد اليوم بين
+  /// «الجهاز المربوط» و«دور المستخدم» عبر الأجهزة.
+  Future<void> assignDeviceToUser(String deviceId, int? userId) =>
+      setDeviceIdentity(deviceId, userId: userId, assignUser: true);
 
   /// يضبط صلاحيات جهاز عضو بدقة: يُنشئ/يحدّث المستخدم المرتبط بالجهاز بالدور
   /// ومجموعة الصلاحيات المحددة، ثم يزامن التغيير لبقية الأجهزة.
-  /// للمدير (owner) فقط.
+  /// للمدير (owner) فقط. (دفعة 57) غلاف رقيق حول setDeviceIdentity.
   Future<void> setDevicePermissions(
     String deviceId,
     UserRole role,
     Set<String> perms,
-  ) async {
+  ) =>
+      setDeviceIdentity(deviceId, role: role, perms: perms);
+
+  /// (دفعة 57) المعاملة الموحّدة الموثوقة لهوية الجهاز: ربط مستخدم
+  /// و/أو ضبط دور+صلاحيات في معاملة SQLite واحدة، ثم بثّ عمليات
+  /// المزامنة الناتجة — تعالج انفصال assignDeviceUser/setDevicePermissions
+  /// الذي كان يسمح بحالة وسيطة غير متسقة بين الأجهزة.
+  Future<void> setDeviceIdentity(
+    String deviceId, {
+    int? userId,
+    bool assignUser = false,
+    UserRole? role,
+    Set<String>? perms,
+  }) async {
     await _ensureCan('manage_users');
+    if (role == null) {
+      // مسار الربط فقط (بدون تعديل دور).
+      if (!assignUser) return;
+      final db = await _db;
+      final now = DateTime.now().toIso8601String();
+      await db.transaction((txn) async {
+        await txn.update(
+          'devices',
+          {
+            'user_id': userId,
+            'paired_by': _currentUserId,
+            'updated_at': now,
+            if (userId != null) 'is_paired': 1,
+          },
+          where: 'id = ?',
+          whereArgs: [deviceId],
+        );
+      });
+      return;
+    }
+    await _setDeviceRoleAndPerms(deviceId, role, perms ?? const {},
+        overrideUserId: assignUser ? userId : null);
+  }
+
+  Future<void> _setDeviceRoleAndPerms(
+    String deviceId,
+    UserRole role,
+    Set<String> perms, {
+    int? overrideUserId,
+  }) async {
     // دور «مدير النظام» لا يُمنح لأي عضو إطلاقاً — الوكيل هو أعلى دور
     // يمكن للمدير منحه (يقوم بعمله أثناء غيابه).
     if (role == UserRole.admin) {
@@ -1545,7 +1596,7 @@ class Repo {
         (dev.first['name'] as String?)?.trim().isNotEmpty == true
             ? (dev.first['name'] as String)
             : 'جهاز';
-    int? uid = dev.first['user_id'] as int?;
+    int? uid = overrideUserId ?? dev.first['user_id'] as int?;
     final now = DateTime.now().toIso8601String();
     // المدير يأخذ كل الصلاحيات دائمًا.
     final effectivePerms = role == UserRole.admin
@@ -1665,7 +1716,7 @@ class Repo {
       {
         'revoked_at': '',
         'is_paired': 1,
-        'auth_secret': generateLanSecret(),
+        'auth_secret': await SecretStore.protect(generateLanSecret()),
         'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'id = ?',
@@ -1682,7 +1733,9 @@ class Repo {
     await db.update(
       'devices',
       {
-        'auth_secret': secret,
+        // يُعاد النص الصريح للمستخدم (لإدخاله في الجهاز الآخر)
+        // بينما يُخزَّن معمّى محلياً.
+        'auth_secret': await SecretStore.protect(secret),
         'pair_token': '',
         'pair_token_exp': '',
         'updated_at': DateTime.now().toIso8601String(),
@@ -2241,7 +2294,7 @@ class Repo {
     final db = await _db;
     final rows = await db.query(
       'messages',
-      where: 'conversation_id = ?',
+      where: "conversation_id = ? AND COALESCE(deleted_at,'') = ''",
       whereArgs: [groupConversationId],
       orderBy: 'created_at ASC, id ASC',
       limit: limit,
@@ -2289,14 +2342,16 @@ class Repo {
 
   Future<List<Map<String, Object?>>> conversations() async {
     final db = await _db;
-    return db.query('conversations', orderBy: 'updated_at DESC');
+    // (دفعة 57) المحذوف ناعماً لا يظهر.
+    return db.query('conversations',
+        where: "COALESCE(deleted_at,'') = ''", orderBy: 'updated_at DESC');
   }
 
   Future<List<ChatMessage>> messages(int conversationId) async {
     final db = await _db;
     final rows = await db.query(
       'messages',
-      where: 'conversation_id = ?',
+      where: "conversation_id = ? AND COALESCE(deleted_at,'') = ''",
       whereArgs: [conversationId],
       orderBy: 'id ASC',
     );
@@ -2315,9 +2370,79 @@ class Repo {
     return id;
   }
 
+  /// (دفعة 57) حذف ناعم متماثل: الرسالة تُوسم deleted_at/deleted_by ولا
+  /// تُمحى فيزيائياً — عملية delete_message تُقيَّد في سجل العمليات وتنتشر
+  /// لكل الأجهزة (apply_remote يسوّم deleted_at تلقائياً عند وجود العمود).
   Future<void> deleteMessage(int id) async {
     final db = await _db;
-    await db.delete('messages', where: 'id = ?', whereArgs: [id]);
+    final now = DateTime.now().toIso8601String();
+    final rows = await db.query('messages',
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    if (rows.isEmpty) return;
+    await db.update(
+      'messages',
+      {
+        'deleted_at': now,
+        'deleted_by': requireDeviceId,
+        'sync_state': 'pending',
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await queueOperation(
+      entityType: EntityKind.message,
+      entityId: '$id',
+      opType: OpKind.delete_,
+      payload: {
+        ...rows.first,
+        'deleted_at': now,
+        'deleted_by': requireDeviceId,
+      },
+    );
+  }
+
+  /// (دفعة 57) حذف ناعم لمحادثة كاملة: توسم المحادثة وكل رسائلها
+  /// deleted_at/deleted_by في معاملة واحدة، وتُبث عملية delete_conversation
+  /// متماثلة للأقران (كلٌّ منهم يسوّم نسخته المحلية بنفس الطريقة).
+  Future<void> deleteConversation(int id) async {
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    final rows = await db.query('conversations',
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    if (rows.isEmpty) return;
+    await db.transaction((txn) async {
+      await txn.update(
+        'conversations',
+        {
+          'deleted_at': now,
+          'deleted_by': requireDeviceId,
+          'sync_state': 'pending',
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'messages',
+        {
+          'deleted_at': now,
+          'deleted_by': requireDeviceId,
+          'sync_state': 'pending',
+        },
+        where: "conversation_id = ? AND COALESCE(deleted_at,'') = ''",
+        whereArgs: [id],
+      );
+    });
+    await queueOperation(
+      entityType: EntityKind.conversation,
+      entityId: '$id',
+      opType: OpKind.delete_,
+      payload: {
+        ...rows.first,
+        'deleted_at': now,
+        'deleted_by': requireDeviceId,
+      },
+    );
   }
 
   // ==================== التصنيفات ====================
@@ -3544,6 +3669,7 @@ class Repo {
   }) async {
     final db = await _db;
     await db.insert('notifications', {
+      'workspace_id': requireWorkspaceId, // (دفعة 57) عزل بالمساحة.
       'title': title,
       'body': body,
       'kind': kind,
@@ -3578,7 +3704,12 @@ class Repo {
   /// آخر الإشعارات الداخلية (الأحدث أولًا).
   Future<List<Map<String, Object?>>> notifications({int limit = 50}) async {
     final db = await _db;
-    return db.query('notifications', orderBy: 'id DESC', limit: limit);
+    // (دفعة 57) إشعارات المساحة النشطة فقط.
+    return db.query('notifications',
+        where: 'workspace_id = ?',
+        whereArgs: [requireWorkspaceId],
+        orderBy: 'id DESC',
+        limit: limit);
   }
 
   /// عدد الإشعارات غير المقروءة.
