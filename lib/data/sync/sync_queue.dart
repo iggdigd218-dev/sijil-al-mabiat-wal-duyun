@@ -270,6 +270,22 @@ class SyncQueueOps {
     );
   }
 
+  /// عودة الاتصال (قرين ظهر من جديد / شبكة عادت): صفّر مواعيد backoff
+  /// فقط دون تصفير المحاولات — كل المعلّق يُدفع في الدورة الفورية التالية
+  /// بدل انتظار حتى دقيقتين. هذا ما يمنع بقاء عمليات «محتجزة» في الطابور
+  /// رغم عودة الشبكة.
+  Future<void> resumeBackoff() async {
+    await db.update(
+      'sync_queue',
+      {
+        'next_try_at': '',
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'status IN (?, ?)',
+      whereArgs: [SyncStatus.pending.name, SyncStatus.failed.name],
+    );
+  }
+
   Future<int> countPending() async {
     final r = await db.rawQuery(
       "SELECT COUNT(*) AS c FROM sync_queue q "

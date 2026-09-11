@@ -164,7 +164,15 @@ class SyncEngine {
                   onPeerJoined?.call(display);
                 } catch (_) {}
               });
-              notifyNewOperation();
+              // تصفير مواعيد backoff أولاً: بدونه تبقى العمليات المعلّقة
+              // «محتجزة» حتى دقيقتين رغم أن القرين عاد للاتصال فعلاً.
+              Future(() async {
+                try {
+                  final q = _queue ??= SyncQueueOps(await _db);
+                  await q.resumeBackoff();
+                } catch (_) {}
+                notifyNewOperation();
+              });
             }
             ..start();
     }
@@ -263,10 +271,15 @@ class SyncEngine {
         return;
       }
       final db = await _db;
-      // عمليات معلقة/فاشلة في الطابور (أي هدف).
+      // حساب دقيق للتباين: عمليات مميّزة (operation_id) لا صفوف طابور خام —
+      // الصف الواحد قد يتكرر لهدفين (lan + cloud) فيتضاعف العدد زوراً،
+      // وتُستبعد الكيانات الصامتة (رسائل الدردشة) لأنها ليست خطراً مالياً.
       final rows = await db.rawQuery(
-        "SELECT COUNT(*) c, MIN(created_at) oldest, MAX(attempts) att "
-        "FROM sync_queue WHERE status IN ('pending','failed','syncing')",
+        "SELECT COUNT(DISTINCT q.operation_id) c, MIN(q.created_at) oldest, "
+        "MAX(q.attempts) att "
+        "FROM sync_queue q JOIN operations o ON o.id = q.operation_id "
+        "WHERE q.status IN ('pending','failed','syncing') "
+        "AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}",
       );
       final stuck = (rows.first['c'] as int?) ?? 0;
       if (stuck == 0) {
@@ -275,13 +288,20 @@ class SyncEngine {
       }
       final oldest = DateTime.tryParse('${rows.first['oldest'] ?? ''}');
       final attempts = (rows.first['att'] as int?) ?? 0;
-      _oldestStuckSince ??= oldest ?? DateTime.now();
+      // تتبّع حي لأقدم عالقة من قاعدة البيانات مباشرة: لو نجح دفع الصفوف
+      // القديمة وبقيت صفوف حديثة فقط، يهبط العمر تحت العتبة ويُخفى البانر —
+      // التخزين المؤقت القديم (??=) كان يُبقي الخطر ظاهراً زوراً.
+      _oldestStuckSince = oldest ?? _oldestStuckSince ?? DateTime.now();
       final stuckFor = DateTime.now().difference(_oldestStuckSince!);
       // عتبة الخطر: عالقة ≥ 10 دقائق مع محاولات متكررة، أو ≥ 30 دقيقة مطلقاً.
       final danger = (stuckFor >= const Duration(minutes: 10) &&
               attempts >= 5) ||
           stuckFor >= const Duration(minutes: 30);
-      if (!danger) return;
+      if (!danger) {
+        // دون العتبة (عولج القديم): أخفِ البانر إن كان ظاهراً.
+        if (_lastDangerMsg.isNotEmpty) _clearDanger();
+        return;
+      }
       // هل المدير (المالك) غير متصل؟ نخصص الرسالة.
       var ownerOffline = false;
       try {
@@ -315,6 +335,10 @@ class SyncEngine {
   /// للاختبارات: تشغيل فحص الخطر مباشرة بلا انتظار المؤقّت الدوري.
   @visibleForTesting
   Future<void> debugCheckDangerState() => _checkDangerState();
+
+  /// فحص فوري عام لواجهة المستخدم (زر «إعادة المحاولة» في بانر الخطر):
+  /// يعيد تقييم الحالة حالاً — نجاح يبثّ null، وبقاء الخطر يبثّ الرسالة.
+  Future<void> recheckDangerNow() => _checkDangerState();
 
   void _clearDanger() {
     _oldestStuckSince = null;
@@ -850,7 +874,15 @@ class SyncEngine {
     await processQueue();
     // نبّه الأقران فورًا ليسحبوا الطابور/الصلاحيات المعلّقة.
     await _lanTransport?.broadcastNotify(reason: 'force');
+    // إعادة تقييم «نافذة الخطر» فوراً: إن نجح الدفع يُبث null فيختفي
+    // البانر في نفس اللحظة دون انتظار الدورة (8 ثوانٍ).
+    await _checkDangerState();
   }
+
+  /// زر «إعادة المحاولة والمزامنة فوراً» في بانر الخطر: نفس forceSyncNow
+  /// باسم صريح — يصفّر backoff ويعيد المحاولة ويدفع كل المعلّق حالاً
+  /// ثم يعيد فحص الخطر ليُخفى البانر تلقائياً عند النجاح.
+  Future<void> triggerImmediateSync() => forceSyncNow();
 
   /// يُستدعى بعد تغيير صلاحية/جهاز (منح صلاحية لجهاز) لبثّ التغيير فورًا
   /// إلى كل الأقران ودفع أي عمليات معلّقة — استجابة خلال ثوانٍ (<10 ثوانٍ).
@@ -1011,6 +1043,13 @@ class SyncEngine {
       try {
         onSyncActivity?.call();
       } catch (_) {}
+      // بانر الخطر ظاهر؟ أعد الفحص فور انتهاء الدورة: نجاح الدفع يبثّ
+      // null فيختفي البانر لحظياً — لا انتظار لدورة المؤقّت التالية.
+      if (_lastDangerMsg.isNotEmpty) {
+        try {
+          await _checkDangerState();
+        } catch (_) {}
+      }
     }
   }
 }

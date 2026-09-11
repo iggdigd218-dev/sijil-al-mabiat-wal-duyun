@@ -108,6 +108,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   /// هل بانر «نافذة الخطر» ظاهر حالياً؟ (لمنع تكرار الصوت مع كل فحص).
   bool _dangerShown = false;
+  bool _dangerSyncing = false; // سبينر «إعادة المحاولة» داخل بانر الخطر.
+  DateTime? _dangerSnoozedUntil; // «إخفاء» = غفوة 30 دقيقة لا كتم دائم.
 
   @override
   void initState() {
@@ -367,51 +369,29 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
     // «نافذة الخطر»: تباين خطير محتمل في السجلات — بانر مثبّت أعلى
     // الشاشة يتكرر مع كل فحص حتى تُستعاد سلامة المزامنة، ثم يُزال.
+    // البانر قابل للحل مباشرة: زر «إعادة المحاولة والمزامنة فوراً» ينفّذ
+    // triggerImmediateSync() مع سبينر داخل البانر، والنجاح يخفيه لحظياً
+    // (المحرك يبثّ null فور تفريغ الطابور). «إخفاء» = غفوة 30 دقيقة.
     SyncEngine.onSyncDanger = (message) {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       if (message == null) {
+        // زوال الخطر يلغي أي غفوة سارية — الحالة القادمة تبدأ من جديد.
+        _dangerSnoozedUntil = null;
         if (_dangerShown) {
           _dangerShown = false;
+          _dangerSyncing = false;
           messenger.hideCurrentMaterialBanner();
         }
         return;
       }
+      // غفوة سارية (ضغط المستخدم «إخفاء»)؟ نصمت حتى تنقضي الـ 30 دقيقة.
+      final snooze = _dangerSnoozedUntil;
+      if (snooze != null && DateTime.now().isBefore(snooze)) return;
+      _dangerSnoozedUntil = null;
       if (!_dangerShown) Sfx.error();
       _dangerShown = true;
-      messenger
-        ..hideCurrentMaterialBanner()
-        ..showMaterialBanner(MaterialBanner(
-          backgroundColor: AppColors.dangerOf(context).withValues(alpha: .1),
-          leading: Icon(Icons.warning_amber_rounded,
-              color: AppColors.dangerOf(context)),
-          content: Text(
-            message,
-            style: TextStyle(
-              color: AppColors.dangerOf(context),
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              height: 1.5,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                messenger.hideCurrentMaterialBanner();
-                _dangerShown = false;
-                _go(AppScreen.syncOps);
-              },
-              child: const Text('فحص الحالة'),
-            ),
-            TextButton(
-              onPressed: () {
-                messenger.hideCurrentMaterialBanner();
-                _dangerShown = false;
-              },
-              child: const Text('إخفاء'),
-            ),
-          ],
-        ));
+      _showDangerBanner(messenger, message);
     };
     // رسالة دردشة واردة — قاعدة صارمة: مكانها الوحيد (1) إشعار النظام
     // الخارجي بصوته المرفق بالنص و(2) شارة العداد على أيقونة الدردشة.
@@ -542,6 +522,97 @@ class _HomeShellState extends ConsumerState<HomeShell>
   ];
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  /// يعرض بانر الخطر بأزراره الثلاثة. يُعاد استدعاؤها لتحديث حالة السبينر
+  /// (MaterialBanner لا يعيد البناء ذاتياً، فنستبدله بنسخة محدّثة).
+  void _showDangerBanner(ScaffoldMessengerState messenger, String message) {
+    final syncing = _dangerSyncing;
+    messenger
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(MaterialBanner(
+        backgroundColor: AppColors.dangerOf(context).withValues(alpha: .1),
+        leading: syncing
+            ? SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: AppColors.dangerOf(context),
+                ),
+              )
+            : Icon(Icons.warning_amber_rounded,
+                color: AppColors.dangerOf(context)),
+        content: Text(
+          syncing ? 'جارٍ إعادة المحاولة ودفع العمليات المعلّقة…' : message,
+          style: TextStyle(
+            color: AppColors.dangerOf(context),
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          // الحل المباشر: مزامنة فورية من قلب البانر مع سبينر أثناء العمل.
+          TextButton.icon(
+            onPressed: syncing ? null : () => _dangerRetryNow(messenger),
+            icon: const Icon(Icons.sync_rounded, size: 18),
+            label: const Text('إعادة المحاولة والمزامنة فوراً'),
+          ),
+          TextButton(
+            onPressed: syncing
+                ? null
+                : () {
+                    messenger.hideCurrentMaterialBanner();
+                    _dangerShown = false;
+                    _go(AppScreen.syncOps);
+                  },
+            child: const Text('فحص الحالة'),
+          ),
+          TextButton(
+            onPressed: syncing
+                ? null
+                : () {
+                    // غفوة 30 دقيقة: البانر يعود تلقائياً إن بقي الخطر قائماً.
+                    _dangerSnoozedUntil =
+                        DateTime.now().add(const Duration(minutes: 30));
+                    messenger.hideCurrentMaterialBanner();
+                    _dangerShown = false;
+                  },
+            child: const Text('إخفاء'),
+          ),
+        ],
+      ));
+  }
+
+  /// زر «إعادة المحاولة والمزامنة فوراً»: يصفّر backoff ويدفع كل المعلّق
+  /// حالاً. النجاح يبثّ null عبر onSyncDanger فيختفي البانر تلقائياً؛
+  /// وإن بقيت عمليات عالقة يعود البانر برسالته دون السبينر.
+  Future<void> _dangerRetryNow(ScaffoldMessengerState messenger) async {
+    if (_dangerSyncing) return;
+    Sfx.click();
+    final engine = ref.read(syncEngineProvider);
+    _dangerSyncing = true;
+    // أعد عرض البانر بحالة «جارٍ المزامنة» (سبينر + تعطيل الأزرار).
+    if (_dangerShown && mounted) {
+      _showDangerBanner(messenger, '');
+    }
+    try {
+      await engine
+          .triggerImmediateSync()
+          .timeout(const Duration(seconds: 45));
+    } catch (_) {
+      // فشل/مهلة: يبقى الخطر قائماً وسيُعاد بثه بالدورة التالية.
+    } finally {
+      _dangerSyncing = false;
+      // إن كان البانر ما زال معروضاً (لم يصل null) نعيد الرسالة الحية
+      // من المحرك بالفحص الفوري — وإلا فقد أُخفي تلقائياً بالنجاح.
+      if (mounted && _dangerShown) {
+        try {
+          await engine.recheckDangerNow();
+        } catch (_) {}
+      }
+    }
+  }
 
   void _go(AppScreen s) {
     setState(() => _screen = s);
