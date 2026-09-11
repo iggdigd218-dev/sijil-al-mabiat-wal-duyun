@@ -14,12 +14,12 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
+import '../data/sync/cloud_join.dart';
 import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
 import 'join_group_flow.dart';
 import 'qr_pair_scanner.dart' show scanQrPair;
 import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
-import 'users_screen.dart' show UserCard, openUserForm;
 import 'widgets.dart';
 
 class GroupManagementScreen extends ConsumerStatefulWidget {
@@ -29,20 +29,45 @@ class GroupManagementScreen extends ConsumerStatefulWidget {
   ConsumerState<GroupManagementScreen> createState() => _State();
 }
 
-class _State extends ConsumerState<GroupManagementScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tab;
+class _State extends ConsumerState<GroupManagementScreen> {
+  Timer? _joinReqTimer;
 
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    // استطلاع طلبات الانضمام المعلّقة كل 5 ثوانٍ (المدير فقط).
+    _joinReqTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _checkJoinRequests(),
+    );
+    _checkJoinRequests();
   }
 
   @override
   void dispose() {
-    _tab.dispose();
+    _joinReqTimer?.cancel();
     super.dispose();
+  }
+
+  bool _joinSheetOpen = false;
+
+  Future<void> _checkJoinRequests() async {
+    if (!mounted || _joinSheetOpen) return;
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final reqs = await CloudJoin.fetchJoinRequests(repo, backendUrl: url);
+      if (reqs.isEmpty || !mounted) return;
+      _joinSheetOpen = true;
+      await showJoinApprovalSheet(context, ref, reqs.first, backendUrl: url);
+      _joinSheetOpen = false;
+      if (mounted) bump(ref);
+    } catch (_) {
+      _joinSheetOpen = false;
+    }
   }
 
   @override
@@ -72,30 +97,24 @@ class _State extends ConsumerState<GroupManagementScreen>
             ),
           );
         }
+        // توحيد الواجهة (دفعة 51): قائمة واحدة «الأجهزة والمستخدمين» —
+        // كل بطاقة جهاز تحمل دوره وصلاحياته وإجراءاته، لا تبويبين منفصلين.
         return Scaffold(
           appBar: AppBar(
-            title: const Text('إدارة المجموعة'),
-            bottom: TabBar(
-              controller: _tab,
-              tabs: const [
-                Tab(icon: Icon(Icons.devices), text: 'الأجهزة'),
-                Tab(icon: Icon(Icons.manage_accounts), text: 'المستخدمون'),
-              ],
-            ),
+            title: const Text('الأجهزة والمستخدمين'),
             actions: [
               IconButton(
-                tooltip: 'ربط جهاز/حساب جديد',
+                tooltip: 'إضافة جهاز جديد',
                 icon: const Icon(Icons.add_link),
                 onPressed: () => _showPairHub(context),
               ),
             ],
           ),
-          body: TabBarView(
-            controller: _tab,
-            children: const [
-              _DevicesTab(),
-              _UsersTab(),
-            ],
+          body: const _DevicesTab(),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => _showPairHub(context),
+            icon: const Icon(Icons.qr_code_2),
+            label: const Text('إضافة جهاز جديد'),
           ),
         );
       },
@@ -317,6 +336,24 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         await engine.broadcastRosterChange();
                         safeBump();
                       },
+                      // (دفعة 51) تعديل الدور مباشرة من البطاقة: يضبط دور
+                      // مستخدم الجهاز وصلاحياته الافتراضية ويبثّها فوراً.
+                      onRoleChanged: amITheOwner
+                          ? (role) async {
+                              await repo.setDevicePermissions(
+                                d['id'] as String,
+                                role,
+                                defaultPerms(role)
+                                    .entries
+                                    .where((e) => e.value)
+                                    .map((e) => e.key)
+                                    .toSet(),
+                              );
+                              await engine.broadcastRosterChange();
+                              Sfx.success();
+                              safeBump();
+                            }
+                          : null,
                       onPermissions: () async {
                         await _editDevicePermissions(context, ref, d);
                         safeBump();
@@ -364,9 +401,21 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           // بث الطرد فوراً لكل الأجهزة (roster سحابي/LAN):
                           // الجهاز المطرود يكتشف حالته ويمسح بياناته حالاً.
                           try {
-                            await ref
-                                .read(syncEngineProvider)
-                                .broadcastRosterChange();
+                            await engine.broadcastRosterChange();
+                          } catch (_) {}
+                          // (دفعة 51) طرد نهائي كامل: رفع الحالة المطرودة
+                          // إلى /roster السحابي + حذف طلب انضمامه القديم.
+                          try {
+                            final st = await repo.settings();
+                            final cloudUrl =
+                                (st['cloudBackendUrl'] ?? '').trim();
+                            if (cloudUrl.isNotEmpty) {
+                              await CloudJoin.purgePeerFromCloud(
+                                repo,
+                                backendUrl: cloudUrl,
+                                deviceId: d['id'] as String,
+                              );
+                            }
                           } catch (_) {}
                           safeBump();
                         }
@@ -442,73 +491,6 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
   }
 }
 
-// ═══════════════════════════ تبويب المستخدمين ════════════════════════════
-class _UsersTab extends ConsumerWidget {
-  const _UsersTab();
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final users = ref.watch(usersProvider);
-    return users.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) =>
-          EmptyState(icon: Icons.error_outline, title: 'خطأ', message: '$e'),
-      data: (list) => ListView(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
-        children: [
-          const SectionTitle('الأدوار'),
-          GridView.count(
-            crossAxisCount: 4,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: .85,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            children: UserRole.values
-                .map(
-                  (r) => Card(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(r.icon, style: const TextStyle(fontSize: 22)),
-                        const SizedBox(height: 4),
-                        Text(
-                          r.label,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 18),
-          const SectionTitle('المستخدمون'),
-          if (list.isEmpty)
-            const EmptyState(
-              icon: Icons.people_outline,
-              title: 'لا مستخدمون',
-              message: 'أضف مستخدمًا وحدّد صلاحياته.',
-            ),
-          for (final u in list)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: UserCard(user: u),
-            ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: () => openUserForm(context, ref),
-            icon: const Icon(Icons.person_add_alt),
-            label: const Text('إضافة مستخدم'),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 // ═══════════════════════════ نافذة الربط الموحدة ════════════════════════════
 class _PairHubSheet extends ConsumerStatefulWidget {
@@ -874,4 +856,140 @@ class _HubManualTile extends StatelessWidget {
       onTap: () => Navigator.pop(context),
     );
   }
+}
+
+// ═══════════════ موافقة المدير على طلبات الانضمام (دفعة 51) ═══════════════
+
+/// نافذة «طلب انضمام جهاز جديد»: اسم الجهاز + بصمته + اختيار الدور،
+/// وزرا «قبول وتفعيل» / «رفض». تُستدعى تلقائياً عند رصد طلب معلّق.
+Future<void> showJoinApprovalSheet(
+  BuildContext context,
+  WidgetRef ref,
+  Map<String, Object?> request, {
+  required String backendUrl,
+}) async {
+  final repo = ref.read(repoProvider);
+  final engine = ref.read(syncEngineProvider);
+  final deviceId = '${request['deviceId'] ?? ''}';
+  final deviceName = '${request['deviceName'] ?? 'جهاز جديد'}';
+  final fp = '${request['fingerprint'] ?? ''}';
+  final platform = '${request['platform'] ?? ''}';
+  var role = UserRole.accountant;
+  Sfx.notify();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    isDismissible: false,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setSheet) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              18, 18, 18, 18 + MediaQuery.viewInsetsOf(ctx).bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0EA5E9).withValues(alpha: .14),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.devices_other,
+                        color: Color(0xFF0EA5E9)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('طلب انضمام جهاز جديد',
+                            style: TextStyle(
+                                fontSize: 15.5, fontWeight: FontWeight.w800)),
+                        Text(
+                          deviceName,
+                          style: const TextStyle(
+                              fontSize: 13.5, fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'المنصة: $platform${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
+                style: TextStyle(
+                    fontSize: 11.5, color: AppColors.text3Of(ctx)),
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<UserRole>(
+                initialValue: role,
+                decoration: const InputDecoration(
+                  labelText: 'الدور والصلاحيات',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: [
+                  for (final r in UserRole.values)
+                    if (r != UserRole.admin)
+                      DropdownMenuItem(
+                          value: r, child: Text('${r.icon} ${r.label}')),
+                ],
+                onChanged: (v) =>
+                    setSheet(() => role = v ?? UserRole.accountant),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red),
+                      icon: const Icon(Icons.close),
+                      label: const Text('رفض'),
+                      onPressed: () async {
+                        try {
+                          await CloudJoin.rejectJoinRequest(repo,
+                              backendUrl: backendUrl, deviceId: deviceId);
+                        } catch (_) {}
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('قبول وتفعيل'),
+                      onPressed: () async {
+                        try {
+                          await CloudJoin.approveJoinRequest(repo,
+                              backendUrl: backendUrl,
+                              deviceId: deviceId,
+                              deviceName: deviceName,
+                              roleCode: role.code);
+                          await engine.broadcastRosterChange();
+                          Sfx.pair();
+                        } catch (e) {
+                          if (ctx.mounted) {
+                            showSnack(ctx, 'تعذّر القبول: $e', error: true);
+                          }
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }

@@ -6,6 +6,8 @@
 //   ويمكنه إدخاله يدوياً إن لزم.
 // - الجهاز المستقل: يمكنه الانضمام لمجموعة عبر السحابة (رابط + رمز دعوة أو
 //   مسح QR) — تُحذف كل بياناته المحلية وتُستبدل بنسخة المجموعة ثم يتزامن.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -271,8 +273,45 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
   final inv = invite;
   await showDialog<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('دعوة انضمام عبر السحابة'),
+    builder: (ctx) => _CloudInviteDialog(invite: inv),
+  );
+}
+
+/// حوار دعوة الاقتران (دفعة 51): QR + رمز PIN كبير من 6 أرقام
+/// + عدّاد تنازلي لصلاحية 15 دقيقة.
+class _CloudInviteDialog extends StatefulWidget {
+  const _CloudInviteDialog({required this.invite});
+  final CloudInviteInfo invite;
+
+  @override
+  State<_CloudInviteDialog> createState() => _CloudInviteDialogState();
+}
+
+class _CloudInviteDialogState extends State<_CloudInviteDialog> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(
+        const Duration(seconds: 1), (_) => mounted ? setState(() {}) : null);
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inv = widget.invite;
+    final left = inv.expiresAt.difference(DateTime.now());
+    final expired = left.isNegative;
+    final mm = left.inMinutes.clamp(0, 99).toString().padLeft(2, '0');
+    final ss = (left.inSeconds % 60).clamp(0, 59).toString().padLeft(2, '0');
+    return AlertDialog(
+      title: const Text('إضافة جهاز جديد'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -287,39 +326,77 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
                 ),
                 child: QrImageView(
                   data: inv.qrContent,
-                  size: 190,
+                  size: 180,
                   backgroundColor: Colors.white,
                 ),
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
+            if (inv.pin.isNotEmpty) ...[
+              Center(
+                child: Column(
+                  children: [
+                    const Text('أو أدخل هذا الرمز على الجهاز الجديد:',
+                        style: TextStyle(fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Directionality(
+                      textDirection: TextDirection.ltr,
+                      child: SelectableText(
+                        '${inv.pin.substring(0, 3)} ${inv.pin.substring(3)}',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 30,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(
+                  color: (expired ? Colors.red : Colors.orange)
+                      .withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  expired
+                      ? '⛔ انتهت صلاحية الدعوة — أنشئ دعوة جديدة'
+                      : '⏱ تنتهي الدعوة خلال $mm:$ss',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: expired ? Colors.red : Colors.orange.shade800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             const Text(
-              'على جهاز العضو الجديد: الإعدادات ← المزامنة السحابية ← '
-              '«الانضمام إلى مجموعة عبر السحابة» ثم مسح هذا الباركود، '
-              'أو إدخال البيانات التالية يدوياً:',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              'على الجهاز الجديد: «الانضمام إلى مجموعة» ← تسمية الجهاز ← '
+              'مسح الرمز أو إدخال الأرقام. سيصلك هنا طلب موافقة قبل تفعيله.',
+              style: TextStyle(fontSize: 11.5, height: 1.6),
             ),
-            const SizedBox(height: 10),
-            _copyRow(ctx, 'الرابط', inv.backendUrl),
-            _copyRow(ctx, 'رمز الدعوة', inv.token),
             const SizedBox(height: 8),
-            Text(
-              '⏱ الدعوة صالحة حتى: ${inv.expiresAt.toLocal().toString().split('.').first}\n'
-              '⚠️ ستُحذف كل بيانات جهاز العضو وتُستبدل بنسخة المجموعة.',
-              style: const TextStyle(
-                  fontSize: 11, color: Colors.black54, height: 1.6),
-            ),
+            _copyRow(context, 'الرابط', inv.backendUrl),
+            _copyRow(context, 'رمز الدعوة', inv.token),
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx),
+          onPressed: () => Navigator.pop(context),
           child: const Text('إغلاق'),
         ),
       ],
-    ),
-  );
+    );
+  }
 }
 
 Widget _copyRow(BuildContext context, String label, String value) => Padding(

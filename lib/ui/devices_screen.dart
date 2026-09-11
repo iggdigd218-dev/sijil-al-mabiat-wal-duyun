@@ -484,6 +484,9 @@ class DeviceCard extends StatelessWidget {
   final VoidCallback onResetSecret;
   final VoidCallback? onPermissions;
   final VoidCallback? onCloudLink;
+
+  /// (دفعة 51) تعديل الدور مباشرة من البطاقة دون فتح نافذة الصلاحيات.
+  final Future<void> Function(UserRole role)? onRoleChanged;
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
@@ -499,6 +502,7 @@ class DeviceCard extends StatelessWidget {
     required this.onResetSecret,
     this.onPermissions,
     this.onCloudLink,
+    this.onRoleChanged,
     required this.isSelf,
     required this.isOwnerDevice,
     required this.amITheOwner,
@@ -636,17 +640,12 @@ class DeviceCard extends StatelessWidget {
                 children: [
                   _smallLabel('المنصة', platform.isEmpty ? '—' : platform),
                   _smallLabel('المستخدم', userName ?? 'غير معيّن'),
+                  // مقتطف بصمة الجهاز (المعرّف مشتق من بصمة العتاد).
                   _smallLabel(
-                    'الدور',
-                    userRole == 'admin'
-                        ? 'مدير'
-                        : userRole == 'accountant'
-                            ? 'محاسب'
-                            : userRole == 'data_entry'
-                                ? 'إدخال'
-                                : userRole == 'viewer'
-                                    ? 'عرض'
-                                    : '—',
+                    'البصمة',
+                    (data['id'] as String? ?? '').length > 10
+                        ? (data['id'] as String).substring(0, 10)
+                        : (data['id'] as String? ?? '—'),
                   ),
                   if (ip.isNotEmpty) _smallLabel('IP', ip),
                   if (lastSeen.isNotEmpty)
@@ -661,33 +660,65 @@ class DeviceCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(
-                    child: DropdownButtonFormField<int?>(
-                      initialValue: currentUserId,
-                      decoration: const InputDecoration(
-                        labelText: 'الصلاحيات (المستخدم المرتبط)',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                      ),
-                      items: [
-                        const DropdownMenuItem<int?>(
-                          value: null,
-                          child: Text('— بدون صلاحيات —'),
-                        ),
-                        ...users.map(
-                          (u) => DropdownMenuItem<int?>(
-                            value: u.id,
-                            child: Text('${u.name} (${u.role.label})'),
+                  // (دفعة 51) تعديل الدور مباشرةً من البطاقة — للمدير فقط،
+                  // ولا يُعدَّل دور جهاز المدير نفسه.
+                  if (onRoleChanged != null && !isOwnerDevice)
+                    Expanded(
+                      child: DropdownButtonFormField<UserRole>(
+                        initialValue: UserRole.fromCode(userRole ?? ''),
+                        decoration: const InputDecoration(
+                          labelText: 'الدور',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
                           ),
                         ),
-                      ],
-                      onChanged: inactive ? null : onAssign,
+                        items: [
+                          for (final r in UserRole.values)
+                            if (r != UserRole.admin)
+                              DropdownMenuItem(
+                                value: r,
+                                child: Text('${r.icon} ${r.label}',
+                                    style: const TextStyle(fontSize: 12.5)),
+                              ),
+                        ],
+                        onChanged: inactive
+                            ? null
+                            : (r) {
+                                if (r != null) onRoleChanged!(r);
+                              },
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: DropdownButtonFormField<int?>(
+                        initialValue: currentUserId,
+                        decoration: const InputDecoration(
+                          labelText: 'الصلاحيات (المستخدم المرتبط)',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                        ),
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('— بدون صلاحيات —'),
+                          ),
+                          ...users.map(
+                            (u) => DropdownMenuItem<int?>(
+                              value: u.id,
+                              child: Text('${u.name} (${u.role.label})'),
+                            ),
+                          ),
+                        ],
+                        onChanged: inactive ? null : onAssign,
+                      ),
                     ),
-                  ),
                   const SizedBox(width: 6),
                   // كل إجراءات الجهاز مجمّعة في قائمة ثلاث نقاط واحدة
                   // بدل صف الأيقونات الصغيرة المبعثرة.

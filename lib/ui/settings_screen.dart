@@ -14,6 +14,7 @@ import '../data/providers.dart';
 import 'update_section.dart';
 import 'appearance_screen.dart';
 import 'cloud_sync_section.dart';
+import 'join_approval_flow.dart' show startJoinApprovalFlow;
 import 'group_management_screen.dart';
 import 'widgets.dart';
 
@@ -662,12 +663,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               color: Color(0xFF7C3AED)),
                           title: const Text('الانضمام إلى مجموعة عبر السحابة'),
                           subtitle: const Text(
-                            'أدخل رابط المدير ورمز الدعوة — ستُحذف بيانات هذا '
-                            'الجهاز وتُستبدل بنسخة المجموعة.',
+                            'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
+                            'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
                             style: TextStyle(fontSize: 11.5, height: 1.5),
                           ),
                           trailing: const Icon(Icons.chevron_left),
-                          onTap: () => showCloudJoinDialog(context, ref),
+                          onTap: () => startJoinApprovalFlow(context, ref),
                         ),
                       ),
                   ],

@@ -13,11 +13,13 @@
 //    بالأحدث (updated_at) فيرى المدير جهاز العضو البعيد ويعيّن له مستخدماً
 //    وصلاحيات، ويصل التعيين/الطرد للعضو خلال دورة سحب واحدة.
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
 import 'lan_http_transport.dart';
@@ -30,6 +32,12 @@ String _newToken([int len = 8]) {
       .join();
 }
 
+/// رمز PIN رقمي من 6 خانات — لأجهزة سطح المكتب بلا كاميرا.
+String newPairPin() {
+  final rnd = Random.secure();
+  return List.generate(6, (_) => '${rnd.nextInt(10)}').join();
+}
+
 /// بيانات دعوة انضمام سحابية جاهزة للعرض/المشاركة.
 class CloudInviteInfo {
   final String backendUrl;
@@ -37,12 +45,16 @@ class CloudInviteInfo {
   final String token;
   final String cloudCode;
   final DateTime expiresAt;
+
+  /// PIN بشري من 6 أرقام يظهر تحت QR — لأجهزة سطح المكتب بلا كاميرا.
+  final String pin;
   const CloudInviteInfo({
     required this.backendUrl,
     required this.workspaceId,
     required this.token,
     required this.cloudCode,
     required this.expiresAt,
+    this.pin = '',
   });
 
   /// محتوى QR: nexora://cloudjoin?url=...&ws=...&tok=...&code=...
@@ -242,11 +254,15 @@ class CloudJoin {
     });
 
     final token = _newToken();
-    final expires = now.add(const Duration(hours: 24));
+    final pin = newPairPin();
+    // TTL دقيق: 15 دقيقة لمسار الموافقة التفاعلي (كانت 24 ساعة — نافذة
+    // أوسع من اللازم أمنياً بعد اعتماد موافقة المدير الصريحة).
+    final expires = now.add(const Duration(minutes: 15));
     await _putJson('$root/invites/$token.json', {
       'createdAt': now.toIso8601String(),
       'expiresAt': expires.toIso8601String(),
       'ws': ws,
+      'pin': pin,
     }, timeout: const Duration(seconds: 20));
 
     // رفع سجل الأجهزة أيضاً حتى تكون الحالة السحابية كاملة قبل انضمام العضو.
@@ -265,6 +281,7 @@ class CloudJoin {
       token: token,
       cloudCode: (st['cloudCode'] ?? '').trim(),
       expiresAt: expires,
+      pin: pin,
     );
   }
 
@@ -576,5 +593,268 @@ class CloudJoin {
     } catch (_) {}
 
     return changed;
+  }
+
+  // ══════════ خط أنابيب الانضمام بموافقة المدير (دفعة 51) ══════════
+  //
+  // التدفق: الجهاز الجديد يتحقق من الدعوة (QR أو PIN من 6 أرقام) ثم يدفع
+  // طلباً إلى /workspaces/$ws/joinRequests/$deviceId ويدخل حالة
+  // «بانتظار موافقة المدير» — حارس صارم: لا سحب لللقطة ولا أي بيانات
+  // قبل الموافقة. المدير يرى الطلب، يعيّن دوراً، ويوافق/يرفض. عند
+  // الموافقة فقط يُنفَّذ الترطيب النظيف (join الكامل).
+
+  static String requestPath(String base, String ws, String deviceId) =>
+      '${_root(base, ws)}/joinRequests/${Uri.encodeComponent(deviceId)}.json';
+
+  /// (الجهاز الجديد — خطوة 3) التحقق من الدعوة/PIN ودفع طلب الانضمام.
+  /// لا يمس أي بيانات محلية ولا يسحب اللقطة — يسجّل الطلب فقط.
+  /// يتحقق من التوكن الكامل أو رمز PIN المرافق للدعوة (invite.pin).
+  static Future<void> requestJoin(
+    Repo repo, {
+    required String backendUrl,
+    required String tokenOrPin,
+    required String deviceName,
+    String workspaceId = 'default',
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final input = tokenOrPin.trim().toUpperCase();
+    if (input.isEmpty) throw const CloudJoinException('أدخل رمز الاقتران.');
+    if (deviceName.trim().isEmpty) {
+      throw const CloudJoinException('أدخل اسم الجهاز أولاً.');
+    }
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      throw const CloudJoinException(
+          'هذا الجهاز عضو في مجموعة قائمة بالفعل.');
+    }
+    final root = _root(url, workspaceId);
+    // مطابقة الدعوة: توكن كامل، أو PIN من 6 أرقام (نمسح كل الدعوات الحية).
+    String? matchedToken;
+    Map<String, dynamic>? invite;
+    if (RegExp(r'^\d{6}$').hasMatch(input)) {
+      final all = await _getJson('$root/invites.json');
+      if (all != null) {
+        for (final e in all.entries) {
+          final v = e.value;
+          if (v is Map && '${v['pin'] ?? ''}' == input) {
+            matchedToken = e.key;
+            invite = Map<String, dynamic>.from(v);
+            break;
+          }
+        }
+      }
+    } else {
+      invite = await _getJson('$root/invites/$input.json');
+      if (invite != null) matchedToken = input;
+    }
+    if (invite == null || matchedToken == null) {
+      throw const CloudJoinException(
+          'رمز الاقتران غير صحيح أو انتهت صلاحيته.');
+    }
+    final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
+    if (exp == null || DateTime.now().isAfter(exp)) {
+      await _delete('$root/invites/$matchedToken.json');
+      throw const CloudJoinException(
+          'انتهت صلاحية رمز الاقتران — اطلب من المدير رمزاً جديداً.');
+    }
+    // حفظ اسم الجهاز محلياً + دفع الطلب.
+    await setDeviceName(repo, deviceName.trim());
+    final ourId = await ensureDeviceId(repo);
+    final fp = await hardwareFingerprintRaw();
+    await _putJson(requestPath(url, workspaceId, ourId), {
+      'deviceId': ourId,
+      'deviceName': deviceName.trim(),
+      'fingerprint': fp == null ? '' : fp.hashCode.toRadixString(16),
+      'platform': Platform.operatingSystem,
+      'token': matchedToken,
+      'status': 'pending',
+      'requestedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
+    // حفظ سياق الانتظار محلياً لاستئناف الاستطلاع بعد إعادة التشغيل.
+    await repo.setSetting('pendingJoin.url', url);
+    await repo.setSetting('pendingJoin.ws', workspaceId);
+    await repo.setSetting('pendingJoin.token', matchedToken);
+  }
+
+  /// (الجهاز الجديد — استطلاع الحالة) يعيد: pending | approved | rejected |
+  /// missing. عند approved تُعاد أيضاً بيانات الدور المعيّن.
+  static Future<Map<String, String>> pollJoinStatus(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final rec =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    if (rec == null) return {'status': 'missing'};
+    return {
+      'status': '${rec['status'] ?? 'pending'}',
+      'role': '${rec['role'] ?? ''}',
+      'token': '${rec['token'] ?? ''}',
+    };
+  }
+
+  /// (الجهاز الجديد — خطوة 4ب) بعد الموافقة: الترطيب النظيف الكامل —
+  /// مسح ذري + لقطة + مؤشرات. ثم حذف الطلب من السحابة (نظافة).
+  static Future<void> completeApprovedJoin(
+    Repo repo, {
+    required String backendUrl,
+    required String token,
+    String workspaceId = 'default',
+    String cloudCode = '',
+  }) async {
+    await join(repo,
+        backendUrl: backendUrl,
+        token: token,
+        workspaceId: workspaceId,
+        cloudCode: cloudCode);
+    final ourId = await ensureDeviceId(repo);
+    try {
+      await _delete(requestPath(backendUrl, workspaceId, ourId));
+    } catch (_) {}
+    // تنظيف سياق الانتظار.
+    final db = await repo.database;
+    await db.delete('settings',
+        where: "key LIKE 'pendingJoin.%'");
+  }
+
+  /// (المدير) جلب طلبات الانضمام المعلّقة.
+  static Future<List<Map<String, Object?>>> fetchJoinRequests(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final all =
+        await _getJson('${_root(backendUrl, workspaceId)}/joinRequests.json');
+    if (all == null) return const [];
+    final out = <Map<String, Object?>>[];
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final m = Map<String, Object?>.from(v);
+      if ('${m['status'] ?? 'pending'}' != 'pending') continue;
+      m['deviceId'] = '${m['deviceId'] ?? e.key}';
+      out.add(m);
+    }
+    out.sort((a, b) =>
+        '${a['requestedAt']}'.compareTo('${b['requestedAt']}'));
+    return out;
+  }
+
+  /// (المدير — خطوة 4أ) الموافقة: تعيين الدور + تسجيل الجهاز في roster
+  /// + تحديث الطلب إلى approved ليستلمه الجهاز المنتظر فوراً.
+  static Future<void> approveJoinRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    required String deviceName,
+    required String roleCode,
+    String workspaceId = 'default',
+  }) async {
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
+      throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
+    }
+    final db = await repo.database;
+    final now = DateTime.now().toIso8601String();
+    // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).
+    final role = UserRole.values.firstWhere((r) => r.code == roleCode,
+        orElse: () => UserRole.viewer);
+    final perms = defaultPerms(role);
+    final permStr =
+        perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+    final uid = await db.insert('users', {
+      'name': deviceName,
+      'role': role.code,
+      'pin': '',
+      'password': '',
+      'permissions': permStr,
+      'is_me': 0,
+      'active': 1,
+      'workspace_id': repo.requireWorkspaceId,
+      'deleted_at': '',
+      'created_at': now,
+      'updated_at': now,
+    });
+    // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
+    // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
+    await db.insert(
+        'devices',
+        {
+          'id': deviceId,
+          'workspace_id': repo.requireWorkspaceId,
+          'name': deviceName,
+          'is_paired': 1,
+          'is_owner': 0,
+          'user_id': uid,
+          'revoked_at': '',
+          'expelled_at': '',
+          'last_seen_at': now,
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    // رفع للسحابة: roster + حالة الطلب approved.
+    final root = _root(backendUrl, workspaceId);
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (own.isNotEmpty) {
+      await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+          _safeDeviceRow(own.first),
+          timeout: const Duration(seconds: 20));
+    }
+    final req =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+      ...?req,
+      'status': 'approved',
+      'role': role.code,
+      'approvedAt': now,
+    }, timeout: const Duration(seconds: 20));
+  }
+
+  /// (المدير — الطرد الكامل) يرفع سجل الجهاز المطرود بحالة revoked إلى
+  /// /roster/$deviceId ثم يحذف عقدته نهائياً بعد مهلة سماح — الجهاز
+  /// المطرود يقرأ حالته عبر syncRoster ويبطل جلسته ذاتياً.
+  static Future<void> purgePeerFromCloud(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final db = await repo.database;
+    // 1) ارفع الحالة المطرودة أولاً (ليكتشفها الجهاز نفسه عند سحبه القادم).
+    final row = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (row.isNotEmpty) {
+      try {
+        await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+            _safeDeviceRow(row.first),
+            timeout: const Duration(seconds: 20));
+      } catch (_) {}
+    }
+    // 2) احذف أي طلب انضمام قديم له.
+    try {
+      await _delete(requestPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+  }
+
+  /// (المدير) الرفض: تحديث الحالة rejected — الجهاز المنتظر يتلقاها
+  /// ويعرضها للمستخدم دون أي مساس ببياناته.
+  static Future<void> rejectJoinRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final req =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+      ...?req,
+      'status': 'rejected',
+      'rejectedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
   }
 }

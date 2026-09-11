@@ -8,7 +8,7 @@ import '../core/sfx.dart';
 import '../data/providers.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/lan_http_transport.dart';
-import 'cloud_sync_section.dart' show performCloudJoin;
+import 'join_approval_flow.dart' show JoinApprovalScreen;
 import 'qr_pair_scanner.dart' show PairingData;
 import 'widgets.dart';
 
@@ -19,16 +19,17 @@ Future<void> joinGroupFromScan(
   ProviderContainer container,
   PairingData data,
 ) async {
-  // باركود دعوة سحابية؟ الانضمام يمر عبر مسار السحابة بالكامل
-  // (حذف البيانات ← لقطة من فيربيس ← عضو يتزامن برابط المدير نفسه).
+  // باركود دعوة سحابية؟ (دفعة 51) يمر عبر تدفق الموافقة الجديد:
+  // تسمية الجهاز ← طلب انضمام ← انتظار موافقة المدير ← ترطيب نظيف.
   if (data.isCloud) {
-    await performCloudJoin(
-      context,
-      container,
-      backendUrl: data.cloudUrl,
-      token: data.tok,
-      workspaceId: data.ws.isEmpty ? 'default' : data.ws,
-      cloudCode: data.cloudCode,
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => JoinApprovalScreen(
+          prefillUrl: data.cloudUrl,
+          prefillWs: data.ws.isEmpty ? 'default' : data.ws,
+          prefillToken: data.tok,
+        ),
+      ),
     );
     return;
   }
