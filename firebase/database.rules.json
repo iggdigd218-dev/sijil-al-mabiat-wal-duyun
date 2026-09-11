@@ -1,0 +1,33 @@
+{
+  "rules": {
+    "workspaces": {
+      "$ws": {
+        "operations": {
+          ".indexOn": ["server_ts"],
+          ".read": true,
+          ".write": true
+        },
+        "roster": {
+          ".read": true,
+          ".write": true
+        },
+        "evictions": {
+          ".read": true,
+          ".write": true
+        },
+        "invites": {
+          ".read": true,
+          ".write": true
+        },
+        "joinRequests": {
+          ".read": true,
+          ".write": true
+        },
+        "joinSnapshot": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    }
+  }
+}
