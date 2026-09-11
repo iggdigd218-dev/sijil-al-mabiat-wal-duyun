@@ -16,6 +16,7 @@ import 'package:http/testing.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_firebase_transport.dart';
+import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/sync_engine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -462,5 +463,189 @@ void main() {
     expect((await db.query('conversations')).length, 0);
     expect((await db.query('sync_queue')).length, 0);
     expect(await repo.workspaceMode(), 'standalone');
+  });
+
+  // ==================== دفعة 56: تنظيف السجل وكسر حلقة إعادة الطرد ====================
+
+  test('QA-B56-01 purgeDeviceRecordFromCloud wipes roster+eviction+joinRequest',
+      () async {
+    final cloud = FakeCloudStore();
+    cloud.store['/workspaces/default/roster/gone-dev.json'] = {'id': 'gone-dev'};
+    cloud.store['/workspaces/default/evictions/gone-dev.json'] = {
+      'deviceId': 'gone-dev',
+      'reason': 'expelled_by_manager',
+    };
+    cloud.store['/workspaces/default/joinRequests/gone-dev.json'] = {
+      'status': 'approved',
+    };
+    await http.runWithClient(
+        () => CloudJoin.purgeDeviceRecordFromCloud(
+            backendUrl: url, deviceId: 'gone-dev'),
+        cloud.client);
+    expect(
+        cloud.store.keys.any((k) => k.contains('gone-dev')), isFalse,
+        reason: 'كل أثر سحابي للجهاز يجب أن يُمحى');
+  });
+
+  test(
+      'QA-B56-02 purgeDeviceRecord: expelled device + orphan shadow user '
+      'deleted; active device rejected', () async {
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [devId]);
+    // مستخدم ظل + جهاز مطرود مرتبط به.
+    final uid = await db.insert('users', {
+      'name': 'ظل مطرود',
+      'role': 'viewer',
+      'pin': '',
+      'password': '',
+      'permissions': '',
+      'is_me': 0,
+      'active': 1,
+      'workspace_id': 'default',
+      'deleted_at': '',
+      'created_at': '2026-09-11T09:00:00',
+      'updated_at': '2026-09-11T09:00:00',
+    });
+    await db.insert(
+        'devices',
+        {
+          'id': 'expelled-dev',
+          'workspace_id': 'default',
+          'name': 'مطرود',
+          'is_paired': 0,
+          'is_owner': 0,
+          'user_id': uid,
+          'expelled_at': '2026-09-10T00:00:00',
+          'created_at': '2026-09-10T00:00:00',
+          'updated_at': '2026-09-10T00:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    // جهاز نشط — يجب رفض حذفه النهائي.
+    await db.insert(
+        'devices',
+        {
+          'id': 'active-dev',
+          'workspace_id': 'default',
+          'name': 'نشط',
+          'is_paired': 1,
+          'is_owner': 0,
+          'created_at': '2026-09-10T00:00:00',
+          'updated_at': '2026-09-10T00:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await repo.purgeDeviceRecord('expelled-dev');
+    expect(
+        (await db.query('devices',
+                where: 'id = ?', whereArgs: ['expelled-dev']))
+            .length,
+        0);
+    expect(
+        (await db.query('users', where: 'id = ?', whereArgs: [uid])).length,
+        0,
+        reason: 'مستخدم الظل اليتيم يُحذف مع الجهاز');
+    await expectLater(
+        repo.purgeDeviceRecord('active-dev'), throwsA(isA<StateError>()));
+    // expelledDeviceIds لا يعيد النشط.
+    expect(await repo.expelledDeviceIds(), isEmpty);
+  });
+
+  test(
+      'QA-B56-03 approveJoinRequest deletes stale eviction tombstone '
+      '(re-pairing loop broken) and roster row carries role', () async {
+    final cloud = FakeCloudStore();
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [devId]);
+    // شاهدة قديمة من طرد سابق — يجب أن تختفي بعد الموافقة.
+    cloud.store['/workspaces/default/evictions/rejoin-dev.json'] = {
+      'deviceId': 'rejoin-dev',
+      'reason': 'expelled_by_manager',
+    };
+    cloud.store['/workspaces/default/joinRequests/rejoin-dev.json'] = {
+      'deviceId': 'rejoin-dev',
+      'status': 'pending',
+    };
+    await http.runWithClient(
+        () => CloudJoin.approveJoinRequest(repo,
+            backendUrl: url,
+            deviceId: 'rejoin-dev',
+            deviceName: 'عائد',
+            roleCode: 'accountant'),
+        cloud.client);
+    expect(
+        cloud.store
+            .containsKey('/workspaces/default/evictions/rejoin-dev.json'),
+        isFalse,
+        reason: 'الموافقة تمحو شاهدة الطرد القديمة قبل تسجيل roster');
+    final roster =
+        cloud.store['/workspaces/default/roster/rejoin-dev.json'] as Map?;
+    expect(roster, isNotNull);
+    expect('${roster!['user_role']}', 'accountant',
+        reason: 'صف roster يحمل الدور المعيّن');
+    final req = cloud.store['/workspaces/default/joinRequests/rejoin-dev.json']
+        as Map;
+    expect('${req['status']}', 'approved');
+  });
+
+  test(
+      'QA-B56-04 pendingJoin guard: handshake skips eviction check while '
+      'awaiting approval', () async {
+    final cloud = FakeCloudStore();
+    await setMode('member');
+    // شاهدة موجودة لكن الجهاز في حالة انتظار موافقة إعادة الربط.
+    cloud.store['/workspaces/default/evictions/$devId.json'] = {
+      'deviceId': devId,
+      'reason': 'expelled_by_manager',
+    };
+    await repo.setSetting('pendingJoin.token', 'TOK-REJOIN');
+    var evicted = false;
+    final t = makeTransport();
+    t.onEvicted = () => evicted = true;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(evicted, isFalse,
+        reason: 'لا طرد ذاتي أثناء انتظار الموافقة — الشاهدة قديمة');
+    // بعد اكتمال الانضمام (زوال pendingJoin) يعود الفحص للعمل.
+    await db.delete('settings', where: "key = 'pendingJoin.token'");
+    final t2 = makeTransport();
+    t2.onEvicted = () => evicted = true;
+    await http.runWithClient(
+        () => t2.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(evicted, isTrue, reason: 'بعد الانضمام الشاهدة تُفعّل الطرد');
+  });
+
+  test('QA-B56-05 setDevicePermissions updates users.role for badge sync',
+      () async {
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [devId]);
+    await db.insert(
+        'devices',
+        {
+          'id': 'badge-dev',
+          'workspace_id': 'default',
+          'name': 'جهاز الشارة',
+          'is_paired': 1,
+          'is_owner': 0,
+          'created_at': '2026-09-11T09:00:00',
+          'updated_at': '2026-09-11T09:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await repo.setDevicePermissions(
+        'badge-dev', UserRole.accountant, {'view_reports'});
+    final dev = (await db.query('devices',
+            where: 'id = ?', whereArgs: ['badge-dev']))
+        .first;
+    final uid = dev['user_id'] as int?;
+    expect(uid, isNotNull, reason: 'devices.user_id يرتبط فوراً');
+    final u =
+        (await db.query('users', where: 'id = ?', whereArgs: [uid])).first;
+    expect('${u['role']}', 'accountant');
+    // تغيير الدور يحدّث نفس المستخدم لا ينشئ آخر.
+    await repo.setDevicePermissions('badge-dev', UserRole.dataentry, {});
+    final u2 =
+        (await db.query('users', where: 'id = ?', whereArgs: [uid])).first;
+    expect('${u2['role']}', 'dataentry');
   });
 }

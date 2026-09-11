@@ -584,10 +584,15 @@ class CloudJoin {
           where: 'key = ?', whereArgs: [metaKey], limit: 1);
       final lastPush =
           metaRows.isEmpty ? '' : '${metaRows.first['value'] ?? ''}';
+      // (دفعة 56) ضمّ دور المستخدم المرتبط لكل جهاز — حتى تعرض بقية
+      // الأجهزة شارة الدور الصحيحة فور تغييرها من المدير.
       final rows = isOwner
-          ? await db.query('devices')
-          : await db.query('devices',
-              where: 'id = ?', whereArgs: [ourId]);
+          ? await db.rawQuery('SELECT d.*, u.role AS user_role '
+              'FROM devices d LEFT JOIN users u ON u.id = d.user_id')
+          : await db.rawQuery(
+              'SELECT d.*, u.role AS user_role FROM devices d '
+              'LEFT JOIN users u ON u.id = d.user_id WHERE d.id = ?',
+              [ourId]);
       var maxUpd = lastPush;
       for (final d in rows) {
         final upd = '${d['updated_at'] ?? ''}';
@@ -809,11 +814,17 @@ class CloudJoin {
         conflictAlgorithm: ConflictAlgorithm.replace);
     // رفع للسحابة: roster + حالة الطلب approved.
     final root = _root(backendUrl, workspaceId);
+    // (دفعة 56) كسر حلقة إعادة الطرد: إن كان الجهاز مطروداً سابقاً فلديه
+    // شاهدة في /evictions — يجب حذفها قبل تسجيله في roster وإلا طرد
+    // نفسه فور أول مصافحة بعد إعادة الربط.
+    try {
+      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
     final own = await db.query('devices',
         where: 'id = ?', whereArgs: [deviceId], limit: 1);
     if (own.isNotEmpty) {
       await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
-          _safeDeviceRow(own.first),
+          {..._safeDeviceRow(own.first), 'user_role': role.code},
           timeout: const Duration(seconds: 20));
     }
     final req =
@@ -927,6 +938,28 @@ class CloudJoin {
       } catch (_) {}
     }
     return broadcast;
+  }
+
+  /// (المدير — دفعة 56) «حذف نهائي من السجل»: محو كل أثر سحابي لجهاز
+  /// مطرود — roster + شاهدة الطرد + طلب الانضمام. يُستدعى بعد أن يكون
+  /// الجهاز قد استهلك شاهدته (أو لم يعد يهمنا وصولها): البطاقة تختفي
+  /// من كل الأجهزة ولا يبقى ركام في /evictions.
+  static Future<void> purgeDeviceRecordFromCloud({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final enc = Uri.encodeComponent(deviceId);
+    for (final url in [
+      '$root/roster/$enc.json',
+      '$root/evictions/$enc.json',
+      '$root/joinRequests/$enc.json',
+    ]) {
+      try {
+        await _delete(url);
+      } catch (_) {}
+    }
   }
 
   /// (المدير — دفعة 54) إزالة شاهدة الطرد عند «إعادة السماح» — وإلا

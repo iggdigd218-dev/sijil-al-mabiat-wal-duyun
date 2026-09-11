@@ -174,6 +174,11 @@ class CloudFirebaseTransport implements SyncTransport {
       final mode = await repo.workspaceMode();
       if (mode != 'member') return;
       final st = await repo.settings();
+      // (دفعة 56) حارس إعادة الربط: أثناء انتظار موافقة المدير أو قبل
+      // إتمام التهيئة لا نفحص الطرد إطلاقاً — شاهدة قديمة من طردٍ سابق
+      // قد تكون ما تزال موجودة لحظة إعادة الربط، وفحصها قبل اكتمال
+      // الموافقة (التي تحذفها) يُدخل الجهاز حلقة طرد ذاتي أبدية.
+      if ((st['pendingJoin.token'] ?? '').trim().isNotEmpty) return;
       final devId = (st['sync.deviceId'] ?? '').trim();
       if (devId.isEmpty) return;
       // (دفعة 54) الشاهدة الصريحة أولاً: وجود /evictions/$devId = طرد
@@ -471,6 +476,12 @@ class CloudFirebaseTransport implements SyncTransport {
         final mode = await repo.workspaceMode();
         if (mode != 'member') return;
         final st = await repo.settings();
+        // (دفعة 56) لا استماع للطرد أثناء انتظار موافقة إعادة الربط —
+        // شاهدة قديمة قد تبقى حتى تحذفها موافقة المدير.
+        if ((st['pendingJoin.token'] ?? '').trim().isNotEmpty) {
+          await Future<void>.delayed(const Duration(seconds: 10));
+          continue;
+        }
         final devId = (st['sync.deviceId'] ?? '').trim();
         if (devId.isEmpty) return;
         final client = HttpClient()

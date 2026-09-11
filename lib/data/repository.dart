@@ -1453,6 +1453,51 @@ class Repo {
     );
   }
 
+  /// (دفعة 56) «حذف نهائي من السجل» لجهاز مطرود/محظور: يمحو سجل الجهاز
+  /// من devices ويحذف مستخدم الظل المرتبط به إن لم يعد أي جهاز آخر
+  /// يستعمله (تنظيف الحسابات اليتيمة). للمدير فقط، ولا يُحذف جهاز نشط.
+  Future<void> purgeDeviceRecord(String deviceId) async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final rows = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (rows.isEmpty) return;
+    final row = rows.first;
+    if (((row['is_owner'] ?? 0) as int) == 1) {
+      throw StateError('لا يمكن حذف سجل جهاز المدير.');
+    }
+    final expelled = '${row['expelled_at'] ?? ''}'.isNotEmpty;
+    final revoked = '${row['revoked_at'] ?? ''}'.isNotEmpty;
+    if (!expelled && !revoked) {
+      throw StateError('الحذف النهائي متاح للأجهزة المطرودة/المحظورة فقط.');
+    }
+    final uid = row['user_id'] as int?;
+    await db.transaction((txn) async {
+      await txn.delete('devices', where: 'id = ?', whereArgs: [deviceId]);
+      if (uid != null) {
+        // مستخدم الظل يُحذف فقط إن لم يبق جهاز آخر مرتبطاً به
+        // ولم يكن حساباً حقيقياً مستخدَماً حالياً.
+        final still = await txn.query('devices',
+            where: 'user_id = ?', whereArgs: [uid], limit: 1);
+        if (still.isEmpty) {
+          await txn.delete('users',
+              where: 'id = ? AND is_me <> 1', whereArgs: [uid]);
+        }
+      }
+    });
+    await logActivity('حذف نهائي لجهاز من السجل', 'device', deviceId);
+  }
+
+  /// (دفعة 56) قائمة معرفات الأجهزة المطرودة — لزر «تنظيف المطرودين».
+  Future<List<String>> expelledDeviceIds() async {
+    await _ensureCan('manage_users');
+    final db = await _db;
+    final rows = await db.query('devices',
+        columns: ['id'],
+        where: "COALESCE(expelled_at,'') <> '' AND COALESCE(is_owner,0) <> 1");
+    return [for (final r in rows) '${r['id']}'];
+  }
+
   /// تعيين/تغيير المستخدم (والصلاحيات) المرتبط بجهاز.
   Future<void> assignDeviceUser(String deviceId, int? userId) async =>
       assignDeviceToUser(deviceId, userId);

@@ -103,6 +103,12 @@ class _State extends ConsumerState<GroupManagementScreen> {
           appBar: AppBar(
             title: const Text('الأجهزة والمستخدمين'),
             actions: [
+              // (دفعة 56) تنظيف كل الأجهزة المطرودة دفعة واحدة.
+              IconButton(
+                tooltip: 'تنظيف الأجهزة المطرودة',
+                icon: const Icon(Icons.delete_sweep_outlined),
+                onPressed: () => _purgeAllExpelled(context),
+              ),
               IconButton(
                 tooltip: 'إضافة جهاز جديد',
                 icon: const Icon(Icons.add_link),
@@ -119,6 +125,47 @@ class _State extends ConsumerState<GroupManagementScreen> {
         );
       },
     );
+  }
+
+  /// (دفعة 56) «تنظيف الأجهزة المطرودة»: حذف نهائي لكل البطاقات
+  /// المطرودة دفعة واحدة — محلياً وسحابياً.
+  Future<void> _purgeAllExpelled(BuildContext context) async {
+    Sfx.click();
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    List<String> ids;
+    try {
+      ids = await repo.expelledDeviceIds();
+    } catch (e) {
+      if (context.mounted) showSnack(context, 'تعذّر: $e', error: true);
+      return;
+    }
+    if (!context.mounted) return;
+    if (ids.isEmpty) {
+      showSnack(context, 'لا توجد أجهزة مطرودة في السجل.');
+      return;
+    }
+    final ok = await confirmDialog(
+      context,
+      title: 'تنظيف الأجهزة المطرودة',
+      message: 'سيُحذف ${ids.length} جهاز مطرود نهائياً من السجل '
+          'ومن السحابة. لا يمكن التراجع.',
+      confirmText: 'حذف الكل نهائياً',
+      danger: true,
+    );
+    if (ok != true) return;
+    var done = 0;
+    for (final id in ids) {
+      try {
+        await engine.purgeDeviceRecordEverywhere(id);
+        done++;
+      } catch (_) {}
+    }
+    Sfx.success();
+    if (context.mounted) {
+      bump(ref);
+      showSnack(context, '✅ حُذف $done من ${ids.length} جهاز مطرود نهائياً.');
+    }
   }
 
   void _showPairHub(BuildContext context) {
@@ -357,6 +404,32 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                       onPermissions: () async {
                         await _editDevicePermissions(context, ref, d);
                         safeBump();
+                      },
+                      // (دفعة 56) حذف نهائي من السجل لبطاقة مطرودة/محظورة.
+                      onPurge: () async {
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'حذف نهائي من السجل',
+                          message:
+                              'سيُمحى سجل "${d['name']}" نهائياً من قائمة '
+                              'الأجهزة هنا ومن السحابة (roster + شواهد الطرد). '
+                              'لا يمكن التراجع — إعادة ربط الجهاز لاحقاً تتم '
+                              'بدعوة جديدة كأي جهاز جديد.',
+                          confirmText: 'حذف نهائي',
+                          danger: true,
+                        );
+                        if (ok != true) return;
+                        try {
+                          await engine.purgeDeviceRecordEverywhere(
+                              d['id'] as String);
+                          Sfx.success();
+                          safeBump();
+                        } catch (e) {
+                          Sfx.error();
+                          if (context.mounted) {
+                            showSnack(context, 'تعذّر الحذف: $e', error: true);
+                          }
+                        }
                       },
                       onRename: () async {
                         final name = await promptDialog(

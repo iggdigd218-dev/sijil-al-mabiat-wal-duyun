@@ -1018,6 +1018,29 @@ class SyncEngine {
   ///     تصل المستهدف عبر قناته المخصصة لحظياً.
   ///  2) حذف عقدته من /roster نهائياً (محفّز الدفاع الثاني).
   /// يُستدعى بعد expelDevice/revokeDevice المحليتين مباشرة.
+  /// (دفعة 56) «حذف نهائي من السجل»: محو جهاز مطرود محلياً وسحابياً —
+  /// devices + مستخدم الظل اليتيم محلياً، وroster/evictions/joinRequest
+  /// سحابياً. البطاقة تختفي نهائياً من كل الشاشات.
+  Future<void> purgeDeviceRecordEverywhere(String targetDeviceId) async {
+    // المحلي أولاً (يرمي عند خرق الشروط: جهاز نشط/مالك) ثم السحابي
+    // بأفضل جهد — غياب الشبكة لا يمنع اختفاء البطاقة.
+    await repo.purgeDeviceRecord(targetDeviceId);
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        await CloudJoin.purgeDeviceRecordFromCloud(
+          backendUrl: url,
+          deviceId: targetDeviceId,
+          workspaceId: _cloudTransport?.workspaceId ?? 'default',
+        );
+      }
+    } catch (_) {}
+    try {
+      await broadcastRosterChange();
+    } catch (_) {}
+  }
+
   Future<void> broadcastEviction(String targetDeviceId,
       {String reason = 'revoked_by_manager'}) async {
     try {

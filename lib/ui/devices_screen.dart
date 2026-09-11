@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
+import '../core/sfx.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -194,6 +195,28 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                         isOwnerDevice: d['id'] == hostId,
                         amITheOwner: amITheOwner,
                         onAssign: (uid) => _assign(uid, d['id'] as String),
+                        // (دفعة 56) تغيير الدور من البطاقة مباشرة —
+                        // حفظ فوري محلياً + بث للسحابة + تحديث الواجهة.
+                        onRoleChanged: amITheOwner
+                            ? (role) async {
+                                await repo.setDevicePermissions(
+                                  d['id'] as String,
+                                  role,
+                                  defaultPerms(role)
+                                      .entries
+                                      .where((e) => e.value)
+                                      .map((e) => e.key)
+                                      .toSet(),
+                                );
+                                try {
+                                  await ref
+                                      .read(syncEngineProvider)
+                                      .broadcastRosterChange();
+                                } catch (_) {}
+                                Sfx.success();
+                                bump(ref);
+                              }
+                            : null,
                         onRename: () => _rename(
                           d['id'] as String,
                           (d['name'] ?? '') as String,
@@ -259,6 +282,31 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                 context,
                                 '✅ تم طرد الجهاز وبثّ الإبطال — سيُقصى لحظياً.',
                               );
+                            }
+                          }
+                        },
+                        // (دفعة 56) حذف نهائي من السجل — بطاقة مطرودة فقط.
+                        onPurge: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'حذف نهائي من السجل',
+                            message:
+                                'سيُمحى سجل "${d['name']}" نهائياً محلياً '
+                                'وسحابياً. لا يمكن التراجع.',
+                            confirmText: 'حذف نهائي',
+                            danger: true,
+                          );
+                          if (ok != true) return;
+                          try {
+                            await ref
+                                .read(syncEngineProvider)
+                                .purgeDeviceRecordEverywhere(d['id'] as String);
+                            Sfx.success();
+                            bump(ref);
+                          } catch (e) {
+                            if (context.mounted) {
+                              showSnack(context, 'تعذّر الحذف: $e',
+                                  error: true);
                             }
                           }
                         },
@@ -505,6 +553,9 @@ class DeviceCard extends StatelessWidget {
   final VoidCallback? onPermissions;
   final VoidCallback? onCloudLink;
 
+  /// (دفعة 56) «حذف نهائي من السجل» — للبطاقات المطرودة/المحظورة فقط.
+  final VoidCallback? onPurge;
+
   /// (دفعة 51) تعديل الدور مباشرة من البطاقة دون فتح نافذة الصلاحيات.
   final Future<void> Function(UserRole role)? onRoleChanged;
   final bool isSelf;
@@ -522,6 +573,7 @@ class DeviceCard extends StatelessWidget {
     required this.onResetSecret,
     this.onPermissions,
     this.onCloudLink,
+    this.onPurge,
     this.onRoleChanged,
     required this.isSelf,
     required this.isOwnerDevice,
@@ -545,12 +597,20 @@ class DeviceCard extends StatelessWidget {
     final userName = data['user_name'] as String?;
     final userRole = data['user_role'] as String?;
     final currentUserId = data['user_id'] as int?;
-    final ip = (data['ip_address'] ?? '') as String;
 
     // تحديد الأجهزة الخاملة لأكثر من شهر (للتنبيه البصري).
     final lastSeenDt = DateTime.tryParse(lastSeen);
     final staleForMonth = lastSeenDt != null &&
         DateTime.now().difference(lastSeenDt) > const Duration(days: 30);
+    // (دفعة 56) مؤشر الاتصال السحابي: ظهور خلال آخر 3 دقائق = متصل.
+    final cloudOnline = lastSeenDt != null &&
+        DateTime.now().difference(lastSeenDt) < const Duration(minutes: 3);
+    // دور الجهاز الفعلي (شارة ملونة عالية التباين).
+    final role = isOwnerDevice
+        ? UserRole.admin
+        : (userRole == null || userRole.isEmpty
+            ? null
+            : UserRole.fromCode(userRole));
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -575,6 +635,12 @@ class DeviceCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  // (دفعة 56) شارة الدور الديناميكية — تعكس الدور الممنوح
+                  // فعلياً بلون مميز عالي التباين لكل دور.
+                  if (role != null) ...[
+                    _RoleBadge(role: role),
+                    const SizedBox(width: 6),
+                  ],
                   if (expelled)
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -639,14 +705,18 @@ class DeviceCard extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: .12),
+                        color: (cloudOnline || isSelf ? Colors.green : Colors.blueGrey)
+                            .withValues(alpha: .12),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Text(
-                        'نشط',
+                      child: Text(
+                        // (دفعة 56) مؤشر الحالة السحابية بدل «نشط» العامة.
+                        cloudOnline || isSelf ? 'متصل سحابياً ☁️' : 'غير متصل',
                         style: TextStyle(
                           fontSize: 10,
-                          color: Colors.green,
+                          color: cloudOnline || isSelf
+                              ? Colors.green
+                              : Colors.blueGrey,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -658,7 +728,9 @@ class DeviceCard extends StatelessWidget {
                 spacing: 10,
                 runSpacing: 4,
                 children: [
-                  _smallLabel('المنصة', platform.isEmpty ? '—' : platform),
+                  // (دفعة 56) وسم منصة نظيف (Android/Windows...) بدل
+                  // عرض «المنصة: lan» وعناوين IP الخام البائدة.
+                  _smallLabel('الجهاز', _platformTag(platform)),
                   _smallLabel('المستخدم', userName ?? 'غير معيّن'),
                   // مقتطف بصمة الجهاز (المعرّف مشتق من بصمة العتاد).
                   _smallLabel(
@@ -667,7 +739,6 @@ class DeviceCard extends StatelessWidget {
                         ? (data['id'] as String).substring(0, 10)
                         : (data['id'] as String? ?? '—'),
                   ),
-                  if (ip.isNotEmpty) _smallLabel('IP', ip),
                   if (lastSeen.isNotEmpty)
                     _smallLabel(
                       'آخر ظهور',
@@ -685,6 +756,9 @@ class DeviceCard extends StatelessWidget {
                   if (onRoleChanged != null && !isOwnerDevice)
                     Expanded(
                       child: DropdownButtonFormField<UserRole>(
+                        // (دفعة 56) مفتاح بالدور: يجبر إعادة البناء عند تغيّر
+                        // الدور فيظهر الاختيار الجديد فوراً دون إعادة فتح.
+                        key: ValueKey('role-${data['id']}-$userRole'),
                         initialValue: UserRole.fromCode(userRole ?? ''),
                         decoration: const InputDecoration(
                           labelText: 'الدور',
@@ -818,6 +892,13 @@ class DeviceCard extends StatelessWidget {
     if (!expelled && !isSelf && !isOwnerDevice) {
       add('expel', Icons.person_remove, Colors.red, 'طرد من المجموعة');
     }
+    // (دفعة 56) «حذف نهائي من السجل» — للبطاقات المطرودة/المحظورة فقط،
+    // يمحو الجهاز محلياً وسحابياً فتختفي البطاقة نهائياً.
+    if (inactive && !isSelf && amITheOwner && onPurge != null) {
+      if (items.isNotEmpty) items.add(const PopupMenuDivider());
+      add('purge', Icons.delete_forever, Colors.red.shade700,
+          'حذف نهائي من السجل');
+    }
 
     if (items.isEmpty) return const SizedBox.shrink();
 
@@ -843,6 +924,8 @@ class DeviceCard extends StatelessWidget {
             onTransferOwner();
           case 'expel':
             onExpel();
+          case 'purge':
+            onPurge?.call();
         }
       },
     );
@@ -854,6 +937,16 @@ class DeviceCard extends StatelessWidget {
         'windows' => Icons.laptop_windows,
         'linux' || 'macos' => Icons.computer,
         _ => Icons.devices,
+      };
+
+  /// (دفعة 56) وسم منصة نظيف — لا «lan» ولا قيم خام.
+  String _platformTag(String p) => switch (p) {
+        'android' => 'Android',
+        'ios' => 'iPhone',
+        'windows' => 'Windows',
+        'linux' => 'Linux',
+        'macos' => 'Mac',
+        _ => 'جهاز',
       };
 
   Widget _smallLabel(String k, String v) => RichText(
@@ -869,4 +962,45 @@ class DeviceCard extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// (دفعة 56) شارة الدور الديناميكية عالية التباين:
+/// مدير ذهبية، وكيل بنفسجية داكنة، كاشير زمردية، محاسب زرقاء،
+/// مدخل بيانات بنفسجية، عرض فقط رمادية.
+class _RoleBadge extends StatelessWidget {
+  final UserRole role;
+  const _RoleBadge({required this.role});
+
+  @override
+  Widget build(BuildContext context) {
+    final (bg, fg) = switch (role) {
+      UserRole.admin => (const Color(0xFFF59E0B), Colors.white), // ذهبي
+      UserRole.agent => (const Color(0xFF7C3AED), Colors.white), // وكيل
+      UserRole.accountant => (const Color(0xFF10B981), Colors.white), // كاشير
+      UserRole.dataentry => (const Color(0xFFA855F7), Colors.white), // إدخال
+      UserRole.viewer => (const Color(0xFF6B7280), Colors.white), // عرض
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: bg.withValues(alpha: .35),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Text(
+        '${role.icon} ${role.label}',
+        style: TextStyle(
+          fontSize: 10,
+          color: fg,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
 }
