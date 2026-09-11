@@ -9,6 +9,7 @@ import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/update_service.dart';
 import 'update_section.dart';
 import 'account_form.dart';
 import 'accounts_screen.dart';
@@ -499,6 +500,31 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
+  /// (دفعة 58 — متطلب 12) «الجديد في هذا التحديث» الديناميكي:
+  /// يُعرض مرة واحدة فقط بعد كل ترقية فعلية (تغيّر kAppVersion عن آخر
+  /// إصدار شوهد)، وبملاحظات هذا الإصدار حصراً — تُقرأ من بيان التحديث
+  /// عندما يطابق رقمه إصدارنا المثبَّت، فلا يظهر أي نص قديم أبداً.
+  Future<void> _maybeShowWhatsNew(UpdateInfo info) async {
+    final repo = ref.read(repoProvider);
+    final st = await repo.settings();
+    final seen = (st['whatsNewSeenVersion'] ?? '').trim();
+    if (seen == kAppVersion) return; // عُرض لهذا الإصدار من قبل.
+    // أول تثبيت (لا قيمة سابقة): سجّل بصمت بلا حوار.
+    if (seen.isEmpty) {
+      await repo.setSetting('whatsNewSeenVersion', kAppVersion);
+      return;
+    }
+    // ملاحظات البيان تخص أحدث إصدار منشور — نعرضها فقط إن كانت نسختنا
+    // هي ذاتها الأحدث (ترقية اكتملت للتو). وإلا نكتفي بالتسجيل.
+    final latest = info.latest;
+    final isCurrentRelease =
+        latest != null && '${latest.major}.${latest.minor}.${latest.patch}' == kAppVersion;
+    await repo.setSetting('whatsNewSeenVersion', kAppVersion);
+    if (!isCurrentRelease || info.notes.trim().isEmpty) return;
+    if (!mounted) return;
+    await showWhatsNewDialog(context, kAppVersion, info.notes);
+  }
+
   /// فحص تحديث صامت عند الإقلاع: لا يزعج المستخدم إلا إذا وُجد تحديث فعلًا،
   /// ولا يظهر الحوار الاختياري أكثر من مرة واحدة في اليوم.
   Future<void> _checkForUpdateOnStart() async {
@@ -507,6 +533,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
     try {
       final repo = ref.read(repoProvider);
       final info = await ref.read(updateServiceProvider).check();
+      if (!mounted) return;
+      // «الجديد في هذا التحديث» بعد اكتمال ترقية — قبل أي حوار تحديث آخر.
+      try {
+        await _maybeShowWhatsNew(info);
+      } catch (_) {}
       if (!mounted || !info.hasUpdate) return;
       if (!info.isMandatory) {
         // كتم الحوار الاختياري 24 ساعة بعد آخر عرض/تأجيل.
@@ -1030,6 +1061,20 @@ class _HomeShellState extends ConsumerState<HomeShell>
               onPressed: () =>
                   ref.read(hideBalancesProvider.notifier).state = !hidden,
             ),
+            // (دفعة 58) سطح المكتب بلا «سحب للتحديث» — زر تحديث دائم
+            // يعيد تحميل بيانات الشاشة الحالية ويحفّز مزامنة فورية.
+            if (desktop)
+              IconButton(
+                tooltip: 'تحديث البيانات',
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () {
+                  bump(ref);
+                  _refreshSync();
+                  try {
+                    ref.read(syncEngineProvider).forceSyncNow();
+                  } catch (_) {}
+                },
+              ),
           ],
         ),
         drawer: _Drawer(current: _screen, onSelect: _go),

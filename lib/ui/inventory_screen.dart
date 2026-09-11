@@ -183,7 +183,10 @@ class _InventorySections extends ConsumerWidget {
             )
             .toList();
 
-    return ListView(
+    // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+    return RefreshIndicator(
+      onRefresh: () async => bump(ref),
+      child: ListView(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
       children: [
         Padding(
@@ -212,6 +215,7 @@ class _InventorySections extends ConsumerWidget {
             message: 'جرّب كلمة بحث أخرى.',
           ),
       ],
+      ),
     );
   }
 }

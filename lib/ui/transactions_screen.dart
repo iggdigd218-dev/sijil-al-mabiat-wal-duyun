@@ -66,7 +66,10 @@ class TransactionsScreen extends ConsumerWidget {
                   message: 'غيّر معايير البحث أو سجّل عملية جديدة.',
                 );
               }
-              return ListView.separated(
+              // (دفعة 58) سحب للأسفل = إعادة تحميل + مزامنة فورية.
+              return RefreshIndicator(
+                onRefresh: () async => bump(ref),
+                child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(14, 4, 14, 96),
                 itemCount: p.items.length + 1,
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -82,6 +85,7 @@ class TransactionsScreen extends ConsumerWidget {
                     hidden: hidden,
                   );
                 },
+              ),
               );
             },
           ),

@@ -591,7 +591,10 @@ class _ReportView extends ConsumerWidget {
             ),
           ),
         Expanded(
-          child: ListView(
+          // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+          child: RefreshIndicator(
+            onRefresh: () async => bump(ref),
+            child: ListView(
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 96),
             children: [
               if (table.summary.isNotEmpty) ...[
@@ -680,6 +683,7 @@ class _ReportView extends ConsumerWidget {
                 ],
               ),
             ],
+          ),
           ),
         ),
       ],

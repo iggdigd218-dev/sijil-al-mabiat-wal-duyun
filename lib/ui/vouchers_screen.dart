@@ -40,13 +40,17 @@ class VouchersScreen extends ConsumerWidget {
                       'أنشئ سند قبض أو صرف أو قيد — بترقيم تلقائي وطباعة A4.',
                 );
               }
-              return ListView.separated(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 96),
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, i) => _VoucherCard(
-                  voucher: items[i],
-                  account: byId[items[i].accountId],
+              // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+              return RefreshIndicator(
+                onRefresh: () async => bump(ref),
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 96),
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) => _VoucherCard(
+                    voucher: items[i],
+                    account: byId[items[i].accountId],
+                  ),
                 ),
               );
             },

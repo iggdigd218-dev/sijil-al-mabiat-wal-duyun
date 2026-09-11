@@ -66,7 +66,10 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     final devicesAsync = ref.watch(devicesProvider);
     final usersAsync = ref.watch(usersProvider);
 
-    return ListView(
+    // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+    return RefreshIndicator(
+      onRefresh: () async => bump(ref),
+      child: ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
       children: [
         Card(
@@ -363,6 +366,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           },
         ),
       ],
+      ),
     );
   }
 }

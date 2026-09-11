@@ -265,8 +265,31 @@ class UpdateInstaller {
           progress: 1);
       try {
         if (isExe) {
-          // تشغيل المُثبّت منفصلاً — سيطلب النظام إذن المسؤول (UAC).
-          await Process.start(file.path, const [], mode: ProcessStartMode.detached);
+          // (دفعة 58) تشغيل المُثبّت عبر ShellExecute (Start-Process
+          // -Verb RunAs): الإطلاق المباشر بـ Process.start يفشل صامتاً
+          // عندما يتطلب المُثبّت صلاحية مسؤول (ERROR_ELEVATION_REQUIRED)
+          // — كان هذا سبب تعطل التحديث التلقائي على ويندوز.
+          try {
+            await Process.start(
+              'powershell.exe',
+              [
+                '-NoProfile',
+                '-NonInteractive',
+                '-Command',
+                'Start-Process -FilePath \'${file.path}\' -Verb RunAs',
+              ],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          } catch (_) {
+            // احتياط: cmd start يمرّ عبر ShellExecute أيضاً فيُظهر UAC.
+            await Process.start(
+              'cmd.exe',
+              ['/c', 'start', '', file.path],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          }
         } else {
           // نسخة zip محمولة: نفتح مجلدها ليستخرجها المستخدم.
           await Process.start('explorer.exe', ['/select,', file.path],
@@ -274,8 +297,9 @@ class UpdateInstaller {
         }
         yield const InstallProgress(InstallPhase.done, progress: 1);
         if (isExe) {
-          // نغلق التطبيق بعد لحظة حتى لا تبقى ملفاته مقفلة أثناء التثبيت.
-          Future.delayed(const Duration(milliseconds: 1500), () => exit(0));
+          // نغلق التطبيق بعد مهلة كافية لظهور UAC حتى لا تبقى ملفاتنا
+          // مقفلة أثناء التثبيت (المثبّت يغلق التطبيق أيضاً احتياطاً).
+          Future.delayed(const Duration(seconds: 3), () => exit(0));
         }
       } catch (e) {
         yield InstallProgress(InstallPhase.failed,

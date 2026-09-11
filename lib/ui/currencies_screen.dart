@@ -24,7 +24,10 @@ class CurrenciesScreen extends ConsumerWidget {
         title: 'تعذّر تحميل العملات',
         message: '$e',
       ),
-      data: (list) => ListView(
+      // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+      data: (list) => RefreshIndicator(
+        onRefresh: () async => bump(ref),
+        child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
         children: [
           const SectionTitle('العملات'),
@@ -46,6 +49,7 @@ class CurrenciesScreen extends ConsumerWidget {
           const SectionTitle('🔄 تحويل العملات'),
           _Converter(currencies: list, baseCode: defaultCode),
         ],
+        ),
       ),
     );
   }

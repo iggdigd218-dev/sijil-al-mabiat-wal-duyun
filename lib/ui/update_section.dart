@@ -403,3 +403,69 @@ Future<void> showUpdateDialog(
     ),
   );
 }
+
+/// (دفعة 58 — متطلب 12) حوار «الجديد في هذا التحديث» الديناميكي:
+/// يظهر مرة واحدة فقط بعد كل ترقية، ويعرض حصراً ملاحظات الإصدار
+/// المثبَّت حالياً (من بيان version.json حين يطابق رقمه إصدارنا) —
+/// لا نص قديم مخزّن في الكود، ويتجدد تلقائياً مع كل إصدار جديد.
+Future<void> showWhatsNewDialog(
+  BuildContext context,
+  String version,
+  String notes,
+) {
+  final items = notes
+      .split(RegExp(r'\n+'))
+      .map((s) => s.trim().replaceFirst(RegExp(r'^[•\-*]\s*'), ''))
+      .where((s) => s.isNotEmpty)
+      .take(10)
+      .toList();
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(Icons.celebration_outlined, color: AppColors.primaryOf(ctx)),
+      title: const Text('الجديد في هذا التحديث'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 380, maxWidth: 420),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'الإصدار $version',
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              for (final it in items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.check_circle_outline,
+                          size: 16, color: AppColors.greenOf(ctx)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          it,
+                          style:
+                              const TextStyle(fontSize: 12.5, height: 1.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('رائع!'),
+        ),
+      ],
+    ),
+  );
+}

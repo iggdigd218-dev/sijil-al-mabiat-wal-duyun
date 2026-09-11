@@ -22,7 +22,10 @@ class UsersScreen extends ConsumerWidget {
         title: 'تعذّر تحميل المستخدمين',
         message: '$e',
       ),
-      data: (list) => ListView(
+      // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+      data: (list) => RefreshIndicator(
+        onRefresh: () async => bump(ref),
+        child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 96),
         children: [
           const SectionTitle('الأدوار المتاحة'),
@@ -76,6 +79,7 @@ class UsersScreen extends ConsumerWidget {
             label: const Text('إضافة مستخدم'),
           ),
         ],
+        ),
       ),
     );
   }

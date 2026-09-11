@@ -81,7 +81,10 @@ class TrashScreen extends ConsumerWidget {
               ),
             ),
             Expanded(
-              child: ListView.builder(
+              // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+              child: RefreshIndicator(
+                onRefresh: () async => bump(ref),
+                child: ListView.builder(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 90),
                 itemCount: items.length,
                 itemBuilder: (_, i) {
@@ -161,6 +164,7 @@ class TrashScreen extends ConsumerWidget {
                     ),
                   );
                 },
+              ),
               ),
             ),
           ],
