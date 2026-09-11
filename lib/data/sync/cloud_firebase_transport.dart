@@ -98,6 +98,8 @@ class CloudFirebaseTransport implements SyncTransport {
 
   @override
   Future<void> push(SyncOperation op) async {
+    // (دفعة 53) جهاز مطرود لا يدفع شيئاً للسحابة — إيقاف صامت فوري.
+    if (_evicted) throw StateError('device-evicted');
     final uri = Uri.parse(_opPath(op.id));
     // ختم وقت الخادم: فيربيس يستبدل {".sv":"timestamp"} بوقت خادمه (ملي
     // ثانية) لحظة الكتابة — يقضي على ثغرة انحراف ساعات الأجهزة التي كانت
@@ -139,7 +141,79 @@ class CloudFirebaseTransport implements SyncTransport {
     );
   }
 
+  // ==================== المصافحة النشطة للسجل (دفعة 53) ====================
+  // الجهاز يتحقق بنفسه من عضويته في /roster/$deviceId — الطرد يُكتشف حتى
+  // لو حُذفت عقدته نهائياً (وليس فقط عند وسمها revoked/expelled).
+
+  /// يُستدعى عند اكتشاف أن هذا الجهاز طُرد/حُذف من سجل المجموعة.
+  void Function()? onEvicted;
+
+  bool _evicted = false;
+  DateTime? _lastEvictionCheck;
+
+  bool get isEvicted => _evicted;
+
+  /// فحص العضوية الذاتي (مخنوق: مرة كل 20 ثانية كحد أقصى):
+  /// - وضع member فقط (المالك والمستقل لا يُطردان ذاتياً).
+  /// - عقدة موجودة بحقول نظيفة → سليم + وسم rosterSeenSelf.
+  /// - revoked=true أو revoked_at/expelled_at غير فارغة → طرد.
+  /// - عقدة null (حُذفت): طرد فقط إن سبق أن رأينا أنفسنا في السجل —
+  ///   حارس ضد الإيجابيات الكاذبة (سجل لم يُملأ بعد/انضمام قديم).
+  /// - أخطاء الشبكة/رموز غير 200 لا تُحسب طرداً أبداً.
+  Future<void> maybeCheckSelfEviction({bool force = false}) async {
+    if (_evicted) return;
+    final now = DateTime.now();
+    if (!force &&
+        _lastEvictionCheck != null &&
+        now.difference(_lastEvictionCheck!) < const Duration(seconds: 20)) {
+      return;
+    }
+    _lastEvictionCheck = now;
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode != 'member') return;
+      final st = await repo.settings();
+      final devId = (st['sync.deviceId'] ?? '').trim();
+      if (devId.isEmpty) return;
+      final tok = await _idToken();
+      final uri = Uri.parse(
+              '$_root/roster/${Uri.encodeComponent(devId)}.json')
+          .replace(queryParameters: {if (tok != null) 'auth': tok});
+      final res = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return; // خطأ خادم/صلاحية — لا حكم.
+      final body = utf8.decode(res.bodyBytes).trim();
+      if (body.isEmpty || body == 'null') {
+        // العقدة محذوفة كلياً — طرد إن كنا مسجلين سابقاً.
+        if ((st['sync.rosterSeenSelf'] ?? '') == '1') _fireEvicted();
+        return;
+      }
+      final m = jsonDecode(body);
+      if (m is! Map) return;
+      // رأينا سجلنا — فعّل حارس الحذف للمستقبل.
+      if ((st['sync.rosterSeenSelf'] ?? '') != '1') {
+        await repo.setSetting('sync.rosterSeenSelf', '1');
+      }
+      final revoked = m['revoked'] == true ||
+          '${m['revoked_at'] ?? ''}'.trim().isNotEmpty;
+      final expelled = '${m['expelled_at'] ?? ''}'.trim().isNotEmpty;
+      if (revoked || expelled) _fireEvicted();
+    } catch (_) {
+      // شبكة متقطعة — الفحص القادم يغطي.
+    }
+  }
+
+  void _fireEvicted() {
+    if (_evicted) return;
+    _evicted = true;
+    try {
+      onEvicted?.call();
+    } catch (_) {}
+  }
+
   Future<int> pull({ConflictResolver? resolver}) async {
+    // (دفعة 53) مصافحة العضوية قبل أي سحب: جهاز مطرود يوقف كل شيء فوراً.
+    await maybeCheckSelfEviction();
+    if (_evicted) return 0;
     final db = await _db;
     // نستخدم timestamp-based cursor مع overlap للسماح بالوصول المتأخر.
     final lastTsRow = await db.query(
@@ -362,6 +436,13 @@ class CloudFirebaseTransport implements SyncTransport {
   Future<void> _sseLoop() async {
     while (_listening) {
       try {
+        // (دفعة 53) مصافحة العضوية عند كل تمهيد للقناة: جهاز مطرود
+        // يُجهض البث فوراً ولا يفتح القناة إطلاقاً.
+        await maybeCheckSelfEviction(force: true);
+        if (_evicted) {
+          _listening = false;
+          break;
+        }
         // (دفعة 52) فحص وصول سريع قبل فتح القناة: استعلام DNS للمضيف —
         // يكشف انقطاع الإنترنت/حجب جدار الحماية فوراً برسالة دقيقة
         // بدل تعليق ثم فشل صامت.

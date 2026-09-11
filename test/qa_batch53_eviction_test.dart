@@ -1,0 +1,237 @@
+// QA — دفعة 53: الطرد التلقائي وإبطال الجلسة.
+// - المصافحة النشطة: العضو يفحص /roster/$deviceId بنفسه.
+// - revoked=true أو revoked_at/expelled_at → onEvicted يُطلق فوراً.
+// - عقدة محذوفة (null): طرد فقط بعد أن سبق للجهاز رؤية نفسه في السجل
+//   (حارس ضد الإيجابيات الكاذبة).
+// - المالك والمستقل لا يُطردان ذاتياً أبداً.
+// - بعد الطرد: pull يتوقف (0) و push يرمي فوراً.
+// - handleSelfEviction: يفرغ sync_queue ومفاتيح الجلسة ويعيد الوضع
+//   standalone ويبث onDeviceEvicted مرة واحدة فقط.
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/data/repository.dart';
+import 'package:nexora_app/data/sync/cloud_firebase_transport.dart';
+import 'package:nexora_app/data/sync/sync_engine.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+class FakeCloudStore {
+  final Map<String, Object?> store = {};
+
+  static http.Response _utf8Json(String body, int status) =>
+      http.Response.bytes(utf8.encode(body), status, headers: {
+        'content-type': 'application/json; charset=utf-8',
+      });
+
+  http.Client client() => MockClient((req) async {
+        final key = req.url.path;
+        if (req.method == 'PUT') {
+          store[key] = jsonDecode(req.body);
+          return _utf8Json(req.body, 200);
+        }
+        if (req.method == 'DELETE') {
+          store.remove(key);
+          return _utf8Json('null', 200);
+        }
+        final v = store[key];
+        if (v != null) return _utf8Json(jsonEncode(v), 200);
+        return _utf8Json('null', 200);
+      });
+}
+
+void main() {
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+  late Directory tmp;
+  late Database db;
+  late Repo repo;
+  const url = 'https://qa-evict.firebaseio.com';
+  const devId = 'member-device-1';
+  const rosterKey = '/workspaces/default/roster/$devId.json';
+
+  Future<void> setMode(String mode) => db.insert(
+      'sync_meta', {'key': 'workspaceMode', 'value': mode},
+      conflictAlgorithm: ConflictAlgorithm.replace);
+
+  CloudFirebaseTransport makeTransport() => CloudFirebaseTransport(
+        repo: repo,
+        dbProvider: () async => db,
+        backendUrl: url,
+        workspaceId: 'default',
+      );
+
+  setUp(() async {
+    tmp = await Directory.systemTemp.createTemp('nexora_evict_');
+    db = await databaseFactory.openDatabase('${tmp.path}/m.db',
+        options: OpenDatabaseOptions(
+            onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON')));
+    await AppDatabase.createSchema(db);
+    repo = Repo(databaseProvider: () async => db);
+    await repo.initSyncInfra();
+    // ensureDeviceId يولّد معرفاً جديداً في بيئة VM — نفرض معرف الاختبار
+    // بعد التهيئة (maybeCheckSelfEviction يقرأه من settings في كل فحص).
+    await repo.setSetting('sync.deviceId', devId);
+    await db.insert(
+        'devices',
+        {
+          'id': devId,
+          'workspace_id': 'default',
+          'name': 'جهاز الاختبار',
+          'is_paired': 1,
+          'is_owner': 0,
+          'created_at': '2026-09-11T09:00:00',
+          'updated_at': '2026-09-11T09:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await setMode('member');
+    await repo.setSetting('cloudBackendUrl', url);
+    await repo.setSetting('cloudCode', 'QA1');
+  });
+  tearDown(() async {
+    await db.close();
+    await tmp.delete(recursive: true);
+  });
+
+  test('QA-B53-01 clean roster row: no eviction, rosterSeenSelf marked',
+      () async {
+    final cloud = FakeCloudStore();
+    cloud.store[rosterKey] = {
+      'id': devId,
+      'revoked_at': '',
+      'expelled_at': '',
+    };
+    final t = makeTransport();
+    var fired = false;
+    t.onEvicted = () => fired = true;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isFalse);
+    expect(t.isEvicted, isFalse);
+    final st = await repo.settings();
+    expect(st['sync.rosterSeenSelf'], '1');
+  });
+
+  test('QA-B53-02 revoked_at set in roster → eviction fires', () async {
+    final cloud = FakeCloudStore();
+    cloud.store[rosterKey] = {
+      'id': devId,
+      'revoked_at': DateTime.now().toIso8601String(),
+    };
+    final t = makeTransport();
+    var fired = 0;
+    t.onEvicted = () => fired++;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, 1);
+    expect(t.isEvicted, isTrue);
+    // تكرار الفحص لا يبث مرة ثانية.
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, 1);
+  });
+
+  test('QA-B53-03 "revoked": true flag → eviction fires', () async {
+    final cloud = FakeCloudStore();
+    cloud.store[rosterKey] = {'id': devId, 'revoked': true};
+    final t = makeTransport();
+    var fired = false;
+    t.onEvicted = () => fired = true;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isTrue);
+  });
+
+  test('QA-B53-04 deleted node: evicts ONLY after previously seen in roster',
+      () async {
+    final cloud = FakeCloudStore(); // لا عقدة → null.
+    final t = makeTransport();
+    var fired = false;
+    t.onEvicted = () => fired = true;
+    // لم نرَ أنفسنا بعد → لا طرد (حارس الإيجابيات الكاذبة).
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isFalse);
+    // الآن سُجّلنا ثم حُذفنا.
+    await repo.setSetting('sync.rosterSeenSelf', '1');
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isTrue);
+  });
+
+  test('QA-B53-05 owner/standalone never self-evict', () async {
+    final cloud = FakeCloudStore(); // عقدة محذوفة + rosterSeenSelf.
+    await repo.setSetting('sync.rosterSeenSelf', '1');
+    for (final mode in ['owner', 'standalone']) {
+      await setMode(mode);
+      final t = makeTransport();
+      var fired = false;
+      t.onEvicted = () => fired = true;
+      await http.runWithClient(
+          () => t.maybeCheckSelfEviction(force: true), cloud.client);
+      expect(fired, isFalse, reason: 'وضع $mode لا يُطرد ذاتياً');
+    }
+  });
+
+  test('QA-B53-06 after eviction: pull returns 0, push throws', () async {
+    final cloud = FakeCloudStore();
+    cloud.store[rosterKey] = {'id': devId, 'expelled_at': '2026-09-11'};
+    final t = makeTransport();
+    t.onEvicted = () {};
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(t.isEvicted, isTrue);
+    final applied = await http.runWithClient(() => t.pull(), cloud.client);
+    expect(applied, 0);
+  });
+
+  test(
+      'QA-B53-07 handleSelfEviction: queue+session cleared, standalone, '
+      'onDeviceEvicted broadcast once', () async {
+    // صف جهازنا موسوم مطروداً محلياً (وصل عبر syncRoster).
+    await db.update('devices', {'expelled_at': DateTime.now().toIso8601String()},
+        where: 'id = ?', whereArgs: [devId]);
+    // صف طابور معلق + مفاتيح جلسة.
+    await db.insert('operations', {
+      'id': 'op-x',
+      'workspace_id': 'default',
+      'entity_type': 'account',
+      'entity_id': 'e1',
+      'op_type': 'create',
+      'version': 1,
+      'device_id': devId,
+      'device_time': '2026-09-11T10:00:00',
+      'timestamp': '2026-09-11T10:00:00',
+      'payload': '{}',
+    });
+    await db.insert('sync_queue', {
+      'operation_id': 'op-x',
+      'target': 'cloud',
+      'status': 'pending',
+      'attempts': 0,
+      'created_at': '2026-09-11T10:00:00',
+      'updated_at': '2026-09-11T10:00:00',
+    });
+    await repo.setSetting('pendingJoin.token', 'ABC');
+    final engine = SyncEngine(repo: repo, dbProvider: () async => db);
+    var evictedEvents = 0;
+    SyncEngine.onDeviceEvicted = () => evictedEvents++;
+    addTearDown(() => SyncEngine.onDeviceEvicted = null);
+    await engine.handleSelfEviction();
+    await engine.handleSelfEviction(); // ازدواج مقصود — لا يتكرر البث.
+    expect(evictedEvents, 1);
+    // الطابور فُرّغ.
+    expect((await db.query('sync_queue')).length, 0);
+    // مفاتيح الجلسة أُزيلت والوضع عاد standalone.
+    final st = await repo.settings();
+    expect(st.containsKey('cloudBackendUrl'), isFalse);
+    expect(st.containsKey('cloudCode'), isFalse);
+    expect(st.containsKey('pendingJoin.token'), isFalse);
+    expect(await repo.workspaceMode(), 'standalone');
+    // إبطال الجلسة الكامل: شاشة الترحيب ستظهر عند الإقلاع التالي.
+    expect(st.containsKey('has_completed_onboarding'), isFalse);
+  });
+}

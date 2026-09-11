@@ -93,6 +93,11 @@ class CloudJoinException implements Exception {
 }
 
 class CloudJoin {
+  /// (دفعة 53) خطاف الطرد الذاتي: يضبطه SyncEngine عند الإقلاع ليتولى
+  /// المعالجة المركزية (إيقاف SSE/الدفع + تنظيف الجلسة + بث للواجهة)
+  /// بدل الاكتفاء بإعادة الضبط الصامتة.
+  static Future<void> Function()? onSelfEvicted;
+
   static String _root(String base, String ws) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
 
@@ -506,7 +511,14 @@ class CloudJoin {
               '${r['revoked_at'] ?? ''}'.isNotEmpty;
           if (expelledNow && !isOwner) {
             try {
-              await repo.resetToStandaloneAfterExpulsion();
+              // (دفعة 53) الخطاف المركزي أولاً: المحرك يوقف SSE/الدفع،
+              // ينظف الجلسة، يعيد الضبط، ويبث onDeviceEvicted للواجهة.
+              final hook = onSelfEvicted;
+              if (hook != null) {
+                await hook();
+              } else {
+                await repo.resetToStandaloneAfterExpulsion();
+              }
             } catch (_) {}
             return true;
           }

@@ -35,6 +35,7 @@ import 'group_management_screen.dart';
 import 'notifications_sheet.dart';
 import 'app_notice.dart';
 import '../core/sfx.dart';
+import 'onboarding_screen.dart' show OnboardingScreen;
 import '../core/keep_alive_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
@@ -372,6 +373,41 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // البانر قابل للحل مباشرة: زر «إعادة المحاولة والمزامنة فوراً» ينفّذ
     // triggerImmediateSync() مع سبينر داخل البانر، والنجاح يخفيه لحظياً
     // (المحرك يبثّ null فور تفريغ الطابور). «إخفاء» = غفوة 30 دقيقة.
+    // (دفعة 53) الطرد التلقائي: المدير حذف/حظر/طرد هذا الجهاز — المحرك
+    // نظّف الجلسة وأعاد الضبط بالفعل؛ هنا نعيد التوجيه لشاشة الترحيب
+    // مع الرسالة الصريحة، من جذر الملاحة مباشرة.
+    SyncEngine.onDeviceEvicted = () {
+      if (!mounted) return;
+      Sfx.error();
+      final nav = Navigator.of(context, rootNavigator: true);
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+        (_) => false,
+      );
+      // رسالة صريحة فوق شاشة الترحيب (بعد اكتمال الانتقال).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = nav.context;
+        showDialog<void>(
+          context: ctx,
+          builder: (dCtx) => AlertDialog(
+            icon: const Icon(Icons.link_off, color: Colors.red, size: 40),
+            title: const Text('انتهى ارتباط الجهاز'),
+            content: const Text(
+              'تم إلغاء ارتباط هذا الجهاز من قبل مدير المؤسسة.\n\n'
+              'أُزيلت بيانات المجموعة من هذا الجهاز ويمكنك استخدامه '
+              'كجهاز مستقل أو طلب الانضمام مجدداً.',
+              style: TextStyle(height: 1.6),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dCtx),
+                child: const Text('حسناً'),
+              ),
+            ],
+          ),
+        );
+      });
+    };
     SyncEngine.onSyncDanger = (message) {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
@@ -499,6 +535,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
     SyncEngine.onDeviceSyncComplete = null;
     SyncEngine.onSyncDanger = null;
+    SyncEngine.onDeviceEvicted = null;
     LanSyncService.onChatMessage = null;
     LanSyncService.onMemberNotice = null;
     super.dispose();
