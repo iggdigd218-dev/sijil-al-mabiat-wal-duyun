@@ -577,6 +577,16 @@ class DeviceCard extends StatelessWidget {
                           ? lastSeen
                           : Fmt.relative(DateTime.parse(lastSeen)),
                     ),
+                  // (دفعة 58 — متطلب 9) وقت آخر مزامنة ناجحة لكل عضو —
+                  // يراها المدير على بطاقة الجهاز مباشرة.
+                  if ('${data['last_sync_at'] ?? ''}'.isNotEmpty)
+                    _smallLabel(
+                      'آخر مزامنة ☁️',
+                      DateTime.tryParse('${data['last_sync_at']}') == null
+                          ? '${data['last_sync_at']}'
+                          : Fmt.relative(
+                              DateTime.parse('${data['last_sync_at']}')),
+                    ),
                 ],
               ),
               const SizedBox(height: 8),

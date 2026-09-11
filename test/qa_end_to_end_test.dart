@@ -106,7 +106,8 @@ void main() {
       await _drain(tester);
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.byType(TxForm), findsNothing);
-      expect(find.text('QA UI SAVE'), findsOneWidget);
+      // (دفعة 58 — متطلب 10) البطاقة تعرض «الوصف · HH:MM» — نطابق جزئياً.
+      expect(find.textContaining('QA UI SAVE'), findsOneWidget);
       await tester.runAsync(() async {
         final rows = await repo.transactions();
         expect(rows, hasLength(1));

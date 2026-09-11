@@ -378,23 +378,31 @@ class MainActivity : FlutterFragmentActivity() {
         val nm = getSystemService(android.content.Context.NOTIFICATION_SERVICE)
             as android.app.NotificationManager
         val channelId = "nexora_$sound"
+        // (دفعة 58 — متطلب 7) sound == "silent": إشعار صامت تماماً (كتم شامل).
+        val silent = sound == "silent"
         val soundUri = Uri.parse("android.resource://$packageName/raw/$sound")
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             val ch = android.app.NotificationChannel(
                 channelId,
-                "تنبيهات نكسورا",
-                android.app.NotificationManager.IMPORTANCE_HIGH
+                if (silent) "تنبيهات نكسورا (صامتة)" else "تنبيهات نكسورا",
+                if (silent) android.app.NotificationManager.IMPORTANCE_LOW
+                else android.app.NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "إشعارات مهمة بصوت مميز"
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 350, 150, 350)
-                setSound(
-                    soundUri,
-                    android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
+                if (silent) {
+                    enableVibration(false)
+                    setSound(null, null)
+                } else {
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 350, 150, 350)
+                    setSound(
+                        soundUri,
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                }
             }
             nm.createNotificationChannel(ch)
         }
@@ -415,9 +423,12 @@ class MainActivity : FlutterFragmentActivity() {
             android.app.Notification.Builder(this, channelId)
         } else {
             @Suppress("DEPRECATION")
-            android.app.Notification.Builder(this)
-                .setSound(soundUri)
-                .setVibrate(longArrayOf(0, 350, 150, 350))
+            android.app.Notification.Builder(this).apply {
+                if (!silent) {
+                    setSound(soundUri)
+                    setVibrate(longArrayOf(0, 350, 150, 350))
+                }
+            }
         }
         val notification = builder
             .setContentTitle(title)

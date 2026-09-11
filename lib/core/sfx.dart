@@ -32,9 +32,16 @@ class Sfx {
   static void setMuted(bool v) => _muted = v;
 
   /// تحدّث حالتي الصوت والاهتزاز من إعدادات المستخدم.
-  static void applySettings({required bool sound, required bool haptic}) {
+  /// (دفعة 58 — متطلب 7) [mute] كتم شامل اختياري يشمل حتى أصوات
+  /// إشعارات النظام الخارجية — مفتاح واحد يسكت كل شيء.
+  static void applySettings({
+    required bool sound,
+    required bool haptic,
+    bool? mute,
+  }) {
     _soundOn = sound;
     _hapticOn = haptic;
+    if (mute != null) _muted = mute;
   }
 
   static bool get _soundEnabled => !_muted && _soundOn;
@@ -67,12 +74,16 @@ class Sfx {
     String entityType = '',
     String entityId = '',
   }) async {
-    if (_muted || !_isAndroid) return;
+    if (!_isAndroid) return;
     try {
+      // (دفعة 58 — متطلب 7) عند الكتم الشامل يصل الإشعار لكن صامتاً —
+      // لا يفوّت المستخدم أمراً مهماً ولا يزعجه صوت.
       await _channel.invokeMethod('notify', {
         'title': title,
         'body': body,
-        'sound': peaceful ? 'nexora_peace' : 'nexora_alert',
+        'sound': _muted || !_soundOn
+            ? 'silent'
+            : (peaceful ? 'nexora_peace' : 'nexora_alert'),
         'entityType': entityType,
         'entityId': entityId,
       });

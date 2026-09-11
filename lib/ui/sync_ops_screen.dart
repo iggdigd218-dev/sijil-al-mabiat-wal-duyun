@@ -25,11 +25,22 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
   StreamSubscription<int>? _bus;
   bool _syncing = false;
 
+  /// (دفعة 58 — متطلب 9) وقت آخر مزامنة سحابية ناجحة لهذا الجهاز.
+  String _lastCloudSync = '';
+
   @override
   void initState() {
     super.initState();
     _ticker = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
     _bus = SyncActivityBus.instance.stream.listen((_) => _refresh());
+    _loadLastSync();
+  }
+
+  Future<void> _loadLastSync() async {
+    final st = await ref.read(repoProvider).settings();
+    if (mounted) {
+      setState(() => _lastCloudSync = st['lastCloudSync'] ?? '');
+    }
   }
 
   @override
@@ -42,6 +53,7 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
   void _refresh() {
     if (!mounted) return;
     ref.invalidate(deviceSyncStatusProvider);
+    _loadLastSync();
   }
 
   Future<void> _syncNow() async {
@@ -132,6 +144,20 @@ class _SyncOpsScreenState extends ConsumerState<SyncOpsScreen> {
                             style: TextStyle(
                                 fontSize: 12.5, color: Colors.grey[700]),
                           ),
+                          // (دفعة 58 — متطلب 9) وقت آخر مزامنة سحابية
+                          // ناجحة لهذا الجهاز — يظهر حياً ويتحدّث تلقائياً.
+                          if (_lastCloudSync.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              '☁️ آخر مزامنة ناجحة: '
+                              '${_lastSyncLabel(_lastCloudSync)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.teal,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

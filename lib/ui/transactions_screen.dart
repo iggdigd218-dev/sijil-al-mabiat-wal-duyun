@@ -605,11 +605,13 @@ class _TxCard extends ConsumerWidget {
                       children: [
                         Pill(tx.type.label, color: color),
                         const SizedBox(width: 6),
+                        // (دفعة 58 — متطلب 10) وقت التنفيذ HH:MM بجانب
+                        // التاريخ في بطاقة العملية.
                         Flexible(
                           child: Text(
                             tx.description.isEmpty
-                                ? Fmt.date(tx.date)
-                                : tx.description,
+                                ? '${Fmt.date(tx.date)} · ${Fmt.clock(tx.createdAt)}'
+                                : '${tx.description} · ${Fmt.clock(tx.createdAt)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(

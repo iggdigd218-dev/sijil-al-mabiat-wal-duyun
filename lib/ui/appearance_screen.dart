@@ -80,6 +80,28 @@ class AppearanceScreen extends ConsumerWidget {
                   },
                 ),
                 const Divider(height: 1),
+                // (دفعة 58 — متطلب 7) الوضع الصامت الشامل: يكتم كل الأصوات
+                // والاهتزازات وحتى صوت إشعارات النظام الخارجية بمفتاح واحد.
+                SwitchListTile(
+                  secondary: const Icon(Icons.volume_off_outlined),
+                  title: const Text('الوضع الصامت'),
+                  subtitle: const Text(
+                      'كتم كل الأصوات والاهتزازات — تصل الإشعارات صامتة'),
+                  value: (st['sfxMute'] ?? '0') == '1',
+                  onChanged: (v) async {
+                    await ref
+                        .read(repoProvider)
+                        .setSetting('sfxMute', v ? '1' : '0');
+                    Sfx.applySettings(
+                      sound: (st['sfxSound'] ?? '1') == '1',
+                      haptic: (st['sfxHaptic'] ?? '1') == '1',
+                      mute: v,
+                    );
+                    if (!v) Sfx.pop();
+                    ref.invalidate(settingsProvider);
+                  },
+                ),
+                const Divider(height: 1),
                 SwitchListTile(
                   secondary: const Icon(Icons.volume_up_outlined),
                   title: const Text('الأصوات'),

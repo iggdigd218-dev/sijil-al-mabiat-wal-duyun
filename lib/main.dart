@@ -85,6 +85,7 @@ Future<void> main() async {
     Sfx.applySettings(
       sound: (initialSettings['sfxSound'] ?? '1') == '1',
       haptic: (initialSettings['sfxHaptic'] ?? '1') == '1',
+      mute: (initialSettings['sfxMute'] ?? '0') == '1',
     );
   } catch (e) {
     debugPrint('initial settings failed: $e');

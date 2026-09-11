@@ -472,8 +472,9 @@ class _TxTile extends StatelessWidget {
         tx.type.label,
         style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
       ),
+      // (دفعة 58 — متطلب 10) وقت التنفيذ HH:MM بجانب التاريخ.
       subtitle: Text(
-        '${Fmt.date(tx.date)}'
+        '${Fmt.date(tx.date)} · ${Fmt.clock(tx.createdAt)}'
         '${tx.description.isEmpty ? '' : ' · ${tx.description}'}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,

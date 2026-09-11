@@ -1,6 +1,7 @@
 // ويدجت مؤشر حالة المزامنة في شريط الحالة.
 import 'package:flutter/material.dart';
 
+import '../../core/format.dart';
 import '../../data/sync/sync_service.dart';
 
 class SyncStatusBadge extends StatelessWidget {
@@ -20,8 +21,15 @@ class SyncStatusBadge extends StatelessWidget {
         (Icons.sync, Colors.amber, 'تجري المزامنة في الخلفية'),
       SyncState.offline => (Icons.cloud_off, Colors.grey, 'غير فعّال'),
     };
+    // (دفعة 58 — متطلب 9) وقت آخر مزامنة سحابية ناجحة يظهر في التلميح
+    // بجانب حالة الاتصال — يراه العضو حياً على جهازه.
+    final lastDt =
+        info.lastSyncAt == null ? null : DateTime.tryParse(info.lastSyncAt!);
+    final tooltip = lastDt == null
+        ? label
+        : '$label · آخر مزامنة: ${Fmt.relative(lastDt)}';
     return Tooltip(
-      message: label,
+      message: tooltip,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),

@@ -9,6 +9,7 @@ class Fmt {
   static final _two = NumberFormat('#,##0.00', 'en');
   static final _date = DateFormat('yyyy/MM/dd', 'en');
   static final _dateTime = DateFormat('yyyy/MM/dd  hh:mm a', 'en');
+  static final _clock = DateFormat('hh:mm a', 'en');
   static final _month = DateFormat('MMMM yyyy', 'ar');
   static final _day = DateFormat('EEEE d MMMM', 'ar');
 
@@ -24,6 +25,10 @@ class Fmt {
 
   static String date(DateTime d) => _date.format(d);
   static String dateTime(DateTime d) => _dateTime.format(d);
+
+  /// (دفعة 58 — متطلب 10) وقت التنفيذ فقط HH:MM — يظهر بجانب التاريخ
+  /// في بطاقات العمليات.
+  static String clock(DateTime d) => _clock.format(d);
   static String month(DateTime d) => _month.format(d);
   static String day(DateTime d) => _day.format(d);
 
