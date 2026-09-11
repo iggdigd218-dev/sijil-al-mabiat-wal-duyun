@@ -16,8 +16,6 @@ import '../core/workspace_mode.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
-import 'sync/lan_http_transport.dart';
-import 'sync/qr_pairing.dart';
 import 'sync/recorder.dart';
 import 'sync/sync_queue.dart';
 import 'sync/workspace_service.dart';
@@ -68,10 +66,8 @@ class Repo {
           'is_paired': 1,
           'is_owner': 1, // الجهاز المحلي في الوضع المستقل هو المالك.
           // (دفعة 57) السر يُخزَّن معمّى — لا نص صريح على القرص.
-          'auth_secret': await SecretStore.protect(generateLanSecret()),
+          'auth_secret': await SecretStore.protect(generateDeviceSecret()),
           'revoked_at': '',
-          'ip_address': '',
-          'port': kDefaultLanPort,
           'last_seen_at': now,
           'last_sync_at': '',
           'created_at': now,
@@ -311,7 +307,7 @@ class Repo {
     final adminPerms = defaultPerms(UserRole.admin);
     final permStr =
         adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    final newSecret = await SecretStore.protect(generateLanSecret());
+    final newSecret = await SecretStore.protect(generateDeviceSecret());
     await db.transaction((txn) async {
       const tables = [
         'accounts',
@@ -345,8 +341,6 @@ class Repo {
         'is_owner': 1,
         'auth_secret': newSecret,
         'revoked_at': '',
-        'ip_address': '',
-        'port': kDefaultLanPort,
         'last_seen_at': now,
         'last_sync_at': '',
         'created_at': now,
@@ -1716,7 +1710,7 @@ class Repo {
       {
         'revoked_at': '',
         'is_paired': 1,
-        'auth_secret': await SecretStore.protect(generateLanSecret()),
+        'auth_secret': await SecretStore.protect(generateDeviceSecret()),
         'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'id = ?',
@@ -1729,7 +1723,7 @@ class Repo {
   Future<String> resetDeviceSecret(String deviceId) async {
     await _ensureCan('manage_users');
     final db = await _db;
-    final secret = generateLanSecret();
+    final secret = generateDeviceSecret();
     await db.update(
       'devices',
       {
@@ -1763,25 +1757,8 @@ class Repo {
     await db.update('users', patch, where: 'id = ?', whereArgs: [userId]);
   }
 
-  /// توليد رمز اقتران جديد صالح 5 دقائق لاستقبال جهاز جديد.
-  Future<Map<String, String?>> createPairingToken({
-    String? ipAddress,
-    int? port,
-  }) async {
-    await _ensureCan('manage_users');
-    final db = await _db;
-    final svc = QrPairingService(db: db, ourDeviceId: requireDeviceId);
-    final info = await svc.createPairingToken(
-      workspaceId: requireWorkspaceId,
-      port: port ?? kDefaultLanPort,
-      ipAddress: ipAddress,
-    );
-    return {
-      'token': info.token,
-      'qr': info.qrContent,
-      'expires': info.expiresAt.toIso8601String(),
-    };
-  }
+  // (دفعة 58) حُذفت createPairingToken (اقتران LAN عبر QR بعنوان IP) —
+  // الاقتران أصبح سحابياً حصرياً عبر CloudJoin.createInvite (رمز/QR سحابي).
 
   /// يُنفَّذ دوريًا على المضيف: أي جهاز لم يظهر لمدة 30 يومًا يُطرَد تلقائيًا.
   /// يعيد قائمة الأجهزة المطرودة حديثًا (للعرض في الإشعارات).

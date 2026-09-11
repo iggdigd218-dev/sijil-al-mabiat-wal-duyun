@@ -4,8 +4,6 @@
 //  2) قائمة الأجهزة المرتبطة مع صلاحياتها.
 //  3) قائمة المستخدمين والصلاحيات + إعادة تعيين PIN/كلمة المرور.
 //  4) النسخ الاحتياطي.
-import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,9 +15,6 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
-import 'join_group_flow.dart';
-import 'qr_pair_scanner.dart' show scanQrPair;
-import 'sync_settings_section.dart' show PairingQrDialog, PairingQrInfo;
 import 'widgets.dart';
 
 class GroupManagementScreen extends ConsumerStatefulWidget {
@@ -598,102 +593,6 @@ class _PairHubSheet extends ConsumerStatefulWidget {
 }
 
 class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
-  DateTime? _pairAt;
-  Timer? _tick;
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _generateQr() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final repo = ref.read(repoProvider);
-      final st = await repo.settings();
-      final port = int.tryParse(st['lanSyncPort'] ?? '43053') ?? 43053;
-      // تأكّد من أن خادم المزامنة يستمع فعلاً قبل توليد الرمز.
-      String? ip;
-      try {
-        for (final iface in await NetworkInterface.list(
-            includeLoopback: false, type: InternetAddressType.IPv4)) {
-          for (final a in iface.addresses) {
-            if (!a.isLoopback && a.type == InternetAddressType.IPv4) {
-              ip = a.address;
-              break;
-            }
-          }
-          if (ip != null) break;
-        }
-      } catch (_) {}
-      final engine = ref.read(syncEngineProvider);
-      if (engine.hasStarted) engine.start();
-      final hostUp = await engine.ensureLanHost(port);
-      if (!hostUp) {
-        if (mounted) {
-          showSnack(
-              context,
-              'تعذّر تشغيل خادم المزامنة على المنفذ $port. تأكد أن المنفذ حر واسمح للتطبيق في جدار الحماية.',
-              error: true);
-        }
-        return;
-      }
-      final info = await repo.createPairingToken(ipAddress: ip, port: port);
-      setState(() {
-        _pairAt = DateTime.now();
-      });
-      _tick?.cancel();
-      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_pairAt == null) return;
-        final left = 300 - DateTime.now().difference(_pairAt!).inSeconds;
-        if (left <= 0 && mounted) {
-          setState(() {
-            _pairAt = null;
-          });
-          _tick?.cancel();
-        }
-      });
-      Sfx.pair();
-      // افتح حوار QR الكبير.
-      if (!mounted) return;
-      Navigator.pop(context);
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => PairingQrDialog(
-          info: PairingQrInfo(
-            token: info['token']!,
-            qrContent: info['qr']!,
-            expiresAt: DateTime.tryParse(info['expires'] ?? '') ??
-                DateTime.now().add(const Duration(minutes: 5)),
-          ),
-          port: port,
-          ip: ip,
-          primaryColor: Theme.of(context).colorScheme.primary,
-        ),
-      );
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _scanQr() async {
-    // كان الخلل هنا: الكاميرا تُفتح وتُهمل نتيجتها فيخرج الجهاز بلا ربط.
-    // الآن: مسح ← تأكيد ← اقتران فعلي ← استلام لقطة البيانات كاملة.
-    // نلتقط container وnavigator قبل إغلاق الـ sheet لأن ref يفنى معها.
-    final container = ProviderScope.containerOf(context, listen: false);
-    final rootContext = Navigator.of(context, rootNavigator: true).context;
-    Navigator.pop(context);
-    Sfx.click();
-    final data = await scanQrPair(rootContext);
-    if (data == null || !rootContext.mounted) return;
-    await joinGroupFromScan(rootContext, container, data);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -738,29 +637,14 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
               ),
             ),
             const SizedBox(height: 20),
-            _HubTile(
-              icon: Icons.qr_code_2_rounded,
-              color: const Color(0xFF4CAF50),
-              title: 'إنشاء باركود QR للاقتران',
-              subtitle:
-                  'يعرض باركوداً يمسحه الجهاز الآخر بكاميراه (أسرع طريقة، صالح 5 دقائق).',
-              onTap: _generateQr,
-            ),
-            _HubTile(
-              icon: Icons.photo_camera_rounded,
-              color: const Color(0xFF2196F3),
-              title: 'مسح باركود بالكاميرا',
-              subtitle:
-                  'للانضمام إلى مجموعة موجودة بجهاز آخر — افتح الكاميرا وامسح باركود المضيف.',
-              onTap: _scanQr,
-            ),
-            const _HubManualTile(),
+            // (دفعة 58) الاقتران سحابي حصرياً — أزيلت طرق LAN (QR بعنوان IP،
+            // الإدخال اليدوي IP+منفذ، كود التفعيل المحلي) نهائياً.
             _HubTile(
               icon: Icons.cloud_sync_outlined,
               color: const Color(0xFF0EA5E9),
-              title: 'ربط عضو عبر السحابة (عبر الإنترنت)',
+              title: 'ربط عضو عبر السحابة',
               subtitle:
-                  'لجهاز بعيد خارج شبكة Wi-Fi: يُنشئ دعوة سحابية (QR + رمز صالح 24 ساعة) بنفس رابط حسابك السحابي — تُحذف بيانات جهاز العضو وتُستبدل بنسخة المجموعة.',
+                  'يُنشئ دعوة سحابية (QR + رمز PIN صالح 15 دقيقة) — يمسحها العضو أو يُدخل الرمز، وبعد موافقتك تُستبدل بياناته بنسخة المجموعة.',
               onTap: () {
                 final rootContext =
                     Navigator.of(context, rootNavigator: true).context;
@@ -769,107 +653,12 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
                 showCloudInviteDialog(rootContext, ref);
               },
             ),
-            _HubTile(
-              icon: Icons.vpn_key_outlined,
-              color: const Color(0xFF9C27B0),
-              title: 'كود تعريف الجهاز (لتفعيل الحسابات عن بُعد)',
-              subtitle:
-                  'أعطِ هذا الكود للعميل/العضو ليدخله يدوياً في جهازه بعد إدخال IP والمنفذ.',
-              onTap: () {
-                Navigator.pop(context);
-                _showActivationCode(context);
-              },
-            ),
           ],
         ),
       ),
     );
   }
 
-  void _showActivationCode(BuildContext context) async {
-    final repo = ref.read(repoProvider);
-    final st = await repo.settings();
-    final port = int.tryParse(st['lanSyncPort'] ?? '43053') ?? 43053;
-    final engine = ref.read(syncEngineProvider);
-    if (engine.hasStarted) engine.start();
-    final ok = await engine.ensureLanHost(port);
-    if (!ok) {
-      if (mounted) {
-        showSnack(context, 'تعذّر تشغيل خادم المزامنة على المنفذ $port.',
-            error: true);
-      }
-      return;
-    }
-    if (!context.mounted) return;
-    showDialog(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('كود تعريف الجهاز'),
-        content: FutureBuilder<Map<String, String?>>(
-          future: repo.createPairingToken(port: port),
-          builder: (ctx, snap) {
-            if (!snap.hasData) {
-              return const SizedBox(
-                height: 80,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            final info = snap.data!;
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'أعطِ العميل/العضو البيانات التالية ليدخلها يدوياً في جهازه (صالحة 5 دقائق):',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.black54,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _kv('الرمز', info['token'] ?? ''),
-                _kv('المنفذ', '43053'),
-                const SizedBox(height: 10),
-                const Text(
-                  'على الجهاز الآخر: شاشة المزامنة ← انضمام ← إدخال IP + المنفذ + الرمز.',
-                  style: TextStyle(fontSize: 11, color: Colors.black45),
-                ),
-              ],
-            );
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(c),
-            child: const Text('إغلاق'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Text('$k: ', style: const TextStyle(fontWeight: FontWeight.w700)),
-            Expanded(
-              child: Directionality(
-                textDirection: TextDirection.ltr,
-                child: SelectableText(
-                  v,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
 }
 
 class _HubTile extends StatelessWidget {
@@ -937,21 +726,6 @@ class _HubTile extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _HubManualTile extends StatelessWidget {
-  const _HubManualTile();
-  @override
-  Widget build(BuildContext context) {
-    return _HubTile(
-      icon: Icons.edit_note,
-      color: Colors.orange,
-      title: 'إدخال بيانات الجهاز يدوياً',
-      subtitle:
-          'إذا لم يعمل المسح أو كانت الشبكات مختلفة، أدخل IP الجهاز المضيف والمنفذ ورمز الاقتران مباشرة من قسم المزامنة في الإعدادات.',
-      onTap: () => Navigator.pop(context),
     );
   }
 }

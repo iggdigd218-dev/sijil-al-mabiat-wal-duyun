@@ -1,7 +1,4 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
@@ -21,45 +18,6 @@ class DevicesScreen extends ConsumerStatefulWidget {
 }
 
 class _DevicesScreenState extends ConsumerState<DevicesScreen> {
-  Map<String, String?>? _pairInfo;
-  DateTime? _pairAt;
-  Timer? _tick;
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _startPairing() async {
-    // لا نستطيع قراءة WiFi IP بدون صلاحيات إضافية؛ يُترك IP فارغاً ويدخله
-    // المستخدم يدوياً عند الاقتران (الرمز والمنفذ كافيان للمزامنة السحابية).
-    try {
-      final info = await ref.read(repoProvider).createPairingToken();
-      setState(() {
-        _pairInfo = info;
-        _pairAt = DateTime.now();
-      });
-      _tick?.cancel();
-      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_pairAt == null) return;
-        final left = 300 - DateTime.now().difference(_pairAt!).inSeconds;
-        if (left <= 0 && mounted) {
-          setState(() {
-            _pairInfo = null;
-            _pairAt = null;
-          });
-          _tick?.cancel();
-        } else {
-          setState(() {});
-        }
-      });
-    } catch (e) {
-      if (mounted)
-        showSnack(context, 'تعذّر توليد رمز الاقتران: $e', error: true);
-    }
-  }
-
   Future<void> _assign(int? userId, String deviceId) async {
     if (userId == null) return;
     try {
@@ -133,9 +91,10 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                       ),
                     ),
                     FilledButton.icon(
-                      onPressed: _startPairing,
-                      icon: const Icon(Icons.add),
-                      label: const Text('ربط جهاز جديد'),
+                      // (دفعة 58) الربط سحابي فقط — دعوة عبر Firebase.
+                      onPressed: () => showCloudInviteDialog(context, ref),
+                      icon: const Icon(Icons.cloud_outlined),
+                      label: const Text('ربط جهاز جديد عبر السحابة'),
                     ),
                   ],
                 ),
@@ -148,7 +107,6 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             ),
           ),
         ),
-        if (_pairInfo != null) _pairingCard(),
         const SizedBox(height: 12),
         const SectionTitle('الأجهزة'),
         devicesAsync.when(
@@ -407,137 +365,6 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       ],
     );
   }
-
-  Widget _pairingCard() {
-    final info = _pairInfo!;
-    final token = info['token'] ?? '';
-    final qr = info['qr'] ?? '';
-    final ipPart = _extractIp(qr);
-    final portPart = _extractPort(qr);
-    final secondsLeft = _pairAt == null
-        ? 0
-        : (300 - DateTime.now().difference(_pairAt!).inSeconds).clamp(0, 300);
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Card(
-        color: AppColors.infoSoftOf(context),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.qr_code_2, size: 22),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'رمز اقتران جديد (صالح 5 دقائق)',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                  ),
-                  const Spacer(),
-                  _chip('${secondsLeft}s', Icons.timer_outlined),
-                  const SizedBox(width: 6),
-                  IconButton(
-                    tooltip: 'إغلاق',
-                    onPressed: () => setState(() {
-                      _pairInfo = null;
-                      _pairAt = null;
-                      _tick?.cancel();
-                    }),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'على الجهاز الآخر افتح التطبيق ← الإعدادات ← ربط بجهاز آخر، وأدخل المعلومات التالية:',
-                style: TextStyle(fontSize: 12, height: 1.5),
-              ),
-              const SizedBox(height: 10),
-              _copyRow('رمز الاقتران', token),
-              if (ipPart != null) _copyRow('عنوان IP للمضيف', ipPart),
-              if (portPart != null) _copyRow('المنفذ', portPart),
-              _copyRow('رابط الاقتران الكامل', qr, multiline: true),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _copyRow(String label, String value, {bool multiline = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment:
-            multiline ? CrossAxisAlignment.start : CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              label,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                height: 1.3,
-              ),
-            ),
-          ),
-          IconButton(
-            iconSize: 18,
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              showSnack(context, 'تم النسخ ✅');
-            },
-            icon: const Icon(Icons.copy),
-            tooltip: 'نسخ',
-          ),
-        ],
-      ),
-    );
-  }
-
-  String? _extractIp(String qr) {
-    try {
-      final u = Uri.parse(qr);
-      return u.queryParameters['ip'];
-    } catch (_) {
-      return null;
-    }
-  }
-
-  String? _extractPort(String qr) {
-    try {
-      final u = Uri.parse(qr);
-      return u.queryParameters['port'];
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Widget _chip(String label, IconData icon) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.primary.withValues(alpha: .3)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12),
-            const SizedBox(width: 4),
-            Text(label, style: const TextStyle(fontSize: 11)),
-          ],
-        ),
-      );
 }
 
 class DeviceCard extends StatelessWidget {

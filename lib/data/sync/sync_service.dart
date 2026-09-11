@@ -19,7 +19,6 @@ class SyncStatusInfo {
   final String? lastSyncAt;
   final String? cloudUrl;
   final bool cloudConfigured;
-  final bool lanConfigured;
   final String? error;
 
   const SyncStatusInfo({
@@ -29,7 +28,6 @@ class SyncStatusInfo {
     this.lastSyncAt,
     this.cloudUrl,
     required this.cloudConfigured,
-    required this.lanConfigured,
     this.error,
   });
 }
@@ -50,18 +48,13 @@ class SyncService {
     );
     final syncing = (s.first['c'] as int?) ?? 0;
     final st = await repo.settings();
-    final lastCloud = st['lastCloudSync'];
-    final lastLan = st['lastLanSync'];
-    final lastSync = (lastCloud?.isNotEmpty == true &&
-            (lastLan == null || lastCloud!.compareTo(lastLan) > 0))
-        ? lastCloud
-        : (lastLan?.isNotEmpty == true ? lastLan : lastCloud);
+    // (دفعة 58) القناة الوحيدة سحابية — لا lastLanSync/lanSyncEnabled.
+    final lastSync = st['lastCloudSync'];
     final cloudUrl = (st['cloudBackendUrl'] ?? '').trim();
     final cloudConfigured =
         cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
-    final lanConfigured = (st['lanSyncEnabled'] ?? '0') == '1';
     final mode = await repo.workspaceMode();
-    final anyChannel = cloudConfigured || lanConfigured;
+    final anyChannel = cloudConfigured;
 
     SyncState state;
     if (mode == 'standalone') {
@@ -90,7 +83,6 @@ class SyncService {
       lastSyncAt: (lastSync?.isNotEmpty == true) ? lastSync : null,
       cloudUrl: cloudConfigured ? cloudUrl : null,
       cloudConfigured: cloudConfigured,
-      lanConfigured: lanConfigured,
     );
   }
 }

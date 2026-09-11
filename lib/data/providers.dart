@@ -799,14 +799,15 @@ final syncOpsProvider =
     for (final o in opRows) {
       ops[o['id'] as String] = o;
     }
-    // عدد الأجهزة التي استلمت كل عملية.
+    // (دفعة 58) لا op_deliveries بعد الآن: العملية المدفوعة للسحابة
+    // (synced=1) تُعد واصلة لكل الأقران — SSE يسلّمها لحظياً.
     final dRows = await db.rawQuery(
-      'SELECT operation_id, COUNT(*) c FROM op_deliveries '
-      'WHERE operation_id IN ($placeholders) GROUP BY operation_id',
+      'SELECT id, synced FROM operations WHERE id IN ($placeholders)',
       opIds,
     );
     for (final d in dRows) {
-      deliveries[d['operation_id'] as String] = (d['c'] as int?) ?? 0;
+      deliveries[d['id'] as String] =
+          ((d['synced'] as int?) ?? 0) == 1 ? 1 << 20 : 0;
     }
   }
   // إجمالي الأقران المقترنين (المطلوب الوصول إليهم).
@@ -832,7 +833,9 @@ final syncOpsProvider =
       entityId: (o?['entity_id'] as String?) ?? '',
       updatedAt: (r['updated_at'] as String?) ?? '',
       deviceId: (o?['device_id'] as String?) ?? '',
-      deliveredCount: deliveries[opId] ?? 0,
+      deliveredCount: (deliveries[opId] ?? 0) > totalPeers
+          ? totalPeers
+          : (deliveries[opId] ?? 0),
       totalPeers: totalPeers,
       summary: syncOpSummary((o?['payload'] as String?) ?? ''),
     );
@@ -864,10 +867,10 @@ final txDeliveryBadgesProvider =
   final total = (peersR.first['c'] as int?) ?? 0;
   if (total <= 0) return const {};
   // أحدث عملية محلية لكل معاملة + عدد الأجهزة التي استلمتها.
+  // (دفعة 58) شارة التسليم سحابية: synced=1 = وصلت السحابة = وصلت الجميع.
   final rows = await db.rawQuery('''
     SELECT o.entity_id AS eid,
-           (SELECT COUNT(*) FROM op_deliveries d WHERE d.operation_id = o.id)
-             AS delivered
+           CASE WHEN o.synced = 1 THEN $total ELSE 0 END AS delivered
     FROM operations o
     WHERE o.entity_type = 'tx' AND o.device_id = ?
       AND o.version = (
@@ -958,22 +961,21 @@ final groupPeersProvider = FutureProvider<List<GroupPeer>>((ref) async {
     where: "COALESCE(expelled_at,'') = ''",
     orderBy: 'is_owner DESC, name ASC',
   );
-  final presence = ref.read(syncEngineProvider).presence;
   final out = <GroupPeer>[];
   for (final d in rows) {
     final id = d['id'] as String;
     final isSelf = id == ourId;
     final revoked = ((d['revoked_at'] as String?) ?? '').isNotEmpty;
-    // متصل: نحن دائماً؛ الأقران وفق نظام الحضور أو آخر ظهور حديث (<15 ث).
+    // (دفعة 58) متصل: نحن دائماً؛ الأقران وفق آخر ظهور/مزامنة سحابية
+    // حديثة (< 5 دقائق) — لا مسبار LAN بعد اليوم.
     bool online = isSelf;
     if (!isSelf) {
-      if (presence != null) {
-        online = presence.isOnline(id);
-      } else {
-        final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
-        online = seen != null &&
-            DateTime.now().difference(seen) < const Duration(seconds: 15);
-      }
+      final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
+      final ls = DateTime.tryParse((d['last_sync_at'] as String?) ?? '');
+      final freshest =
+          (ls != null && (seen == null || ls.isAfter(seen))) ? ls : seen;
+      online = freshest != null &&
+          DateTime.now().difference(freshest) < const Duration(minutes: 5);
     }
     out.add(GroupPeer(
       deviceId: id,
@@ -1061,42 +1063,33 @@ final deviceSyncStatusProvider =
     ORDER BY d.is_owner DESC, d.name ASC
   ''', [ourId]);
   if (peers.isEmpty) return const [];
-  final presence = ref.read(syncEngineProvider).presence;
   final out = <DeviceSyncStatus>[];
   for (final d in peers) {
     final id = d['id'] as String;
-    // عملياتنا التي لم تُسلَّم بعد لهذا الجهاز تحديداً.
+    // (دفعة 58) «الناقص» سحابياً = عملياتنا التي لم تُدفع للسحابة بعد —
+    // ما إن تصل السحابة يسحبها كل قرين لحظياً عبر SSE.
     final missing = await db.rawQuery('''
       SELECT COUNT(*) c FROM operations o
       WHERE o.device_id = ?
         AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}
-        AND NOT EXISTS (
-          SELECT 1 FROM op_deliveries dl
-          WHERE dl.operation_id = o.id AND dl.device_id = ?
-        )
+        AND COALESCE(o.synced, 0) = 0
         AND NOT EXISTS (
           -- العمليات التي ألغى المستخدم مزامنتها لا تُحسب ضد الجهاز.
           SELECT 1 FROM sync_queue cq
           WHERE cq.operation_id = o.id AND cq.status = 'cancelled'
         )
-    ''', [ourId, id]);
-    bool online;
-    if (presence != null) {
-      online = presence.isOnline(id);
-    } else {
-      final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
-      online = seen != null &&
-          DateTime.now().difference(seen) < const Duration(seconds: 15);
-    }
-    // آخر تسليم ناجح لهذا الجهاز — «آخر مزامنة» في قائمة الأجهزة.
-    String lastSync = '';
-    try {
-      final ls = await db.rawQuery(
-        'SELECT MAX(delivered_at) t FROM op_deliveries WHERE device_id = ?',
-        [id],
-      );
-      lastSync = (ls.first['t'] as String?) ?? '';
-    } catch (_) {}
+    ''', [ourId]);
+    // حالة الاتصال: آخر ظهور/مزامنة سحابية خلال 5 دقائق = متصل.
+    final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
+    final lastSyncAt = DateTime.tryParse((d['last_sync_at'] as String?) ?? '');
+    final freshest = (lastSyncAt != null &&
+            (seen == null || lastSyncAt.isAfter(seen)))
+        ? lastSyncAt
+        : seen;
+    final online = freshest != null &&
+        DateTime.now().difference(freshest) < const Duration(minutes: 5);
+    // «آخر مزامنة» = آخر دفع سحابي معروف لهذا الجهاز.
+    final lastSync = (d['last_sync_at'] as String?) ?? '';
     out.add(DeviceSyncStatus(
       deviceId: id,
       name: (d['name'] as String?) ?? 'جهاز',

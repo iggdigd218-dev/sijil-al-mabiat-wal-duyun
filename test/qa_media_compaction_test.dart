@@ -267,13 +267,7 @@ void main() {
         'created_at': nowIso,
         'updated_at': nowIso,
       });
-      // سجل تسليم سيتيتّم بحذف OP-GC-1.
-      await db.insert('op_deliveries', {
-        'operation_id': 'OP-GC-1',
-        'device_id': 'DEV-PEER',
-        'delivered_at': old,
-      });
-      // لا أقران مقترنين → totalPeers = 0 وشرط التسليم متحقق دائماً.
+      // (دفعة 58) لا op_deliveries — معيار التقليم synced=1 فقط.
       final repo = Repo(databaseProvider: () async => db);
       await repo.setSetting('sync.deviceId', 'DEV-GC');
       await repo.initSyncInfra();
@@ -289,10 +283,6 @@ void main() {
       expect(ids.contains('OP-GC-3'), isTrue,
           reason: 'عملية عليها طابور pending لا تُمس');
       expect(ids.contains('OP-GC-4'), isTrue);
-      // سجل التسليم اليتيم أُزيل.
-      final orphans = await db.query('op_deliveries',
-          where: 'operation_id = ?', whereArgs: ['OP-GC-1']);
-      expect(orphans, isEmpty);
       await db.close();
       await tmp.delete(recursive: true);
     });

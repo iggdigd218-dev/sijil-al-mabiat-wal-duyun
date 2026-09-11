@@ -334,8 +334,9 @@ String uuid() {
   return '${chars.substring(0, 8)}-${chars.substring(8, 12)}-${chars.substring(12, 16)}-${chars.substring(16, 20)}-${chars.substring(20)}';
 }
 
-/// يولّد سرًا عشوائيًا قصيرًا لمصادقة أجهزة LAN (يُشارك أثناء الاقتران).
-String generateLanSecret() {
+/// يولّد سراً عشوائياً لهوية الجهاز (بقايا الحقل auth_secret — يُخزَّن
+/// معمّى ولا يُتبادل شبكياً بعد اجتثاث LAN في الدفعة 58).
+String generateDeviceSecret() {
   final r = Random.secure();
   final bytes = List<int>.generate(24, (_) => r.nextInt(256));
   // Base64url بدون padding لتبسيط الإرسال.

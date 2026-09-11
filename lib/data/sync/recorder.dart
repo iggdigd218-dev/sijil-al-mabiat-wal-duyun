@@ -102,32 +102,15 @@ class SyncRecorder {
     // للمستخدم كمزامنات عالقة وتزاحم الطابور.
     final st = await db.query('settings',
         columns: ['key', 'value'],
-        where: 'key IN (?, ?, ?)',
-        whereArgs: ['lanSyncEnabled', 'cloudBackendUrl', 'cloudAutoSync']);
+        where: 'key IN (?, ?)',
+        whereArgs: ['cloudBackendUrl', 'cloudAutoSync']);
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
     final cloudOn = (map['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
         (map['cloudAutoSync'] ?? '1') != '0';
-    // هندسة «السحابة أولاً وحصرياً»: عند وجود خادم سحابي مهيأ تمر كل
-    // المزامنة عبر Firebase وحده — لا هدف LAN إطلاقاً (أُخرج من الخدمة).
-    // هدف LAN يبقى فقط كتراجع للمجموعات القديمة بلا سحابة.
-    var lanOn = !cloudOn && map['lanSyncEnabled'] == '1';
-    if (!lanOn && !cloudOn) {
-      try {
-        final wm = await db.query('sync_meta',
-            columns: ['value'],
-            where: 'key = ?',
-            whereArgs: ['workspaceMode'],
-            limit: 1);
-        final mode =
-            wm.isEmpty ? 'standalone' : (wm.first['value'] as String? ?? '');
-        lanOn = mode.isNotEmpty && mode != 'standalone';
-      } catch (_) {
-        // جدول sync_meta غير موجود (بيئة اختبار مصغّرة) — تجاهل.
-      }
-    }
+    // (دفعة 58) «السحابة حصرياً»: Firebase RTDB هو الناقل الوحيد —
+    // اجتُثت طبقة LAN نهائياً، لا هدف lan في الطابور بعد اليوم.
     final targets = <String>{
       if (cloudOn) SyncTarget.cloud,
-      if (lanOn) SyncTarget.lanBroadcast,
       ...extraTargets,
     };
     for (final t in targets) {

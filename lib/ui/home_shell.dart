@@ -39,7 +39,7 @@ import 'onboarding_screen.dart' show OnboardingScreen;
 import '../core/keep_alive_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
-import '../data/sync/lan_http_transport.dart';
+import '../data/sync/chat_hooks.dart';
 import 'widgets.dart' show showSnack;
 
 /// كل شاشات التطبيق الاثنتي عشرة.
@@ -433,7 +433,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // الخارجي بصوته المرفق بالنص و(2) شارة العداد على أيقونة الدردشة.
     // يُمنع إدراجها في جدول notifications الداخلي (مخصص للمالي/الإداري)،
     // والبانر الداخلي يظهر فقط إن كان المستخدم على شاشة أخرى غير الدردشة.
-    LanSyncService.onChatMessage = (senderName0, body) {
+    ChatHooks.onChatMessage = (senderName0, body) {
       final senderName =
           senderName0.trim().isEmpty ? kDefaultMemberName : senderName0;
       final short = body.length > 80 ? '${body.substring(0, 80)}…' : body;
@@ -454,7 +454,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
     // تغيير أجراه المدير على هذا العضو (اسم/دور/صلاحيات): حدث إداري
     // مهم → إشعار داخلي (الجرس) + خارجي + بانر.
-    LanSyncService.onMemberNotice = (title, body) {
+    ChatHooks.onMemberNotice = (title, body) {
       Sfx.systemNotify(title: title, body: body);
       try {
         ref.read(repoProvider).notify(title: title, body: body, kind: 'info');
@@ -536,8 +536,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     SyncEngine.onDeviceSyncComplete = null;
     SyncEngine.onSyncDanger = null;
     SyncEngine.onDeviceEvicted = null;
-    LanSyncService.onChatMessage = null;
-    LanSyncService.onMemberNotice = null;
+    ChatHooks.onChatMessage = null;
+    ChatHooks.onMemberNotice = null;
     super.dispose();
   }
 

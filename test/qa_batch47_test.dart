@@ -253,7 +253,7 @@ void main() {
   });
 
   group('deviceSyncStatusProvider — قائمة عالية المستوى', () {
-    test('displayName يعتمد على الدور وlastSyncAt يُقرأ من op_deliveries',
+    test('displayName يعتمد على الدور وlastSyncAt يُقرأ من devices.last_sync_at',
         () async {
       final db = await databaseFactory.openDatabase(inMemoryDatabasePath);
       addTearDown(() => db.close());
@@ -278,12 +278,10 @@ void main() {
         'created_at': DateTime.now().toIso8601String(),
         'updated_at': DateTime.now().toIso8601String(),
       });
+      // (دفعة 58) لا op_deliveries — «آخر مزامنة» تُقرأ من last_sync_at.
       final ts = DateTime(2026, 9, 10, 8, 30).toIso8601String();
-      await db.insert('op_deliveries', {
-        'operation_id': 'OP-X',
-        'device_id': 'DEV-PEER',
-        'delivered_at': ts,
-      });
+      await db.update('devices', {'last_sync_at': ts},
+          where: 'id = ?', whereArgs: ['DEV-PEER']);
       final engine = SyncEngine(repo: repo, dbProvider: () async => db);
       addTearDown(engine.stop);
       final container = ProviderContainer(overrides: [

@@ -43,34 +43,32 @@ void main() {
   group('السحابة حصرياً — أهداف الطابور', () {
     test('سحابة مهيأة: هدف cloud فقط، لا lan إطلاقاً', () async {
       await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
-      await repo.setSetting('lanSyncEnabled', '1'); // حتى مع LAN مفعّل قديماً
       await db.insert('sync_meta', {'key': 'workspaceMode', 'value': 'host'},
           conflictAlgorithm: ConflictAlgorithm.replace);
       await seedAccount();
       final targets =
           (await db.query('sync_queue')).map((r) => r['target']).toSet();
       expect(targets, contains(SyncTarget.cloud));
-      expect(targets, isNot(contains(SyncTarget.lanBroadcast)),
-          reason: 'هندسة السحابة الخالصة: LAN خارج الخدمة عند تهيؤ السحابة');
+      expect(targets, isNot(contains('lan')),
+          reason: '(دفعة 58) LAN اجتُث نهائياً — لا هدف lan في الطابور');
     });
 
-    test('بلا سحابة: التراجع لهدف lan كما كان (مجموعات محلية قديمة)',
+    test('(دفعة 58) بلا سحابة: لا أهداف إطلاقاً — لا تراجع لـ lan',
         () async {
-      await repo.setSetting('lanSyncEnabled', '1');
       await seedAccount();
       final targets =
           (await db.query('sync_queue')).map((r) => r['target']).toSet();
-      expect(targets, contains(SyncTarget.lanBroadcast));
+      expect(targets, isNot(contains('lan')));
       expect(targets, isNot(contains(SyncTarget.cloud)));
     });
 
-    test('وضع member بلا أي إعداد: lan احتياطاً (سلوك قديم محفوظ)', () async {
+    test('(دفعة 58) وضع member بلا سحابة: لا هدف lan بعد الاجتثاث', () async {
       await db.insert('sync_meta', {'key': 'workspaceMode', 'value': 'member'},
           conflictAlgorithm: ConflictAlgorithm.replace);
       await seedAccount();
       final targets =
           (await db.query('sync_queue')).map((r) => r['target']).toSet();
-      expect(targets, contains(SyncTarget.lanBroadcast));
+      expect(targets, isNot(contains('lan')));
     });
   });
 

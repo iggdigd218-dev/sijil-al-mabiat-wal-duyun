@@ -44,12 +44,13 @@ void main() {
 
   test('QA-CHAT-01 sendGroupMessage يخزن الرسالة ويولّد عملية مزامنة',
       () async {
-    await repo.setSetting('lanSyncEnabled', '1');
+    // (دفعة 58) الناقل الوحيد سحابي.
+    await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
     final id = await repo.sendGroupMessage('مرحباً يا مدير');
     final msgs = await repo.groupMessages();
     expect(msgs, hasLength(1));
     expect(msgs.single.body, 'مرحباً يا مدير');
-    // عملية message في سجل العمليات + صف lan في الطابور.
+    // عملية message في سجل العمليات + صف cloud في الطابور.
     final ops = await db.query('operations',
         where: 'entity_type = ? AND entity_id = ?',
         whereArgs: ['message', '$id']);
@@ -57,7 +58,7 @@ void main() {
     final q = await db.rawQuery(
         "SELECT q.* FROM sync_queue q JOIN operations o "
         "ON o.id = q.operation_id "
-        "WHERE q.target = 'lan' AND o.entity_id = ?",
+        "WHERE q.target = 'cloud' AND o.entity_id = ?",
         ['$id']);
     expect(q, hasLength(1));
     expect(q.single['status'], 'pending');
@@ -65,7 +66,7 @@ void main() {
 
   test('QA-CHAT-03 رسائل الدردشة صامتة: خارج العدادات والقوائم لكنها تُزامن',
       () async {
-    await repo.setSetting('lanSyncEnabled', '1');
+    await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
     await repo.sendGroupMessage('رسالة صامتة');
     final ops = SyncQueueOps(db);
     // العدادات والقوائم المرئية تتجاهل رسائل الدردشة تماماً.
@@ -76,7 +77,7 @@ void main() {
     final raw = await db.rawQuery(
         "SELECT COUNT(*) c FROM sync_queue WHERE status = 'pending'");
     expect(raw.first['c'], greaterThan(0));
-    final picked = await ops.pickPending(limit: 10, target: 'lan');
+    final picked = await ops.pickPending(limit: 10, target: 'cloud');
     expect(picked, isNotEmpty);
   });
 
@@ -123,19 +124,19 @@ void main() {
   });
 
   test('QA-CAT-01 إضافة فئة تولّد عملية مزامنة category', () async {
-    await repo.setSetting('lanSyncEnabled', '1');
+    await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
     await repo.addCategory('مشروبات');
     final ops =
         await db.query('operations', where: "entity_type = 'category'");
     expect(ops, hasLength(1));
     final q = await db.query('sync_queue', where: 'target = ?',
-        whereArgs: ['lan']);
+        whereArgs: ['cloud']);
     expect(q, isNotEmpty);
   });
 
-  test('QA-BACKFILL-01 عمليات قديمة بلا صف lan تُدرج عند الإقلاع', () async {
+  test('QA-BACKFILL-01 عمليات قديمة بلا صف cloud تُدرج عند الإقلاع', () async {
     final ourId = await ensureDeviceId(repo);
-    await repo.setSetting('lanSyncEnabled', '1');
+    await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
     // قرين نشط (بعد ضمان صف مساحة العمل ليتحقق قيد FK).
     await db.insert(
         'workspaces',
@@ -180,24 +181,23 @@ void main() {
     await engine.start();
     engine.stop();
     final q = await db.query('sync_queue',
-        where: "target = 'lan' AND status = 'pending'");
+        where: "target = 'cloud' AND status = 'pending'");
     expect(q.map((r) => r['operation_id']), contains('$ourId-777'),
         reason: 'الإنقاذ عند الإقلاع يعيد إدراج العمليات المنسية');
   });
 
-  test('QA-RECORDER-01 وضع member يفعّل هدف LAN حتى بلا lanSyncEnabled',
+  test('QA-RECORDER-01 (دفعة 58) وضع member بلا سحابة: لا هدف lan إطلاقاً',
       () async {
     await db.insert(
         'sync_meta', {'key': 'workspaceMode', 'value': 'member'},
         conflictAlgorithm: ConflictAlgorithm.replace);
     await repo.sendGroupMessage('رسالة عضو');
     final q = await db.query('sync_queue', where: "target = 'lan'");
-    expect(q, isNotEmpty,
-        reason: 'جهاز داخل مجموعة يُدرج عملياته لهدف LAN دائماً');
+    expect(q, isEmpty,
+        reason: 'LAN اجتُث نهائياً — لا هدف lan في الطابور بعد اليوم');
   });
 
   test('QA-CLOUD-01 لا صفوف cloud بلا خادم سحابي مهيأ', () async {
-    await repo.setSetting('lanSyncEnabled', '1');
     await repo.sendGroupMessage('بدون سحابة');
     final cloud = await db.query('sync_queue', where: "target = 'cloud'");
     expect(cloud, isEmpty,

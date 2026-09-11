@@ -5,22 +5,17 @@
 //   - سحب العمليات من الـ Cloud تلقائيًا عند التهيئة.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/token_cipher.dart';
-import '../../core/secret_store.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
 import 'conflict_resolver.dart';
-import 'device_id.dart';
-import 'lan_http_transport.dart';
 import 'operation.dart';
-import 'presence_service.dart';
 import 'recorder.dart';
 import 'sync_activity.dart';
 import 'sync_queue.dart';
@@ -47,8 +42,6 @@ class SyncEngine {
   bool get hasStarted => _started;
 
   /// خدمة الحضور: مناداة كل 3 ثوانٍ + استماع دائم عبر خادم LAN.
-  PresenceService? _presence;
-  PresenceService? get presence => _presence;
 
   /// يُستدعى عند اكتمال مزامنة عملية مهمة إلى جهاز (لإشعار المستخدم).
   /// (وصف العملية، اسم الجهاز الهدف، نوع الكيان مثل 'tx'، معرّفه المحلي)
@@ -92,8 +85,6 @@ class SyncEngine {
   static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
   String? _cloudUrl;
   CloudFirebaseTransport? _cloudTransport;
-  LanSyncService? _lanTransport;
-  bool _lanEnabled = false;
 
   SyncEngine({required this.repo, required this.dbProvider});
 
@@ -104,159 +95,8 @@ class SyncEngine {
     _transports.add(t);
   }
 
-  Future<void> _ensureLanTransport() async {
-    final st = await repo.settings();
-    // «السحابة حصرياً»: خادم سحابي مهيأ = إيقاف كامل لمزامنة LAN
-    // (لا خادم HTTP محلي ولا بث) — كل الحركة عبر Firebase فقط.
-    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
-        (st['cloudAutoSync'] ?? '1') != '0';
-    final enabled = !cloudOn && (st['lanSyncEnabled'] ?? '0') == '1';
-    final port = int.tryParse(st['lanSyncPort'] ?? '') ?? kDefaultLanPort;
-    final db = await _db;
-    if (cloudOn) {
-      // صفوف lan العالقة بلا ناقل تُعلَّم synced (السحابة تسلّم بدلاً عنها).
-      try {
-        await db.update(
-          'sync_queue',
-          {
-            'status': 'synced',
-            'last_error': '',
-            'next_try_at': '',
-            'updated_at': DateTime.now().toIso8601String(),
-          },
-          where: "target = ? AND status IN ('pending','syncing','failed')",
-          whereArgs: [SyncTarget.lanBroadcast],
-        );
-      } catch (_) {}
-    }
-    if (!enabled) {
-      await _lanTransport?.stopServer();
-      _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
-      _lanTransport = null;
-      _lanEnabled = false;
-      // (دفعة 57) إخماد كامل لطبقة LAN في وضع السحابة الحصري: مسبار
-      // الحضور (مناداة كل 3 ثوانٍ على ip:port) يتوقف أيضاً — لا حركة
-      // شبكية محلية ولا محاولات فاشلة ضد عناوين قديمة.
-      _presence?.dispose();
-      _presence = null;
-      return;
-    }
-    if (_lanEnabled && _lanTransport?.port == port) return;
-    if (_lanTransport != null) {
-      await _lanTransport!.stopServer();
-      _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
-    }
-    final ourId = await ensureDeviceId(repo);
-    // تأكد من وجود سجل هذا الجهاز في devices table مع اسم المنصة.
-    final ourName = await deviceName(repo);
-    final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'devices',
-      where: 'id = ?',
-      whereArgs: [ourId],
-      limit: 1,
-    );
-    if (existing.isEmpty) {
-      await db.insert('devices', {
-        'id': ourId,
-        'workspace_id': defaultWorkspaceId,
-        'name': ourName,
-        'platform': Platform.operatingSystem,
-        'port': port,
-        'is_paired': 1,
-        'auth_secret': await SecretStore.protect(generateLanSecret()),
-        'revoked_at': '',
-        'ip_address': '',
-        'created_at': now,
-        'updated_at': now,
-      });
-    }
-    _lanTransport = LanSyncService(
-      repo: repo,
-      dbProvider: dbProvider,
-      ourDeviceId: ourId,
-      port: port,
-    );
-    _wireLanNotify(_lanTransport!);
-    _wireLanDelivery(_lanTransport!);
-    await _lanTransport!.startServer();
-    registerTransport(_lanTransport!);
-    _lanEnabled = true;
-  }
-
   /// يربط ناقل LAN بنظام الحضور (تخطي الغائبين) وبإشعار التسليم الناجح،
   /// ويشغّل خدمة الحضور (مناداة كل 3 ثوانٍ + مزامنة فورية عند عودة قرين).
-  void _wireLanDelivery(LanSyncService svc) {
-    if (_presence == null || _presence!.ourDeviceId != svc.ourDeviceId) {
-      _presence?.dispose();
-      _presence =
-          PresenceService(dbProvider: dbProvider, ourDeviceId: svc.ourDeviceId)
-            ..onPeerOnline = (id, name) {
-              // جهاز عاد للاتصال: دفع فوري لكل المعلّق + إشعار بلقب الدور.
-              Future(() async {
-                final display = await roleDisplayNameOf(id, name);
-                try {
-                  onPeerJoined?.call(display);
-                } catch (_) {}
-              });
-              // تصفير مواعيد backoff أولاً: بدونه تبقى العمليات المعلّقة
-              // «محتجزة» حتى دقيقتين رغم أن القرين عاد للاتصال فعلاً.
-              Future(() async {
-                try {
-                  final q = _queue ??= SyncQueueOps(await _db);
-                  await q.resumeBackoff();
-                } catch (_) {}
-                notifyNewOperation();
-              });
-            }
-            ..start();
-    }
-    svc.isPeerOnline = (id) => _presence?.isOnline(id) ?? true;
-    svc.onDelivered = (op, deviceId, deviceName) {
-      // إشعار "تمت مزامنة العملية" للعمليات المهمة فقط (مالية/مخزون/سندات).
-      const important = {'tx', 'stockMove', 'voucher', 'account', 'item'};
-      if (important.contains(op.entityType.name)) {
-        Future(() async {
-          final display = await roleDisplayNameOf(deviceId, deviceName);
-          try {
-            onOpDelivered?.call(
-                _describeOp(op), display, op.entityType.name, op.entityId);
-          } catch (_) {}
-        });
-      }
-      try {
-        onSyncActivity?.call();
-      } catch (_) {}
-      // اكتمال المزامنة مع جهاز: بعد آخر تسليم بثانيتين، إن لم يبق شيء
-      // معلقاً لهدف LAN نُشعر «اكتملت المزامنة مع [الدور (اسم الجهاز)]».
-      _recentDelivered.add(deviceId);
-      _completeTimer?.cancel();
-      _completeTimer = Timer(const Duration(seconds: 2), () async {
-        final ids = List<String>.of(_recentDelivered);
-        _recentDelivered.clear();
-        if (ids.isEmpty || onDeviceSyncComplete == null) return;
-        try {
-          final db = await _db;
-          final left = await db.rawQuery(
-            "SELECT COUNT(*) c FROM sync_queue "
-            "WHERE target = 'lan' AND status IN ('pending','syncing','failed')",
-          );
-          if (((left.first['c'] as int?) ?? 0) == 0) {
-            for (final id in ids.toSet()) {
-              final display = await roleDisplayNameOf(id, '');
-              onDeviceSyncComplete?.call(display);
-            }
-            // بثّ حدث الاكتمال لكل أقران المجموعة المتصلين ليعلموا أن
-            // هذا الجهاز أصبح محدّثاً (يُنعش قوائم حالة المزامنة لديهم).
-            try {
-              await _lanTransport?.broadcastNotify(reason: 'sync-complete');
-            } catch (_) {}
-          }
-        } catch (_) {}
-      });
-    };
-  }
-
   /// اللقب الموحد للجهاز بحسب دور مستخدمه: «المدير (اسم الجهاز)»،
   /// «الكاشير (…)»، «مدخل البيانات (…)»، «الشريك / الوكيل (…)».
   /// يُستخدم في كل تنبيهات المزامنة وحالات الأقران.
@@ -345,8 +185,17 @@ class SyncEngine {
             where: "is_owner = 1 AND is_paired = 1 "
                 "AND COALESCE(revoked_at,'') = ''",
             limit: 1);
-        if (own.isNotEmpty && _presence != null) {
-          ownerOffline = !_presence!.isOnline(own.first['id'] as String);
+        // (دفعة 58) لا مسبار LAN بعد الآن — نستدل بغياب مزامنة حديثة:
+        // آخر last_sync_at للمالك أقدم من 5 دقائق = غير متصل غالباً.
+        if (own.isNotEmpty) {
+          final r = await db.query('devices',
+              columns: ['last_sync_at'],
+              where: 'id = ?',
+              whereArgs: [own.first['id']],
+              limit: 1);
+          final ls = DateTime.tryParse('${r.isEmpty ? '' : r.first['last_sync_at'] ?? ''}');
+          ownerOffline = ls == null ||
+              DateTime.now().difference(ls) > const Duration(minutes: 5);
         }
       } catch (_) {}
       final mins = stuckFor.inMinutes;
@@ -385,83 +234,11 @@ class SyncEngine {
     }
   }
 
-  static String _describeOp(SyncOperation op) {
-    final entity = switch (op.entityType.name) {
-      'tx' => 'عملية حسابية',
-      'account' => 'حساب',
-      'item' => 'صنف',
-      'stockMove' => 'حركة مخزون',
-      'voucher' => 'سند',
-      _ => op.entityType.name,
-    };
-    final action = switch (op.opType.name) {
-      'create' => 'إضافة',
-      'update' => 'تعديل',
-      'delete_' => 'حذف',
-      'restore' => 'استعادة',
-      _ => op.opType.name,
-    };
-    return '$action $entity';
-  }
-
-  /// يربط إشعار الأقران الفوري: عند وصول إشعار من نظير نسحب الـ roster ونعالج
-  /// الطابور فورًا (فرض الصلاحيات/العمليات خلال ثوانٍ لا انتظار الدورية).
-  void _wireLanNotify(LanSyncService svc) {
-    svc.onPeerNotify = () {
-      try {
-        onSyncActivity?.call();
-      } catch (_) {}
-      Future(() async {
-        try {
-          final changed = await svc.reconcileRoster();
-          if (changed == true) await processQueue();
-        } catch (_) {}
-        try {
-          await processQueue();
-        } catch (_) {}
-      });
-    };
-  }
-
+  /// (دفعة 58) إعادة تهيئة شاملة = السحابة فقط — لا طبقة LAN بعد اليوم.
   Future<void> reconfigureAll() async {
     try {
       await reconfigureCloud();
     } catch (_) {}
-    try {
-      await _ensureLanTransport();
-    } catch (_) {}
-  }
-
-  /// يضمن تشغيل خادم LAN على [port] ويُعيد ما إذا كان يستمع فعلًا.
-  /// تُستخدم قبل إنشاء رمز الاقتران حتى لا يُعلَن منفذ لا يستمع عليه خادم.
-  Future<bool> ensureLanHost(int port) async {
-    try {
-      await repo.setSetting('lanSyncEnabled', '1');
-      await repo.setSetting('lanSyncPort', '$port');
-      if (_lanEnabled && _lanTransport?.isRunning == true &&
-          _lanTransport?.port == port) {
-        return true;
-      }
-      await _lanTransport?.stopServer();
-      _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
-      final ourId = await ensureDeviceId(repo);
-      final svc = LanSyncService(
-        repo: repo,
-        dbProvider: dbProvider,
-        ourDeviceId: ourId,
-        port: port,
-      );
-      _wireLanNotify(svc);
-      _wireLanDelivery(svc);
-      await svc.startServer();
-      if (!svc.isRunning) return false;
-      _lanTransport = svc;
-      registerTransport(svc);
-      _lanEnabled = true;
-      return true;
-    } catch (_) {
-      return false;
-    }
   }
 
   /// يُعاد تهيئة الـ Cloud transport بعد تغيير الإعدادات.
@@ -568,38 +345,26 @@ class SyncEngine {
     final generation = ++_generation;
     _queue ??= SyncQueueOps(await _db);
     await _queue!.recoverInterrupted();
-    // إنقاذ المزامنات السابقة العالقة: أي عملية محلية لم تصل لكل الأجهزة
-    // (لا صف lan لها في الطابور أو صفها علق قبل الإصلاحات) يُعاد إدراجها.
-    try {
-      await _backfillMissedLanOps();
-    } catch (_) {}
     // إنقاذ سحابي: عمليات سُجّلت قبل تهيئة السحابة (لا صف cloud لها) —
     // تُدرج الآن لتصعد للسحابة فتصل الأجهزة المرتبطة سحابياً.
     try {
       await _backfillMissedCloudOps();
     } catch (_) {}
-    // هجرة تنظيف الطابور (مرة واحدة عند كل إقلاع): مع سحابة مهيأة تُصفّى
-    // صفوف lan القديمة العالقة (كانت تسدّ طابور المدير وتُبقي بانر الخطر)،
-    // وتُصفّر مواعيد backoff لصفوف cloud لتُدفع فوراً كخط أساس نظيف.
+    // (دفعة 58) هجرة تنظيف: أي صفوف lan تاريخية متبقية من إصدارات ما قبل
+    // اجتثاث LAN تُغلق نهائياً حتى لا تسد الطابور أو تُظهر بانر الخطأ.
     try {
-      final st0 = await repo.settings();
-      final cloudOn0 = (st0['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
-          (st0['cloudAutoSync'] ?? '1') != '0';
-      if (cloudOn0) {
-        final db0 = await _db;
-        await db0.update(
-          'sync_queue',
-          {
-            'status': 'synced',
-            'last_error': '',
-            'next_try_at': '',
-            'updated_at': DateTime.now().toIso8601String(),
-          },
-          where: "target = ? AND status IN ('pending','syncing','failed')",
-          whereArgs: [SyncTarget.lanBroadcast],
-        );
-        await _queue!.resumeBackoff();
-      }
+      final db0 = await _db;
+      await db0.update(
+        'sync_queue',
+        {
+          'status': 'synced',
+          'last_error': '',
+          'next_try_at': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: "target = 'lan' AND status IN ('pending','syncing','failed')",
+      );
+      await _queue!.resumeBackoff();
     } catch (_) {}
     if (!_started || generation != _generation) return;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
@@ -609,13 +374,7 @@ class SyncEngine {
     try {
       await _ensureCloudTransport();
     } catch (_) {}
-    try {
-      await _ensureLanTransport();
-    } catch (_) {}
-    if (!_started || generation != _generation) {
-      await _lanTransport?.stopServer();
-      return;
-    }
+    if (!_started || generation != _generation) return;
     _timer ??= Timer.periodic(
       const Duration(seconds: 8),
       (_) async {
@@ -645,9 +404,6 @@ class SyncEngine {
         try {
           await _pruneOperationPayloads();
         } catch (_) {}
-        try {
-          await _lanTransport?.backfillMissingAttachments();
-        } catch (_) {}
       },
     );
     // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
@@ -655,10 +411,6 @@ class SyncEngine {
     Future(() async {
       try {
         await _pruneOperationPayloads();
-      } catch (_) {}
-      try {
-        await _ensureLanTransport();
-        await _lanTransport?.backfillMissingAttachments();
       } catch (_) {}
     });
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
@@ -709,60 +461,6 @@ class SyncEngine {
     }
   }
 
-  /// إنقاذ العمليات السابقة (ما قبل الإصلاحات): عمليات محلية سُجّلت أيام
-  /// كانت مزامنة LAN معطلة أو علقت في الطابور — نعيد إدراج هدف lan لها
-  /// حتى تُدفع الآن لكل الأجهزة. آمنة تماماً: الاستقبال idempotent
-  /// (نفس operation id لا يُطبق مرتين)، وop_deliveries يمنع التكرار للجهاز
-  /// الذي استلم فعلاً.
-  Future<void> _backfillMissedLanOps() async {
-    final db = await _db;
-    final st = await repo.settings();
-    // «السحابة حصرياً»: لا إنقاذ لهدف LAN عند وجود سحابة مهيأة.
-    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
-        (st['cloudAutoSync'] ?? '1') != '0';
-    if (cloudOn) return;
-    if ((st['lanSyncEnabled'] ?? '0') != '1') return;
-    final ourId = st['sync.deviceId'] ?? '';
-    if (ourId.isEmpty) return;
-    // لا معنى للإنقاذ بلا أقران.
-    final peers = await db.rawQuery(
-      "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
-      "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
-      "AND id <> ?",
-      [ourId],
-    );
-    if (((peers.first['c'] as int?) ?? 0) == 0) return;
-    final now = DateTime.now().toIso8601String();
-    // كل عملية محلية بلا صف lan في الطابور — أدرجه pending.
-    await db.rawInsert('''
-      INSERT OR IGNORE INTO sync_queue
-        (operation_id, status, target, attempts, last_error, next_try_at,
-         created_at, updated_at)
-      SELECT o.id, 'pending', 'lan', 0, '', '', ?, ?
-      FROM operations o
-      WHERE o.device_id = ?
-        AND NOT EXISTS (
-          SELECT 1 FROM sync_queue q
-          WHERE q.operation_id = o.id AND q.target = 'lan'
-        )
-    ''', [now, now, ourId]);
-    // صفوف lan التي عُلّمت synced قديماً لكن لم تُسلَّم فعلياً لكل الأجهزة
-    // (لا سجلات كافية في op_deliveries) — نعيدها pending لتُستكمل.
-    await db.rawUpdate('''
-      UPDATE sync_queue SET status = 'pending', next_try_at = '',
-                            attempts = 0, updated_at = ?
-      WHERE target = 'lan' AND status = 'synced'
-        AND operation_id IN (
-          SELECT o.id FROM operations o
-          WHERE o.device_id = ?
-            AND (SELECT COUNT(*) FROM op_deliveries d
-                 WHERE d.operation_id = o.id) <
-                (SELECT COUNT(*) FROM devices v
-                 WHERE v.is_paired = 1 AND COALESCE(v.revoked_at,'') = ''
-                   AND COALESCE(v.expelled_at,'') = '' AND v.id <> ?)
-        )
-    ''', [now, ourId, ourId]);
-  }
 
   /// إنقاذ سحابي: كل عملية محلية لم يُدرج لها هدف cloud (سُجّلت قبل ضبط
   /// السحابة أو أثناء تعطيلها) تُدرج pending الآن. idempotent بالكامل:
@@ -805,22 +503,14 @@ class SyncEngine {
     final db = await _db;
     final ourId = (await repo.settings())['sync.deviceId'] ?? '';
     if (ourId.isEmpty) return;
-    final peersR = await db.rawQuery(
-      "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
-      "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
-      "AND id <> ?",
-      [ourId],
-    );
-    final totalPeers = (peersR.first['c'] as int?) ?? 0;
-    // (1) تجريد base64: عملياتنا التي سلّمناها لكل الأقران (أو رفعناها
-    // للسحابة إن لم يكن هناك أقران LAN) وحمولتها تتضمن file_b64.
+    // (دفعة 58) المعيار السحابي الوحيد: synced=1 = العملية على السحابة
+    // ويستطيع أي قرين سحبها — لا op_deliveries بعد اليوم.
+    // (1) تجريد base64: عملياتنا المرفوعة للسحابة وحمولتها تتضمن file_b64.
     final fat = await db.rawQuery('''
       SELECT id, payload FROM operations
       WHERE payload LIKE '%"file_b64"%' AND synced = 1
-        AND (SELECT COUNT(*) FROM op_deliveries d
-             WHERE d.operation_id = operations.id) >= ?
       LIMIT 200
-    ''', [totalPeers]);
+    ''');
     for (final r in fat) {
       try {
         final decoded =
@@ -840,9 +530,7 @@ class SyncEngine {
       await db.rawDelete('''
         DELETE FROM operations
         WHERE entity_type = 'message' AND synced = 1 AND timestamp < ?
-          AND (SELECT COUNT(*) FROM op_deliveries d
-               WHERE d.operation_id = operations.id) >= ?
-      ''', [cutoff, totalPeers]);
+      ''', [cutoff]);
     } catch (_) {}
     // (3) تقليم عام (Compaction): العمليات المتجاوَزة — synced، مسلَّمة لكل
     // الأقران النشطين، أقدم من 14 يوماً، وليست أحدث نسخة لكيانها.
@@ -855,8 +543,6 @@ class SyncEngine {
           DELETE FROM operations
           WHERE synced = 1 AND timestamp < ?
             AND entity_type <> 'message'
-            AND (SELECT COUNT(*) FROM op_deliveries d
-                 WHERE d.operation_id = operations.id) >= ?
             AND EXISTS (
               SELECT 1 FROM operations n
               WHERE n.entity_type = operations.entity_type
@@ -868,19 +554,12 @@ class SyncEngine {
               WHERE q.operation_id = operations.id
                 AND q.status IN ('pending', 'syncing')
             )
-        ''', [cutoff, totalPeers]);
+        ''', [cutoff]);
         // صفوف الطابور التاريخية (synced) الأقدم من فترة الاحتفاظ.
         await txn.rawDelete(
           "DELETE FROM sync_queue WHERE status = 'synced' AND updated_at < ?",
           [cutoff],
         );
-        // سجلات تسليم يتيمة (عمليتها حُذفت).
-        await txn.rawDelete('''
-          DELETE FROM op_deliveries
-          WHERE NOT EXISTS (
-            SELECT 1 FROM operations o WHERE o.id = op_deliveries.operation_id
-          )
-        ''');
       });
     } catch (_) {}
   }
@@ -888,10 +567,11 @@ class SyncEngine {
   Future<void> _reconcileRoster() async {
     try {
       if (!_started) return;
-      await _ensureLanTransport();
-      final changed = await _lanTransport?.reconcileRoster();
-      if (changed == true) {
-        // تغيرت ملكيتنا → أعد معالجة الطابور لتطبيق أي عمليات معلّقة.
+      // (دفعة 58) المصالحة سحابية حصرياً: سحب فوري يلتقط أي تغيّر في
+      // السجل/الملكية المدفوع من المدير، ثم معالجة الطابور.
+      final t = _cloudTransport;
+      if (t != null) {
+        await t.pull(resolver: ConflictResolver());
         await processQueue();
       }
     } catch (_) {}
@@ -1007,8 +687,6 @@ class SyncEngine {
     _cloudPullTimer = null;
     unawaited(_cloudTransport?.stopListening() ?? Future.value());
     _immediate?.cancel();
-    _presence?.dispose();
-    _presence = null;
     _timer = null;
     _maintenanceTimer = null;
     _rosterTimer = null;
@@ -1016,11 +694,6 @@ class SyncEngine {
     if (SyncRecorder.onOperationRecorded == notifyNewOperation) {
       SyncRecorder.onOperationRecorded = null;
     }
-    final lan = _lanTransport;
-    _lanTransport = null;
-    _lanEnabled = false;
-    _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
-    if (lan != null) unawaited(lan.stopServer());
   }
 
   /// User action also resumes rows that exhausted their automatic retry budget.
@@ -1028,8 +701,6 @@ class SyncEngine {
     final q = _queue ??= SyncQueueOps(await _db);
     await q.retryFailed();
     await processQueue();
-    // نبّه الأقران فورًا ليسحبوا الطابور/الصلاحيات المعلّقة.
-    await _lanTransport?.broadcastNotify(reason: 'force');
     // إعادة تقييم «نافذة الخطر» فوراً: إن نجح الدفع يُبث null فيختفي
     // البانر في نفس اللحظة دون انتظار الدورة (8 ثوانٍ).
     await _checkDangerState();
@@ -1186,9 +857,6 @@ class SyncEngine {
   }
 
   Future<void> broadcastRosterChange() async {
-    try {
-      await _lanTransport?.broadcastNotify(reason: 'roster');
-    } catch (_) {}
     // توحيد الهوية: ادفع سجل الأجهزة فوراً للسحابة أيضاً حتى يظهر الاسم
     // الجديد على كل الأجهزة المرتبطة سحابياً دون انتظار الدورة (45 ثانية).
     try {

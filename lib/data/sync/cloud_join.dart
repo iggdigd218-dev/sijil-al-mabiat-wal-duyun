@@ -23,7 +23,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
-import 'lan_http_transport.dart';
+import 'snapshot_apply.dart';
 
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -259,6 +259,10 @@ class CloudJoin {
     m['auth_secret'] = '';
     m['pair_token'] = '';
     m['pair_token_exp'] = '';
+    // (دفعة 58) أعمدة LAN أُسقطت من المخطط — صفوف roster من إصدارات
+    // أقدم قد تحملها فتفشل الإدراج/التحديث.
+    m.remove('ip_address');
+    m.remove('port');
     return m;
   }
 
@@ -461,7 +465,7 @@ class CloudJoin {
         where: 'id = ?', whereArgs: [ourId], limit: 1);
     // حذف كامل البيانات المحلية واستبدالها بنسخة المجموعة (معاملة واحدة):
     // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
-    await LanSyncService.applySnapshot(() async => db, ourId, snap);
+    await SnapshotApply.applySnapshot(() async => db, ourId, snap);
 
     // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
     final ourRowAfter = await db.query('devices',
@@ -482,8 +486,6 @@ class CloudJoin {
             'name': before['name'] ?? kDefaultMemberName,
             'platform': before['platform'] ?? '',
             'auth_secret': before['auth_secret'] ?? '',
-            'ip_address': before['ip_address'] ?? '',
-            'port': before['port'] ?? 0,
             'is_paired': 1,
             'is_owner': 0,
             'revoked_at': '',

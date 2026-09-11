@@ -42,7 +42,6 @@ extension SyncStatusName on SyncStatus {
 class SyncTarget {
   static const cloud = 'cloud';
   static String device(String deviceId) => 'device:$deviceId';
-  static const lanBroadcast = 'lan';
   static bool isDevice(String t) => t.startsWith('device:');
   static String deviceIdOf(String t) => t.replaceFirst('device:', '');
 }

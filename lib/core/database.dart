@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 21;
+  static const int _version = 22;
 
   static int get schemaVersion => _version;
 
@@ -317,6 +317,11 @@ class AppDatabase {
       await migrateToV21(db);
     } catch (_) {
     }
+    try {
+      // (دفعة 58) اجتثاث بقايا LAN عند كل فتح — idempotent بالكامل.
+      await migrateToV22(db);
+    } catch (_) {
+    }
   }
 
   /// جداول المزامنة الجديدة (v5).
@@ -337,8 +342,6 @@ class AppDatabase {
         name           TEXT NOT NULL DEFAULT '',
         platform       TEXT DEFAULT '',
         app_version    TEXT DEFAULT '',
-        ip_address     TEXT DEFAULT '',
-        port           INTEGER DEFAULT 0,
         last_seen_at   TEXT DEFAULT '',
         last_sync_at   TEXT DEFAULT '',
         pair_token     TEXT DEFAULT '',
@@ -390,13 +393,6 @@ class AppDatabase {
         FOREIGN KEY (operation_id) REFERENCES operations(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_queue_status ON sync_queue(status, next_try_at);
-
-      CREATE TABLE IF NOT EXISTS op_deliveries (
-        operation_id TEXT NOT NULL,
-        device_id    TEXT NOT NULL,
-        delivered_at TEXT NOT NULL,
-        PRIMARY KEY (operation_id, device_id)
-      );
 
       CREATE TABLE IF NOT EXISTS sync_meta (
         key   TEXT PRIMARY KEY,
@@ -500,8 +496,7 @@ class AppDatabase {
         CREATE TABLE IF NOT EXISTS devices (
           id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
           name TEXT NOT NULL DEFAULT '', platform TEXT DEFAULT '',
-          app_version TEXT DEFAULT '', ip_address TEXT DEFAULT '',
-          port INTEGER DEFAULT 0, last_seen_at TEXT DEFAULT '',
+          app_version TEXT DEFAULT '', last_seen_at TEXT DEFAULT '',
           last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
           pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
           revoked_at TEXT DEFAULT '', expelled_at TEXT DEFAULT '',
@@ -525,14 +520,6 @@ class AppDatabase {
           attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
           next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
           UNIQUE(operation_id, target)
-        )''');
-    // تتبع تسليم كل عملية إلى كل جهاز على حدة (عداد الأجهزة المتزامنة + ✅).
-    await _tryCreateTable(db, 'op_deliveries', '''
-        CREATE TABLE IF NOT EXISTS op_deliveries (
-          operation_id TEXT NOT NULL,
-          device_id    TEXT NOT NULL,
-          delivered_at TEXT NOT NULL,
-          PRIMARY KEY (operation_id, device_id)
         )''');
     await _tryCreateTable(db, 'google_auth', '''
         CREATE TABLE IF NOT EXISTS google_auth (
@@ -914,6 +901,10 @@ class AppDatabase {
     if (from < 21) {
       await migrateToV21(db);
     }
+    // ====== v22 (دفعة 58): اجتثاث LAN — إسقاط op_deliveries وأعمدة الشبكة ======
+    if (from < 22) {
+      await migrateToV22(db);
+    }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا
     // خطأ "table workspaces already exists" و"تعذّر تحميل الفئات/الإعدادات".
@@ -983,6 +974,66 @@ class AppDatabase {
     await _addColumn(db, 'conversations', 'deleted_by', "TEXT DEFAULT ''");
     await _addColumn(
         db, 'conversations', 'sync_state', "TEXT DEFAULT 'synced'");
+  }
+
+  /// Migration v21 → v22 (دفعة 58 — اجتثاث LAN نهائياً):
+  ///  1) إسقاط جدول op_deliveries (تتبع تسليم LAN لكل جهاز) — معيار
+  ///     التسليم اليوم سحابي: operations.synced=1 يعني وصلت الجميع.
+  ///  2) إعادة بناء devices بلا عمودَي ip_address/port (لا اتصال مباشر
+  ///     بين الأجهزة بعد اليوم — Firebase RTDB هو الناقل الوحيد).
+  ///  3) تطهير مفاتيح إعدادات LAN التاريخية.
+  /// idempotent بالكامل — تُستدعى أيضاً من ensureFullSchema عند كل فتح.
+  static Future<void> migrateToV22(Database db) async {
+    await db.execute('DROP TABLE IF EXISTS op_deliveries');
+    // إعادة بناء devices فقط إن كانت أعمدة LAN ما تزال موجودة.
+    final cols = await db.rawQuery('PRAGMA table_info(devices)');
+    final names = cols.map((c) => '${c['name']}').toSet();
+    if (names.contains('ip_address') || names.contains('port')) {
+      await db.transaction((txn) async {
+        await txn.execute('''
+          CREATE TABLE IF NOT EXISTS devices_v22 (
+            id             TEXT PRIMARY KEY,
+            workspace_id   TEXT NOT NULL,
+            name           TEXT NOT NULL DEFAULT '',
+            platform       TEXT DEFAULT '',
+            app_version    TEXT DEFAULT '',
+            last_seen_at   TEXT DEFAULT '',
+            last_sync_at   TEXT DEFAULT '',
+            pair_token     TEXT DEFAULT '',
+            pair_token_exp TEXT DEFAULT '',
+            auth_secret    TEXT DEFAULT '',
+            revoked_at     TEXT DEFAULT '',
+            expelled_at    TEXT DEFAULT '',
+            user_id        INTEGER,
+            paired_by      INTEGER,
+            is_paired      INTEGER NOT NULL DEFAULT 1,
+            is_owner       INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL
+          )''');
+        await txn.execute('''
+          INSERT OR IGNORE INTO devices_v22
+            (id, workspace_id, name, platform, app_version, last_seen_at,
+             last_sync_at, pair_token, pair_token_exp, auth_secret,
+             revoked_at, expelled_at, user_id, paired_by, is_paired,
+             is_owner, created_at, updated_at)
+          SELECT id, workspace_id, name, COALESCE(platform,''),
+                 COALESCE(app_version,''), COALESCE(last_seen_at,''),
+                 COALESCE(last_sync_at,''), COALESCE(pair_token,''),
+                 COALESCE(pair_token_exp,''), COALESCE(auth_secret,''),
+                 COALESCE(revoked_at,''), COALESCE(expelled_at,''),
+                 user_id, paired_by, COALESCE(is_paired,1),
+                 COALESCE(is_owner,0), created_at, updated_at
+          FROM devices''');
+        await txn.execute('DROP TABLE devices');
+        await txn.execute('ALTER TABLE devices_v22 RENAME TO devices');
+      });
+    }
+    // مفاتيح LAN التاريخية في settings — لم يعد يقرؤها أحد.
+    try {
+      await db.delete('settings',
+          where: "key IN ('lanSyncEnabled', 'lastLanSync')");
+    } catch (_) {}
   }
 
   static Future<void> _migrate4to5(Database db) async {

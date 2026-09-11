@@ -103,6 +103,8 @@ void main() {
       () async {
     await db.insert('sync_meta', {'key': 'workspaceMode', 'value': 'host'},
         conflictAlgorithm: ConflictAlgorithm.replace);
+    // (دفعة 58) الهدف الوحيد سحابي — يهيأ ليُدرج صف cloud في الطابور.
+    await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
     final id = await repo.saveTx(_tx(accountId));
     expect((await repo.transactions()).single.id, id);
     expect((await repo.transactions()).single.syncState, 'pending');
@@ -241,11 +243,10 @@ void main() {
     expect(reset['last_error'], '');
   });
 
-  test('QA-SYNC-04 local save enqueues LAN when enabled', () async {
-    await repo.setSetting('lanSyncEnabled', '1');
+  test('QA-SYNC-04 (دفعة 58) الحفظ المحلي لا يُدرج هدف lan أبداً', () async {
     await repo.saveTx(_tx(accountId));
     final rows = await db.query('sync_queue');
-    expect(rows.map((r) => r['target']), contains(SyncTarget.lanBroadcast));
+    expect(rows.map((r) => r['target']), isNot(contains('lan')));
   });
 
   test('QA-SYNC-05 remote setting uses settings key rather than an id column',

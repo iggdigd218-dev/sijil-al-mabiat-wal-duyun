@@ -1,4 +1,5 @@
-// شاشة مسح QR للاقتران بين الأجهزة.
+// شاشة مسح QR للاقتران السحابي (دفعة 58: الدعوات السحابية حصرياً —
+// حُذف تماماً تحليل رموز LAN القديمة nexora://pair بعنوان IP).
 // تستخدم mobile_scanner نفسها المستخدمة في barcode_scanner.dart.
 import 'dart:io';
 
@@ -6,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../data/sync/cloud_join.dart';
-import '../data/sync/qr_pairing.dart';
 
 class PairingData {
   final String ws;
@@ -14,7 +14,7 @@ class PairingData {
   final int port;
   final String tok;
 
-  /// نوع الاقتران: 'lan' (شبكة محلية) أو 'cloud' (دعوة سحابية).
+  /// نوع الاقتران: 'cloud' حصرياً منذ الدفعة 58 (اجتُثت رموز LAN).
   final String kind;
 
   /// لدعوات السحابة: رابط قاعدة البيانات ورمز النسخة السحابية.
@@ -25,7 +25,7 @@ class PairingData {
     required this.ip,
     required this.port,
     required this.tok,
-    this.kind = 'lan',
+    this.kind = 'cloud',
     this.cloudUrl = '',
     this.cloudCode = '',
   });
@@ -91,17 +91,7 @@ class _QrPairScannerState extends State<_QrPairScanner> {
         ));
         return;
       }
-      final parsed = QrPairingService.parseQr(raw);
-      if (parsed == null) continue;
-      final ws = parsed['ws'] ?? '';
-      final ip = parsed['ip'] ?? '';
-      final port = int.tryParse(parsed['port'] ?? '') ?? 43053;
-      final tok = parsed['tok'] ?? '';
-      if (tok.isEmpty || ip.isEmpty) continue;
-      _handled = true;
-      Navigator.of(context)
-          .pop(PairingData(ws: ws, ip: ip, port: port, tok: tok));
-      return;
+      // (دفعة 58) رمز غير سحابي = غير مدعوم — نتجاهله بصمت ونواصل المسح.
     }
   }
 

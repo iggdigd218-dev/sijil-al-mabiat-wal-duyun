@@ -47,8 +47,6 @@ void main() {
       'workspace_id': 'default',
       'name': 'جهاز ب',
       'platform': 'android',
-      'ip_address': '192.168.1.20',
-      'port': 43053,
       'is_owner': 0,
       'is_paired': 1,
       'auth_secret': 'secret-b',

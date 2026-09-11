@@ -22,7 +22,7 @@ import 'apply_remote.dart';
 import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
-import 'lan_http_transport.dart';
+import 'chat_hooks.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
 
@@ -427,7 +427,7 @@ class CloudFirebaseTransport implements SyncTransport {
             };
           }
           if (body.isNotEmpty) {
-            LanSyncService.onChatMessage?.call(senderName, body);
+            ChatHooks.onChatMessage?.call(senderName, body);
           }
         } catch (_) {}
       }
