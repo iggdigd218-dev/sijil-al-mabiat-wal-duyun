@@ -853,6 +853,39 @@ class CloudJoin {
         where: "key LIKE 'pendingJoin.%'");
   }
 
+  /// (دفعة 58 — متطلب 11) «طلب مغادرة»: العضو يكتب طلباً في نفس عقدة
+  /// /joinRequests بوسم kind=leave — يصل للمدير لحظياً عبر نفس قناة SSE
+  /// ليقرّه (طرد نظيف + بث شاهدة) أو يرفضه.
+  static Future<void> requestLeave(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final ourId = await ensureDeviceId(repo);
+    final db = await repo.database;
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourId], limit: 1);
+    final name = own.isNotEmpty ? '${own.first['name'] ?? ''}'.trim() : '';
+    await _putJson(requestPath(url, workspaceId, ourId), {
+      'deviceId': ourId,
+      'deviceName': name.isEmpty ? 'جهاز عضو' : name,
+      'kind': 'leave',
+      'platform': Platform.operatingSystem,
+      'status': 'pending',
+      'requestedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
+  }
+
+  /// (المدير) حذف طلب انضمام/مغادرة من السحابة (رفض أو تنظيف).
+  static Future<void> deleteJoinRequest({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required String deviceId,
+  }) =>
+      _delete(requestPath(backendUrl, workspaceId, deviceId));
+
   /// (المدير) جلب طلبات الانضمام المعلّقة.
   static Future<List<Map<String, Object?>>> fetchJoinRequests(
     Repo repo, {
@@ -898,19 +931,42 @@ class CloudJoin {
     final perms = defaultPerms(role);
     final permStr =
         perms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    final uid = await db.insert('users', {
-      'name': deviceName,
-      'role': role.code,
-      'pin': '',
-      'password': '',
-      'permissions': permStr,
-      'is_me': 0,
-      'active': 1,
-      'workspace_id': repo.requireWorkspaceId,
-      'deleted_at': '',
-      'created_at': now,
-      'updated_at': now,
-    });
+    // (دفعة 58 — متطلب 3) لا مستخدمي ظل مكررين: انضمام نفس الجهاز مجدداً
+    // يعيد استخدام مستخدم الظل القائم بنفس الاسم بدل إنشاء نسخة ثانية.
+    int uid;
+    final existing = await db.query('users',
+        columns: ['id'],
+        where:
+            "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
+        whereArgs: [deviceName],
+        limit: 1);
+    if (existing.isNotEmpty) {
+      uid = existing.first['id'] as int;
+      await db.update(
+          'users',
+          {
+            'role': role.code,
+            'permissions': permStr,
+            'active': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [uid]);
+    } else {
+      uid = await db.insert('users', {
+        'name': deviceName,
+        'role': role.code,
+        'pin': '',
+        'password': '',
+        'permissions': permStr,
+        'is_me': 0,
+        'active': 1,
+        'workspace_id': repo.requireWorkspaceId,
+        'deleted_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+    }
     // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
     // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
     await db.insert(

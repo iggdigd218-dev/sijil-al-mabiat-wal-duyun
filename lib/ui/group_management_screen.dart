@@ -388,7 +388,10 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                   vertical: 10,
                 ),
                 children: [
+                  // (دفعة 58 — متطلب 16) جهاز المدير نفسه لا يُعرض في
+                  // قائمة أجهزة المجموعة — القائمة لأجهزة الأعضاء فقط.
                   for (final d in list)
+                    if (d['id'] != ownId)
                     DeviceCard(
                       data: d,
                       users: (usersAsync.valueOrNull ?? const <AppUser>[])
@@ -740,6 +743,12 @@ Future<void> showJoinApprovalSheet(
   Map<String, Object?> request, {
   required String backendUrl,
 }) async {
+  // (دفعة 58 — متطلب 11) طلب مغادرة عضو يمر من نفس القناة بوسم kind=leave
+  // — له حوار خاص (موافقة = طرد نظيف، رفض = بقاء العضو).
+  if ('${request['kind'] ?? ''}' == 'leave') {
+    return showLeaveApprovalDialog(context, ref, request,
+        backendUrl: backendUrl);
+  }
   final repo = ref.read(repoProvider);
   final engine = ref.read(syncEngineProvider);
   final deviceId = '${request['deviceId'] ?? ''}';
@@ -872,4 +881,64 @@ Future<void> showJoinApprovalSheet(
       ),
     ),
   );
+}
+
+
+/// (دفعة 58 — متطلب 11) حوار موافقة المدير على طلب مغادرة عضو:
+/// الموافقة تنفّذ فك ارتباط نظيفاً كاملاً (طرد محلي + بث شاهدة سحابية
+/// فيمسح جهاز العضو بيانات المجموعة ويعود مستقلاً)، والرفض يبقيه عضواً.
+Future<void> showLeaveApprovalDialog(
+  BuildContext context,
+  WidgetRef ref,
+  Map<String, Object?> request, {
+  required String backendUrl,
+}) async {
+  final repo = ref.read(repoProvider);
+  final engine = ref.read(syncEngineProvider);
+  final deviceId = '${request['deviceId'] ?? ''}';
+  final deviceName = '${request['deviceName'] ?? 'جهاز عضو'}';
+  Sfx.notify();
+  final approve = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      icon: const Icon(Icons.logout, color: Colors.orange, size: 40),
+      title: const Text('طلب مغادرة المجموعة'),
+      content: Text(
+        'الجهاز «$deviceName» يطلب مغادرة المجموعة.\n\n'
+        'الموافقة تفكّ ارتباطه نظيفاً: تُحذف بيانات المجموعة من جهازه '
+        'ويعود مستقلاً، وتختفي عملياته المعلقة من متابعة المزامنة.',
+        style: const TextStyle(height: 1.6),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('رفض — يبقى عضواً'),
+        ),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+          onPressed: () => Navigator.pop(ctx, true),
+          icon: const Icon(Icons.check),
+          label: const Text('الموافقة على المغادرة'),
+        ),
+      ],
+    ),
+  );
+  // في الحالتين نحذف الطلب من السحابة (استُهلك).
+  final db = await repo.database;
+  final wsRows = await db.query('workspaces', limit: 1);
+  final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+  try {
+    await CloudJoin.deleteJoinRequest(
+        backendUrl: backendUrl, workspaceId: ws, deviceId: deviceId);
+  } catch (_) {}
+  if (approve != true) return;
+  try {
+    await repo.expelDevice(deviceId);
+    // بث شاهدة الإبطال — يصل العضو لحظياً عبر SSE فيفك ارتباطه بنفسه.
+    await engine.broadcastEviction(deviceId, reason: 'leave_approved');
+  } catch (_) {}
+  if (context.mounted) {
+    showSnack(context, '✅ تمت الموافقة على المغادرة وفُكّ ارتباط الجهاز.');
+  }
 }

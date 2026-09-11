@@ -294,6 +294,9 @@ class CloudFirebaseTransport implements SyncTransport {
     final ourId = await ensureDeviceId(repo);
     // رسائل دردشة وصلت في هذه السحبة — تُشعر بعد إغلاق المعاملة.
     final chatOps = <SyncOperation>[];
+    // (دفعة 58 — متطلب 18) عمليات user واردة: قد تحمل تغيير دور/صلاحيات
+    // هذا العضو من المدير — تُفحص بعد كل معاملة لإخطار العضو لحظياً.
+    final roleOps = <SyncOperation>[];
 
     bool hasMore = true;
     String? startAfterKey;
@@ -402,6 +405,13 @@ class CloudFirebaseTransport implements SyncTransport {
               op.deviceId != ourId) {
             chatOps.add(op);
           }
+          // (دفعة 58 — متطلب 18) تحديث user وارد من جهاز آخر — قد يكون
+          // المدير غيّر دور/صلاحيات هذا العضو: يُفحص بعد المعاملة.
+          if (ok &&
+              op.entityType == EntityKind.user &&
+              op.deviceId != ourId) {
+            roleOps.add(op);
+          }
           lastKey = entry.key as String;
         }
       });
@@ -432,6 +442,36 @@ class CloudFirebaseTransport implements SyncTransport {
         } catch (_) {}
       }
       chatOps.clear();
+      // (دفعة 58 — متطلب 18) إخطار لحظي للعضو عند تغيير دوره/صلاحياته:
+      // إن كانت عملية user الواردة تخص المستخدم المرتبط بجهازنا نبثّ
+      // إشعاراً فورياً + نبضة تحديث حي للواجهة — لا حاجة لإعادة تشغيل.
+      for (final op in roleOps) {
+        try {
+          final own = await db.query('devices',
+              columns: ['user_id'],
+              where: 'id = ?',
+              whereArgs: [ourId],
+              limit: 1);
+          final myUid = own.isNotEmpty ? own.first['user_id'] : null;
+          if (myUid == null || '${op.entityId}' != '$myUid') continue;
+          final roleCode = '${op.payload['role'] ?? ''}';
+          final roleLabel = switch (roleCode) {
+            'admin' => 'المدير',
+            'agent' => 'وكيل المدير',
+            'accountant' => 'محاسب',
+            'dataentry' => 'مدخل بيانات',
+            'viewer' => 'عرض فقط',
+            _ => roleCode,
+          };
+          ChatHooks.onMemberNotice?.call(
+            'تحدّثت صلاحياتك',
+            roleLabel.isEmpty
+                ? 'قام المدير بتحديث صلاحيات حسابك — سرى التغيير فوراً.'
+                : 'دورك الآن: $roleLabel — سرى التغيير فوراً على هذا الجهاز.',
+          );
+        } catch (_) {}
+      }
+      roleOps.clear();
       // وضع الجلب الكامل يعيد كل شيء في طلب واحد — لا صفحات تالية.
       hasMore = serverFiltered && entries.length >= kPullPageSize;
       startAfterKey = lastKey;

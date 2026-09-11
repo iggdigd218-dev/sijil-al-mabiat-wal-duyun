@@ -10,6 +10,7 @@ import '../core/app_version.dart';
 import '../core/db_init.dart' show isDesktop;
 import '../core/factory_reset.dart';
 import '../core/receipt_image.dart';
+import '../core/models.dart';
 import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
@@ -96,6 +97,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) showSnack(context, 'تعذّر إنشاء النسخة: $e', error: true);
+    }
+  }
+
+  /// (دفعة 58 — متطلب 11) العضو يطلب مغادرة المجموعة: تأكيد ثم إرسال
+  /// الطلب للسحابة — المدير يوافق فيُطرد الجهاز نظيفاً (شاهدة إبطال تصل
+  /// عبر SSE فيعيد الجهاز نفسه مستقلاً تلقائياً).
+  Future<void> _requestLeaveGroup(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.logout, color: Colors.orange, size: 40),
+        title: const Text('طلب مغادرة المجموعة'),
+        content: const Text(
+          'سيُرسل طلبك إلى مدير المجموعة. بعد موافقته تُحذف بيانات '
+          'المجموعة من جهازك نهائياً ويعود جهازك مستقلاً.\n\nهل أنت متأكد؟',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('إرسال الطلب'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) {
+        if (mounted) {
+          showSnack(context, 'لا يوجد اتصال سحابي مهيأ على هذا الجهاز.',
+              error: true);
+        }
+        return;
+      }
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      await CloudJoin.requestLeave(repo, backendUrl: url, workspaceId: ws);
+      Sfx.success();
+      if (mounted) {
+        showSnack(context,
+            '📨 أُرسل طلب المغادرة إلى المدير — سيُفصل جهازك فور موافقته.');
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر إرسال الطلب: $e', error: true);
     }
   }
 
@@ -272,6 +326,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
         final wsOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
         final canEditOrg = wsMode == 'standalone' || wsOwner;
+        // (دفعة 58 — متطلب 8) الإعدادات الحساسة (المزامنة/قاعدة البيانات)
+        // للمالك أو من دوره «مدير» فقط — تُخفى تماماً عن بقية الأدوار.
+        final userRole =
+            ref.watch(deviceRoleProvider).valueOrNull?.role;
+        final canSensitive = canEditOrg || userRole == UserRole.admin;
         return Stack(
           children: [
             ListView(
@@ -643,9 +702,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                 ],
-                // المزامنة السحابية — تظهر للجميع:
-                // المدير/المستقل يضبط الرابط وينشئ دعوات، والعضو يرى الحالة
-                // ويستطيع إدخال الرابط يدوياً إن لم يصله من المدير.
+                // (دفعة 58 — متطلب 8) المزامنة السحابية: إعداد حساس —
+                // يظهر للمالك/دور المدير فقط، ويُخفى عن بقية الأعضاء.
+                if (canSensitive) ...[
                 const SizedBox(height: 18),
                 _Collapsible(
                   title: 'المزامنة السحابية (Firebase)',
@@ -678,6 +737,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                   ],
                 ),
+                ],
                 // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،
                 // ويظهر هنا فقط خيار إنشاء نسخة محلية (بلا Google ولا سحابة).
                 if (!canEditOrg) ...[
@@ -698,6 +758,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                         trailing: const Icon(Icons.chevron_left),
                         onTap: () => _createLocalBackup(context),
+                      ),
+                    ],
+                  ),
+                  // (دفعة 58 — متطلب 11) «طلب مغادرة المجموعة»: يرسل طلباً
+                  // للمدير عبر السحابة، وبعد موافقته يُفَكّ ارتباط هذا الجهاز
+                  // نظيفاً ويعود مستقلاً.
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'مغادرة المجموعة',
+                    icon: Icons.logout,
+                    color: const Color(0xFFEA580C),
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.logout,
+                            color: Color(0xFFEA580C)),
+                        title: const Text('طلب مغادرة المجموعة'),
+                        subtitle: const Text(
+                          'يُرسل طلبك إلى المدير، وبعد موافقته يُفصل جهازك '
+                          'عن المجموعة وتُحذف بياناتها من جهازك ويعود مستقلاً.',
+                          style: TextStyle(fontSize: 11.5, height: 1.5),
+                        ),
+                        trailing: const Icon(Icons.chevron_left),
+                        onTap: () => _requestLeaveGroup(context),
                       ),
                     ],
                   ),

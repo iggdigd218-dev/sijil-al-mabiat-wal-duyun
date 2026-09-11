@@ -9,6 +9,7 @@ import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
 import 'update_section.dart';
 import 'account_form.dart';
@@ -108,6 +109,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
   Timer? _greetingTimer;
   DateTime _lastDeliveredNotice = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // (دفعة 58 — متطلب 20) مستمع سحابي عالمي لطلبات الانضمام على جهاز
+  // المدير: يعمل من إقلاع التطبيق وعلى أي شاشة — حوار الموافقة/الرفض
+  // يظهر فوق كل شيء لحظة وصول الطلب، لا فقط داخل شاشة إدارة المجموعة.
+  JoinRequestWatcher? _globalJoinWatcher;
+  bool _joinSheetShowing = false;
+
   /// هل بانر «نافذة الخطر» ظاهر حالياً؟ (لمنع تكرار الصوت مع كل فحص).
   bool _dangerShown = false;
   bool _dangerSyncing = false; // سبينر «إعادة المحاولة» داخل بانر الخطر.
@@ -131,6 +138,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
     // فُتح التطبيق بالضغط على إشعار خارجي؟ انتقل للسجل المقصود.
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
+    // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
+    _startGlobalJoinWatcher();
     // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
     _ensureGroupKeepAlive();
   }
@@ -500,6 +509,57 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
+  /// (دفعة 58 — متطلب 20) يشغّل قناة SSE عالمية على /joinRequests لجهاز
+  /// المدير: أي طلب انضمام يفتح حوار الموافقة فوق الشاشة الحالية أياً
+  /// كانت. تُعاد المحاولة تلقائياً داخل JoinRequestWatcher عند الانقطاع.
+  Future<void> _startGlobalJoinWatcher() async {
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty || !mounted) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      _globalJoinWatcher = JoinRequestWatcher(
+        backendUrl: url,
+        workspaceId: ws,
+        onRequestsChanged: () {
+          if (mounted) _handleGlobalJoinRequests(url, ws);
+        },
+      )..start();
+      // فحص أولي: طلب وصل والتطبيق مغلق يظهر فور الإقلاع.
+      await _handleGlobalJoinRequests(url, ws);
+    } catch (_) {}
+  }
+
+  Future<void> _handleGlobalJoinRequests(String url, String ws) async {
+    if (!mounted || _joinSheetShowing) return;
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final reqs = await CloudJoin.fetchJoinRequests(repo,
+          backendUrl: url, workspaceId: ws);
+      if (reqs.isEmpty || !mounted || _joinSheetShowing) return;
+      _joinSheetShowing = true;
+      try {
+        // فوق أي شاشة: نستخدم سياق جذر الملاحة لا سياق الشاشة الحالية.
+        final rootCtx =
+            Navigator.of(context, rootNavigator: true).context;
+        await showJoinApprovalSheet(rootCtx, ref, reqs.first,
+            backendUrl: url);
+      } finally {
+        _joinSheetShowing = false;
+      }
+      if (mounted) bump(ref);
+      // طلبات إضافية متراكمة؟ عالجها تباعاً.
+      if (mounted) await _handleGlobalJoinRequests(url, ws);
+    } catch (_) {
+      _joinSheetShowing = false;
+    }
+  }
+
   /// (دفعة 58 — متطلب 12) «الجديد في هذا التحديث» الديناميكي:
   /// يُعرض مرة واحدة فقط بعد كل ترقية فعلية (تغيّر kAppVersion عن آخر
   /// إصدار شوهد)، وبملاحظات هذا الإصدار حصراً — تُقرأ من بيان التحديث
@@ -562,6 +622,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
     _greetingTimer?.cancel();
+    _globalJoinWatcher?.stop();
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
     SyncEngine.onDeviceSyncComplete = null;

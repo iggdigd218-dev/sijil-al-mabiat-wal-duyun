@@ -582,41 +582,9 @@ class DeviceCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  // (دفعة 51) تعديل الدور مباشرةً من البطاقة — للمدير فقط،
-                  // ولا يُعدَّل دور جهاز المدير نفسه.
-                  if (onRoleChanged != null && !isOwnerDevice)
-                    Expanded(
-                      child: DropdownButtonFormField<UserRole>(
-                        // (دفعة 56) مفتاح بالدور: يجبر إعادة البناء عند تغيّر
-                        // الدور فيظهر الاختيار الجديد فوراً دون إعادة فتح.
-                        key: ValueKey('role-${data['id']}-$userRole'),
-                        initialValue: UserRole.fromCode(userRole ?? ''),
-                        decoration: const InputDecoration(
-                          labelText: 'الدور',
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                        ),
-                        items: [
-                          for (final r in UserRole.values)
-                            if (r != UserRole.admin)
-                              DropdownMenuItem(
-                                value: r,
-                                child: Text('${r.icon} ${r.label}',
-                                    style: const TextStyle(fontSize: 12.5)),
-                              ),
-                        ],
-                        onChanged: inactive
-                            ? null
-                            : (r) {
-                                if (r != null) onRoleChanged!(r);
-                              },
-                      ),
-                    )
-                  else
+                  // (دفعة 58 — متطلب 17) أُزيلت منسدلة الدور من ظاهر
+                  // البطاقة نهائياً — تعديل الدور حصراً من حوار «إدارة
+                  // صلاحيات الجهاز» عبر قائمة النقاط الثلاث.
                     Expanded(
                       child: DropdownButtonFormField<int?>(
                         initialValue: currentUserId,
@@ -708,7 +676,9 @@ class DeviceCard extends StatelessWidget {
             enabled: !isSelf);
       }
     }
-    if (!expelled && !isSelf && amITheOwner && onCloudLink != null) {
+    // (دفعة 58 — متطلب 19) «ربط العضو عبر السحابة» يظهر فقط عندما يكون
+    // الجهاز موقوفاً/غير مرتبط — جهاز نشط مرتبط فعلاً لا يحتاج إعادة ربط.
+    if (!expelled && !isSelf && amITheOwner && onCloudLink != null && revoked) {
       add('cloudlink', Icons.cloud_sync_outlined, const Color(0xFF0EA5E9),
           'ربط العضو عبر السحابة');
     }

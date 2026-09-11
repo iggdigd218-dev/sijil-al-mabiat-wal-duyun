@@ -1266,7 +1266,22 @@ class Repo {
       where: includeDeleted ? null : "COALESCE(deleted_at,'') = ''",
       orderBy: 'id ASC',
     );
-    return rows.map(AppUser.fromMap).toList();
+    if (includeDeleted) return rows.map(AppUser.fromMap).toList();
+    // (دفعة 58 — متطلب 3) استبعاد نسخ الظل المكررة: انضمامات قديمة كانت
+    // تُنشئ مستخدم ظل جديداً لكل انضمام بنفس الاسم — نعرض الأحدث فقط
+    // لكل اسم ظل (is_me=0) وتبقى حسابات المستخدمين الحقيقية كما هي.
+    final seenShadow = <String>{};
+    final out = <AppUser>[];
+    for (final r in rows.reversed) {
+      final isMe = (r['is_me'] as int? ?? 0) == 1;
+      final name = '${r['name'] ?? ''}'.trim();
+      if (!isMe && name.isNotEmpty) {
+        if (seenShadow.contains(name)) continue;
+        seenShadow.add(name);
+      }
+      out.add(AppUser.fromMap(r));
+    }
+    return out.reversed.toList();
   }
 
   Future<AppUser?> currentUser() async {
