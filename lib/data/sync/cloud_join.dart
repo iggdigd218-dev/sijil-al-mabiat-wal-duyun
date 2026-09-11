@@ -526,6 +526,9 @@ class CloudJoin {
         }
         if (local == null) {
           final row = _safeDeviceRow(r);
+          // (دفعة 56) user_role حقل عرضي للشارات فقط — ليس عموداً في
+          // جدول devices، وإبقاؤه يفشل الإدراج بصمت ويعطل مزامنة السجل.
+          row.remove('user_role');
           row['id'] = id;
           row['workspace_id'] = localWs;
           row['created_at'] =
@@ -545,6 +548,8 @@ class CloudJoin {
           final row = _safeDeviceRow(r);
           row.remove('id');
           row.remove('created_at');
+          // (دفعة 56) حقل عرضي — ليس عموداً في devices (انظر أعلاه).
+          row.remove('user_role');
           // لا نلمس سرّ المصادقة المحلي (قد يكون تعلّمه عبر اقتران LAN).
           row.remove('auth_secret');
           row['workspace_id'] = localWs;

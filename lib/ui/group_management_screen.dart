@@ -996,7 +996,15 @@ Future<void> showJoinApprovalSheet(
               ),
               const SizedBox(height: 10),
               Text(
-                'المنصة: $platform${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
+                // (دفعة 56) وسم منصة نظيف بدل القيمة الخام.
+                'الجهاز: ${switch (platform) {
+                  'android' => 'Android',
+                  'ios' => 'iPhone',
+                  'windows' => 'Windows',
+                  'linux' => 'Linux',
+                  'macos' => 'Mac',
+                  _ => 'جهاز',
+                }}${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
                 style: TextStyle(
                     fontSize: 11.5, color: AppColors.text3Of(ctx)),
               ),

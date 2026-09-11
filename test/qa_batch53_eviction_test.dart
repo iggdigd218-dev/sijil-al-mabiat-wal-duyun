@@ -648,4 +648,51 @@ void main() {
         (await db.query('users', where: 'id = ?', whereArgs: [uid])).first;
     expect('${u2['role']}', 'dataentry');
   });
+
+  test(
+      'QA-B56-06 syncRoster tolerates user_role display field in cloud rows '
+      '(no silent insert/update failure)', () async {
+    final cloud = FakeCloudStore();
+    await setMode('member');
+    // صف قرين سحابي يحمل user_role (كما يدفعه المدير منذ دفعة 56).
+    cloud.store['/workspaces/default/roster/badge-peer.json'] = {
+      'id': 'badge-peer',
+      'workspace_id': 'default',
+      'name': 'قرين بشارة',
+      'is_paired': 1,
+      'is_owner': 0,
+      'user_role': 'accountant',
+      'revoked_at': '',
+      'expelled_at': '',
+      'created_at': '2026-09-11T09:00:00',
+      'updated_at': '2026-09-11T09:00:00',
+    };
+    cloud.store[rosterKey] = {'id': devId, 'is_paired': 1};
+    final ok = await http.runWithClient(
+        () async => CloudJoin.syncRoster(repo, await repo.database,
+            backendUrl: url, workspaceId: 'default'),
+        cloud.client);
+    expect(ok, isTrue, reason: 'الدمج نجح رغم الحقل العرضي');
+    final rows = await db
+        .query('devices', where: 'id = ?', whereArgs: ['badge-peer']);
+    expect(rows.length, 1,
+        reason: 'الصف أُدرج — user_role العرضي أُسقط قبل الإدراج');
+    // تحديث لاحق يحمل الحقل أيضاً — يجب ألا يفشل.
+    cloud.store['/workspaces/default/roster/badge-peer.json'] = {
+      'id': 'badge-peer',
+      'name': 'قرين معاد تسميته',
+      'is_paired': 1,
+      'is_owner': 0,
+      'user_role': 'dataentry',
+      'updated_at': '2026-09-11T10:00:00',
+    };
+    await http.runWithClient(
+        () async => CloudJoin.syncRoster(repo, await repo.database,
+            backendUrl: url, workspaceId: 'default'),
+        cloud.client);
+    final after = (await db
+            .query('devices', where: 'id = ?', whereArgs: ['badge-peer']))
+        .first;
+    expect('${after['name']}', 'قرين معاد تسميته');
+  });
 }
