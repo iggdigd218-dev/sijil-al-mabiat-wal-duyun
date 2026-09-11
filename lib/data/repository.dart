@@ -2422,6 +2422,65 @@ class Repo {
     );
   }
 
+  /// (دفعة 58 — متطلب 4) التنظيف التلقائي للدردشة: كل رسالة (مجموعة أو
+  /// فردية) أقدم من 24 ساعة تُحذف نهائياً من هذا الجهاز مع ملف مرفقها من
+  /// documents/chat_media. تعمل دورياً عند الإقلاع وفي دورة الصيانة —
+  /// على كل جهاز محلياً، والمدير يطهّر المسار السحابي بالتوازي
+  /// (CloudJoin.purgeOldChatOperations). يعيد عدد الرسائل المحذوفة.
+  Future<int> purgeExpiredChatMessages(
+      {Duration ttl = const Duration(hours: 24)}) async {
+    final db = await _db;
+    final cutoff = DateTime.now().subtract(ttl).toIso8601String();
+    List<Map<String, Object?>> old;
+    try {
+      old = await db.query('messages',
+          columns: ['id', 'kind', 'payload'],
+          where: 'created_at < ?',
+          whereArgs: [cutoff]);
+    } catch (_) {
+      old = const [];
+    }
+    // 1) ملفات المرفقات على القرص (المسار النسبي داخل payload).
+    for (final m in old) {
+      final kind = '${m['kind'] ?? ''}';
+      if (!const {'image', 'video', 'audio', 'file'}.contains(kind)) continue;
+      var path = '${m['payload'] ?? ''}'.trim();
+      if (path.isEmpty) continue;
+      // الحمولة قد تكون JSON فيها path — أو المسار مباشرة.
+      if (path.startsWith('{')) {
+        try {
+          final d = jsonDecode(path);
+          if (d is Map) path = '${d['path'] ?? ''}'.trim();
+        } catch (_) {}
+      }
+      if (path.isEmpty) continue;
+      try {
+        final f = File(MediaPaths.toAbsolute(path));
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+    // 2) صفوف الرسائل نفسها (حذف صلب — انتهى عمرها المقرر).
+    var n = 0;
+    if (old.isNotEmpty) {
+      n = await db.delete('messages',
+          where: 'created_at < ?', whereArgs: [cutoff]);
+    }
+    // 3) عمليات message المحلية المرفوعة (synced) الأقدم من المهلة —
+    //    حمولاتها قد تتضمن base64 ضخماً ولا فائدة من بقائها.
+    try {
+      await db.rawDelete('''
+        DELETE FROM operations
+        WHERE entity_type = 'message' AND synced = 1 AND timestamp < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_queue q
+            WHERE q.operation_id = operations.id
+              AND q.status IN ('pending', 'syncing')
+          )
+      ''', [cutoff]);
+    } catch (_) {}
+    return n;
+  }
+
   // ==================== التصنيفات ====================
 
   Future<List<String>> categories() async {

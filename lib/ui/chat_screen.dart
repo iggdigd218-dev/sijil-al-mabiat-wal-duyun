@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -456,7 +457,17 @@ class _Bubble extends StatelessWidget {
 
     return Align(
       alignment: mine ? Alignment.centerLeft : Alignment.centerRight,
-      child: Container(
+      // (دفعة 58 — متطلب 5) ضغطة مطوّلة تنسخ نص الرسالة للحافظة.
+      child: GestureDetector(
+        onLongPress: message.body.trim().isEmpty
+            ? null
+            : () async {
+                await Clipboard.setData(ClipboardData(text: message.body));
+                if (context.mounted) {
+                  showSnack(context, 'تم نسخ نص الرسالة ✅');
+                }
+              },
+        child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
@@ -504,11 +515,21 @@ class _Bubble extends StatelessWidget {
                 style: const TextStyle(fontSize: 13.5, height: 1.5),
               ),
             const SizedBox(height: 4),
-            Text(
-              Fmt.dateTime(message.createdAt),
-              style: TextStyle(fontSize: 10, color: AppColors.text3Of(context)),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.schedule,
+                    size: 10, color: AppColors.text3Of(context)),
+                const SizedBox(width: 3),
+                Text(
+                  Fmt.dateTime(message.createdAt),
+                  style: TextStyle(
+                      fontSize: 10, color: AppColors.text3Of(context)),
+                ),
+              ],
             ),
           ],
+        ),
         ),
       ),
     );

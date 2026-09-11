@@ -404,6 +404,10 @@ class SyncEngine {
         try {
           await _pruneOperationPayloads();
         } catch (_) {}
+        // (دفعة 58) رسائل الدردشة تُحذف نهائياً بعد 24 ساعة (محلي).
+        try {
+          await repo.purgeExpiredChatMessages();
+        } catch (_) {}
       },
     );
     // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
@@ -411,6 +415,10 @@ class SyncEngine {
     Future(() async {
       try {
         await _pruneOperationPayloads();
+      } catch (_) {}
+      // (دفعة 58) تنظيف الدردشة المنتهية عمرها فور الإقلاع أيضاً.
+      try {
+        await repo.purgeExpiredChatMessages();
       } catch (_) {}
     });
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
@@ -595,6 +603,11 @@ class SyncEngine {
             } catch (_) {}
             try {
               await compactCloudOperations(backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            // (دفعة 58) عمليات الدردشة الأقدم من 24 ساعة تُطهَّر سحابياً.
+            try {
+              await CloudJoin.purgeOldChatOperations(
+                  backendUrl: url, workspaceId: ws);
             } catch (_) {}
             // 3) زوال اللقطة: دعوة منتهية بلا أخرى حية → حذف joinSnapshot.
             try {

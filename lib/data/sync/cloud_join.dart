@@ -1114,6 +1114,51 @@ class CloudJoin {
   /// server_ts ≤ [throughTsMs] — تُستدعى فقط من SyncEngine بعد التحقق
   /// من أن الحد مغطى بلقطة موثّقة. تحذف على دفعات (استعلام مرشّح
   /// بالفهرس، وتراجع «جلب كامل» عند غياب .indexOn). تعيد عدد المحذوف.
+  /// (دفعة 58 — متطلب 4) تطهير سحابي لرسائل الدردشة الأقدم من 24 ساعة:
+  /// يحذف من /operations كل عملية entity=message تجاوز server_ts عمرها
+  /// المقرر — حمولات المرفقات (base64) تختفي من السحابة نهائياً.
+  /// يستدعيها المدير في دورة الصيانة. يعيد عدد العقد المحذوفة.
+  static Future<int> purgeOldChatOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    Duration ttl = const Duration(hours: 24),
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final cutoffMs = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
+    Map<String, dynamic>? all;
+    try {
+      final uri = Uri.parse('$root/operations.json').replace(
+        queryParameters: {
+          'orderBy': jsonEncode('server_ts'),
+          'endAt': '$cutoffMs',
+        },
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if (res.statusCode == 400 && res.body.contains('Index not defined')) {
+        all = await _getJson('$root/operations.json');
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
+        final d = jsonDecode(res.body);
+        all = d is Map ? Map<String, dynamic>.from(d) : null;
+      }
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    var removed = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      if ('${v['entity_type'] ?? ''}' != 'message') continue;
+      final ts = (v['server_ts'] as num?)?.toInt() ?? 0;
+      if (ts == 0 || ts > cutoffMs) continue;
+      try {
+        await _delete('$root/operations/${Uri.encodeComponent(e.key)}.json');
+        removed++;
+      } catch (_) {}
+    }
+    return removed;
+  }
+
   static Future<int> compactOperations({
     required String backendUrl,
     String workspaceId = 'default',
