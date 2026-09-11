@@ -393,7 +393,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             icon: const Icon(Icons.link_off, color: Colors.red, size: 40),
             title: const Text('انتهى ارتباط الجهاز'),
             content: const Text(
-              'تم إلغاء ارتباط هذا الجهاز من قبل مدير المؤسسة.\n\n'
+              'تم إلغاء ارتباط هذا الجهاز من المؤسسة بواسطة المدير.\n\n'
               'أُزيلت بيانات المجموعة من هذا الجهاز ويمكنك استخدامه '
               'كجهاز مستقل أو طلب الانضمام مجدداً.',
               style: TextStyle(height: 1.6),

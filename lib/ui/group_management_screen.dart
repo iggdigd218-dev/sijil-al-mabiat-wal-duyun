@@ -380,11 +380,23 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         );
                         if (ok == true) {
                           await repo.revokeDevice(d['id'] as String);
+                          // (دفعة 54) الحظر أيضاً يبث شاهدة الطرد: الجهاز
+                          // المحظور يُقصى لحظياً ويعود لوضع مستقل.
+                          await engine.broadcastEviction(d['id'] as String);
+                          try {
+                            await engine.broadcastRosterChange();
+                          } catch (_) {}
                           safeBump();
                         }
                       },
                       onRestore: () async {
                         await repo.restoreDevice(d['id'] as String);
+                        // (دفعة 54) حذف شاهدة الطرد وإلا أقصى الجهازُ
+                        // المستعاد نفسَه عند فحصه القادم.
+                        await engine.clearEvictionBroadcast(d['id'] as String);
+                        try {
+                          await engine.broadcastRosterChange();
+                        } catch (_) {}
                         safeBump();
                       },
                       onExpel: () async {
@@ -398,24 +410,14 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         );
                         if (ok == true) {
                           await repo.expelDevice(d['id'] as String);
-                          // بث الطرد فوراً لكل الأجهزة (roster سحابي/LAN):
-                          // الجهاز المطرود يكتشف حالته ويمسح بياناته حالاً.
+                          // (دفعة 54) بروتوكول الطرد النشط: شاهدة صريحة في
+                          // /evictions + حذف عقدته من /roster — تصل
+                          // المستهدف لحظياً عبر قناته المخصصة.
+                          await engine.broadcastEviction(d['id'] as String,
+                              reason: 'expelled_by_manager');
+                          // بث تغيير السجل لبقية الأجهزة (LAN + roster).
                           try {
                             await engine.broadcastRosterChange();
-                          } catch (_) {}
-                          // (دفعة 51) طرد نهائي كامل: رفع الحالة المطرودة
-                          // إلى /roster السحابي + حذف طلب انضمامه القديم.
-                          try {
-                            final st = await repo.settings();
-                            final cloudUrl =
-                                (st['cloudBackendUrl'] ?? '').trim();
-                            if (cloudUrl.isNotEmpty) {
-                              await CloudJoin.purgePeerFromCloud(
-                                repo,
-                                backendUrl: cloudUrl,
-                                deviceId: d['id'] as String,
-                              );
-                            }
                           } catch (_) {}
                           safeBump();
                         }

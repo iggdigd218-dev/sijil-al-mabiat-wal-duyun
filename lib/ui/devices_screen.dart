@@ -211,6 +211,12 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                             await ref
                                 .read(repoProvider)
                                 .revokeDevice(d['id'] as String);
+                            // (دفعة 54) بث شاهدة الطرد النشطة للمستهدف.
+                            try {
+                              await ref
+                                  .read(syncEngineProvider)
+                                  .broadcastEviction(d['id'] as String);
+                            } catch (_) {}
                             bump(ref);
                           }
                         },
@@ -218,6 +224,12 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                           await ref
                               .read(repoProvider)
                               .restoreDevice(d['id'] as String);
+                          // (دفعة 54) حذف شاهدة الطرد عند إعادة السماح.
+                          try {
+                            await ref
+                                .read(syncEngineProvider)
+                                .clearEvictionBroadcast(d['id'] as String);
+                          } catch (_) {}
                           bump(ref);
                         },
                         onExpel: () async {
@@ -233,11 +245,19 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                             await ref
                                 .read(repoProvider)
                                 .expelDevice(d['id'] as String);
+                            // (دفعة 54) بث شاهدة الطرد النشطة: تصل المستهدف
+                            // لحظياً عبر SSE فيبطل جلسته ويعود مستقلاً.
+                            try {
+                              await ref
+                                  .read(syncEngineProvider)
+                                  .broadcastEviction(d['id'] as String,
+                                      reason: 'expelled_by_manager');
+                            } catch (_) {}
                             bump(ref);
                             if (mounted) {
                               showSnack(
                                 context,
-                                '✅ تم طرد الجهاز من المجموعة. سيمسح بياناته عند أول اتصال.',
+                                '✅ تم طرد الجهاز وبثّ الإبطال — سيُقصى لحظياً.',
                               );
                             }
                           }

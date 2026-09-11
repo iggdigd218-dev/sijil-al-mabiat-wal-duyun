@@ -6,10 +6,10 @@
 library;
 
 /// إصدار التطبيق المعروض (يطابق pubspec.yaml).
-const String kAppVersion = '3.41.0';
+const String kAppVersion = '3.42.0';
 
 /// رقم البناء (ما بعد + في pubspec.yaml).
-const int kAppBuild = 71;
+const int kAppBuild = 72;
 
 /// النص المعروض للمستخدم.
 String get appVersionLabel => 'الإصدار $kAppVersion';

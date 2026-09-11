@@ -898,6 +898,26 @@ class SyncEngine {
       }
       if (await repo.amIExpelled()) {
         await handleSelfEviction();
+        return;
+      }
+      // (دفعة 54) فحص شاهدة الطرد الصريحة عند الإقلاع وكل دورة صيانة —
+      // يغطي حالة إقلاع الجهاز بعد أن طُرد وهو مطفأ (قبل فتح قنوات SSE).
+      if (await repo.workspaceMode() == 'member') {
+        final st = await repo.settings();
+        final url = (st['cloudBackendUrl'] ?? '').trim();
+        final devId = (st['sync.deviceId'] ?? '').trim();
+        if (url.isNotEmpty && devId.isNotEmpty) {
+          try {
+            final tomb = await CloudJoin.hasEvictionTombstone(
+              backendUrl: url,
+              deviceId: devId,
+              workspaceId: _cloudTransport?.workspaceId ?? 'default',
+            );
+            if (tomb) await handleSelfEviction();
+          } catch (_) {
+            // شبكة — المصافحة داخل الناقل تغطي لاحقاً.
+          }
+        }
       }
     } catch (_) {}
   }
@@ -993,6 +1013,48 @@ class SyncEngine {
 
   /// يُستدعى بعد تغيير صلاحية/جهاز (منح صلاحية لجهاز) لبثّ التغيير فورًا
   /// إلى كل الأقران ودفع أي عمليات معلّقة — استجابة خلال ثوانٍ (<10 ثوانٍ).
+  /// (دفعة 54 — جهة المدير) بث الطرد النشط لجهاز مستهدف:
+  ///  1) شاهدة صريحة في /evictions/$deviceId بختم وقت الخادم —
+  ///     تصل المستهدف عبر قناته المخصصة لحظياً.
+  ///  2) حذف عقدته من /roster نهائياً (محفّز الدفاع الثاني).
+  /// يُستدعى بعد expelDevice/revokeDevice المحليتين مباشرة.
+  Future<void> broadcastEviction(String targetDeviceId,
+      {String reason = 'revoked_by_manager'}) async {
+    try {
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final t = _cloudTransport;
+      await CloudJoin.purgePeerFromCloud(
+        repo,
+        backendUrl: url,
+        deviceId: targetDeviceId,
+        workspaceId: t?.workspaceId ?? 'default',
+        reason: reason,
+      );
+    } catch (_) {
+      // الشبكة غائبة — المصافحة الدورية لدى المستهدف تلتقط الطرد لاحقاً
+      // عبر roster (الذي سيصله وسم الطرد مع أول مزامنة سجل).
+    }
+  }
+
+  /// (دفعة 54 — جهة المدير) إعادة السماح لجهاز محظور: حذف شاهدة طرده
+  /// من السحابة حتى لا يُقصي الجهازُ المستعاد نفسَه عند فحصه القادم.
+  Future<void> clearEvictionBroadcast(String targetDeviceId) async {
+    try {
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      await CloudJoin.clearEvictionTombstone(
+        backendUrl: url,
+        deviceId: targetDeviceId,
+        workspaceId: _cloudTransport?.workspaceId ?? 'default',
+      );
+    } catch (_) {}
+  }
+
   Future<void> broadcastRosterChange() async {
     try {
       await _lanTransport?.broadcastNotify(reason: 'roster');

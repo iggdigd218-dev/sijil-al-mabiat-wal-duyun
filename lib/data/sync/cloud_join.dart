@@ -826,31 +826,62 @@ class CloudJoin {
     }, timeout: const Duration(seconds: 20));
   }
 
-  /// (المدير — الطرد الكامل) يرفع سجل الجهاز المطرود بحالة revoked إلى
-  /// /roster/$deviceId ثم يحذف عقدته نهائياً بعد مهلة سماح — الجهاز
-  /// المطرود يقرأ حالته عبر syncRoster ويبطل جلسته ذاتياً.
+  /// (دفعة 54) مسار شاهدة الطرد الصريحة لجهاز معيّن.
+  static String evictionPath(String base, String ws, String deviceId) =>
+      '${_root(base, ws)}/evictions/${Uri.encodeComponent(deviceId)}.json';
+
+  /// (المدير — بروتوكول الطرد النشط، دفعة 54) عند «طرد نهائي» أو حظر:
+  ///  1) كتابة شاهدة طرد صريحة في /evictions/$deviceId بختم وقت الخادم —
+  ///     الجهاز المستهدف يستمع عليها عبر SSE فيبطل جلسته لحظياً.
+  ///  2) حذف عقدته نهائياً من /roster/$deviceId — غياب العقدة محفّز طرد
+  ///     ثانٍ لدى مصافحة العضوية (دفاع مزدوج).
+  ///  3) حذف أي طلب انضمام قديم له (نظافة).
   static Future<void> purgePeerFromCloud(
     Repo repo, {
     required String backendUrl,
     required String deviceId,
     String workspaceId = 'default',
+    String reason = 'revoked_by_manager',
   }) async {
     final root = _root(backendUrl, workspaceId);
-    final db = await repo.database;
-    // 1) ارفع الحالة المطرودة أولاً (ليكتشفها الجهاز نفسه عند سحبه القادم).
-    final row = await db.query('devices',
-        where: 'id = ?', whereArgs: [deviceId], limit: 1);
-    if (row.isNotEmpty) {
-      try {
-        await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
-            _safeDeviceRow(row.first),
-            timeout: const Duration(seconds: 20));
-      } catch (_) {}
-    }
-    // 2) احذف أي طلب انضمام قديم له.
+    // 1) الشاهدة الصريحة أولاً — أهم خطوة: تصل المستهدف عبر SSE فوراً،
+    //    وختم {".sv":"timestamp"} يمنع تلاعب ساعات الأجهزة.
+    await _putJson(evictionPath(backendUrl, workspaceId, deviceId), {
+      'deviceId': deviceId,
+      'expelled_at': {'.sv': 'timestamp'},
+      'reason': reason,
+    }, timeout: const Duration(seconds: 20));
+    // 2) إزالة العقدة من السجل نهائياً (لا مجرد وسمها).
+    try {
+      await _delete('$root/roster/${Uri.encodeComponent(deviceId)}.json');
+    } catch (_) {}
+    // 3) حذف أي طلب انضمام قديم له.
     try {
       await _delete(requestPath(backendUrl, workspaceId, deviceId));
     } catch (_) {}
+  }
+
+  /// (المدير — دفعة 54) إزالة شاهدة الطرد عند «إعادة السماح» — وإلا
+  /// سيطرد الجهاز المستعاد نفسه فور فحصه القادم.
+  static Future<void> clearEvictionTombstone({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    try {
+      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+  }
+
+  /// (العضو — المصافحة، دفعة 54) هل توجد شاهدة طرد لهذا الجهاز؟
+  static Future<bool> hasEvictionTombstone({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final rec =
+        await _getJson(evictionPath(backendUrl, workspaceId, deviceId));
+    return rec != null;
   }
 
   /// (المدير) الرفض: تحديث الحالة rejected — الجهاز المنتظر يتلقاها

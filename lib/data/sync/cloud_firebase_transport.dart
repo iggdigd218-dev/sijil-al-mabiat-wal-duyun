@@ -19,6 +19,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/desktop_net.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
+import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
 import 'lan_http_transport.dart';
@@ -175,6 +176,21 @@ class CloudFirebaseTransport implements SyncTransport {
       final st = await repo.settings();
       final devId = (st['sync.deviceId'] ?? '').trim();
       if (devId.isEmpty) return;
+      // (دفعة 54) الشاهدة الصريحة أولاً: وجود /evictions/$devId = طرد
+      // قاطع فوري — لا يحتاج أي حارس (المدير كتبها قصداً).
+      try {
+        final tomb = await CloudJoin.hasEvictionTombstone(
+          backendUrl: backendUrl,
+          deviceId: devId,
+          workspaceId: workspaceId,
+        );
+        if (tomb) {
+          _fireEvicted();
+          return;
+        }
+      } catch (_) {
+        // شبكة — نسقط لفحص الـroster المعتاد.
+      }
       final tok = await _idToken();
       final uri = Uri.parse(
               '$_root/roster/${Uri.encodeComponent(devId)}.json')
@@ -423,6 +439,9 @@ class CloudFirebaseTransport implements SyncTransport {
       DesktopNet.trustedHost = Uri.parse(backendUrl).host;
     } catch (_) {}
     unawaited(_sseLoop());
+    // (دفعة 54) قناة ثانية خفيفة على شاهدة الطرد الخاصة بنا —
+    // المدير يكتبها فيصلنا الطرد لحظياً حتى لو لم تصل أي عملية.
+    unawaited(_evictionSseLoop());
   }
 
   Future<void> stopListening() async {
@@ -431,6 +450,80 @@ class CloudFirebaseTransport implements SyncTransport {
       _sseClient?.close(force: true);
     } catch (_) {}
     _sseClient = null;
+    try {
+      _evictionSseClient?.close(force: true);
+    } catch (_) {}
+    _evictionSseClient = null;
+  }
+
+  // ==================== مستمع شاهدة الطرد (دفعة 54) ====================
+
+  HttpClient? _evictionSseClient;
+  int _evictionRetrySeconds = 4;
+
+  /// قناة SSE مخصصة على /evictions/$myDeviceId: أول حدث put قد يحمل
+  /// شاهدة موجودة أصلاً (اللقطة الأولية)، وأي put لاحق ببيانات غير null
+  /// يعني أن المدير طردنا الآن — الإبطال يُطلق في الحالتين.
+  /// وضع غير member يُنهي القناة فوراً (المالك/المستقل لا يُطردان).
+  Future<void> _evictionSseLoop() async {
+    while (_listening && !_evicted) {
+      try {
+        final mode = await repo.workspaceMode();
+        if (mode != 'member') return;
+        final st = await repo.settings();
+        final devId = (st['sync.deviceId'] ?? '').trim();
+        if (devId.isEmpty) return;
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 15);
+        _evictionSseClient = client;
+        final tok = await _idToken();
+        final uri = Uri.parse(
+                '$_root/evictions/${Uri.encodeComponent(devId)}.json')
+            .replace(queryParameters: {if (tok != null) 'auth': tok});
+        final req = await client.getUrl(uri);
+        req.headers.set('Accept', 'text/event-stream');
+        req.headers.set('Cache-Control', 'no-cache');
+        final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw StateError('eviction-sse-http-${resp.statusCode}');
+        }
+        _evictionRetrySeconds = 4;
+        String? eventName;
+        await for (final line in resp
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
+          if (!_listening || _evicted) break;
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (eventName == 'put' || eventName == 'patch') {
+              // صيغة فيربيس: data: {"path":"/","data":<payload>}
+              final raw = line.substring(5).trim();
+              try {
+                final m = jsonDecode(raw);
+                if (m is Map && m['data'] != null) {
+                  // شاهدة طرد موجودة/كُتبت الآن — إبطال فوري.
+                  _fireEvicted();
+                  return;
+                }
+              } catch (_) {}
+            } else if (eventName == 'auth_revoked') {
+              break; // أعد الاتصال بتوكن جديد.
+            }
+          }
+        }
+      } catch (_) {
+        // شبكة — إعادة المحاولة بتراجع.
+      } finally {
+        try {
+          _evictionSseClient?.close(force: true);
+        } catch (_) {}
+        _evictionSseClient = null;
+      }
+      if (!_listening || _evicted) break;
+      await Future<void>.delayed(Duration(seconds: _evictionRetrySeconds));
+      _evictionRetrySeconds = (_evictionRetrySeconds * 2).clamp(4, 180);
+    }
   }
 
   Future<void> _sseLoop() async {

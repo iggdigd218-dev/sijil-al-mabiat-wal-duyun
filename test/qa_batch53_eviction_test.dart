@@ -16,6 +16,7 @@ import 'package:http/testing.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_firebase_transport.dart';
+import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/sync_engine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -233,5 +234,88 @@ void main() {
     expect(await repo.workspaceMode(), 'standalone');
     // إبطال الجلسة الكامل: شاشة الترحيب ستظهر عند الإقلاع التالي.
     expect(st.containsKey('has_completed_onboarding'), isFalse);
+  });
+
+  // ==================== دفعة 54: بروتوكول الطرد النشط ====================
+
+  test('QA-B54-01 manager purge writes eviction tombstone + deletes roster',
+      () async {
+    final cloud = FakeCloudStore();
+    // عقدة roster موجودة قبل الطرد.
+    cloud.store[rosterKey] = {'id': devId, 'name': 'جهاز'};
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'is_owner = 1 OR id = ?', whereArgs: [devId]);
+    await http.runWithClient(
+        () => CloudJoin.purgePeerFromCloud(repo,
+            backendUrl: url, deviceId: devId, reason: 'expelled_by_manager'),
+        cloud.client);
+    // الشاهدة كُتبت بالحمولة الصحيحة.
+    const tombKey = '/workspaces/default/evictions/$devId.json';
+    final tomb = cloud.store[tombKey] as Map?;
+    expect(tomb, isNotNull);
+    expect('${tomb!['reason']}', 'expelled_by_manager');
+    expect(tomb['expelled_at'], isNotNull); // {".sv":"timestamp"}
+    // عقدة roster حُذفت نهائياً.
+    expect(cloud.store.containsKey(rosterKey), isFalse);
+  });
+
+  test('QA-B54-02 member handshake detects tombstone → immediate eviction',
+      () async {
+    final cloud = FakeCloudStore();
+    // roster سليم لكن الشاهدة موجودة — الشاهدة تحسم أولاً.
+    cloud.store[rosterKey] = {'id': devId, 'revoked_at': '', 'expelled_at': ''};
+    cloud.store['/workspaces/default/evictions/$devId.json'] = {
+      'deviceId': devId,
+      'expelled_at': 1757600000000,
+      'reason': 'revoked_by_manager',
+    };
+    final t = makeTransport();
+    var fired = false;
+    t.onEvicted = () => fired = true;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isTrue, reason: 'الشاهدة الصريحة = طرد قاطع فوري');
+    expect(t.isEvicted, isTrue);
+  });
+
+  test('QA-B54-03 clearEvictionTombstone removes tombstone (re-allow flow)',
+      () async {
+    final cloud = FakeCloudStore();
+    const tombKey = '/workspaces/default/evictions/$devId.json';
+    cloud.store[tombKey] = {'deviceId': devId, 'reason': 'revoked_by_manager'};
+    await http.runWithClient(
+        () => CloudJoin.clearEvictionTombstone(
+            backendUrl: url, deviceId: devId),
+        cloud.client);
+    expect(cloud.store.containsKey(tombKey), isFalse);
+    // بعد الإزالة: المصافحة لا تطرد (roster سليم).
+    cloud.store[rosterKey] = {'id': devId, 'revoked_at': '', 'expelled_at': ''};
+    final t = makeTransport();
+    var fired = false;
+    t.onEvicted = () => fired = true;
+    await http.runWithClient(
+        () => t.maybeCheckSelfEviction(force: true), cloud.client);
+    expect(fired, isFalse);
+  });
+
+  test('QA-B54-04 hasEvictionTombstone: true when present, false when absent',
+      () async {
+    final cloud = FakeCloudStore();
+    expect(
+        await http.runWithClient(
+            () => CloudJoin.hasEvictionTombstone(
+                backendUrl: url, deviceId: devId),
+            cloud.client),
+        isFalse);
+    cloud.store['/workspaces/default/evictions/$devId.json'] = {
+      'deviceId': devId
+    };
+    expect(
+        await http.runWithClient(
+            () => CloudJoin.hasEvictionTombstone(
+                backendUrl: url, deviceId: devId),
+            cloud.client),
+        isTrue);
   });
 }
