@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -7,6 +9,8 @@ import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/db_init.dart';
 import 'core/desktop.dart';
+import 'core/desktop_net.dart';
+import 'core/windows_firewall.dart';
 import 'core/media_paths.dart';
 import 'core/database.dart';
 import 'core/sfx.dart';
@@ -19,6 +23,12 @@ import 'ui/splash.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   initDbForPlatform();
+  // (دفعة 52) سطح المكتب: بروكسي تلقائي + مهلات + تشخيص أخطاء TLS دقيق
+  // لكل عملاء HTTP في التطبيق، وتسجيل قاعدة جدار حماية ويندوز بلا انتظار.
+  if (isDesktop) {
+    HttpOverrides.global = DesktopHttpOverrides();
+    unawaited(WindowsFirewall.ensureRegistered());
+  }
   await initializeDateFormatting('ar');
   await initializeDateFormatting('en');
   // جذر documents لمسارات الوسائط النسبية (chat_media/...).

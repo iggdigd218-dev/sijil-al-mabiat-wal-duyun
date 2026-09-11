@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/desktop_net.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'conflict_resolver.dart';
@@ -342,6 +343,11 @@ class CloudFirebaseTransport implements SyncTransport {
     if (_listening) return;
     _listening = true;
     _sseRetrySeconds = 2;
+    // (دفعة 52) اعتماد مضيف الواجهة الخلفية كموثوق لدى طبقة تشخيص TLS
+    // (يُقبل رغم فشل التحقق في شبكات تفتيش TLS — الباقي يُرفض دائماً).
+    try {
+      DesktopNet.trustedHost = Uri.parse(backendUrl).host;
+    } catch (_) {}
     unawaited(_sseLoop());
   }
 
@@ -356,6 +362,14 @@ class CloudFirebaseTransport implements SyncTransport {
   Future<void> _sseLoop() async {
     while (_listening) {
       try {
+        // (دفعة 52) فحص وصول سريع قبل فتح القناة: استعلام DNS للمضيف —
+        // يكشف انقطاع الإنترنت/حجب جدار الحماية فوراً برسالة دقيقة
+        // بدل تعليق ثم فشل صامت.
+        final host = Uri.parse(backendUrl).host;
+        final pre = await DesktopNet.preflight(host);
+        if (pre != null) throw SocketException('preflight: $pre');
+        // ملاحظة: HttpClient هنا يرث DesktopHttpOverrides العالمية على
+        // سطح المكتب (بروكسي بيئة + مهلات + تشخيص شهادات TLS).
         final client = HttpClient()
           ..connectionTimeout = const Duration(seconds: 15);
         _sseClient = client;
@@ -376,6 +390,7 @@ class CloudFirebaseTransport implements SyncTransport {
           throw StateError('sse-http-${resp.statusCode}');
         }
         _sseRetrySeconds = 2; // الاتصال نجح — صفّر التراجع.
+        DesktopNet.clearError(); // الشبكة سليمة — امسح أي خطأ معروض.
         String? eventName;
         var skippedInitial = false;
         await for (final line in resp
@@ -400,8 +415,11 @@ class CloudFirebaseTransport implements SyncTransport {
             }
           }
         }
-      } catch (_) {
-        // انقطاع شبكة/خادم — سنعيد المحاولة بعد المهلة.
+      } catch (e) {
+        // انقطاع شبكة/خادم — سنعيد المحاولة بعد المهلة، مع تسجيل
+        // الخطأ الدقيق (SocketException/HandshakeException/مهلة...)
+        // ليُعرض في واجهة المزامنة بدل الفشل الصامت.
+        DesktopNet.recordError(e);
       } finally {
         try {
           _sseClient?.close(force: true);

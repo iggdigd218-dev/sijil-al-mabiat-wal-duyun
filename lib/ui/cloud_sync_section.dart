@@ -13,7 +13,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../core/desktop_net.dart';
 import '../core/sfx.dart';
+import '../core/windows_firewall.dart';
 import '../data/cloud_sync.dart';
 import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
@@ -153,6 +155,59 @@ class _CloudSyncSettingsSectionState
               ),
             ),
           ],
+        ),
+        // (دفعة 52) عرض خطأ الشبكة الدقيق بدل الفشل الصامت:
+        // SocketException/HandshakeException/مهلة — يُحدَّث حياً من ناقل
+        // السحابة ويختفي تلقائياً فور نجاح الاتصال.
+        ValueListenableBuilder<String?>(
+          valueListenable: DesktopNet.netErrorNotifier,
+          builder: (_, err, __) => err == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: .07),
+                      borderRadius: BorderRadius.circular(8),
+                      border:
+                          Border.all(color: Colors.red.withValues(alpha: .3)),
+                    ),
+                    child: Text(
+                      '⚠️ خطأ اتصال: $err',
+                      textDirection: TextDirection.rtl,
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.red, height: 1.5),
+                    ),
+                  ),
+                ),
+        ),
+        // توجيه جدار حماية ويندوز إن تعذّر التسجيل الآلي للقاعدة.
+        ValueListenableBuilder<String?>(
+          valueListenable: WindowsFirewall.firewallNotice,
+          builder: (_, notice, __) => notice == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: .08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: Colors.orange.withValues(alpha: .35)),
+                    ),
+                    child: Text(
+                      '🛡️ $notice',
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: Colors.orange.shade800,
+                          height: 1.5),
+                    ),
+                  ),
+                ),
         ),
         const SizedBox(height: 12),
         TextField(

@@ -48,4 +48,13 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; (دفعة 52) تسجيل قاعدتي جدار الحماية (دخول/خروج) أثناء التثبيت —
+; المُثبّت يعمل بصلاحية المسؤول أصلاً فلا تظهر أي نافذة UAC إضافية.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Nexora Enterprise"""; Flags: runhidden; StatusMsg: "Configuring Windows Firewall..."
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Nexora Enterprise"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall..."
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Nexora Enterprise"" dir=out action=allow program=""{app}\{#MyAppExeName}"" enable=yes"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall..."
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; إزالة قاعدة جدار الحماية عند إلغاء التثبيت (نظافة).
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Nexora Enterprise"""; Flags: runhidden; RunOnceId: "DelFirewallRule"

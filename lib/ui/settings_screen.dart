@@ -7,10 +7,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/app_version.dart';
+import '../core/db_init.dart' show isDesktop;
+import '../core/factory_reset.dart';
 import '../core/receipt_image.dart';
 import '../core/security.dart';
+import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'splash.dart' show SplashScreen;
 import 'update_section.dart';
 import 'appearance_screen.dart';
 import 'cloud_sync_section.dart';
@@ -708,6 +712,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     children: [_GroupWipeTile()],
                   ),
                 ],
+                // (دفعة 52) نسخة الكمبيوتر: إعادة ضبط المصنع المحلية —
+                // تحذف ملف قاعدة البيانات نفسه من القرص وتعيد التطبيق
+                // لشاشة الترحيب (الحل الجذري للبيانات القديمة العالقة).
+                if (isDesktop) ...[
+                  const SizedBox(height: 18),
+                  const _FactoryResetTile(),
+                ],
                 const SizedBox(height: 18),
                 const UpdateSection(),
                 const SizedBox(height: 18),
@@ -990,6 +1001,119 @@ class _GroupWipeTileState extends ConsumerState<_GroupWipeTile> {
           style: const TextStyle(fontSize: 11.5, height: 1.5),
         ),
         onTap: locked || _busy ? null : _wipe,
+      ),
+    );
+  }
+}
+
+// ═══════════ (دفعة 52) إعادة ضبط المصنع — نسخة الكمبيوتر ═══════════
+
+/// زر بارز أحمر يحذف ملف قاعدة البيانات المحلية نفسه من القرص
+/// (nexora.db + wal/shm) بعد إغلاق الاتصال، ثم يعيد التطبيق إلى شاشة
+/// الترحيب — الحل الجذري للبيانات القديمة العالقة على ويندوز.
+class _FactoryResetTile extends ConsumerStatefulWidget {
+  const _FactoryResetTile();
+
+  @override
+  ConsumerState<_FactoryResetTile> createState() => _FactoryResetTileState();
+}
+
+class _FactoryResetTileState extends ConsumerState<_FactoryResetTile> {
+  bool _busy = false;
+
+  Future<void> _reset() async {
+    // 1) تأكيد صريح بالنص المطلوب.
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('⚠️ إعادة ضبط المصنع'),
+        content: const Text(
+          'هل أنت متأكد من رغبتك في تصفير البرنامج وحذف قاعدة البيانات '
+          'المحلية؟\n\nسيُحذف ملف قاعدة البيانات نهائياً من هذا الكمبيوتر '
+          '(الحسابات، العمليات، الأصناف، الإعدادات، بيانات الاقتران) '
+          'ويبدأ التطبيق من شاشة الترحيب كأنه مثبت للتو.\n\n'
+          'هذا الإجراء لا يمكن التراجع عنه.',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('تصفير وحذف نهائي'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    setState(() => _busy = true);
+    final engine = ref.read(syncEngineProvider);
+    try {
+      // 2) أوقف محرك المزامنة أولاً (يستخدم القاعدة).
+      try {
+        engine.stop();
+      } catch (_) {}
+      // 3) أغلق القاعدة واحذف ملفاتها + الوسائط.
+      await FactoryReset.wipeAllLocalData();
+      Sfx.success();
+      if (!mounted) return;
+      // 4) عودة نظيفة لشاشة البداية: القاعدة الجديدة تُنشأ تلقائياً
+      //    عند أول فتح، وشاشة الترحيب تظهر لغياب has_completed_onboarding.
+      final repo = ref.read(repoProvider);
+      try {
+        await repo.initSyncInfra().timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      try {
+        await engine.start();
+      } catch (_) {}
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const SplashScreen()),
+        (_) => false,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showSnack(context, 'تعذّر التصفير: $e', error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Colors.red.withValues(alpha: .05),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.red.withValues(alpha: .35)),
+      ),
+      child: ListTile(
+        enabled: !_busy,
+        leading: _busy
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.restart_alt, color: Colors.red),
+        title: const Text(
+          'مسح كافة البيانات وإعادة ضبط المصنع (نسخة الكمبيوتر)',
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: Colors.red,
+          ),
+        ),
+        subtitle: const Text(
+          'يحذف ملف قاعدة البيانات المحلية نهائياً من هذا الجهاز ويعيد '
+          'البرنامج إلى شاشة الترحيب — يُستخدم عند تعذّر تنظيف البيانات '
+          'القديمة يدوياً.',
+          style: TextStyle(fontSize: 11.5, height: 1.5),
+        ),
+        onTap: _busy ? null : _reset,
       ),
     );
   }
