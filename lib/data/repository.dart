@@ -321,6 +321,18 @@ class Repo {
     _currentUserId = null;
     final me = await currentUser();
     _currentUserId = me?.id;
+    // إبطال الجلسة بالكامل: الجهاز المطرود يعود لشاشة الإعداد الأول
+    // (onboarding) عند التشغيل التالي — قاعدة نظيفة وهوية جديدة.
+    try {
+      final db2 = await _db;
+      await db2.delete('settings',
+          where: 'key IN (?, ?, ?)',
+          whereArgs: [
+            'has_completed_onboarding',
+            'cloudBackendUrl',
+            'cloudCode',
+          ]);
+    } catch (_) {}
   }
 
   /// مسح كل البيانات المحلية على العضو الجديد ليستبدلها بنسخة المضيف.
@@ -1682,6 +1694,28 @@ class Repo {
       where: 'id = ?',
       whereArgs: [deviceId],
     );
+    // تطهير الدردشة: المحادثة الفردية مع الجهاز المطرود تُحذف برسائلها —
+    // لا يبقى المطرود في قوائم المحادثات ولا في بيانات الرسائل الوصفية.
+    await purgePeerChat(deviceId);
+  }
+
+  /// يحذف محادثة القرين الفردية (peer:<deviceId>) ورسائلها بالكامل.
+  /// تُستدعى عند الطرد/الإلغاء لدى المدير، وعبر مصالحة الـ roster لدى
+  /// بقية الأعضاء عندما يصلهم خبر الطرد.
+  Future<void> purgePeerChat(String deviceId) async {
+    final db = await _db;
+    final convs = await db.query(
+      'conversations',
+      columns: ['id'],
+      where: 'title = ?',
+      whereArgs: ['peer:$deviceId'],
+    );
+    for (final c in convs) {
+      final cid = c['id'];
+      await db.delete('messages',
+          where: 'conversation_id = ?', whereArgs: [cid]);
+      await db.delete('conversations', where: 'id = ?', whereArgs: [cid]);
+    }
   }
 
   /// ينقل ملكية/إدارة المجموعة لجهاز آخر (يعينه is_owner=1 ويُعيّن له المستخدم

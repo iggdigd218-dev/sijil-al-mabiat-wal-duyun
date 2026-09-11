@@ -369,10 +369,40 @@ class CloudJoin {
     if (cloudCode.trim().isNotEmpty) {
       await repo.setSetting('cloudCode', cloudCode.trim().toUpperCase());
     }
-    // صفّر مؤشر السحب حتى يُعاد تشغيل كل تاريخ العمليات فوق اللقطة
-    // (idempotent) فلا يفوت العضو الجديد أي عملية.
+    // صفّر كل مؤشرات المزامنة (سحابة/roster/LAN) حتى يُعاد تشغيل كامل
+    // تاريخ العمليات فوق اللقطة (idempotent) — الترطيب النظيف يبدأ من
+    // إصدار اللقطة بالضبط قبل الاستماع للعمليات الجديدة.
     await db.delete('sync_meta',
-        where: 'key = ?', whereArgs: ['lastCloudTs:$workspaceId']);
+        where: "key LIKE 'lastCloudTs:%' OR key LIKE 'lastRosterPush:%' "
+            "OR key LIKE 'lastLanTs:%'");
+
+    // مضاد الأشباح: deviceId حتمي من بصمة العتاد — إعادة التثبيت تعيد
+    // إنتاج نفس المعرف. إن وُجد سجلنا القديم في roster السحابي (بدوره
+    // وصلاحياته) نحييه: نستعيد user_id والاسم ونمسح أي طرد قديم بدل
+    // إنشاء جهاز مكرر جديد.
+    try {
+      final oldRec = await _getJson(
+          '$root/roster/${Uri.encodeComponent(ourId)}.json');
+      if (oldRec != null && oldRec.isNotEmpty) {
+        final nowIso = DateTime.now().toIso8601String();
+        await db.update(
+          'devices',
+          {
+            'user_id': oldRec['user_id'],
+            'name': (oldRec['name'] as String?)?.trim().isNotEmpty == true
+                ? oldRec['name']
+                : null,
+            'revoked_at': '',
+            'expelled_at': '',
+            'is_paired': 1,
+            'last_seen_at': nowIso,
+            'updated_at': nowIso,
+          }..removeWhere((k, v) => v == null),
+          where: 'id = ?',
+          whereArgs: [ourId],
+        );
+      }
+    } catch (_) {}
 
     // سجّل جهازنا في السجل السحابي حتى يراه المدير ويعيّن له الصلاحيات.
     final own = await db.query('devices',
@@ -453,6 +483,16 @@ class CloudJoin {
             whereArgs: [id],
           );
           changed = true;
+          // إبطال فوري من جهة العميل: المدير طردنا عبر السحابة →
+          // مسح بيانات المجموعة والعودة مستقلين + شاشة الإعداد الأول.
+          final expelledNow = '${r['expelled_at'] ?? ''}'.isNotEmpty ||
+              '${r['revoked_at'] ?? ''}'.isNotEmpty;
+          if (expelledNow && !isOwner) {
+            try {
+              await repo.resetToStandaloneAfterExpulsion();
+            } catch (_) {}
+            return true;
+          }
           continue;
         }
         if (local == null) {
@@ -482,6 +522,18 @@ class CloudJoin {
           try {
             await db.update('devices', row, where: 'id = ?', whereArgs: [id]);
             changed = true;
+            // طرد كامل: انتقال القرين إلى مطرود يطهّر محادثته الفردية
+            // من قوائم الدردشة لدى كل الأجهزة التي تصلها المصالحة.
+            final wasExpelled =
+                '${local['expelled_at'] ?? ''}'.isNotEmpty ||
+                    '${local['revoked_at'] ?? ''}'.isNotEmpty;
+            final nowExpelled = '${row['expelled_at'] ?? ''}'.isNotEmpty ||
+                '${row['revoked_at'] ?? ''}'.isNotEmpty;
+            if (nowExpelled && !wasExpelled) {
+              try {
+                await repo.purgePeerChat(id);
+              } catch (_) {}
+            }
           } catch (_) {}
         }
       }

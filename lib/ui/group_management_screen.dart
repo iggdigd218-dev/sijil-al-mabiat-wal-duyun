@@ -361,6 +361,13 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         );
                         if (ok == true) {
                           await repo.expelDevice(d['id'] as String);
+                          // بث الطرد فوراً لكل الأجهزة (roster سحابي/LAN):
+                          // الجهاز المطرود يكتشف حالته ويمسح بياناته حالاً.
+                          try {
+                            await ref
+                                .read(syncEngineProvider)
+                                .broadcastRosterChange();
+                          } catch (_) {}
                           safeBump();
                         }
                       },

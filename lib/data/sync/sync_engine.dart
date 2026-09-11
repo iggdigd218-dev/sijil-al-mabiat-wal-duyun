@@ -96,9 +96,29 @@ class SyncEngine {
 
   Future<void> _ensureLanTransport() async {
     final st = await repo.settings();
-    final enabled = (st['lanSyncEnabled'] ?? '0') == '1';
+    // «السحابة حصرياً»: خادم سحابي مهيأ = إيقاف كامل لمزامنة LAN
+    // (لا خادم HTTP محلي ولا بث) — كل الحركة عبر Firebase فقط.
+    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+        (st['cloudAutoSync'] ?? '1') != '0';
+    final enabled = !cloudOn && (st['lanSyncEnabled'] ?? '0') == '1';
     final port = int.tryParse(st['lanSyncPort'] ?? '') ?? kDefaultLanPort;
     final db = await _db;
+    if (cloudOn) {
+      // صفوف lan العالقة بلا ناقل تُعلَّم synced (السحابة تسلّم بدلاً عنها).
+      try {
+        await db.update(
+          'sync_queue',
+          {
+            'status': 'synced',
+            'last_error': '',
+            'next_try_at': '',
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "target = ? AND status IN ('pending','syncing','failed')",
+          whereArgs: [SyncTarget.lanBroadcast],
+        );
+      } catch (_) {}
+    }
     if (!enabled) {
       await _lanTransport?.stopServer();
       _transports.removeWhere((t) => t.targetId == SyncTarget.lanBroadcast);
@@ -534,6 +554,29 @@ class SyncEngine {
     try {
       await _backfillMissedCloudOps();
     } catch (_) {}
+    // هجرة تنظيف الطابور (مرة واحدة عند كل إقلاع): مع سحابة مهيأة تُصفّى
+    // صفوف lan القديمة العالقة (كانت تسدّ طابور المدير وتُبقي بانر الخطر)،
+    // وتُصفّر مواعيد backoff لصفوف cloud لتُدفع فوراً كخط أساس نظيف.
+    try {
+      final st0 = await repo.settings();
+      final cloudOn0 = (st0['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+          (st0['cloudAutoSync'] ?? '1') != '0';
+      if (cloudOn0) {
+        final db0 = await _db;
+        await db0.update(
+          'sync_queue',
+          {
+            'status': 'synced',
+            'last_error': '',
+            'next_try_at': '',
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "target = ? AND status IN ('pending','syncing','failed')",
+          whereArgs: [SyncTarget.lanBroadcast],
+        );
+        await _queue!.resumeBackoff();
+      }
+    } catch (_) {}
     if (!_started || generation != _generation) return;
     // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
     SyncRecorder.onOperationRecorded = notifyNewOperation;
@@ -650,6 +693,10 @@ class SyncEngine {
   Future<void> _backfillMissedLanOps() async {
     final db = await _db;
     final st = await repo.settings();
+    // «السحابة حصرياً»: لا إنقاذ لهدف LAN عند وجود سحابة مهيأة.
+    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+        (st['cloudAutoSync'] ?? '1') != '0';
+    if (cloudOn) return;
     if ((st['lanSyncEnabled'] ?? '0') != '1') return;
     final ourId = st['sync.deviceId'] ?? '';
     if (ourId.isEmpty) return;

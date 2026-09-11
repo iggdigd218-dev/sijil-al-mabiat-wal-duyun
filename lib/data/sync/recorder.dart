@@ -107,11 +107,11 @@ class SyncRecorder {
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
     final cloudOn = (map['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
         (map['cloudAutoSync'] ?? '1') != '0';
-    // احتياط: حتى لو لم يُضبط lanSyncEnabled (اقتران قديم قبل الإصلاح)،
-    // أي جهاز داخل مجموعة (workspaceMode غير standalone) يجب أن تُدرج
-    // عملياته لهدف LAN وإلا لن تصل أبداً لبقية الأجهزة.
-    var lanOn = map['lanSyncEnabled'] == '1';
-    if (!lanOn) {
+    // هندسة «السحابة أولاً وحصرياً»: عند وجود خادم سحابي مهيأ تمر كل
+    // المزامنة عبر Firebase وحده — لا هدف LAN إطلاقاً (أُخرج من الخدمة).
+    // هدف LAN يبقى فقط كتراجع للمجموعات القديمة بلا سحابة.
+    var lanOn = !cloudOn && map['lanSyncEnabled'] == '1';
+    if (!lanOn && !cloudOn) {
       try {
         final wm = await db.query('sync_meta',
             columns: ['value'],

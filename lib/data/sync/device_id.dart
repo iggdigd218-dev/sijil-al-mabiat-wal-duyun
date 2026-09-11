@@ -1,13 +1,20 @@
-// إدارة معرّف الجهاز الثابت.
-// deviceId ثابت يُولّد مرة واحدة ويُحفظ إلى الأبد في settings حتى لا يتغير
-// بين تشغيلات التطبيق أو مسح الكاش. يستخدم لربط الأجهزة وبناء Operation IDs.
+// إدارة معرّف الجهاز الثابت + بصمة العتاد الحتمية.
+// deviceId يُشتق من بصمة عتاد الجهاز (device_info_plus) بحيث تنتج نفس
+// الهوية بعد حذف التطبيق وإعادة تثبيته — يمنع «الأشباح» في قائمة الأجهزة:
+// إعادة الانضمام تُحيي السجل القديم بدوره وصلاحياته بدل إنشاء جهاز مكرر.
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+
+import 'package:crypto/crypto.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 import '../repository.dart';
 
 const _chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const _deviceIdKey = 'sync.deviceId';
 const _deviceNameKey = 'sync.deviceName';
+const _hwFingerprintKey = 'sync.hwFingerprint';
 
 /// يولّد سلسلة عشوائية من 8 أحرف من قاعدة Base32 مبسطة.
 String generateDeviceCode([int len = 8]) {
@@ -17,13 +24,77 @@ String generateDeviceCode([int len = 8]) {
 
 String formatDeviceId(String code) => 'DEVICE-$code';
 
-/// يُعيد deviceId الثابت لهذا الجهاز، ويولّده إن لم يكن موجودًا.
+/// يحوّل تجزئة SHA-256 إلى رمز Base32 مبسط بطول [len] — نفس أبجدية
+/// generateDeviceCode حتى تبقى المعرفات متجانسة الشكل.
+String _hashToCode(String input, [int len = 12]) {
+  final digest = sha256.convert(utf8.encode(input)).bytes;
+  final buf = StringBuffer();
+  for (var i = 0; i < len; i++) {
+    buf.write(_chars[digest[i % digest.length] % _chars.length]);
+  }
+  return buf.toString();
+}
+
+/// يجمع معرفات العتاد الثابتة للمنصة الحالية عبر device_info_plus.
+/// يعيد null إن تعذر الجمع (بيئة اختبار VM بلا plugin) — عندها نتراجع
+/// للمعرف العشوائي القديم.
+Future<String?> hardwareFingerprintRaw() async {
+  try {
+    final plugin = DeviceInfoPlugin();
+    if (Platform.isAndroid) {
+      final a = await plugin.androidInfo;
+      // ANDROID_ID ثابت عبر إعادة التثبيت لنفس الجهاز+المستخدم+توقيع التطبيق.
+      final parts = [a.id, a.brand, a.model, a.hardware, a.fingerprint];
+      return 'android:${parts.join('|')}';
+    }
+    if (Platform.isWindows) {
+      final w = await plugin.windowsInfo;
+      // deviceId = MachineGuid — ثابت عبر إعادة تثبيت التطبيق.
+      return 'windows:${w.deviceId}|${w.computerName}';
+    }
+    if (Platform.isLinux) {
+      final l = await plugin.linuxInfo;
+      // machineId من /etc/machine-id — ثابت للنظام.
+      return 'linux:${l.machineId ?? l.id}|${l.name}';
+    }
+    if (Platform.isMacOS) {
+      final m = await plugin.macOsInfo;
+      return 'macos:${m.systemGUID ?? m.computerName}';
+    }
+    if (Platform.isIOS) {
+      final i = await plugin.iosInfo;
+      return 'ios:${i.identifierForVendor ?? i.utsname.machine}';
+    }
+  } catch (_) {
+    // بيئة اختبار أو منصة بلا device_info — التراجع للعشوائي.
+  }
+  return null;
+}
+
+/// معرف الجهاز المشتق من بصمة العتاد: DEVICE-<12 حرفاً حتمياً>.
+/// نفس الجهاز يعيد إنتاج نفس المعرف بعد أي إعادة تثبيت.
+Future<String?> deterministicDeviceId() async {
+  final raw = await hardwareFingerprintRaw();
+  if (raw == null || raw.trim().isEmpty) return null;
+  return formatDeviceId(_hashToCode(raw));
+}
+
+/// يُعيد deviceId الثابت لهذا الجهاز.
+/// الأولوية: (1) المعرف المحفوظ (لا يتغير أبداً بعد أول توليد — حتى لا
+/// تنقلب هوية أجهزة قائمة بعد الترقية)، (2) المعرف الحتمي من بصمة العتاد،
+/// (3) التراجع العشوائي القديم (بيئات الاختبار).
 Future<String> ensureDeviceId(Repo repo) async {
   final st = await repo.settings();
   final existing = st[_deviceIdKey];
   if (existing != null && existing.startsWith('DEVICE-')) return existing;
-  final fresh = formatDeviceId(generateDeviceCode());
+  final hw = await deterministicDeviceId();
+  final fresh = hw ?? formatDeviceId(generateDeviceCode());
   await repo.setSetting(_deviceIdKey, fresh);
+  // نحفظ البصمة الخام (مُجزأة) للمطابقة المستقبلية ضد سجلات قديمة.
+  final raw = await hardwareFingerprintRaw();
+  if (raw != null) {
+    await repo.setSetting(_hwFingerprintKey, _hashToCode(raw, 24));
+  }
   return fresh;
 }
 
