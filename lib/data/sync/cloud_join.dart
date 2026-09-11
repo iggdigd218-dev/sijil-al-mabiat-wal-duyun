@@ -91,14 +91,20 @@ class CloudInviteInfo {
 /// لحظياً (صفر كمون) عند وصول طلب اقتران جديد. أول حدث put يحمل
 /// اللقطة الحالية فيلتقط الطلبات المعلقة سلفاً أيضاً. إعادة اتصال
 /// بتراجع أسّي 4→180 ثانية عند انقطاع الشبكة.
+///
+/// (تكملة) [nodePath] يعمّم القناة: العضو المنتظر يراقب عقدته
+/// 'joinRequests/&lt;deviceId&gt;' فيلتقط قرار المدير (approve/reject)
+/// لحظة كتابته بدل انتظار دورة الاستطلاع.
 class JoinRequestWatcher {
   final String backendUrl;
   final String workspaceId;
+  final String nodePath;
   final void Function() onRequestsChanged;
 
   JoinRequestWatcher({
     required this.backendUrl,
     this.workspaceId = 'default',
+    this.nodePath = 'joinRequests',
     required this.onRequestsChanged,
   });
 
@@ -130,8 +136,7 @@ class JoinRequestWatcher {
         final client = HttpClient()
           ..connectionTimeout = const Duration(seconds: 15);
         _client = client;
-        final req = await client
-            .getUrl(Uri.parse('$root/joinRequests.json'));
+        final req = await client.getUrl(Uri.parse('$root/$nodePath.json'));
         req.headers.set('Accept', 'text/event-stream');
         req.headers.set('Cache-Control', 'no-cache');
         final resp = await req.close().timeout(const Duration(seconds: 20));

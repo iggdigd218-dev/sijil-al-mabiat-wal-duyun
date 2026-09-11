@@ -54,6 +54,8 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   String _error = '';
   bool _busy = false;
   Timer? _pollTimer;
+  // (دفعة 57 — تكملة) قناة SSE على عقدة طلبنا: قرار المدير يصل لحظياً.
+  JoinRequestWatcher? _decisionWatcher;
   String _joinUrl = '';
   String _joinWs = 'default';
   String _joinToken = '';
@@ -61,6 +63,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _decisionWatcher?.stop();
     _nameCtrl.dispose();
     _urlCtrl.dispose();
     _pinCtrl.dispose();
@@ -132,11 +135,32 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
 
   void _startPolling() {
     _pollTimer?.cancel();
+    // (دفعة 57 — تكملة) SSE أولاً: أي كتابة على عقدة طلبنا (موافقة/رفض
+    // المدير) تُفحص فوراً بصفر كمون؛ الاستطلاع يبقى شبكة أمان أبطأ
+    // (15 ثانية بدل 4) لحالات انقطاع القناة فقط.
+    _startDecisionSse();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 4),
+      const Duration(seconds: 15),
       (_) => _pollOnce(),
     );
     _pollOnce();
+  }
+
+  Future<void> _startDecisionSse() async {
+    if (_decisionWatcher != null) return;
+    try {
+      final repo = ref.read(repoProvider);
+      final ourId = await ensureDeviceId(repo);
+      if (!mounted || ourId.isEmpty) return;
+      _decisionWatcher = JoinRequestWatcher(
+        backendUrl: _joinUrl,
+        workspaceId: _joinWs,
+        nodePath: 'joinRequests/${Uri.encodeComponent(ourId)}',
+        onRequestsChanged: () {
+          if (mounted) _pollOnce();
+        },
+      )..start();
+    } catch (_) {}
   }
 
   Future<void> _pollOnce() async {
@@ -153,10 +177,14 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       final status = st['status'];
       if (status == 'approved') {
         _pollTimer?.cancel();
+        _decisionWatcher?.stop();
+        _decisionWatcher = null;
         _joinToken = st['token'] ?? '';
         await _hydrate();
       } else if (status == 'rejected') {
         _pollTimer?.cancel();
+        _decisionWatcher?.stop();
+        _decisionWatcher = null;
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
       }
