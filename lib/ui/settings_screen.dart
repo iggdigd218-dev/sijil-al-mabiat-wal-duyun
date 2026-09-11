@@ -14,6 +14,7 @@ import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/cloud_join.dart';
 import 'splash.dart' show SplashScreen;
 import 'update_section.dart';
 import 'appearance_screen.dart';
@@ -709,7 +710,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     title: 'منطقة الخطر — تهيئة المجموعة',
                     icon: Icons.warning_amber_rounded,
                     color: const Color(0xFFDC2626),
-                    children: [_GroupWipeTile()],
+                    children: [
+                      _GroupWipeTile(),
+                      const SizedBox(height: 8),
+                      // (دفعة 55) حل المجموعة نهائياً: فك ارتباط كل
+                      // الأجهزة فوراً والعودة مستقلاً لإعادة الربط من جديد.
+                      const _DissolveGroupTile(),
+                    ],
                   ),
                 ],
                 // (دفعة 52) نسخة الكمبيوتر: إعادة ضبط المصنع المحلية —
@@ -1114,6 +1121,155 @@ class _FactoryResetTileState extends ConsumerState<_FactoryResetTile> {
           style: TextStyle(fontSize: 11.5, height: 1.5),
         ),
         onTap: _busy ? null : _reset,
+      ),
+    );
+  }
+}
+
+// ═══════════ (دفعة 55) حل المجموعة وإلغاء كل الارتباطات — للمدير ═══════════
+
+/// يبث شواهد طرد لكل الأجهزة المرتبطة (تُقصى لحظياً وتعود مستقلة)،
+/// يحذف عقدة المجموعة من السحابة، ثم يفكك المجموعة محلياً:
+/// دفاتر المدير تبقى، الأجهزة/الأعضاء/الدردشات تُحذف، والوضع يعود
+/// مستقلاً — جاهزاً لإنشاء مجموعة جديدة وإعادة ربط الأجهزة.
+class _DissolveGroupTile extends ConsumerStatefulWidget {
+  const _DissolveGroupTile();
+
+  @override
+  ConsumerState<_DissolveGroupTile> createState() =>
+      _DissolveGroupTileState();
+}
+
+class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
+  bool _busy = false;
+
+  Future<void> _dissolve() async {
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    // عدد الأجهزة المرتبطة (غير جهازنا) لعرضه في التأكيد.
+    var peerCount = 0;
+    try {
+      final st = await repo.settings();
+      final ourId = st['sync.deviceId'] ?? '';
+      final devs = await repo.devices();
+      peerCount = devs.where((d) => '${d['id']}' != ourId).length;
+    } catch (_) {}
+    if (!mounted) return;
+    // 1) تأكيد صريح.
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('⚠️ حذف المجموعة نهائياً'),
+        content: Text(
+          'سيتم حل المجموعة بالكامل:\n\n'
+          '• إلغاء ارتباط كل الأجهزة المرتبطة '
+          '${peerCount > 0 ? '($peerCount جهاز) ' : ''}فوراً — كل جهاز '
+          'يعود مستقلاً وتُحذف بيانات المجموعة منه.\n'
+          '• حذف بيانات المجموعة من السحابة (السجل، العمليات، الدعوات).\n'
+          '• حذف الأعضاء والدردشات من جهازك.\n\n'
+          'دفاترك (الحسابات والعمليات والأصناف) تبقى سليمة على جهازك، '
+          'ويمكنك إنشاء مجموعة جديدة وإعادة ربط الأجهزة في أي وقت.\n\n'
+          'هذا الإجراء لا يمكن التراجع عنه.',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حل المجموعة نهائياً'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    // 2) مصادقة النظام (بصمة/قفل شاشة) — إجراء مدمّر على مستوى المجموعة.
+    final authed = await Security.authenticate(
+      reason: 'أكّد هويتك لحل المجموعة وإلغاء ارتباط كل الأجهزة',
+    );
+    if (!authed) {
+      if (mounted) {
+        showSnack(context, 'لم تكتمل المصادقة — أُلغي الحل', error: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      var broadcast = 0;
+      // 3) البث السحابي: شاهدة طرد لكل جهاز + تفكيك عقدة المجموعة.
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        try {
+          broadcast = await CloudJoin.dissolveGroup(repo, backendUrl: url);
+        } catch (_) {
+          // شبكة غائبة: الشواهد لم تُبث — الأعضاء سيُقصون عند أول
+          // فشل مصافحة roster (العقدة ستُحذف حين تتوفر الشبكة).
+        }
+      }
+      // إشعار أقران الشبكة المحلية أيضاً (إن وجدوا).
+      try {
+        await engine.broadcastRosterChange();
+      } catch (_) {}
+      // 4) التفكيك المحلي على جهاز المدير.
+      engine.stop();
+      await repo.dissolveGroupLocally();
+      await engine.start();
+      Sfx.success();
+      bump(ref);
+      if (mounted) {
+        setState(() => _busy = false);
+        showSnack(
+          context,
+          '✅ حُلّت المجموعة — أُلغي ارتباط '
+          '${broadcast > 0 ? '$broadcast جهاز' : 'كل الأجهزة'} وعاد جهازك '
+          'مستقلاً. يمكنك إنشاء مجموعة جديدة الآن.',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showSnack(context, 'تعذّر حل المجموعة: $e', error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Colors.red.withValues(alpha: .05),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.red.withValues(alpha: .35)),
+      ),
+      child: ListTile(
+        enabled: !_busy,
+        leading: _busy
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.group_off, color: Colors.red),
+        title: const Text(
+          'حذف المجموعة وإلغاء كل الارتباطات',
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: Colors.red,
+          ),
+        ),
+        subtitle: const Text(
+          'يفك ارتباط جميع الأجهزة فوراً (تعود مستقلة وتُمسح بيانات '
+          'المجموعة منها)، يحذف المجموعة من السحابة، ويعيد جهازك مستقلاً '
+          'مع الاحتفاظ بدفاترك — لإعادة الربط من الصفر.',
+          style: TextStyle(fontSize: 11.5, height: 1.5),
+        ),
+        onTap: _busy ? null : _dissolve,
       ),
     );
   }

@@ -861,6 +861,74 @@ class CloudJoin {
     } catch (_) {}
   }
 
+  /// (المدير — دفعة 55) حل المجموعة نهائياً وإلغاء كل الارتباطات:
+  ///  1) كتابة شاهدة طرد لكل جهاز عضو (غير المالك) في /evictions —
+  ///     تصلهم لحظياً عبر قنواتهم المخصصة فيبطلون جلساتهم ويعودون مستقلين.
+  ///  2) مهلة سماح قصيرة ليلتقط الأعضاء المتصلون الشواهد عبر SSE.
+  ///  3) حذف عقدة المجموعة بأكملها من السحابة:
+  ///     roster + operations + invites + joinRequests + joinSnapshot —
+  ///     تُترك /evictions وحدها مدة سماح ليلتقطها من كان مطفأً عند الحل
+  ///     (مصافحته عند الإقلاع تفحصها قبل أي شيء).
+  /// يعيد عدد الأجهزة التي بُثّت لها شواهد.
+  static Future<int> dissolveGroup(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    if (!await repo.isWorkspaceOwner()) {
+      throw const CloudJoinException('حل المجموعة متاح لجهاز المدير فقط.');
+    }
+    final root = _root(backendUrl, workspaceId);
+    final db = await repo.database;
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+
+    // 1) اجمع كل معرفات الأجهزة: المحلية + السحابية (roster) — اتحاداً،
+    //    حتى لا يفلت جهاز موجود سحابياً فقط.
+    final ids = <String>{};
+    // لا تُكتب شواهد لأجهزة المالك إطلاقاً (جهاز المدير نفسه).
+    for (final r in await db.query('devices',
+        columns: ['id'], where: 'COALESCE(is_owner, 0) <> 1')) {
+      ids.add('${r['id']}');
+    }
+    try {
+      final remote = await _getJson('$root/roster.json');
+      if (remote != null) ids.addAll(remote.keys);
+    } catch (_) {}
+    ids.remove(ourId);
+    ids.removeWhere((e) => e.isEmpty);
+
+    // 2) شاهدة طرد لكل عضو — كل شاهدة مستقلة حتى لا يوقف فشلُ واحدة البقية.
+    var broadcast = 0;
+    for (final id in ids) {
+      try {
+        await _putJson(evictionPath(backendUrl, workspaceId, id), {
+          'deviceId': id,
+          'expelled_at': {'.sv': 'timestamp'},
+          'reason': 'group_dissolved',
+        }, timeout: const Duration(seconds: 15));
+        broadcast++;
+      } catch (_) {}
+    }
+
+    // 3) مهلة سماح: الأعضاء المتصلون يلتقطون الشواهد عبر SSE فوراً.
+    await Future<void>.delayed(const Duration(seconds: 3));
+
+    // 4) تفكيك عقدة المجموعة السحابية (كل قسم على حدة — أفضل جهد،
+    //    ونُبقي /evictions للأعضاء المطفأين).
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+    return broadcast;
+  }
+
   /// (المدير — دفعة 54) إزالة شاهدة الطرد عند «إعادة السماح» — وإلا
   /// سيطرد الجهاز المستعاد نفسه فور فحصه القادم.
   static Future<void> clearEvictionTombstone({

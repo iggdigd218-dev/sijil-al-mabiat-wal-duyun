@@ -36,10 +36,24 @@ class FakeCloudStore {
         }
         if (req.method == 'DELETE') {
           store.remove(key);
+          // كما في RTDB: حذف عقدة يحذف شجرتها الفرعية كاملة.
+          final prefix = key.replaceAll('.json', '');
+          store.removeWhere((k, _) => k.startsWith('$prefix/'));
           return _utf8Json('null', 200);
         }
         final v = store[key];
         if (v != null) return _utf8Json(jsonEncode(v), 200);
+        // قراءة عقدة كاملة (مثل roster.json): تجميع الأبناء.
+        final prefix = key.replaceAll('.json', '');
+        final children = <String, Object?>{};
+        for (final e in store.entries) {
+          if (e.key.startsWith('$prefix/')) {
+            final child =
+                e.key.substring(prefix.length + 1).replaceAll('.json', '');
+            children[Uri.decodeComponent(child)] = e.value;
+          }
+        }
+        if (children.isNotEmpty) return _utf8Json(jsonEncode(children), 200);
         return _utf8Json('null', 200);
       });
 }
@@ -317,5 +331,136 @@ void main() {
                 backendUrl: url, deviceId: devId),
             cloud.client),
         isTrue);
+  });
+
+  // ==================== دفعة 55: حل المجموعة بالكامل ====================
+
+  test('QA-B55-01 dissolveGroup: tombstones for ALL peers, cloud node wiped',
+      () async {
+    final cloud = FakeCloudStore();
+    // مدير + عضوان: واحد محلي وواحد سحابي فقط (roster) — الاتحاد يغطيهما.
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [devId]);
+    await db.insert(
+        'devices',
+        {
+          'id': 'peer-local-1',
+          'workspace_id': 'default',
+          'name': 'عضو محلي',
+          'is_paired': 1,
+          'is_owner': 0,
+          'created_at': '2026-09-11T09:00:00',
+          'updated_at': '2026-09-11T09:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    cloud.store['/workspaces/default/roster/peer-cloud-2.json'] = {
+      'id': 'peer-cloud-2',
+      'name': 'عضو سحابي',
+    };
+    cloud.store['/workspaces/default/operations/op1.json'] = {'id': 'op1'};
+    cloud.store['/workspaces/default/invites/TOK1.json'] = {'pin': '123456'};
+    final n = await http.runWithClient(
+        () => CloudJoin.dissolveGroup(repo, backendUrl: url), cloud.client);
+    expect(n, 2, reason: 'شاهدتان: للعضو المحلي والسحابي، لا شاهدة للمدير');
+    expect(
+        cloud.store
+            .containsKey('/workspaces/default/evictions/peer-local-1.json'),
+        isTrue);
+    expect(
+        cloud.store
+            .containsKey('/workspaces/default/evictions/peer-cloud-2.json'),
+        isTrue);
+    expect(
+        cloud.store.containsKey('/workspaces/default/evictions/$devId.json'),
+        isFalse,
+        reason: 'المدير لا يطرد نفسه');
+    final tomb = cloud.store['/workspaces/default/evictions/peer-local-1.json']
+        as Map;
+    expect('${tomb['reason']}', 'group_dissolved');
+    // عقدة المجموعة فُككت: roster/operations/invites حُذفت.
+    expect(
+        cloud.store.keys.any((k) =>
+            k.contains('/roster/') ||
+            k.contains('/operations/') ||
+            k.contains('/invites/')),
+        isFalse);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('QA-B55-02 dissolveGroup rejected for non-owner', () async {
+    final cloud = FakeCloudStore();
+    await setMode('member');
+    await db.update('devices', {'is_owner': 0});
+    await expectLater(
+      http.runWithClient(
+          () => CloudJoin.dissolveGroup(repo, backendUrl: url), cloud.client),
+      throwsA(isA<CloudJoinException>()),
+    );
+  });
+
+  test(
+      'QA-B55-03 dissolveGroupLocally: ledgers kept, peers/users/chats '
+      'purged, standalone restored', () async {
+    await setMode('owner');
+    await db.update('devices', {'is_owner': 1},
+        where: 'id = ?', whereArgs: [devId]);
+    // دفتر للمدير يجب أن يبقى.
+    await db.insert('accounts', {
+      'name': 'عميل المدير',
+      'kind': 'customer',
+      'notify_channel': 'none',
+      'workspace_id': 'default',
+      'created_at': '2026-09-11T08:00:00',
+      'updated_at': '2026-09-11T08:00:00',
+    });
+    // عضو + مستخدمه + محادثة.
+    await db.insert(
+        'devices',
+        {
+          'id': 'peer-x',
+          'workspace_id': 'default',
+          'name': 'عضو',
+          'is_paired': 1,
+          'is_owner': 0,
+          'created_at': '2026-09-11T09:00:00',
+          'updated_at': '2026-09-11T09:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('users', {
+      'name': 'كاشير',
+      'role': 'accountant',
+      'pin': '',
+      'password': '',
+      'permissions': '',
+      'is_me': 0,
+      'active': 1,
+      'workspace_id': 'default',
+      'deleted_at': '',
+      'created_at': '2026-09-11T09:00:00',
+      'updated_at': '2026-09-11T09:00:00',
+    });
+    await db.insert(
+        'conversations',
+        {
+          'id': 1,
+          'workspace_id': 'default',
+          'title': 'دردشة',
+          'created_at': '2026-09-11T09:00:00',
+          'updated_at': '2026-09-11T09:00:00',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await repo.dissolveGroupLocally();
+    // الدفاتر باقية.
+    expect((await db.query('accounts')).length, 1);
+    // الأعضاء والأجهزة الغريبة والدردشات زالت.
+    final devs = await db.query('devices');
+    expect(devs.length, 1);
+    expect('${devs.first['id']}', devId);
+    expect((devs.first['is_owner'] as int), 1);
+    expect(
+        (await db.query('users', where: 'is_me <> 1')).length, 0);
+    expect((await db.query('conversations')).length, 0);
+    expect((await db.query('sync_queue')).length, 0);
+    expect(await repo.workspaceMode(), 'standalone');
   });
 }

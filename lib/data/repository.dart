@@ -248,6 +248,53 @@ class Repo {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// (دفعة 55 — المدير فقط) حل المجموعة محلياً بعد بث شواهد الطرد للسحابة:
+  /// - دفاتر المدير (حسابات/عمليات/أصناف/سندات...) تبقى كما هي — لا تُمس.
+  /// - تُحذف كل أجهزة الأعضاء من devices (يبقى جهاز المدير وحده مالكاً).
+  /// - يُحذف كل المستخدمين عدا مستخدم المدير نفسه.
+  /// - تُحذف كل المحادثات والرسائل (فردية وجماعية) — لم يعد ثمة أعضاء.
+  /// - يُفرَّغ طابور المزامنة (لا وجهات باقية).
+  /// - الوضع يعود standalone، ويمكن للمدير إنشاء مجموعة جديدة فوراً
+  ///   بدعوات جديدة (رابط السحابة يبقى محفوظاً لإعادة الاستخدام).
+  Future<void> dissolveGroupLocally() async {
+    if (!await isWorkspaceOwner()) {
+      throw StateError('حل المجموعة متاح لجهاز المدير فقط.');
+    }
+    final db = await _db;
+    // هوية جهازنا: المصدر الأول إعداد sync.deviceId (الحقيقة المعلنة
+    // للسحابة)، ثم الهوية الداخلية كاحتياط.
+    final ownId =
+        (await settings())['sync.deviceId'] ?? _deviceId ?? '';
+    await db.transaction((txn) async {
+      // أجهزة الأعضاء تُحذف نهائياً — جهازنا يبقى مالكاً نظيفاً.
+      await txn.delete('devices', where: 'id <> ?', whereArgs: [ownId]);
+      await txn.update(
+        'devices',
+        {
+          'is_owner': 1,
+          'is_paired': 1,
+          'revoked_at': '',
+          'expelled_at': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [ownId],
+      );
+      // المستخدمون: يبقى مستخدم المدير (is_me) وحده.
+      await txn.delete('users', where: 'is_me <> 1');
+      // الدردشات كلها تسقط مع المجموعة.
+      await txn.delete('messages');
+      await txn.delete('conversations');
+      // طابور المزامنة: لا وجهات باقية.
+      await txn.delete('sync_queue');
+      // الوضع مستقل.
+      await txn.insert(
+          'sync_meta',
+          {'key': 'workspaceMode', 'value': 'standalone'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
   /// العودة إلى الوضع المستقل (يُستخدم فقط بعد طرد المدير لنا أو كخطة استرداد).
   /// ملاحظة: لا يستطيع العضو طلب الخروج بنفسه — الطرد بيد المدير فقط.
   Future<void> _resetToStandalone() async {
