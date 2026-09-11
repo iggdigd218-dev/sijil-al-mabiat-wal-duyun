@@ -3715,9 +3715,12 @@ class Repo {
   /// عدد الإشعارات غير المقروءة.
   Future<int> unreadNotifications() async {
     final db = await _db;
+    // (دفعة 57) عزل بالمساحة النشطة — اتساقاً مع notifications().
     return Sqflite.firstIntValue(
           await db.rawQuery(
-              'SELECT COUNT(*) FROM notifications WHERE seen = 0'),
+              'SELECT COUNT(*) FROM notifications '
+              'WHERE seen = 0 AND workspace_id = ?',
+              [requireWorkspaceId]),
         ) ??
         0;
   }
@@ -3725,7 +3728,9 @@ class Repo {
   /// تعليم كل الإشعارات كمقروءة.
   Future<void> markAllNotificationsSeen() async {
     final db = await _db;
-    await db.update('notifications', {'seen': 1});
+    // (دفعة 57) لا نمسّ إشعارات مساحة أخرى على نفس الجهاز.
+    await db.update('notifications', {'seen': 1},
+        where: 'workspace_id = ?', whereArgs: [requireWorkspaceId]);
   }
 
   // ==================== الإحصاءات ====================
