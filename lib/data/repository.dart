@@ -13,6 +13,7 @@ import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/workspace_mode.dart';
+import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
@@ -1882,6 +1883,9 @@ class Repo {
     }
 
     final now = DateTime.now().toIso8601String();
+    // (إصلاح التسليم) معرّف مستخدم المالك الجديد — يُرفع خارج المعاملة
+    // لتضمينه في العملية السيادية المبثوثة لكل الأجهزة.
+    int? handoverUserId;
     await db.transaction((txn) async {
       // 1) إلغاء is_owner عن كل الأجهزة.
       await txn.update('devices', {'is_owner': 0});
@@ -1935,6 +1939,7 @@ class Repo {
         });
         newOwnerUserId = id;
       }
+      handoverUserId = newOwnerUserId;
       await txn.update(
         'devices',
         {
@@ -2008,7 +2013,46 @@ class Repo {
         opType: OpKind.settings,
         payload: {'key': 'ownershipEpoch', 'value': now},
       );
+      // (إصلاح تسليم الإدارة) العملية السيادية الصريحة: تحمل هوية المالك
+      // الجديد (جهازاً ومستخدماً) — الجهاز المستلم يقلب is_owner=1 محلياً
+      // فور استلامها عبر السحابة، وبقية الأجهزة تنزع الملكية عن غيره.
+      // كانت المشكلة: is_owner لا يصل العضو أبداً لأن مصالحة roster
+      // تتجاهل هذا العمود لصفّ الجهاز نفسه، فيبقى المستلم «عضواً» في
+      // واجهته رغم ترقية دوره في السجل.
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipTransfer',
+        opType: OpKind.settings,
+        payload: {
+          'key': 'ownershipTransfer',
+          'value': jsonEncode({
+            'owner_device_id': newOwnerDeviceId,
+            'owner_user_id': handoverUserId,
+            'previous_owner_device_id': _deviceId,
+            'at': now,
+          }),
+        },
+      );
     } catch (_) {}
+    // رفع فوري لعقدة المالك الجديد + علم الملكية إلى roster السحابي —
+    // حتى الأجهزة التي تصلها المصالحة قبل العمليات ترى الملكية الجديدة.
+    try {
+      final st = await settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        final wsRows = await db.query('workspaces', limit: 1);
+        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        await CloudJoin.pushOwnershipToRoster(
+          this,
+          backendUrl: url,
+          workspaceId: ws,
+          newOwnerDeviceId: newOwnerDeviceId,
+          previousOwnerDeviceId: _deviceId!,
+        );
+      }
+    } catch (_) {
+      // الشبكة غائبة الآن: العملية السيادية في الطابور ستوصل التغيير.
+    }
   }
 
   /// يُعيد الجهاز إلى الوضع المستقل بعد الطرد من قِبل المدير.

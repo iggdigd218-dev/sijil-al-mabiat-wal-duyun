@@ -297,6 +297,8 @@ class CloudFirebaseTransport implements SyncTransport {
     // (دفعة 58 — متطلب 18) عمليات user واردة: قد تحمل تغيير دور/صلاحيات
     // هذا العضو من المدير — تُفحص بعد كل معاملة لإخطار العضو لحظياً.
     final roleOps = <SyncOperation>[];
+    // (إصلاح تسليم الإدارة) عمليات نقل ملكية واردة — إخطار فوري للمستلم.
+    final ownershipOps = <SyncOperation>[];
 
     bool hasMore = true;
     String? startAfterKey;
@@ -412,6 +414,13 @@ class CloudFirebaseTransport implements SyncTransport {
               op.deviceId != ourId) {
             roleOps.add(op);
           }
+          // (إصلاح تسليم الإدارة) نقل ملكية وارد: إخطار المستلم فوراً.
+          if (ok &&
+              op.entityType == EntityKind.setting &&
+              op.entityId == 'ownershipTransfer' &&
+              op.deviceId != ourId) {
+            ownershipOps.add(op);
+          }
           lastKey = entry.key as String;
         }
       });
@@ -453,7 +462,7 @@ class CloudFirebaseTransport implements SyncTransport {
               whereArgs: [ourId],
               limit: 1);
           final myUid = own.isNotEmpty ? own.first['user_id'] : null;
-          if (myUid == null || '${op.entityId}' != '$myUid') continue;
+          if (myUid == null || op.entityId != '$myUid') continue;
           final roleCode = '${op.payload['role'] ?? ''}';
           final roleLabel = switch (roleCode) {
             'admin' => 'المدير',
@@ -472,6 +481,36 @@ class CloudFirebaseTransport implements SyncTransport {
         } catch (_) {}
       }
       roleOps.clear();
+      // (إصلاح تسليم الإدارة) بلاغ فوري بعد تطبيق نقل الملكية:
+      // المستلم يرى «أنت الآن مدير المجموعة» والبقية تُخطر بتغيّر المدير.
+      for (final op in ownershipOps) {
+        try {
+          final decoded = jsonDecode('${op.payload['value'] ?? '{}'}');
+          if (decoded is! Map) continue;
+          final newOwnerDev = '${decoded['owner_device_id'] ?? ''}';
+          if (newOwnerDev == ourId) {
+            ChatHooks.onMemberNotice?.call(
+              '👑 أنت الآن مدير المجموعة',
+              'سلّمك المدير السابق الإدارة — أصبحت مالك المجموعة بكل '
+                  'الصلاحيات، وظهرت لديك إدارة المجموعة والأجهزة فوراً.',
+            );
+          } else {
+            final rows = await db.query('devices',
+                columns: ['name'],
+                where: 'id = ?',
+                whereArgs: [newOwnerDev],
+                limit: 1);
+            final name = rows.isNotEmpty
+                ? '${rows.first['name'] ?? 'جهاز آخر'}'
+                : 'جهاز آخر';
+            ChatHooks.onMemberNotice?.call(
+              'تغيّر مدير المجموعة',
+              'انتقلت إدارة المجموعة إلى «$name».',
+            );
+          }
+        } catch (_) {}
+      }
+      ownershipOps.clear();
       // وضع الجلب الكامل يعيد كل شيء في طلب واحد — لا صفحات تالية.
       hasMore = serverFiltered && entries.length >= kPullPageSize;
       startAfterKey = lastKey;

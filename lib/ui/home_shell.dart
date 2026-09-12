@@ -41,6 +41,7 @@ import 'onboarding_screen.dart' show OnboardingScreen;
 import '../core/keep_alive_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
+import '../data/sync/sync_activity.dart';
 import '../data/sync/chat_hooks.dart';
 import 'widgets.dart' show showSnack;
 
@@ -115,6 +116,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
   JoinRequestWatcher? _globalJoinWatcher;
   bool _joinSheetShowing = false;
 
+  /// (إصلاح تسليم الإدارة) نبضات نشاط المزامنة → تحديث حي لمزودي
+  /// الملكية/الدور/الوضع، فتظهر «إدارة المجموعة» وشاشات الأجهزة فوراً
+  /// عند استلام الملكية دون إعادة تشغيل أو تسجيل خروج.
+  StreamSubscription<int>? _activityBus;
+
+  /// تجميع النبضات المتتالية بمهلة قصيرة: bump فوري مع كل نبضة كان يطلق
+  /// استعلامات المزودين أثناء معاملة كتابة مفتوحة فيقفل قاعدة البيانات
+  /// (database locked) — التأجيل يترك المعاملة تكتمل أولاً.
+  Timer? _activityDebounce;
+
   /// هل بانر «نافذة الخطر» ظاهر حالياً؟ (لمنع تكرار الصوت مع كل فحص).
   bool _dangerShown = false;
   bool _dangerSyncing = false; // سبينر «إعادة المحاولة» داخل بانر الخطر.
@@ -140,6 +151,21 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
     // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
     _startGlobalJoinWatcher();
+    // (إصلاح تسليم الإدارة) أي دفعة عمليات مطبقة (ومنها نقل الملكية أو
+    // تغيير دور) تعيد بناء كل المزودات المشتقة من refreshProvider —
+    // الشريط الجانبي والإعدادات يعكسان الصلاحيات الجديدة لحظياً.
+    _activityBus = SyncActivityBus.instance.stream.listen((_) {
+      _activityDebounce?.cancel();
+      _activityDebounce = Timer(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        // إبطال موجّه لمزودي الهوية/الصلاحيات فقط — لا bump شاملاً حتى
+        // لا تُفرَّغ قوائم البيانات (العمليات/الحسابات) أثناء إعادة البناء.
+        ref.invalidate(isOwnerProvider);
+        ref.invalidate(deviceRoleProvider);
+        ref.invalidate(workspaceModeProvider);
+        ref.invalidate(devicesProvider);
+      });
+    });
     // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
     _ensureGroupKeepAlive();
   }
@@ -623,6 +649,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _syncTimer?.cancel();
     _greetingTimer?.cancel();
     _globalJoinWatcher?.stop();
+    _activityBus?.cancel();
+    _activityDebounce?.cancel();
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
     SyncEngine.onDeviceSyncComplete = null;

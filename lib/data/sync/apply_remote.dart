@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/media_paths.dart';
+import '../../core/models.dart';
 import '../repository.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
@@ -226,9 +227,85 @@ extension ApplyRemoteOp on Repo {
         await _removeTrashMirror(txn, op);
         break;
     }
+    // (إصلاح تسليم الإدارة) العملية السيادية ownershipTransfer: تقلب علم
+    // الملكية محلياً فور وصولها — الجهاز المستلم يصبح مالكاً (is_owner=1
+    // + workspaceMode=host) دون إعادة تشغيل أو مسح بيانات، والبقية تنزع
+    // الملكية عن المدير السابق.
+    if (op.entityType == EntityKind.setting &&
+        op.entityId == 'ownershipTransfer') {
+      await _applyOwnershipTransfer(txn, op);
+    }
     await txn.insert('operations', _storedOpMap(op),
         conflictAlgorithm: ConflictAlgorithm.ignore);
     return true;
+  }
+
+  /// تطبيق نقل الملكية الوارد: تحقق سيادي (المرسل هو المالك المعروف
+  /// محلياً) ثم قلب الأعلام ذرياً داخل نفس المعاملة.
+  Future<void> _applyOwnershipTransfer(
+      DatabaseExecutor txn, SyncOperation op) async {
+    try {
+      final decoded = jsonDecode('${op.payload['value'] ?? '{}'}');
+      if (decoded is! Map) return;
+      final newOwnerDev = '${decoded['owner_device_id'] ?? ''}';
+      final newOwnerUid = decoded['owner_user_id'];
+      if (newOwnerDev.isEmpty) return;
+      // تحقق سيادي: مصدر العملية يجب أن يكون المالك المعروف محلياً —
+      // جهاز عضو لا يستطيع تزوير نقل ملكية لنفسه.
+      final curOwner = await txn.query('devices',
+          columns: ['id'], where: 'is_owner = 1', limit: 1);
+      if (curOwner.isNotEmpty && '${curOwner.first['id']}' != op.deviceId) {
+        return;
+      }
+      final now = DateTime.now().toIso8601String();
+      // 1) نزع الملكية عن الجميع ثم تتويج الجهاز الجديد.
+      await txn.update('devices', {'is_owner': 0, 'updated_at': now});
+      await txn.update(
+          'devices',
+          {
+            'is_owner': 1,
+            if (newOwnerUid != null) 'user_id': newOwnerUid,
+            'revoked_at': '',
+            'expelled_at': '',
+            'is_paired': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [newOwnerDev]);
+      // 2) ضمان أن مستخدم المالك الجديد مدير كامل الصلاحيات (حزام أمان
+      //    إن سبقت هذه العملية عملياتِ users في الوصول).
+      if (newOwnerUid != null) {
+        final permStr = defaultPerms(UserRole.admin)
+            .entries
+            .where((e) => e.value)
+            .map((e) => e.key)
+            .join(',');
+        await txn.update(
+            'users',
+            {
+              'role': 'admin',
+              'permissions': permStr,
+              'active': 1,
+              'deleted_at': '',
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [newOwnerUid]);
+      }
+      // 3) إن كنا نحن المستلم: الوضع يصبح host فوراً — تظهر «إدارة
+      //    المجموعة» وشاشات الأجهزة دون خروج أو إعادة تشغيل.
+      String ourId = '';
+      try {
+        ourId = requireDeviceId;
+      } catch (_) {}
+      if (ourId.isNotEmpty && ourId == newOwnerDev) {
+        await txn.insert(
+            'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    } catch (_) {
+      // حمولة تالفة لا تسقط بقية السحبة.
+    }
   }
 
   /// صف العملية كما يُخزَّن محلياً: بعد فك مرفق الدردشة وحفظه على القرص

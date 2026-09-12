@@ -856,6 +856,34 @@ class CloudJoin {
   /// (دفعة 58 — متطلب 11) «طلب مغادرة»: العضو يكتب طلباً في نفس عقدة
   /// /joinRequests بوسم kind=leave — يصل للمدير لحظياً عبر نفس قناة SSE
   /// ليقرّه (طرد نظيف + بث شاهدة) أو يرفضه.
+  /// (إصلاح تسليم الإدارة) رفع فوري لعلم الملكية الجديد إلى roster:
+  /// عقدة المالك الجديد تُرفع بـ is_owner=1 ودور admin، وعقدة المدير
+  /// السابق بـ is_owner=0 — حتى تلتقط المصالحة الدورية على كل الأجهزة
+  /// الملكية الجديدة حتى لو سبقت وصولَ العمليات.
+  static Future<void> pushOwnershipToRoster(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String newOwnerDeviceId,
+    required String previousOwnerDeviceId,
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final root = _root(url, workspaceId);
+    final db = await repo.database;
+    for (final id in [newOwnerDeviceId, previousOwnerDeviceId]) {
+      final rows = await db.rawQuery(
+          'SELECT d.*, u.role AS user_role FROM devices d '
+          'LEFT JOIN users u ON u.id = d.user_id WHERE d.id = ?',
+          [id]);
+      if (rows.isEmpty) continue;
+      await _putJson(
+          '$root/roster/${Uri.encodeComponent(id)}.json',
+          _safeDeviceRow(Map<String, Object?>.from(rows.first)),
+          timeout: const Duration(seconds: 20));
+    }
+  }
+
   static Future<void> requestLeave(
     Repo repo, {
     required String backendUrl,
