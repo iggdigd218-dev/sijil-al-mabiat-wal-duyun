@@ -1,5 +1,5 @@
 // 🔒 QA — محرك الفترة التجريبية (SubscriptionGuard):
-// - التفعيل يحسب expires_at خادمياً = created_at + 24h بالضبط.
+// - التفعيل يحسب expires_at خادمياً = created_at + kTrialDuration بالضبط.
 // - القرار بوقت الخادم حصراً: تقديم ساعة الهاتف لا يؤثر إطلاقاً.
 // - منع التصفير: نفس البصمة العتادية تستأنف سجلها الأول حتى مع مساحة جديدة.
 // - البوابة isBlocked: مفتوحة أثناء التجربة، مقفلة بعد الانتهاء،
@@ -60,7 +60,9 @@ void main() {
   late Database db;
   late Repo repo;
   const url = 'https://qa-trial.firebaseio.com';
-  const dayMs = 24 * 60 * 60 * 1000;
+  // مدة التجربة الفعلية من المحرك نفسه (30 يوماً حالياً) — الاختبارات
+  // تتوافق تلقائياً مع أي تعديل مستقبلي للمدة.
+  final dayMs = kTrialDuration.inMilliseconds;
 
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('nexora_trial_');
@@ -78,7 +80,7 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  test('TRIAL-01 التفعيل يحسب expires_at خادمياً = created_at + 24 ساعة',
+  test('TRIAL-01 التفعيل يحسب expires_at خادمياً = created_at + مدة التجربة',
       () async {
     final cloud = _FakeRtdb();
     SubscriptionGuard.debugServerNowOverride =
@@ -91,10 +93,10 @@ void main() {
     expect(st.createdAtMs, cloud.serverClock,
         reason: 'created_at من ختم الخادم لا من ساعة الهاتف');
     expect(st.expiresAtMs, cloud.serverClock + dayMs,
-        reason: 'المدة يوم واحد بالضبط (24h) محسوبة خادمياً');
+        reason: 'المدة تطابق kTrialDuration بالضبط محسوبة خادمياً');
     expect(st.expired, isFalse);
-    expect(st.remaining.inHours, 24,
-        reason: '24 ساعة كاملة متبقية لحظة التفعيل (ساعة الخادم لم تتحرك)');
+    expect(st.remaining.inHours, kTrialDuration.inHours,
+        reason: 'المدة كاملة متبقية لحظة التفعيل (ساعة الخادم لم تتحرك)');
     // العقدة السحابية بالحقول المطلوبة كاملة.
     final rec = cloud.store.entries
         .firstWhere((e) => e.key.contains('/wsA/subscription'))
@@ -123,8 +125,8 @@ void main() {
         cloud.client);
     expect(st.expired, isFalse,
         reason: 'ساعة الخادم لم تتقدم — التجربة سارية مهما عبث الهاتف');
-    // الآن يتقدم الخادم فعلياً 25 ساعة ⇒ الانتهاء الحقيقي.
-    cloud.serverClock += 25 * 60 * 60 * 1000;
+    // الآن يتقدم الخادم فعلياً بما يتجاوز المدة كاملة ⇒ الانتهاء الحقيقي.
+    cloud.serverClock += dayMs + 60 * 60 * 1000;
     st = await http.runWithClient(
         () => SubscriptionGuard.check(repo,
             backendUrl: url, workspaceId: 'wsB', force: true),
@@ -152,10 +154,11 @@ void main() {
     expect(resumed.createdAtMs, first.createdAtMs,
         reason: 'فهرس /trials/\$fp أعاد السجل الأصلي — لا عدّاد جديد');
     expect(resumed.expiresAtMs, first.expiresAtMs,
-        reason: 'expires_at الأصلي محفوظ — متبقٍ 4 ساعات لا 24');
-    expect(resumed.remaining.inHours, lessThanOrEqualTo(4));
-    // وبعد 5 ساعات أخرى تكون منتهية رغم «المساحة الجديدة».
-    cloud.serverClock += 5 * 60 * 60 * 1000;
+        reason: 'expires_at الأصلي محفوظ — استُهلكت 20 ساعة فعلاً');
+    expect(resumed.remaining.inHours,
+        lessThanOrEqualTo(kTrialDuration.inHours - 20));
+    // وبتجاوز كامل المتبقي تكون منتهية رغم «المساحة الجديدة».
+    cloud.serverClock += dayMs - 20 * 60 * 60 * 1000 + 60 * 60 * 1000;
     final after = await http.runWithClient(
         () => SubscriptionGuard.check(repo,
             backendUrl: url, workspaceId: 'ws-new', force: true),
@@ -207,7 +210,7 @@ void main() {
 
   test(
       'TRIAL-06 (ترحيل القدامى) مساحة مسجلة مسبقاً بلا عقدة اشتراك: '
-      'الفحص عند الإقلاع ينشئها تلقائياً بختم الخادم +24h', () async {
+      'الفحص عند الإقلاع ينشئها تلقائياً بختم الخادم + مدة التجربة', () async {
     final cloud = _FakeRtdb();
     SubscriptionGuard.debugServerNowOverride =
         (_) async => cloud.serverClock;
@@ -256,7 +259,8 @@ void main() {
         reason: 'لا إعادة تهيئة — نفس ختم البداية');
     expect(second.expiresAtMs, first.expiresAtMs,
         reason: 'العد التنازلي مستمر بلا تصفير');
-    expect(second.remaining.inHours, lessThanOrEqualTo(14));
+    expect(second.remaining.inHours,
+        lessThanOrEqualTo(kTrialDuration.inHours - 10));
     // وحتى استدعاء التفعيل الصريح لا يصفّر.
     final third = await http.runWithClient(
         () => SubscriptionGuard.ensureTrialStarted(repo,
@@ -286,7 +290,8 @@ void main() {
     expect(st.createdAtMs, origCreated,
         reason: 'الإصلاح من الختم الأصلي لا من الآن');
     expect(st.expiresAtMs, origCreated + dayMs);
-    expect(st.remaining.inHours, lessThanOrEqualTo(18),
+    expect(st.remaining.inHours,
+        lessThanOrEqualTo(kTrialDuration.inHours - 6),
         reason: 'استُهلكت 6 ساعات فعلاً — لا تصفير');
   });
 

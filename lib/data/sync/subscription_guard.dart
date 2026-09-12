@@ -20,9 +20,9 @@ import 'package:http/http.dart' as http;
 import '../repository.dart';
 import 'device_id.dart';
 
-/// مدة التجربة الحالية: يوم واحد (24 ساعة) — لأغراض الاختبار، وتُرفع
+/// مدة التجربة الحالية: شهر كامل (30 يوماً) — تُضبط
 /// لاحقاً بتغيير هذا الثابت وحده.
-const Duration kTrialDuration = Duration(hours: 24);
+const Duration kTrialDuration = Duration(days: 30);
 
 /// المقاعد الافتراضية لباقة المؤسسات (يرفعها المشغّل من عقدة الاشتراك
 /// السحابية `max_devices` بحسب الباقة المباعة).

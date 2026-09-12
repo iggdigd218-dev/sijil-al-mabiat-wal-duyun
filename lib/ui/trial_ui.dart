@@ -51,7 +51,7 @@ Future<void> showTrialWelcomeDialog(BuildContext context) async {
             ),
             const SizedBox(height: 10),
             const Text(
-              'استمتع بكافة المزايا كاملة لمدة 24 ساعة:\n'
+              'استمتع بكافة المزايا كاملة مجاناً لمدة شهر كامل (30 يوماً):\n'
               '☁️ مزامنة سحابية لحظية بين أجهزتك\n'
               '👥 ربط أجهزة الفريق وإدارة الصلاحيات\n'
               '💾 نسخ احتياطي سحابي آمن\n\n'
