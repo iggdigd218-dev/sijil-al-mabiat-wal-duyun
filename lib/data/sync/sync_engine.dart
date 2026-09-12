@@ -262,7 +262,7 @@ class SyncEngine {
   Future<void> _ensureCloudTransport() async {
     final st = await repo.settings();
     final url = effectiveBackendUrl(st['cloudBackendUrl']);
-    final autoSync = (st['cloudAutoSync'] ?? '1') != '0';
+    final autoSync = kCloudAutoSyncAlways; // مثبتة دائماً.
     if (!autoSync || url.isEmpty) {
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
       unawaited(_cloudTransport?.stopListening() ?? Future.value());
@@ -480,8 +480,9 @@ class SyncEngine {
   Future<void> _backfillMissedCloudOps() async {
     final db = await _db;
     final st = await repo.settings();
-    final cloudOn = effectiveBackendUrl(st['cloudBackendUrl']).isNotEmpty &&
-        (st['cloudAutoSync'] ?? '1') != '0';
+    final cloudOn =
+        effectiveBackendUrl(st['cloudBackendUrl']).isNotEmpty &&
+            kCloudAutoSyncAlways;
     if (!cloudOn) return;
     final ourId = st['sync.deviceId'] ?? '';
     if (ourId.isEmpty) return;

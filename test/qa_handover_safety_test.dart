@@ -16,8 +16,12 @@ import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/apply_remote.dart';
 import 'package:nexora_app/data/sync/conflict_resolver.dart';
 import 'package:nexora_app/data/sync/operation.dart';
+import 'package:nexora_app/data/sync/workspace_service.dart';
 
 void main() {
+  // هذه الحزمة تبني فرضياتها على مسار workspaces/default القديم —
+  // نثبّت المعرف القديم بدل التوليد العشوائي (المعمارية الصامتة).
+  debugForceLegacyWorkspaceId = true;
   late Database db;
   late Directory tmp;
 

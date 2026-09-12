@@ -106,8 +106,9 @@ class SyncRecorder {
         where: 'key IN (?, ?)',
         whereArgs: ['cloudBackendUrl', 'cloudAutoSync']);
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
-    final cloudOn = effectiveBackendUrl(map['cloudBackendUrl']).isNotEmpty &&
-        (map['cloudAutoSync'] ?? '1') != '0';
+    final cloudOn =
+        effectiveBackendUrl(map['cloudBackendUrl']).isNotEmpty &&
+            kCloudAutoSyncAlways; // مثبتة دائماً (المعمارية الصامتة).
     // (دفعة 58) «السحابة حصرياً»: Firebase RTDB هو الناقل الوحيد —
     // اجتُثت طبقة LAN نهائياً، لا هدف lan في الطابور بعد اليوم.
     final targets = <String>{

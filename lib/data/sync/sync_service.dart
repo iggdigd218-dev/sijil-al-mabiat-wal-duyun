@@ -53,7 +53,7 @@ class SyncService {
     final lastSync = st['lastCloudSync'];
     final cloudUrl = effectiveBackendUrl(st['cloudBackendUrl']);
     final cloudConfigured =
-        cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
+        cloudUrl.isNotEmpty && kCloudAutoSyncAlways;
     final mode = await repo.workspaceMode();
     final anyChannel = cloudConfigured;
 

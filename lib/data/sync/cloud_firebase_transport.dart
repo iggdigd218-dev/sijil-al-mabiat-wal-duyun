@@ -79,6 +79,11 @@ class CloudFirebaseTransport implements SyncTransport {
 
   String _opPath(String opId) =>
       '$_root/operations/${Uri.encodeComponent(opId)}.json';
+  /// مسار الاستماع SSE — بالصيغة القياسية المعتمدة للنطاق الإقليمي:
+  ///   `$baseUrl/workspaces/$workspaceId/operations.json`
+  /// baseUrl يصل مُطبَّعاً بلا شرطة نهائية (effectiveBackendUrl) —
+  /// شرطة مكررة قبل /workspaces كانت تُنتج 404 (sse-http-404) على نطاق
+  /// firebasedatabase.app الإقليمي، و_root يزيل أي بقايا احتياطاً.
   String get _opsPath => '$_root/operations.json';
 
   Map<String, String> get _authHeaders {

@@ -17,6 +17,7 @@ import 'package:nexora_app/data/sync/cloud_firebase_transport.dart';
 import 'package:nexora_app/data/sync/conflict_resolver.dart';
 import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:nexora_app/data/sync/workspace_service.dart';
 
 /// سحابة وهمية موحّدة: عمليات تزايدية + نسخ كاملة برمز.
 class _FakeCloud {
@@ -55,6 +56,9 @@ class _FakeCloud {
 }
 
 void main() {
+  // هذه الحزمة تبني فرضياتها على مسار workspaces/default القديم —
+  // نثبّت المعرف القديم بدل التوليد العشوائي (المعمارية الصامتة).
+  debugForceLegacyWorkspaceId = true;
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   late Directory tmp;

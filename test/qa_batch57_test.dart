@@ -58,6 +58,9 @@ class FakeCloudStore {
 }
 
 void main() {
+  // هذه الحزمة تبني فرضياتها على مسار workspaces/default القديم —
+  // نثبّت المعرف القديم بدل التوليد العشوائي (المعمارية الصامتة).
+  debugForceLegacyWorkspaceId = true;
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   const url = 'https://qa-b57.firebaseio.com';

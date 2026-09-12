@@ -890,41 +890,53 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     children: [SubscriptionDetailsSection()],
                   ),
                 ],
-                // (دفعة 58 — متطلب 8) المزامنة السحابية: إعداد حساس —
-                // يظهر للمالك/دور المدير فقط، ويُخفى عن بقية الأعضاء.
+                // (المعمارية الصامتة) بطاقة «المزامنة السحابية (Firebase)»
+                // التقنية أُزيلت نهائياً: الرابط الرسمي مضمّن برمجياً
+                // والمزامنة التلقائية مثبتة دائماً في الخلفية — بقي فقط
+                // مدخل «إدارة المجموعة / ربط الأجهزة» البسيط.
                 if (canSensitive) ...[
-                const SizedBox(height: 18),
-                _Collapsible(
-                  title: 'المزامنة السحابية (Firebase)',
-                  icon: Icons.cloud_sync_outlined,
-                  color: const Color(0xFF0EA5E9),
-                  children: [
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: CloudSyncSettingsSection(
-                          isManager: canEditOrg,
-                        ),
-                      ),
-                    ),
-                    // جهاز مستقل (ليس عضواً): يمكنه الانضمام لمجموعة عبر السحابة.
-                    if (wsMode == 'standalone')
-                      Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.group_add_outlined,
-                              color: Color(0xFF7C3AED)),
-                          title: const Text('الانضمام إلى مجموعة عبر السحابة'),
-                          subtitle: const Text(
-                            'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
-                            'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
-                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'المجموعة وربط الأجهزة',
+                    icon: Icons.devices_other_outlined,
+                    color: const Color(0xFF0EA5E9),
+                    children: [
+                      // مدير/مالك: دعوة جهاز جديد لنفس مساحة العمل عبر QR/PIN.
+                      if (canEditOrg && wsMode != 'standalone' ||
+                          (wsMode == 'standalone'))
+                        Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.qr_code_2_outlined,
+                                color: Color(0xFF0EA5E9)),
+                            title: const Text('ربط جهاز جديد عبر السحابة'),
+                            subtitle: const Text(
+                              'اعرض رمز QR أو رمز دعوة من 6 أرقام لضم '
+                              'جهاز جديد إلى مساحة عملك.',
+                              style: TextStyle(fontSize: 11.5, height: 1.5),
+                            ),
+                            trailing: const Icon(Icons.chevron_left),
+                            onTap: () => showCloudInviteDialog(context, ref),
                           ),
-                          trailing: const Icon(Icons.chevron_left),
-                          onTap: () => startJoinApprovalFlow(context, ref),
                         ),
-                      ),
-                  ],
-                ),
+                      // جهاز مستقل (ليس عضواً): يمكنه الانضمام لمجموعة قائمة.
+                      if (wsMode == 'standalone')
+                        Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.group_add_outlined,
+                                color: Color(0xFF7C3AED)),
+                            title:
+                                const Text('الانضمام إلى مجموعة عبر السحابة'),
+                            subtitle: const Text(
+                              'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
+                              'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
+                              style: TextStyle(fontSize: 11.5, height: 1.5),
+                            ),
+                            trailing: const Icon(Icons.chevron_left),
+                            onTap: () => startJoinApprovalFlow(context, ref),
+                          ),
+                        ),
+                    ],
+                  ),
                 ],
                 // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،
                 // ويظهر هنا فقط خيار إنشاء نسخة محلية (بلا Google ولا سحابة).

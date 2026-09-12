@@ -31,7 +31,7 @@ class CloudSync {
     return CloudConfig(
       backendUrl: effectiveBackendUrl(st['cloudBackendUrl']),
       code: (st['cloudCode'] ?? '').trim(),
-      autoSync: (st['cloudAutoSync'] ?? '1') != '0',
+      autoSync: kCloudAutoSyncAlways, // مثبتة دائماً (المعمارية الصامتة).
     );
   }
 

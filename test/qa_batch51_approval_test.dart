@@ -17,6 +17,7 @@ import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:nexora_app/data/sync/workspace_service.dart';
 
 class FakeCloudStore {
   final Map<String, Object?> store = {};
@@ -53,6 +54,9 @@ class FakeCloudStore {
 }
 
 void main() {
+  // هذه الحزمة تبني فرضياتها على مسار workspaces/default القديم —
+  // نثبّت المعرف القديم بدل التوليد العشوائي (المعمارية الصامتة).
+  debugForceLegacyWorkspaceId = true;
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   late Directory tmp;

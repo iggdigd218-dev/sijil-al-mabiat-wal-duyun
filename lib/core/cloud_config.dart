@@ -1,13 +1,16 @@
 // إعدادات السحابة المضمنة برمجياً.
 //
-// kDefaultCloudBackendUrl: رابط قاعدة Firebase RTDB الرسمي للنظام —
+// kDefaultCloudBackendUrl: رابط قاعدة Firebase RTDB الرسمي للنظام (النطاق
+// الإقليمي europe-west1 — قواعد المناطق خارج us-central1 تُخدَم حصرياً عبر
+// نطاق firebasedatabase.app؛ استخدام firebaseio.com معها يعيد 404 ويكسر SSE) —
 // مثبّت كرابط افتراضي دائم (Zero-Config Cloud Onboarding): المستخدم
 // الجديد تبدأ تجربته ويعمل محرك المزامنة فوراً دون أي إعداد يدوي.
 // يمكن تجاوزه وقت البناء عبر --dart-define=NEXORA_BACKEND_URL=...
 // أو وقت التشغيل بضبط رابط مخصص في الإعدادات ← المزامنة السحابية.
 const String kDefaultCloudBackendUrl = String.fromEnvironment(
   'NEXORA_BACKEND_URL',
-  defaultValue: 'https://nexora-ledger-default-rtdb.firebaseio.com',
+  defaultValue:
+      'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app',
 );
 
 /// (اختبارات فقط) تجاوز الرابط الافتراضي — تضبطه حزم الاختبار على ''
@@ -16,7 +19,12 @@ String? debugDefaultBackendUrlOverride;
 
 /// الرابط الفعّال: المضبوط يدوياً في الإعدادات أولاً، ثم الرسمي المضمّن.
 String effectiveBackendUrl(String? customUrl) {
-  final trimmed = (customUrl ?? '').trim();
+  final trimmed = (customUrl ?? '').trim().replaceAll(RegExp(r'/+$'), '');
   if (trimmed.isNotEmpty) return trimmed;
   return debugDefaultBackendUrlOverride ?? kDefaultCloudBackendUrl;
 }
+
+/// (المعمارية الصامتة) المزامنة التلقائية مثبتة دائماً في الخلفية —
+/// لم يعد للمستخدم مفتاح لإيقافها بعد إخفاء بطاقة الإعدادات التقنية.
+/// getter (لا const) كي لا يطوي المحلل الشروط المعتمدة عليه كـ dead code.
+bool get kCloudAutoSyncAlways => true;
