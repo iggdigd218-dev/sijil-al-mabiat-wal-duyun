@@ -1,0 +1,5297 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  التصدير النهائي بعد المعالجة الشاملة — الملفات السبعة الحيوية    ║
+╚══════════════════════════════════════════════════════════════════╝
+التاريخ: 2026-09-12 08:59  |  الالتزام: b6013af (main)  |  الإصدار: 3.50.0+86
+
+📦 الأرشيف الكامل: nexora_full_project.zip (2.9 MB — 333 ملفاً)
+   يشمل المشروع الرئيسي + admin_app كاملاً، مستثنياً .git و build
+   و .dart_tool وephemeral وكل الوسائط المؤقتة.
+
+═══════════════ نتائج الفحص التشغيلي النهائي ═══════════════
+
+▶ flutter analyze (المشروع الرئيسي):
+  71 issues found — كلها info (صفر error، صفر warning) ✅ خط الأساس
+
+▶ flutter analyze (admin_app):
+  4 issues found — كلها info (صفر error، صفر warning) ✅
+
+▶ flutter test test/qa_subscription_guard_test.dart:
+  00:02 +17: All tests passed! ✅
+  (TRIAL-01..10 + PLAN-01..07 — تشمل كشف التلاعب الزمني الجديد)
+
+▶ الفحص الشامل الأخير قبل شحن 3.50.0: كل حزم الاختبار ناجحة.
+
+
+
+████████████████████████████████████████████████████████████████████████
+██  [1/7] lib/data/sync/sync_engine.dart
+██  محرك المزامنة — مهلة _trialBlocked داخل try/finally
+██  1064 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// محرك المزامنة الخلفية.
+//   - معالجة الصفوف PENDING من sync_queue.
+//   - استدعاء transports المسجلة (Cloud/LAN).
+//   - إعادة المحاولة مع backoff.
+//   - سحب العمليات من الـ Cloud تلقائيًا عند التهيئة.
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:http/http.dart' as http;
+import 'package:sqflite/sqflite.dart';
+
+import '../../core/token_cipher.dart';
+import '../repository.dart';
+import 'cloud_firebase_transport.dart';
+import 'cloud_join.dart';
+import 'conflict_resolver.dart';
+import 'operation.dart';
+import 'recorder.dart';
+import 'subscription_guard.dart';
+import 'sync_activity.dart';
+import 'sync_queue.dart';
+import 'workspace_service.dart';
+
+abstract class SyncTransport {
+  String get targetId; // 'cloud' or 'device:xxx'
+  Future<void> push(SyncOperation op);
+}
+
+class SyncEngine {
+  final Repo repo;
+  final Future<Database> Function() dbProvider;
+  final List<SyncTransport> _transports = [];
+  SyncQueueOps? _queue;
+  Timer? _timer;
+  Timer? _maintenanceTimer;
+  Timer? _rosterTimer;
+  Timer? _cloudPullTimer;
+  bool _cloudPulling = false;
+  int _generation = 0;
+  bool _running = false;
+  bool _started = false;
+  bool get hasStarted => _started;
+
+  /// خدمة الحضور: مناداة كل 3 ثوانٍ + استماع دائم عبر خادم LAN.
+
+  /// يُستدعى عند اكتمال مزامنة عملية مهمة إلى جهاز (لإشعار المستخدم).
+  /// (وصف العملية، اسم الجهاز الهدف، نوع الكيان مثل 'tx'، معرّفه المحلي)
+  /// نوع الكيان ومعرّفه يسمحان بفتح السجل المقصود عند الضغط على الإشعار.
+  static void Function(
+    String opDescription,
+    String deviceName,
+    String entityType,
+    String entityId,
+  )? onOpDelivered;
+
+  /// يُستدعى عند عودة جهاز للاتصال (اسمه) لإظهار إشعار "الجهاز متصل".
+  static void Function(String deviceName)? onPeerJoined;
+
+  /// يُستدعى عند اكتمال مزامنة كل العمليات المعلقة مع جهاز معيّن (اسمه).
+  static void Function(String deviceName)? onDeviceSyncComplete;
+
+  /// «نافذة الخطر»: تُستدعى عندما يكتشف المحرك حالة تباين خطيرة —
+  /// عمليات عالقة طويلاً مع فشل متكرر، أو انقطاع مديد عن كل الأقران.
+  /// الوسيط رسالة عربية توضح المشكلة. null = زالت الحالة (أمان).
+  static void Function(String? message)? onSyncDanger;
+
+  /// (دفعة 53) الطرد التلقائي: تُستدعى مرة واحدة عندما يكتشف الجهاز أن
+  /// المدير حذفه/حظره/طرده من سجل المجموعة السحابي. الواجهة تعيد التوجيه
+  /// لشاشة الترحيب مع رسالة «تم إلغاء ارتباط هذا الجهاز من قبل مدير المؤسسة».
+  static void Function()? onDeviceEvicted;
+
+  /// حارس ضد ازدواج معالجة الطرد (SSE + pull قد يكتشفانه معاً).
+  bool _evictionHandled = false;
+
+  /// آخر رسالة خطر مبثوثة (لتجنب التكرار) — '' تعني لا خطر.
+  String _lastDangerMsg = '';
+  DateTime? _oldestStuckSince;
+
+  /// أجهزة استلمت عمليات مؤخراً — تُفحص بعد مهلة قصيرة لإشعار «اكتملت
+  /// المزامنة مع (الجهاز)» عندما يفرغ الطابور.
+  final Set<String> _recentDelivered = {};
+  Timer? _completeTimer;
+
+  /// يُستدعى أي نشاط مزامنة (وصول عملية/تغيّر صلاحيات) لتنبيه الواجهة للتحديث.
+  static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
+  String? _cloudUrl;
+  CloudFirebaseTransport? _cloudTransport;
+
+  SyncEngine({required this.repo, required this.dbProvider});
+
+  Future<Database> get _db async => dbProvider();
+
+  void registerTransport(SyncTransport t) {
+    if (_transports.any((x) => x.targetId == t.targetId)) return;
+    _transports.add(t);
+  }
+
+  /// يربط ناقل LAN بنظام الحضور (تخطي الغائبين) وبإشعار التسليم الناجح،
+  /// ويشغّل خدمة الحضور (مناداة كل 3 ثوانٍ + مزامنة فورية عند عودة قرين).
+  /// اللقب الموحد للجهاز بحسب دور مستخدمه: «المدير (اسم الجهاز)»،
+  /// «الكاشير (…)»، «مدخل البيانات (…)»، «الشريك / الوكيل (…)».
+  /// يُستخدم في كل تنبيهات المزامنة وحالات الأقران.
+  Future<String> roleDisplayNameOf(
+      String deviceId, String fallbackName) async {
+    var name = fallbackName.trim();
+    var role = '';
+    var isOwner = false;
+    try {
+      final db = await _db;
+      final rows = await db.rawQuery('''
+        SELECT d.name, d.is_owner, COALESCE(u.role, '') AS role
+        FROM devices d LEFT JOIN users u ON u.id = d.user_id
+        WHERE d.id = ? LIMIT 1
+      ''', [deviceId]);
+      if (rows.isNotEmpty) {
+        final r = rows.first;
+        final dbName = (r['name'] as String?)?.trim() ?? '';
+        if (dbName.isNotEmpty) name = dbName;
+        role = (r['role'] as String?) ?? '';
+        isOwner = ((r['is_owner'] as int?) ?? 0) == 1;
+      }
+    } catch (_) {}
+    if (name.isEmpty) name = 'جهاز';
+    final label = isOwner
+        ? 'المدير'
+        : switch (role) {
+            'admin' || 'manager' => 'المدير',
+            'agent' => 'الشريك / الوكيل',
+            'accountant' => 'الكاشير',
+            'dataentry' => 'مدخل البيانات',
+            _ => '',
+          };
+    return label.isEmpty ? name : '$label ($name)';
+  }
+
+  /// حارس تباين السجلات («نافذة الخطر»): يفحص دورياً وجود عمليات مالية
+  /// عالقة منذ فترة طويلة (فشل متكرر أو انقطاع مديد عن كل الأقران).
+  /// عند اكتشاف الحالة يبثّ رسالة عربية عالية الأولوية تتكرر حتى تزول،
+  /// وعند زوالها يبثّ null لإخفاء التنبيه.
+  Future<void> _checkDangerState() async {
+    if (onSyncDanger == null) return;
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'standalone') {
+        _clearDanger();
+        return;
+      }
+      final db = await _db;
+      // حساب دقيق للتباين: عمليات مميّزة (operation_id) لا صفوف طابور خام —
+      // الصف الواحد قد يتكرر لهدفين (lan + cloud) فيتضاعف العدد زوراً،
+      // وتُستبعد الكيانات الصامتة (رسائل الدردشة) لأنها ليست خطراً مالياً.
+      final rows = await db.rawQuery(
+        "SELECT COUNT(DISTINCT q.operation_id) c, MIN(q.created_at) oldest, "
+        "MAX(q.attempts) att "
+        "FROM sync_queue q JOIN operations o ON o.id = q.operation_id "
+        "WHERE q.status IN ('pending','failed','syncing') "
+        "AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}",
+      );
+      final stuck = (rows.first['c'] as int?) ?? 0;
+      if (stuck == 0) {
+        _clearDanger();
+        return;
+      }
+      final oldest = DateTime.tryParse('${rows.first['oldest'] ?? ''}');
+      final attempts = (rows.first['att'] as int?) ?? 0;
+      // تتبّع حي لأقدم عالقة من قاعدة البيانات مباشرة: لو نجح دفع الصفوف
+      // القديمة وبقيت صفوف حديثة فقط، يهبط العمر تحت العتبة ويُخفى البانر —
+      // التخزين المؤقت القديم (??=) كان يُبقي الخطر ظاهراً زوراً.
+      _oldestStuckSince = oldest ?? _oldestStuckSince ?? DateTime.now();
+      final stuckFor = DateTime.now().difference(_oldestStuckSince!);
+      // عتبة الخطر: عالقة ≥ 10 دقائق مع محاولات متكررة، أو ≥ 30 دقيقة مطلقاً.
+      final danger = (stuckFor >= const Duration(minutes: 10) &&
+              attempts >= 5) ||
+          stuckFor >= const Duration(minutes: 30);
+      if (!danger) {
+        // دون العتبة (عولج القديم): أخفِ البانر إن كان ظاهراً.
+        if (_lastDangerMsg.isNotEmpty) _clearDanger();
+        return;
+      }
+      // هل المدير (المالك) غير متصل؟ نخصص الرسالة.
+      var ownerOffline = false;
+      try {
+        final own = await db.query('devices',
+            columns: ['id'],
+            where: "is_owner = 1 AND is_paired = 1 "
+                "AND COALESCE(revoked_at,'') = ''",
+            limit: 1);
+        // (دفعة 58) لا مسبار LAN بعد الآن — نستدل بغياب مزامنة حديثة:
+        // آخر last_sync_at للمالك أقدم من 5 دقائق = غير متصل غالباً.
+        if (own.isNotEmpty) {
+          final r = await db.query('devices',
+              columns: ['last_sync_at'],
+              where: 'id = ?',
+              whereArgs: [own.first['id']],
+              limit: 1);
+          final ls = DateTime.tryParse('${r.isEmpty ? '' : r.first['last_sync_at'] ?? ''}');
+          ownerOffline = ls == null ||
+              DateTime.now().difference(ls) > const Duration(minutes: 5);
+        }
+      } catch (_) {}
+      final mins = stuckFor.inMinutes;
+      final msg = ownerOffline
+          ? 'تنبيه خطير: تعذّر مطابقة الحركات المالية مع جهاز المدير منذ '
+              '$mins دقيقة ($stuck عملية معلقة). يرجى فحص الاتصال لتفادي '
+              'تباين الأرصدة بين الأجهزة.'
+          : 'تنبيه خطير: $stuck عملية مالية لم تصل بقية الأجهزة منذ '
+              '$mins دقيقة رغم إعادة المحاولة. يرجى فحص اتصال الشبكة أو '
+              'السحابة لتفادي تباين الأرصدة.';
+      if (msg != _lastDangerMsg) {
+        _lastDangerMsg = msg;
+      }
+      // نبثّ في كل دورة فحص (تكرار مقصود عبر الشاشات حتى تُحل).
+      try {
+        onSyncDanger?.call(msg);
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  /// للاختبارات: تشغيل فحص الخطر مباشرة بلا انتظار المؤقّت الدوري.
+  @visibleForTesting
+  Future<void> debugCheckDangerState() => _checkDangerState();
+
+  /// فحص فوري عام لواجهة المستخدم (زر «إعادة المحاولة» في بانر الخطر):
+  /// يعيد تقييم الحالة حالاً — نجاح يبثّ null، وبقاء الخطر يبثّ الرسالة.
+  Future<void> recheckDangerNow() => _checkDangerState();
+
+  void _clearDanger() {
+    _oldestStuckSince = null;
+    if (_lastDangerMsg.isNotEmpty) {
+      _lastDangerMsg = '';
+      try {
+        onSyncDanger?.call(null);
+      } catch (_) {}
+    }
+  }
+
+  /// (دفعة 58) إعادة تهيئة شاملة = السحابة فقط — لا طبقة LAN بعد اليوم.
+  Future<void> reconfigureAll() async {
+    try {
+      await reconfigureCloud();
+    } catch (_) {}
+  }
+
+  /// يُعاد تهيئة الـ Cloud transport بعد تغيير الإعدادات.
+  Future<void> reconfigureCloud() async {
+    try {
+      _cloudUrl = null;
+      _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      await _cloudTransport?.stopListening();
+      _cloudTransport = null;
+      await _ensureCloudTransport();
+      if (_cloudTransport != null) {
+        try {
+          await _cloudTransport!.pull(resolver: ConflictResolver());
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _ensureCloudTransport() async {
+    final st = await repo.settings();
+    final url = (st['cloudBackendUrl'] ?? '').trim();
+    final autoSync = (st['cloudAutoSync'] ?? '1') != '0';
+    if (!autoSync || url.isEmpty) {
+      _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      unawaited(_cloudTransport?.stopListening() ?? Future.value());
+      _cloudTransport = null;
+      _cloudUrl = null;
+      // تنظيف: صفوف cloud القديمة العالقة بلا خادم سحابي مهيأ — كانت تبقى
+      // «بانتظار الإرسال» للأبد وتظهر كمزامنات معلقة. نُعلمها synced.
+      try {
+        final db = await _db;
+        await db.update(
+          'sync_queue',
+          {
+            'status': 'synced',
+            'last_error': '',
+            'next_try_at': '',
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "target = ? AND status IN ('pending','syncing','failed')",
+          whereArgs: [SyncTarget.cloud],
+        );
+      } catch (_) {}
+      return;
+    }
+    if (url == _cloudUrl && _cloudTransport != null) return;
+    final db = await _db;
+    // Workspace الحالي.
+    final wsRow = await db.query('workspaces', limit: 1);
+    final wsId =
+        wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
+    _cloudTransport = CloudFirebaseTransport.validated(
+      repo: repo,
+      dbProvider: dbProvider,
+      backendUrl: url,
+      workspaceId: wsId,
+      idTokenProvider: () async {
+        try {
+          final d = await _db;
+          final r = await d.query('google_auth', where: 'id = 1', limit: 1);
+          if (r.isEmpty) return null;
+          final stored = r.first['id_token'] as String?;
+          if (stored == null || stored.isEmpty) return null;
+          // مخزّن معمّى (enc1:) أو نص صريح قديم — reveal يتعامل مع الحالتين.
+          final tok = await TokenCipher.reveal(stored);
+          return tok.isEmpty ? null : tok;
+        } catch (_) {
+          return null;
+        }
+      },
+    );
+    registerTransport(_cloudTransport!);
+    _cloudUrl = url;
+    // (دفعة 53) مصافحة العضوية النشطة: الناقل يفحص /roster/$deviceId
+    // قبل كل سحب وعند تمهيد SSE — اكتشاف الطرد يمر بالمعالج المركزي.
+    _cloudTransport!.onEvicted = () {
+      unawaited(handleSelfEviction());
+    };
+    // استماع فوري SSE: أي عملية يكتبها جهاز آخر في السحابة تصلنا لحظياً
+    // (السحب الدوري كل 45 ثانية يبقى شبكة أمان لو انقطعت القناة).
+    _cloudTransport!.onCloudChanged = () {
+      Future(() async {
+        try {
+          final applied =
+              await _cloudTransport?.pull(resolver: ConflictResolver()) ?? 0;
+          if (applied > 0) {
+            try {
+              onSyncActivity?.call();
+            } catch (_) {}
+          }
+        } catch (_) {}
+      });
+    };
+    unawaited(_cloudTransport!.startListening());
+  }
+
+  Future<void> start() async {
+    if (_started) return;
+    _started = true;
+    _evictionHandled = false;
+    // (دفعة 53) ربط خطاف الطرد المركزي: أي مسار يكتشف الطرد
+    // (syncRoster/مصافحة roster في الناقل) يمر من handleSelfEviction.
+    CloudJoin.onSelfEvicted = handleSelfEviction;
+    final generation = ++_generation;
+    _queue ??= SyncQueueOps(await _db);
+    await _queue!.recoverInterrupted();
+    // إنقاذ سحابي: عمليات سُجّلت قبل تهيئة السحابة (لا صف cloud لها) —
+    // تُدرج الآن لتصعد للسحابة فتصل الأجهزة المرتبطة سحابياً.
+    try {
+      await _backfillMissedCloudOps();
+    } catch (_) {}
+    // (دفعة 58) هجرة تنظيف: أي صفوف lan تاريخية متبقية من إصدارات ما قبل
+    // اجتثاث LAN تُغلق نهائياً حتى لا تسد الطابور أو تُظهر بانر الخطأ.
+    try {
+      final db0 = await _db;
+      await db0.update(
+        'sync_queue',
+        {
+          'status': 'synced',
+          'last_error': '',
+          'next_try_at': '',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: "target = 'lan' AND status IN ('pending','syncing','failed')",
+      );
+      await _queue!.resumeBackoff();
+    } catch (_) {}
+    if (!_started || generation != _generation) return;
+    // ربط callback لتحفيز push فوري بعد تسجيل أي عملية جديدة.
+    SyncRecorder.onOperationRecorded = notifyNewOperation;
+    // أي فشل في تهيئة المزامنة (سواء سحابة أو شبكة محلية) لا يجب أن يمنع
+    // التطبيق من الإقلاع أو تعطيل الحفظ المحلي — محلي أولًا دائماً.
+    try {
+      await _ensureCloudTransport();
+    } catch (_) {}
+    if (!_started || generation != _generation) return;
+    _timer ??= Timer.periodic(
+      const Duration(seconds: 8),
+      (_) async {
+        await processQueue();
+        await _checkDangerState();
+      },
+    );
+
+    Future(() async {
+      if (!_started || generation != _generation) return;
+      try {
+        await _ensureCloudTransport();
+        if (_cloudTransport != null) {
+          try {
+            await _cloudTransport!.pull(resolver: ConflictResolver());
+          } catch (_) {}
+        }
+      } catch (_) {}
+      await _checkExpulsionAndAutoPurge();
+      await processQueue();
+    });
+    // تفقد دوري كل 6 ساعات: هل طرأ طرد لنا، أو هناك أجهزة خاملة لنطرَدها تلقائياً.
+    _maintenanceTimer ??= Timer.periodic(
+      const Duration(hours: 6),
+      (_) async {
+        await _checkExpulsionAndAutoPurge();
+        try {
+          await _pruneOperationPayloads();
+        } catch (_) {}
+        // (دفعة 58) رسائل الدردشة تُحذف نهائياً بعد 24 ساعة (محلي).
+        try {
+          await repo.purgeExpiredChatMessages();
+        } catch (_) {}
+      },
+    );
+    // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
+    // الناقصة من الأقران (عمليات وصلت بالمزامنة بلا ملفاتها).
+    Future(() async {
+      try {
+        await _pruneOperationPayloads();
+      } catch (_) {}
+      // (دفعة 58) تنظيف الدردشة المنتهية عمرها فور الإقلاع أيضاً.
+      try {
+        await repo.purgeExpiredChatMessages();
+      } catch (_) {}
+    });
+    // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
+    // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
+    _rosterTimer ??= Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _reconcileRoster(),
+    );
+    // سحب سحابي دوري: بدون هذا كان السحب يحدث مرة واحدة فقط عند الإقلاع،
+    // فلا تصل عمليات الأجهزة الأخرى عبر السحابة إلا بعد إعادة تشغيل التطبيق.
+    _cloudPullTimer ??= Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => _periodicCloudPull(),
+    );
+  }
+
+  Future<void> _periodicCloudPull() async {
+    if (_cloudPulling || !_started) return;
+    if (_cloudTransport == null) return;
+    // 🔒 انتهاء التجربة يوقف السحب السحابي الدوري أيضاً.
+    if (await _trialBlocked()) return;
+    _cloudPulling = true;
+    try {
+      final applied = await _cloudTransport!.pull(resolver: ConflictResolver());
+      if (applied > 0) {
+        try {
+          onSyncActivity?.call();
+        } catch (_) {}
+      }
+      // سجل الأجهزة السحابي: يرى المدير أجهزة الأعضاء البعيدة (المنضمة عبر
+      // السحابة) ويعيّن لها مستخدمين، وتصل التعيينات/الحظر/الطرد للأعضاء.
+      try {
+        final t = _cloudTransport!;
+        final changed = await CloudJoin.syncRoster(
+          repo,
+          await _db,
+          backendUrl: t.backendUrl,
+          workspaceId: t.workspaceId,
+        );
+        if (changed) {
+          try {
+            onSyncActivity?.call();
+          } catch (_) {}
+        }
+      } catch (_) {}
+    } catch (_) {
+      // شبكة غائبة/خادم بعيد — المحاولة القادمة بعد الدورة التالية.
+    } finally {
+      _cloudPulling = false;
+    }
+  }
+
+
+  /// إنقاذ سحابي: كل عملية محلية لم يُدرج لها هدف cloud (سُجّلت قبل ضبط
+  /// السحابة أو أثناء تعطيلها) تُدرج pending الآن. idempotent بالكامل:
+  /// الدفع للسحابة PUT على نفس opId، والصف لا يتكرر (INSERT OR IGNORE).
+  Future<void> _backfillMissedCloudOps() async {
+    final db = await _db;
+    final st = await repo.settings();
+    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+        (st['cloudAutoSync'] ?? '1') != '0';
+    if (!cloudOn) return;
+    final ourId = st['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+    await db.rawInsert('''
+      INSERT OR IGNORE INTO sync_queue
+        (operation_id, status, target, attempts, last_error, next_try_at,
+         created_at, updated_at)
+      SELECT o.id, 'pending', 'cloud', 0, '', '', ?, ?
+      FROM operations o
+      WHERE o.device_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_queue q
+          WHERE q.operation_id = o.id AND q.target = 'cloud'
+        )
+    ''', [now, now, ourId]);
+  }
+
+  /// صيانة تخزين جدول العمليات (تعمل عند الإقلاع وكل 6 ساعات):
+  /// 1) تجريد حمولات base64 الضخمة (مرفقات الدردشة) من العمليات التي
+  ///    وصلت لكل الأجهزة — الملف محفوظ على القرص، ولا حاجة لنسخة ثانية
+  ///    داخل SQLite تتضخم وتُبطئ كل قراءة.
+  /// 2) حذف عمليات الدردشة القديمة (أقدم من 14 يوماً) المستلمة من الجميع
+  ///    والمرفوعة للسحابة — الرسائل نفسها باقية في جدول messages.
+  /// مدخل للاختبارات فقط — يشغّل صيانة تخزين العمليات مباشرة.
+  @visibleForTesting
+  Future<void> pruneOperationPayloadsForTesting() =>
+      _pruneOperationPayloads();
+
+  Future<void> _pruneOperationPayloads() async {
+    final db = await _db;
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return;
+    // (دفعة 58) المعيار السحابي الوحيد: synced=1 = العملية على السحابة
+    // ويستطيع أي قرين سحبها — لا op_deliveries بعد اليوم.
+    // (1) تجريد base64: عملياتنا المرفوعة للسحابة وحمولتها تتضمن file_b64.
+    final fat = await db.rawQuery('''
+      SELECT id, payload FROM operations
+      WHERE payload LIKE '%"file_b64"%' AND synced = 1
+      LIMIT 200
+    ''');
+    for (final r in fat) {
+      try {
+        final decoded =
+            jsonDecode((r['payload'] as String?) ?? '{}') as Map;
+        final slim = Map<String, Object?>.from(decoded)
+          ..remove('file_b64')
+          ..['file_pruned'] = 1;
+        await db.update('operations', {'payload': jsonEncode(slim)},
+            where: 'id = ?', whereArgs: [r['id']]);
+      } catch (_) {}
+    }
+    // (2) حذف عمليات الرسائل القديمة كلياً بعد فترة الاحتفاظ.
+    final cutoff = DateTime.now()
+        .subtract(const Duration(days: 14))
+        .toIso8601String();
+    try {
+      await db.rawDelete('''
+        DELETE FROM operations
+        WHERE entity_type = 'message' AND synced = 1 AND timestamp < ?
+      ''', [cutoff]);
+    } catch (_) {}
+    // (3) تقليم عام (Compaction): العمليات المتجاوَزة — synced، مسلَّمة لكل
+    // الأقران النشطين، أقدم من 14 يوماً، وليست أحدث نسخة لكيانها.
+    // الإبقاء على أحدث نسخة لكل كيان يحفظ اتساق تسلسل الإصدارات
+    // (nextVersion يقرأ MAX(version)) ويُبقي حاجز idempotency ضد إعادة
+    // تطبيق نسخ قديمة تصل من سحب سحابي كامل.
+    try {
+      await db.transaction((txn) async {
+        await txn.rawDelete('''
+          DELETE FROM operations
+          WHERE synced = 1 AND timestamp < ?
+            AND entity_type <> 'message'
+            AND EXISTS (
+              SELECT 1 FROM operations n
+              WHERE n.entity_type = operations.entity_type
+                AND n.entity_id = operations.entity_id
+                AND n.version > operations.version
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM sync_queue q
+              WHERE q.operation_id = operations.id
+                AND q.status IN ('pending', 'syncing')
+            )
+        ''', [cutoff]);
+        // صفوف الطابور التاريخية (synced) الأقدم من فترة الاحتفاظ.
+        await txn.rawDelete(
+          "DELETE FROM sync_queue WHERE status = 'synced' AND updated_at < ?",
+          [cutoff],
+        );
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _reconcileRoster() async {
+    try {
+      if (!_started) return;
+      // (دفعة 58) المصالحة سحابية حصرياً: سحب فوري يلتقط أي تغيّر في
+      // السجل/الملكية المدفوع من المدير، ثم معالجة الطابور.
+      final t = _cloudTransport;
+      if (t != null) {
+        await t.pull(resolver: ConflictResolver());
+        await processQueue();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkExpulsionAndAutoPurge() async {
+    try {
+      if (await repo.isWorkspaceOwner()) {
+        await repo.autoExpireStaleDevices();
+        // (دفعة 57) صيانة سحابية للمدير في نفس الدورة:
+        //  1) تقليم شواهد الطرد المنتهية (TTL 7 أيام) — لا ركام أبدياً.
+        //  2) ضغط سجل العمليات السحابي (أقدم من 30 يوماً ومغطاة باللقطة).
+        try {
+          final st = await repo.settings();
+          final url = (st['cloudBackendUrl'] ?? '').trim();
+          if (url.isNotEmpty) {
+            final ws = _cloudTransport?.workspaceId ?? 'default';
+            try {
+              await CloudJoin.pruneExpiredEvictions(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            try {
+              await compactCloudOperations(backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            // (دفعة 58) عمليات الدردشة الأقدم من 24 ساعة تُطهَّر سحابياً.
+            try {
+              await CloudJoin.purgeOldChatOperations(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+            // 3) زوال اللقطة: دعوة منتهية بلا أخرى حية → حذف joinSnapshot.
+            try {
+              await CloudJoin.purgeStaleInviteArtifacts(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
+          }
+        } catch (_) {}
+        return;
+      }
+      if (await repo.amIExpelled()) {
+        await handleSelfEviction();
+        return;
+      }
+      // (دفعة 54) فحص شاهدة الطرد الصريحة عند الإقلاع وكل دورة صيانة —
+      // يغطي حالة إقلاع الجهاز بعد أن طُرد وهو مطفأ (قبل فتح قنوات SSE).
+      if (await repo.workspaceMode() == 'member') {
+        final st = await repo.settings();
+        final url = (st['cloudBackendUrl'] ?? '').trim();
+        final devId = (st['sync.deviceId'] ?? '').trim();
+        if (url.isNotEmpty && devId.isNotEmpty) {
+          try {
+            final tomb = await CloudJoin.hasEvictionTombstone(
+              backendUrl: url,
+              deviceId: devId,
+              workspaceId: _cloudTransport?.workspaceId ?? 'default',
+            );
+            if (tomb) await handleSelfEviction();
+          } catch (_) {
+            // شبكة — المصافحة داخل الناقل تغطي لاحقاً.
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// (دفعة 53) المعالجة المركزية للطرد الذاتي — تُنفَّذ مرة واحدة فقط:
+  ///  1) إيقاف فوري لقناة SSE وكل الدفع الصادر (المحرك بأكمله).
+  ///  2) وسم صف جهازنا المحلي revoked_at (قبل المسح — أثر تدقيقي فوري).
+  ///  3) تفريغ طابور المزامنة ومفاتيح جلسة المجموعة
+  ///     (cloudBackendUrl/cloudCode/pendingJoin.*).
+  ///  4) العودة لوضع standalone بقاعدة نظيفة (resetToStandalone).
+  ///  5) بث onDeviceEvicted للواجهة → شاشة الترحيب + الرسالة الصريحة.
+  Future<void> handleSelfEviction() async {
+    if (_evictionHandled) return;
+    _evictionHandled = true;
+    // 1) أوقف المحرك كاملاً: SSE + مؤقتات الدفع والسحب.
+    try {
+      stop();
+    } catch (_) {}
+    // 2) وسم الصف المحلي revoked_at الآن (توثيق لحظة الاكتشاف).
+    try {
+      final db = await _db;
+      final st = await repo.settings();
+      final devId = (st['sync.deviceId'] ?? '').trim();
+      if (devId.isNotEmpty) {
+        await db.update(
+          'devices',
+          {'revoked_at': DateTime.now().toIso8601String()},
+          where: 'id = ?',
+          whereArgs: [devId],
+        );
+      }
+      // 3) تفريغ الطابور + مفاتيح الجلسة فوراً (قبل إعادة الضبط الشاملة).
+      await db.delete('sync_queue');
+      await db.delete('settings',
+          where: "key IN (?, ?) OR key LIKE 'pendingJoin.%'",
+          whereArgs: ['cloudBackendUrl', 'cloudCode']);
+    } catch (_) {}
+    // 4) إعادة الضبط الكاملة لوضع standalone (قاعدة نظيفة + هوية جديدة).
+    try {
+      await repo.resetToStandaloneAfterExpulsion();
+    } catch (_) {}
+    // 5) بث الحدث للواجهة.
+    try {
+      onDeviceEvicted?.call();
+    } catch (_) {}
+  }
+
+  void stop() {
+    _started = false;
+    _generation++;
+    _completeTimer?.cancel();
+    _completeTimer = null;
+    _recentDelivered.clear();
+    _timer?.cancel();
+    _maintenanceTimer?.cancel();
+    _rosterTimer?.cancel();
+    _cloudPullTimer?.cancel();
+    _cloudPullTimer = null;
+    unawaited(_cloudTransport?.stopListening() ?? Future.value());
+    _immediate?.cancel();
+    _timer = null;
+    _maintenanceTimer = null;
+    _rosterTimer = null;
+    _immediate = null;
+    if (SyncRecorder.onOperationRecorded == notifyNewOperation) {
+      SyncRecorder.onOperationRecorded = null;
+    }
+  }
+
+  /// User action also resumes rows that exhausted their automatic retry budget.
+  Future<void> forceSyncNow() async {
+    final q = _queue ??= SyncQueueOps(await _db);
+    await q.retryFailed();
+    await processQueue();
+    // إعادة تقييم «نافذة الخطر» فوراً: إن نجح الدفع يُبث null فيختفي
+    // البانر في نفس اللحظة دون انتظار الدورة (8 ثوانٍ).
+    await _checkDangerState();
+  }
+
+  /// زر «إعادة المحاولة والمزامنة فوراً» في بانر الخطر: نفس forceSyncNow
+  /// باسم صريح — يصفّر backoff ويعيد المحاولة ويدفع كل المعلّق حالاً
+  /// ثم يعيد فحص الخطر ليُخفى البانر تلقائياً عند النجاح.
+  Future<void> triggerImmediateSync() => forceSyncNow();
+
+  /// يُستدعى بعد تغيير صلاحية/جهاز (منح صلاحية لجهاز) لبثّ التغيير فورًا
+  /// إلى كل الأقران ودفع أي عمليات معلّقة — استجابة خلال ثوانٍ (<10 ثوانٍ).
+  /// (دفعة 54 — جهة المدير) بث الطرد النشط لجهاز مستهدف:
+  ///  1) شاهدة صريحة في /evictions/$deviceId بختم وقت الخادم —
+  ///     تصل المستهدف عبر قناته المخصصة لحظياً.
+  ///  2) حذف عقدته من /roster نهائياً (محفّز الدفاع الثاني).
+  /// يُستدعى بعد expelDevice/revokeDevice المحليتين مباشرة.
+  /// (دفعة 57) قياس سحابي حي لواجهة الإعدادات — بديل عرض ip:port القديم:
+  /// حالة قناة SSE، كمون السحابة (رحلة GET خفيفة)، اسم مساحة العمل،
+  /// وعدد العمليات المنتظرة في طابور الدفع السحابي.
+  Future<Map<String, Object?>> cloudTelemetry() async {
+    final t = _cloudTransport;
+    final db = await _db;
+    var pending = 0;
+    try {
+      final r = await db.rawQuery(
+          "SELECT COUNT(*) c FROM sync_queue WHERE target = 'cloud' "
+          "AND status IN ('pending','syncing','failed')");
+      pending = (r.first['c'] as int?) ?? 0;
+    } catch (_) {}
+    String wsName = '';
+    try {
+      final w = await db.query('workspaces', limit: 1);
+      if (w.isNotEmpty) {
+        wsName = '${w.first['name'] ?? w.first['id'] ?? ''}';
+      }
+    } catch (_) {}
+    int latencyMs = -1;
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        final ws = t?.workspaceId ?? 'default';
+        final sw = Stopwatch()..start();
+        final res = await http
+            .get(Uri.parse(
+                '${url.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}/roster.json?shallow=true'))
+            .timeout(const Duration(seconds: 8));
+        sw.stop();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          latencyMs = sw.elapsedMilliseconds;
+        }
+      }
+    } catch (_) {}
+    return {
+      'sse': t?.isListening ?? false,
+      'evicted': t?.isEvicted ?? false,
+      'workspace': wsName,
+      'pending': pending,
+      'latency_ms': latencyMs,
+    };
+  }
+
+  /// (دفعة 57 — للمدير فقط) ضغط سجل العمليات السحابي:
+  /// يحذف من /workspaces/$ws/operations كل عملية:
+  ///   • أقدم من 30 يوماً (بختم خادم فيربيس server_ts)، و
+  ///   • مغطاة بلقطة موثّقة (server_ts ≤ snapshotThroughTs المسجلة عند
+  ///     آخر createInvite) — المنضمون الجدد يرتوون من اللقطة فلا يحتاجون
+  ///     إعادة تشغيل التاريخ القديم.
+  /// بدون علامة لقطة مسجلة لا يُحذف شيء (أمان مطلق). يعيد عدد المحذوف.
+  Future<int> compactCloudOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    Duration olderThan = const Duration(days: 30),
+  }) async {
+    if (!await repo.isWorkspaceOwner()) return 0;
+    final db = await _db;
+    final row = await db.query('sync_meta',
+        where: 'key = ?',
+        whereArgs: ['snapshotThroughTs:$workspaceId'],
+        limit: 1);
+    final snapTs =
+        row.isEmpty ? 0 : (int.tryParse('${row.first['value']}') ?? 0);
+    if (snapTs <= 0) return 0; // لا لقطة موثّقة → لا ضغط.
+    final cutoff = DateTime.now().subtract(olderThan).millisecondsSinceEpoch;
+    // الحد الآمن: الأقدم من (30 يوماً) والمغطى باللقطة معاً.
+    final limitTs = snapTs < cutoff ? snapTs : cutoff;
+    if (limitTs <= 0) return 0;
+    return CloudJoin.compactOperations(
+      backendUrl: backendUrl,
+      workspaceId: workspaceId,
+      throughTsMs: limitTs,
+    );
+  }
+
+  /// (دفعة 56) «حذف نهائي من السجل»: محو جهاز مطرود محلياً وسحابياً —
+  /// devices + مستخدم الظل اليتيم محلياً، وroster/evictions/joinRequest
+  /// سحابياً. البطاقة تختفي نهائياً من كل الشاشات.
+  Future<void> purgeDeviceRecordEverywhere(String targetDeviceId) async {
+    // المحلي أولاً (يرمي عند خرق الشروط: جهاز نشط/مالك) ثم السحابي
+    // بأفضل جهد — غياب الشبكة لا يمنع اختفاء البطاقة.
+    await repo.purgeDeviceRecord(targetDeviceId);
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty) {
+        await CloudJoin.purgeDeviceRecordFromCloud(
+          backendUrl: url,
+          deviceId: targetDeviceId,
+          workspaceId: _cloudTransport?.workspaceId ?? 'default',
+        );
+      }
+    } catch (_) {}
+    try {
+      await broadcastRosterChange();
+    } catch (_) {}
+  }
+
+  Future<void> broadcastEviction(String targetDeviceId,
+      {String reason = 'revoked_by_manager'}) async {
+    try {
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final t = _cloudTransport;
+      await CloudJoin.purgePeerFromCloud(
+        repo,
+        backendUrl: url,
+        deviceId: targetDeviceId,
+        workspaceId: t?.workspaceId ?? 'default',
+        reason: reason,
+      );
+    } catch (_) {
+      // الشبكة غائبة — المصافحة الدورية لدى المستهدف تلتقط الطرد لاحقاً
+      // عبر roster (الذي سيصله وسم الطرد مع أول مزامنة سجل).
+    }
+  }
+
+  /// (دفعة 54 — جهة المدير) إعادة السماح لجهاز محظور: حذف شاهدة طرده
+  /// من السحابة حتى لا يُقصي الجهازُ المستعاد نفسَه عند فحصه القادم.
+  Future<void> clearEvictionBroadcast(String targetDeviceId) async {
+    try {
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      await CloudJoin.clearEvictionTombstone(
+        backendUrl: url,
+        deviceId: targetDeviceId,
+        workspaceId: _cloudTransport?.workspaceId ?? 'default',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> broadcastRosterChange() async {
+    // توحيد الهوية: ادفع سجل الأجهزة فوراً للسحابة أيضاً حتى يظهر الاسم
+    // الجديد على كل الأجهزة المرتبطة سحابياً دون انتظار الدورة (45 ثانية).
+    try {
+      final t = _cloudTransport;
+      if (t != null) {
+        await CloudJoin.syncRoster(
+          repo,
+          await _db,
+          backendUrl: t.backendUrl,
+          workspaceId: t.workspaceId,
+        );
+      }
+    } catch (_) {}
+    notifyNewOperation();
+  }
+
+  /// جدولة push فورية (لا تنتظر دورة الـ Timer) — لتسريع Near-Real-Time.
+  Timer? _immediate;
+  void notifyNewOperation() {
+    if (!_started) return;
+    _immediate?.cancel();
+    // Debounce قصير جدًا (80ms) لتجميع العمليات السريعة مع بقاء المزامنة فورية.
+    _immediate = Timer(const Duration(milliseconds: 80), () {
+      processQueue();
+    });
+  }
+
+  Future<SyncSummary> summary() async {
+    final q = _queue ??= SyncQueueOps(await _db);
+    final pending = await q.countPending();
+    final failed = await q.countFailed();
+    return SyncSummary(pending: pending, failed: failed);
+  }
+
+  /// 🔒 (التجربة) هل السحابة محظورة لانتهاء الفترة التجريبية؟
+  /// فحص خفيف بكاش داخلي — لا يضرب الشبكة في كل دورة.
+  Future<bool> _trialBlocked() async {
+    try {
+      final t = _cloudTransport;
+      if (t == null) return false;
+      // مهلة صارمة: فحص معلق (شبكة متجمدة) لا يحبس processQueue —
+      // _running يُصفَّر في finally دوماً، لكن بدون مهلة كانت الدورة
+      // كلها تبقى عالقة فيبدو المحرك «مجمداً» رغم تجديد الاشتراك.
+      return await SubscriptionGuard.isBlocked(repo,
+              backendUrl: t.backendUrl, workspaceId: t.workspaceId)
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      return false; // الشك لصالح الاستمرار — الفحص التالي يحسم.
+    }
+  }
+
+  Future<void> processQueue() async {
+    if (_running) return;
+    _running = true;
+    try {
+      // 🔒 انتهاء التجربة يجمّد الدفع السحابي كلياً (العمل المحلي يستمر).
+      if (await _trialBlocked()) return;
+      final db = await _db;
+      final q = _queue ??= SyncQueueOps(db);
+      // السحابة أولاً: عند نجاح رفع العملية للسحابة تُعلَّم synced=1،
+      // فيعتبرها هدف LAN (في نفس الدورة) مُسلَّمة عبر السحابة للأجهزة
+      // غير القابلة للوصول محلياً — بدل بقائها awaiting-offline-peers.
+      final ordered = List<SyncTransport>.of(_transports)
+        ..sort((a, b) {
+          if (a.targetId == b.targetId) return 0;
+          if (a.targetId == SyncTarget.cloud) return -1;
+          if (b.targetId == SyncTarget.cloud) return 1;
+          return 0;
+        });
+      for (final t in ordered) {
+        List<Map<String, Object?>> rows;
+        try {
+          rows = await q
+              .pickPending(limit: 20, target: t.targetId)
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          continue;
+        }
+        for (final r in rows) {
+          final qid = r['id'] as int;
+          final opId = r['operation_id'] as String;
+          try {
+            await q.markSyncing(qid).timeout(const Duration(seconds: 5));
+          } catch (_) {
+            continue; // Do not send without a durable queue state.
+          }
+          String? entityTable;
+          String? entityId;
+          try {
+            final opRows = await db
+                .query(
+                  'operations',
+                  where: 'id = ?',
+                  whereArgs: [opId],
+                  limit: 1,
+                )
+                .timeout(const Duration(seconds: 5));
+            if (opRows.isEmpty) {
+              try {
+                await q.markSynced(qid).timeout(const Duration(seconds: 3));
+              } catch (_) {}
+              continue;
+            }
+            final op = SyncOperation.fromMap(opRows.first);
+            entityTable = switch (op.entityType) {
+              EntityKind.tx => 'transactions',
+              EntityKind.account => 'accounts',
+              EntityKind.item => 'items',
+              EntityKind.itemCategory => 'item_categories',
+              EntityKind.stockMove => 'stock_moves',
+              EntityKind.voucher => 'vouchers',
+              EntityKind.user => 'users',
+              EntityKind.currency => 'currencies',
+              EntityKind.setting => 'settings',
+              EntityKind.category => 'categories',
+              EntityKind.conversation => 'conversations',
+              EntityKind.message => 'messages',
+            };
+            entityId = op.entityId;
+            if (entityTable == 'transactions') {
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'syncing'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
+            }
+            // مهلة 20 ثانية لكل عملية دفع حتى لا تعلق قائمة الانتظار كلها.
+            await t.push(op).timeout(const Duration(seconds: 20));
+            try {
+              await q.markSynced(qid).timeout(const Duration(seconds: 3));
+            } catch (_) {}
+            if (entityTable == 'transactions') {
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'synced'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
+            }
+          } catch (e) {
+            try {
+              await q.markFailed(qid, e).timeout(const Duration(seconds: 3));
+            } catch (_) {}
+            if (entityTable == 'transactions' && entityId != null) {
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'failed'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } finally {
+      _running = false;
+      try {
+        onSyncActivity?.call();
+      } catch (_) {}
+      // بانر الخطر ظاهر؟ أعد الفحص فور انتهاء الدورة: نجاح الدفع يبثّ
+      // null فيختفي البانر لحظياً — لا انتظار لدورة المؤقّت التالية.
+      if (_lastDangerMsg.isNotEmpty) {
+        try {
+          await _checkDangerState();
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+class SyncSummary {
+  final int pending;
+  final int failed;
+  const SyncSummary({required this.pending, required this.failed});
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [2/7] lib/data/update_installer.dart
+██  مثبّت التحديثات — بلا exit(0) انتحاري (إصلاح UAC)
+██  382 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// التحديث بنقرة واحدة (أندرويد):
+// ينزّل ملف الـ APK عبر DownloadManager (خدمة نظام) ثم يفتح شاشة تثبيت
+// النظام مباشرةً — يبقى القرار النهائي للمستخدم في حوار النظام (لا يسمح
+// أندرويد بتثبيت صامت لتطبيقات خارج المتجر، وهذا قيد أمني في النظام نفسه).
+//
+// لماذا DownloadManager بدل http داخل التطبيق؟
+// 1) السرعة: تنزيل داخل عملية التطبيق يخضع لكبح النظام للتطبيقات الخاملة
+//    ولقيود Dart isolate، بينما مدير التنزيلات خدمة نظام مخصصة لذلك.
+// 2) الاستمرارية: يواصل التنزيل حتى لو أُغلق التطبيق نهائياً.
+// 3) الاستئناف: يستأنف تلقائياً بعد انقطاع الشبكة (HTTP Range)، وعند فتح
+//    التطبيق مجدداً نلتقط التنزيل الجاري/المكتمل بدل البدء من الصفر.
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+
+/// مراحل عملية التحديث بنقرة واحدة.
+enum InstallPhase {
+  idle,
+  downloading,
+  launchingInstaller,
+  awaitingPermission,
+  failed,
+  done,
+}
+
+/// حالة لحظية تُبث أثناء التنزيل/التثبيت لعرض شريط التقدم.
+class InstallProgress {
+  final InstallPhase phase;
+
+  /// نسبة التنزيل 0..1 (أو null إذا كان الحجم مجهولاً).
+  final double? progress;
+  final String? error;
+
+  const InstallProgress(this.phase, {this.progress, this.error});
+}
+
+class UpdateInstaller {
+  static const _channel = MethodChannel('nexora/updates');
+
+  final http.Client Function() _clientFactory;
+
+  UpdateInstaller({http.Client Function()? clientFactory})
+      : _clientFactory = clientFactory ?? (() => http.Client());
+
+  /// هل منح المستخدم إذن «تثبيت التطبيقات غير المعروفة» لهذا التطبيق؟
+  Future<bool> canInstall() async {
+    // ويندوز لا يحتاج إذناً مسبقاً: تشغيل المُثبّت يُظهر حوار UAC للنظام.
+    if (Platform.isWindows) return true;
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('canInstall') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// يفتح صفحة إعدادات النظام لمنح إذن التثبيت (مرة واحدة فقط).
+  Future<void> openInstallSettings() async {
+    try {
+      await _channel.invokeMethod('openInstallSettings');
+    } catch (_) {}
+  }
+
+  // ------- تذكّر معرّف التنزيل بين تشغيلات التطبيق (للاستئناف) -------
+
+  Future<File> _idFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/update_download_id.txt');
+  }
+
+  Future<int?> _savedDownloadId() async {
+    try {
+      final f = await _idFile();
+      if (!f.existsSync()) return null;
+      return int.tryParse((await f.readAsString()).trim());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveDownloadId(int? id) async {
+    try {
+      final f = await _idFile();
+      if (id == null) {
+        if (f.existsSync()) await f.delete();
+      } else {
+        await f.writeAsString('$id');
+      }
+    } catch (_) {}
+  }
+
+  Future<Map<String, Object?>> _query(int id) async {
+    try {
+      final r = await _channel
+          .invokeMapMethod<String, Object?>('queryDownload', {'id': id});
+      return r ?? const {'status': 'unknown'};
+    } catch (_) {
+      return const {'status': 'unknown'};
+    }
+  }
+
+  /// ينزّل APK من [url] ويبث التقدم، ثم يفتح شاشة تثبيت النظام.
+  /// لا يرمي استثناءً — يبث InstallPhase.failed مع سبب عربي مفهوم.
+  Stream<InstallProgress> downloadAndInstall(String url) async* {
+    if (Platform.isWindows) {
+      yield* _windowsDownloadAndInstall(url);
+      return;
+    }
+    if (!Platform.isAndroid) {
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'التحديث المباشر متاح على أندرويد وويندوز فقط.');
+      return;
+    }
+
+    // 0) إذن «المصادر غير المعروفة»: إن لم يُمنح نفتح إعداداته وننتظر المستخدم.
+    if (!await canInstall()) {
+      yield const InstallProgress(InstallPhase.awaitingPermission);
+      await openInstallSettings();
+      // ننتظر عودة المستخدم من الإعدادات (فحص دوري بمهلة قصوى دقيقة واحدة).
+      for (var i = 0; i < 60; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (await canInstall()) break;
+      }
+      if (!await canInstall()) {
+        yield const InstallProgress(InstallPhase.failed,
+            error: 'لم يُمنح إذن تثبيت التحديثات. فعّله من إعدادات النظام '
+                'ثم أعد المحاولة.');
+        return;
+      }
+    }
+
+    yield const InstallProgress(InstallPhase.downloading, progress: 0);
+
+    // 1) استئناف تنزيل سابق إن وُجد (بدأ في جلسة سابقة واستمر في الخلفية).
+    var id = await _savedDownloadId();
+    if (id != null) {
+      final st = await _query(id);
+      final status = '${st['status']}';
+      if (status == 'done' && '${st['path']}'.isNotEmpty) {
+        // اكتمل في الخلفية — ثبّت مباشرة بلا إعادة تنزيل.
+        yield* _install('${st['path']}');
+        return;
+      }
+      if (status != 'running' && status != 'pending' && status != 'paused') {
+        id = null; // فشل/اختفى — نبدأ من جديد.
+      }
+    }
+
+    // 2) بدء تنزيل جديد عبر مدير تنزيلات النظام.
+    if (id == null) {
+      try {
+        final r = await _channel.invokeMethod<Object?>(
+            'startDownload', {'url': url});
+        final started = (r is int) ? r : int.tryParse('$r') ?? -1;
+        if (started >= 0) {
+          id = started;
+          await _saveDownloadId(id);
+        }
+      } catch (_) {}
+    }
+
+    if (id == null) {
+      // مسار احتياطي (أجهزة عطّل فيها مدير التنزيلات): تنزيل مباشر.
+      yield* _fallbackHttpDownload(url);
+      return;
+    }
+
+    // 3) متابعة التقدم — التنزيل نفسه بيد النظام ويستمر لو خرج المستخدم.
+    var stuckCount = 0;
+    while (true) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final st = await _query(id);
+      final status = '${st['status']}';
+      final bytes = (st['bytes'] as num?)?.toInt() ?? 0;
+      final total = (st['total'] as num?)?.toInt() ?? -1;
+      switch (status) {
+        case 'done':
+          final path = '${st['path']}';
+          if (path.isEmpty) {
+            await _saveDownloadId(null);
+            yield const InstallProgress(InstallPhase.failed,
+                error: 'اكتمل التنزيل لكن الملف غير موجود. أعد المحاولة.');
+            return;
+          }
+          yield* _install(path);
+          return;
+        case 'failed':
+          await _saveDownloadId(null);
+          yield InstallProgress(InstallPhase.failed,
+              error: 'فشل التنزيل (رمز ${st['reason'] ?? '?'}). '
+                  'تحقق من الاتصال ثم أعد المحاولة.');
+          return;
+        case 'paused':
+          // انقطاع مؤقت — النظام سيستأنف وحده؛ نُبقي الشريط ظاهراً.
+          yield InstallProgress(InstallPhase.downloading,
+              progress: (total > 0) ? bytes / total : null);
+          break;
+        case 'unknown':
+          // اختفى من قائمة التنزيلات (أُلغي من الإشعار مثلاً).
+          if (++stuckCount >= 6) {
+            await _saveDownloadId(null);
+            yield const InstallProgress(InstallPhase.failed,
+                error: 'أُلغي التنزيل. أعد المحاولة.');
+            return;
+          }
+          break;
+        default: // running / pending
+          stuckCount = 0;
+          yield InstallProgress(InstallPhase.downloading,
+              progress: (total > 0) ? bytes / total : null);
+      }
+    }
+  }
+
+  /// يتحقق من الملف ثم يطلق شاشة تثبيت النظام.
+  Stream<InstallProgress> _install(String path) async* {
+    final apk = File(path);
+    if (!apk.existsSync() || apk.lengthSync() < 1024 * 1024) {
+      await _saveDownloadId(null);
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'الملف المنزَّل غير مكتمل. أعد المحاولة.');
+      return;
+    }
+    yield const InstallProgress(InstallPhase.launchingInstaller, progress: 1);
+    try {
+      final r =
+          await _channel.invokeMethod<String>('installApk', {'path': path});
+      if (r == 'ok') {
+        await _saveDownloadId(null);
+        yield const InstallProgress(InstallPhase.done, progress: 1);
+      } else {
+        yield InstallProgress(InstallPhase.failed,
+            error: switch (r) {
+              'file_missing' => 'ملف التحديث اختفى بعد التنزيل.',
+              'uri_failed' => 'تعذّر تجهيز ملف التثبيت.',
+              _ => 'تعذّر فتح شاشة التثبيت.',
+            });
+      }
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed,
+          error: 'تعذّر فتح شاشة التثبيت: $e');
+    }
+  }
+
+  // ------------------------- مسار ويندوز -------------------------
+
+  /// ويندوز: ينزّل مُثبّت NexoraSetup.exe (أو الملف المتاح) داخل التطبيق
+  /// ثم يشغّله — معالج التثبيت يحدّث النسخة فوق الحالية مع بقاء البيانات.
+  Stream<InstallProgress> _windowsDownloadAndInstall(String url) async* {
+    yield const InstallProgress(InstallPhase.downloading, progress: 0);
+    final segs = Uri.tryParse(url)?.pathSegments ?? const <String>[];
+    final name = segs.isEmpty ? '' : segs.last;
+    final isExe = name.toLowerCase().endsWith('.exe');
+    final fileName = isExe ? 'NexoraSetup.exe' : 'nexora-update.zip';
+    yield* _httpDownload(url, fileName, (file) async* {
+      if (file.lengthSync() < 512 * 1024) {
+        yield const InstallProgress(InstallPhase.failed,
+            error: 'الملف المنزَّل غير مكتمل. أعد المحاولة.');
+        return;
+      }
+      yield const InstallProgress(InstallPhase.launchingInstaller,
+          progress: 1);
+      try {
+        if (isExe) {
+          // (دفعة 58) تشغيل المُثبّت عبر ShellExecute (Start-Process
+          // -Verb RunAs): الإطلاق المباشر بـ Process.start يفشل صامتاً
+          // عندما يتطلب المُثبّت صلاحية مسؤول (ERROR_ELEVATION_REQUIRED)
+          // — كان هذا سبب تعطل التحديث التلقائي على ويندوز.
+          try {
+            await Process.start(
+              'powershell.exe',
+              [
+                '-NoProfile',
+                '-NonInteractive',
+                '-Command',
+                'Start-Process -FilePath \'${file.path}\' -Verb RunAs',
+              ],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          } catch (_) {
+            // احتياط: cmd start يمرّ عبر ShellExecute أيضاً فيُظهر UAC.
+            await Process.start(
+              'cmd.exe',
+              ['/c', 'start', '', file.path],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          }
+        } else {
+          // نسخة zip محمولة: نفتح مجلدها ليستخرجها المستخدم.
+          await Process.start('explorer.exe', ['/select,', file.path],
+              mode: ProcessStartMode.detached);
+        }
+        yield const InstallProgress(InstallPhase.done, progress: 1);
+        // (إصلاح UAC) لا exit(0) هنا: قتل العملية بعد 3 ثوانٍ كان يقتل
+        // سلسلة الإطلاق قبل موافقة المستخدم على حوار صلاحيات المسؤول،
+        // فيموت المثبّت صامتاً. NexoraSetup.exe (Inno Setup) يغلق التطبيق
+        // بنفسه عبر CloseApplications عند بدء التثبيت الفعلي — نبقى أحياء
+        // حتى يتولى هو الإغلاق.
+      } catch (e) {
+        yield InstallProgress(InstallPhase.failed,
+            error: 'تعذّر تشغيل المُثبّت: $e');
+      }
+    });
+  }
+
+  /// مسار احتياطي: تنزيل http داخل التطبيق (كما في السابق) إذا تعذّر
+  /// استخدام مدير تنزيلات النظام.
+  Stream<InstallProgress> _fallbackHttpDownload(String url) async* {
+    yield* _httpDownload(url, 'nexora-update.apk', (f) => _install(f.path));
+  }
+
+  /// تنزيل http عام إلى ملف مؤقت ثم تمرير الملف لخطوة ما بعد التنزيل.
+  Stream<InstallProgress> _httpDownload(
+    String url,
+    String fileName,
+    Stream<InstallProgress> Function(File file) onDone,
+  ) async* {
+    final File apk;
+    try {
+      final cache = await getTemporaryDirectory();
+      final dir = Directory('${cache.path}/updates');
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      dir.createSync(recursive: true);
+      apk = File('${dir.path}/$fileName');
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed,
+          error: 'تعذّر تجهيز مجلد التنزيل: $e');
+      return;
+    }
+
+    final client = _clientFactory();
+    IOSink? sink;
+    try {
+      final req = http.Request('GET', Uri.parse(url));
+      final res = await client.send(req).timeout(const Duration(seconds: 30));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        yield InstallProgress(InstallPhase.failed,
+            error: 'الخادم أعاد الرمز ${res.statusCode}.');
+        return;
+      }
+      final total = res.contentLength;
+      var received = 0;
+      sink = apk.openWrite();
+      var lastYield = DateTime.now();
+      await for (final chunk
+          in res.stream.timeout(const Duration(seconds: 60))) {
+        sink.add(chunk);
+        received += chunk.length;
+        final now = DateTime.now();
+        if (now.difference(lastYield).inMilliseconds > 150) {
+          lastYield = now;
+          yield InstallProgress(
+            InstallPhase.downloading,
+            progress: (total != null && total > 0) ? received / total : null,
+          );
+        }
+      }
+      await sink.flush();
+      await sink.close();
+      sink = null;
+    } on TimeoutException {
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'انقطع الاتصال أثناء التنزيل. أعد المحاولة.');
+      return;
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed, error: 'فشل التنزيل: $e');
+      return;
+    } finally {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      client.close();
+    }
+    yield* onDone(apk);
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [3/7] lib/data/update_service.dart
+██  خدمة التحديثات — كسر كاش CDN + مقارنة build
+██  231 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// نظام التحديث المركزي.
+//
+// يقرأ بيان إصدار (version.json) يُنشر تلقائيًا مع كل إصدار على GitHub،
+// يقارنه بإصدار التطبيق الحالي، ويقرر: لا تحديث / تحديث اختياري / تحديث إجباري.
+// التنزيل والتثبيت يتمّان بفتح رابط الإصدار في المتصفح — لا نُنزّل ونُثبّت
+// حزمًا تلقائيًا لأن ذلك يتطلب أذونات خطرة على أندرويد ولا يعمل في المتاجر.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
+import '../core/app_version.dart';
+
+/// نتيجة فحص التحديث.
+enum UpdateStatus {
+  /// التطبيق محدّث.
+  upToDate,
+
+  /// يوجد إصدار أحدث (اختياري).
+  available,
+
+  /// يوجد إصدار أحدث وإلزامي (الإصدار الحالي أقدم من minSupported).
+  required_,
+
+  /// تعذّر الفحص (لا شبكة / خطأ خادم / بيان تالف).
+  unknown,
+}
+
+/// منصّة التنزيل المطلوبة.
+enum UpdatePlatform { android, windows, other }
+
+class UpdateInfo {
+  final UpdateStatus status;
+  final AppSemVer current;
+  final AppSemVer? latest;
+
+  /// أدنى إصدار مدعوم؛ أقل منه = تحديث إجباري.
+  final AppSemVer? minSupported;
+
+  /// رابط صفحة الإصدار (يُفتح في المتصفح).
+  final String? releaseUrl;
+
+  /// رابط الملف المباشر للمنصّة الحالية إن وُجد.
+  final String? downloadUrl;
+
+  /// ملاحظات الإصدار بالعربية.
+  final String notes;
+
+  /// تاريخ النشر إن وُجد.
+  final DateTime? publishedAt;
+
+  /// سبب الفشل عند status == unknown.
+  final String? error;
+
+  const UpdateInfo({
+    required this.status,
+    required this.current,
+    this.latest,
+    this.minSupported,
+    this.releaseUrl,
+    this.downloadUrl,
+    this.notes = '',
+    this.publishedAt,
+    this.error,
+  });
+
+  bool get hasUpdate =>
+      status == UpdateStatus.available || status == UpdateStatus.required_;
+
+  bool get isMandatory => status == UpdateStatus.required_;
+
+  /// نص مختصر للعرض.
+  String get headline => switch (status) {
+        UpdateStatus.upToDate => 'التطبيق محدَّث',
+        UpdateStatus.available => 'يتوفّر تحديث جديد',
+        UpdateStatus.required_ => 'تحديث إلزامي مطلوب',
+        UpdateStatus.unknown => 'تعذّر التحقق من التحديثات',
+      };
+}
+
+/// مزوّد الوقت — لتسهيل الاختبار.
+typedef NowFn = DateTime Function();
+
+class UpdateService {
+  /// الرابط الافتراضي لبيان الإصدار (يُنشر مع كل بناء ناجح).
+  static const String kDefaultManifestUrl =
+      'https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/download/latest/version.json';
+
+  /// صفحة الإصدار الرسمية (احتياطي إذا لم يذكر البيان رابطًا).
+  static const String kFallbackReleaseUrl =
+      'https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/latest';
+
+  final String manifestUrl;
+  final http.Client Function() _clientFactory;
+  final AppSemVer current;
+  final UpdatePlatform platform;
+  final Duration timeout;
+
+  UpdateService({
+    String? manifestUrl,
+    http.Client Function()? clientFactory,
+    AppSemVer? current,
+    UpdatePlatform? platform,
+    this.timeout = const Duration(seconds: 12),
+  })  : manifestUrl = manifestUrl ?? kDefaultManifestUrl,
+        _clientFactory = clientFactory ?? (() => http.Client()),
+        current = current ?? AppSemVer.current,
+        platform = platform ?? detectPlatform();
+
+  static UpdatePlatform detectPlatform() {
+    if (Platform.isAndroid) return UpdatePlatform.android;
+    if (Platform.isWindows) return UpdatePlatform.windows;
+    return UpdatePlatform.other;
+  }
+
+  /// يفحص وجود تحديث. لا يرمي استثناءً أبدًا — يُعيد status=unknown عند الفشل.
+  Future<UpdateInfo> check() async {
+    final uri = Uri.tryParse(manifestUrl);
+    if (uri == null || !uri.isScheme('https')) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'رابط بيان التحديث غير صالح (يجب أن يكون https).',
+      );
+    }
+    // كسر كاش CDN الوسيط: GitHub/Fastly قد يخدمان version.json قديماً
+    // لدقائق بعد النشر — معامل عشوائي لكل طلب يضمن قراءة أحدث بيان.
+    final uriWithBuster = uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      't': '${DateTime.now().millisecondsSinceEpoch}',
+    });
+    final client = _clientFactory();
+    try {
+      final res = await client.get(uriWithBuster, headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache',
+      }).timeout(timeout);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return UpdateInfo(
+          status: UpdateStatus.unknown,
+          current: current,
+          error: 'الخادم أعاد الرمز ${res.statusCode}.',
+        );
+      }
+      // نفكّ البايتات بـ UTF-8 صراحةً: GitHub يقدّم version.json بنوع
+      // application/octet-stream بلا charset، فتتراجع res.body إلى Latin-1
+      // ويتشوّه النص العربي في الملاحظات (Ø§Ù…). allowMalformed حمايةً من بايتات شاذة.
+      return _parse(utf8.decode(res.bodyBytes, allowMalformed: true));
+    } on TimeoutException {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'انتهت مهلة الاتصال.',
+      );
+    } catch (e) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'تعذّر الاتصال بالإنترنت.',
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  UpdateInfo _parse(String body) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(body);
+    } catch (_) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث تالف.',
+      );
+    }
+    if (decoded is! Map) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث بصيغة غير متوقعة.',
+      );
+    }
+    final map = Map<String, Object?>.from(decoded);
+    final latest = AppSemVer.tryParse('${map['version'] ?? ''}');
+    if (latest == null) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث لا يحتوي رقم إصدار صالح.',
+      );
+    }
+    final minSupported = AppSemVer.tryParse('${map['minSupported'] ?? ''}');
+    final downloads = map['downloads'];
+    String? downloadUrl;
+    if (downloads is Map) {
+      final key = switch (platform) {
+        UpdatePlatform.android => 'android',
+        UpdatePlatform.windows => 'windows',
+        UpdatePlatform.other => '',
+      };
+      final v = downloads[key];
+      if (v is String && v.startsWith('https://')) downloadUrl = v;
+    }
+    final release = map['releaseUrl'];
+    final releaseUrl = (release is String && release.startsWith('https://'))
+        ? release
+        : kFallbackReleaseUrl;
+
+    final status = () {
+      if (minSupported != null && current < minSupported) {
+        return UpdateStatus.required_;
+      }
+      if (latest > current) return UpdateStatus.available;
+      return UpdateStatus.upToDate;
+    }();
+
+    return UpdateInfo(
+      status: status,
+      current: current,
+      latest: latest,
+      minSupported: minSupported,
+      releaseUrl: releaseUrl,
+      downloadUrl: downloadUrl,
+      notes: '${map['notes'] ?? ''}'.trim(),
+      publishedAt: DateTime.tryParse('${map['publishedAt'] ?? ''}'),
+    );
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [4/7] lib/data/sync/subscription_guard.dart
+██  حارس الاشتراك — كشف التراجع الزمني + تأمين ساعة الخادم
+██  659 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// 🔒 محرك الفترة التجريبية الذكية (1-Day Free Trial Engine).
+//
+// المبادئ الصارمة:
+//  1) توقيت الخادم حصراً: التفعيل يُختم بـ {".sv":"timestamp"} على فيربيس،
+//     والتحقق يقارن expires_at بوقت الخادم المُستنتج من ختم write-back —
+//     لا اعتماد على DateTime.now() للهاتف إطلاقاً في قرار الصلاحية.
+//  2) مقاومة التصفير: البصمة العتادية للجهاز تُسجل في فهرس سحابي عالمي
+//     (/trials/$fpHash) مستقل عن مساحة العمل — حذف التطبيق أو مسح بياناته
+//     أو إنشاء مساحة جديدة يعيد نفس البصمة فيُستأنف العدّاد من سجله الأول.
+//  3) بوابة مركزية واحدة (isBlocked) يستشيرها SyncEngine وCloudJoin
+//     وCloudSync — انتهاء التجربة يوقف المزامنة والربط والنسخ السحابي،
+//     ويبقى العمل المحلي سليماً.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show HttpDate;
+
+import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
+
+import '../repository.dart';
+import 'device_id.dart';
+
+/// مدة التجربة الحالية: يوم واحد (24 ساعة) — لأغراض الاختبار، وتُرفع
+/// لاحقاً بتغيير هذا الثابت وحده.
+const Duration kTrialDuration = Duration(hours: 24);
+
+/// المقاعد الافتراضية لباقة المؤسسات (يرفعها المشغّل من عقدة الاشتراك
+/// السحابية `max_devices` بحسب الباقة المباعة).
+const int kDefaultEnterpriseSeats = 5;
+
+/// هامش تسامح لانحراف الشبكة عند إسناد وقت الخادم (ثوانٍ قليلة).
+const int kServerSkewToleranceMs = 5000;
+
+/// مفاتيح المزايا الثمانية في عقدة features السحابية — القيم الافتراضية
+/// حسب الخطة: أثناء التجربة والاشتراك الفعّال كل شيء مفتوح؛ فردي منتهٍ
+/// تُقفل مزاياه المدفوعة؛ مؤسسة منتهية تُجمَّد سحابتها.
+class PlanFeatures {
+  final bool canUseCategories;
+  final bool canSendNotifications;
+  final bool canCloudBackup;
+  final bool canRestoreData;
+  final bool canAdvancedSearch;
+  final bool multiDeviceSync;
+  final bool rolePermissions;
+  final bool auditLog;
+
+  const PlanFeatures({
+    required this.canUseCategories,
+    required this.canSendNotifications,
+    required this.canCloudBackup,
+    required this.canRestoreData,
+    required this.canAdvancedSearch,
+    required this.multiDeviceSync,
+    required this.rolePermissions,
+    required this.auditLog,
+  });
+
+  static const allOn = PlanFeatures(
+    canUseCategories: true,
+    canSendNotifications: true,
+    canCloudBackup: true,
+    canRestoreData: true,
+    canAdvancedSearch: true,
+    multiDeviceSync: true,
+    rolePermissions: true,
+    auditLog: true,
+  );
+
+  /// فردي منتهي التجربة: يبقى التسجيل والحركات اليومية محلياً فقط.
+  static const individualLocked = PlanFeatures(
+    canUseCategories: false,
+    canSendNotifications: false,
+    canCloudBackup: false,
+    canRestoreData: false,
+    canAdvancedSearch: false,
+    multiDeviceSync: false,
+    rolePermissions: false,
+    auditLog: false,
+  );
+
+  factory PlanFeatures.fromMap(Map<String, dynamic>? m) {
+    if (m == null) return allOn;
+    bool b(String k, bool dflt) {
+      final v = m[k];
+      return v is bool ? v : dflt;
+    }
+
+    return PlanFeatures(
+      canUseCategories: b('can_use_categories', true),
+      canSendNotifications: b('can_send_notifications', true),
+      canCloudBackup: b('can_cloud_backup', true),
+      canRestoreData: b('can_restore_data', true),
+      canAdvancedSearch: b('can_advanced_search', true),
+      multiDeviceSync: b('multi_device_sync', true),
+      rolePermissions: b('role_permissions', true),
+      auditLog: b('audit_log', true),
+    );
+  }
+
+  Map<String, Object?> toMap() => {
+        'can_use_categories': canUseCategories,
+        'can_send_notifications': canSendNotifications,
+        'can_cloud_backup': canCloudBackup,
+        'can_restore_data': canRestoreData,
+        'can_advanced_search': canAdvancedSearch,
+        'multi_device_sync': multiDeviceSync,
+        'role_permissions': rolePermissions,
+        'audit_log': auditLog,
+      };
+}
+
+/// حالة الاشتراك كما تُقرأ من السحابة.
+class SubscriptionState {
+  /// trial | active | expired | none (لا سحابة مهيأة).
+  final String status;
+
+  /// individual | enterprise — يُستنتج تلقائياً (مستقل=فردي، مجموعة=مؤسسة).
+  final String planType;
+
+  /// الحد الأقصى للأجهزة (1 للفردي؛ بحسب الباقة للمؤسسة).
+  final int maxDevices;
+
+  final int createdAtMs; // ختم خادم فيربيس (ملي ثانية).
+  final int expiresAtMs; // ختم خادم.
+  final bool isActive;
+  final String deviceFingerprint;
+
+  /// مفاتيح المزايا من عقدة features السحابية.
+  final PlanFeatures features;
+
+  /// وقت الخادم التقريبي لحظة آخر فحص (server_ts المرجعي).
+  final int serverNowMs;
+
+  const SubscriptionState({
+    required this.status,
+    this.planType = 'individual',
+    this.maxDevices = 1,
+    required this.createdAtMs,
+    required this.expiresAtMs,
+    required this.isActive,
+    required this.deviceFingerprint,
+    this.features = PlanFeatures.allOn,
+    required this.serverNowMs,
+  });
+
+  /// هل انتهت التجربة؟ المقارنة بوقت الخادم حصراً.
+  bool get expired =>
+      status != 'active' && expiresAtMs > 0 && serverNowMs >= expiresAtMs;
+
+  /// هل الاشتراك مدفوع وفعّال؟
+  bool get isSubscribed => status == 'active';
+
+  /// هل الميزة المدفوعة مفتوحة الآن؟ (تجربة سارية أو اشتراك فعّال +
+  /// مفتاح الميزة نفسه غير مطفأ من الخادم).
+  bool featureUnlocked(bool Function(PlanFeatures) pick) {
+    if (status == 'none') return true; // لا سحابة بعد — لا قيود عرضية.
+    if (expired && !isSubscribed) return false;
+    return pick(features);
+  }
+
+  /// المتبقي بالملي ثانية (0 عند الانتهاء). بوقت الخادم.
+  int get remainingMs =>
+      expired ? 0 : (expiresAtMs - serverNowMs).clamp(0, 1 << 62);
+
+  Duration get remaining => Duration(milliseconds: remainingMs);
+
+  static const none = SubscriptionState(
+    status: 'none',
+    createdAtMs: 0,
+    expiresAtMs: 0,
+    isActive: true,
+    deviceFingerprint: '',
+    serverNowMs: 0,
+  );
+}
+
+/// حارس الاشتراك: التفعيل، الفحص الدوري بوقت الخادم، والبوابة المركزية.
+class SubscriptionGuard {
+  SubscriptionGuard._();
+
+  /// آخر حالة مفحوصة (كاش خفيف) + لحظة فحصها بساعة أحادية محلية —
+  /// نستخدم Stopwatch (monotonic) لا DateTime.now() حتى لا يكسر تقديم
+  /// ساعة الهاتف حساب «العمر منذ آخر فحص».
+  static SubscriptionState _last = SubscriptionState.none;
+  static final Stopwatch _sinceCheck = Stopwatch();
+  static bool _everChecked = false;
+
+  /// نافذة صلاحية الكاش قبل إعادة الفحص السحابي.
+  static Duration cacheTtl = const Duration(minutes: 5);
+
+  /// (للاختبارات) تجاوز جالب وقت الخادم — يعيد ملي ثانية خادم فيربيس.
+  static Future<int> Function(String backendUrl)? debugServerNowOverride;
+
+  static SubscriptionState get lastState => _last;
+
+  /// تجزئة البصمة العتادية إلى مفتاح سحابي ثابت وآمن (لا نص خام يصعد).
+  static String fingerprintHash(String raw) =>
+      sha256.convert(utf8.encode(raw.trim())).toString().substring(0, 32);
+
+  static String _wsRoot(String base, String ws) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
+
+  static String _trialsRoot(String base) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/trials';
+
+  /// وقت خادم فيربيس الحقيقي — بطبقتين مؤمّنتين:
+  ///  1) الأساس: كتابة {".sv":"timestamp"} وقراءة الناتج (الختم يحسبه
+  ///     خادم فيربيس نفسه — الكتابة المشوّهة من عميل متلاعب لا تغيّره،
+  ///     وقواعد الأمان يمكنها حصر هذا المسار دون كسر الآلية).
+  ///  2) تحقق تقاطعي + احتياط: ترويسة HTTP `Date` من استجابة الخادم —
+  ///     إن انحرف الختم عنها انحرافاً فاحشاً (>10 دقائق) نرفض القيمة
+  ///     (حماية من backend مزيف يعيد أختاماً معدلة)، وإن فشلت الكتابة
+  ///     (قواعد أمان تمنعها) نعتمد الترويسة نفسها كمصدر وقت موثوق —
+  ///     فهي من خادم Google ولا سبيل للعميل للتلاعب بها.
+  static Future<int> serverNowMs(String backendUrl) async {
+    final o = debugServerNowOverride;
+    if (o != null) return o(backendUrl);
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final url = '$base/server_clock.json';
+    http.Response res;
+    try {
+      res = await http
+          .put(Uri.parse(url),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'ts': {'.sv': 'timestamp'}}))
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      return _serverNowFromDateHeader(base);
+    }
+    // ترويسة Date من نفس الاستجابة — للتقاطع أو الاحتياط.
+    final headerMs = _parseHttpDate(res.headers['date']);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // قواعد الأمان تمنع الكتابة؟ الترويسة تكفي كمصدر خادمي موثوق.
+      if (headerMs > 0) return headerMs;
+      return _serverNowFromDateHeader(base);
+    }
+    final m = jsonDecode(res.body);
+    final ts = m is Map ? m['ts'] : null;
+    final tsMs = ts is int ? ts : (ts is num ? ts.toInt() : 0);
+    if (tsMs > 0) {
+      // تقاطع: ختم منحرف >10 دقائق عن ترويسة الخادم = مصدر مشبوه.
+      const crossTolMs = 10 * 60 * 1000;
+      if (headerMs > 0 && (tsMs - headerMs).abs() > crossTolMs) {
+        throw StateError('server-clock-cross-check-failed');
+      }
+      return tsMs;
+    }
+    if (headerMs > 0) return headerMs;
+    throw StateError('server-clock-bad-payload');
+  }
+
+  /// احتياط: وقت الخادم من ترويسة HTTP Date لطلب قراءة خفيف (لا كتابة).
+  static Future<int> _serverNowFromDateHeader(String base) async {
+    final res = await http
+        .get(Uri.parse('$base/server_clock.json'))
+        .timeout(const Duration(seconds: 15));
+    final ms = _parseHttpDate(res.headers['date']);
+    if (ms > 0) return ms;
+    throw StateError('server-clock-no-date-header');
+  }
+
+  /// تفكيك ترويسة HTTP Date (RFC 1123 بتوقيت GMT) إلى مللي ثانية UTC.
+  static int _parseHttpDate(String? v) {
+    if (v == null || v.isEmpty) return 0;
+    try {
+      return HttpDate.parse(v).millisecondsSinceEpoch;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// تفعيل التجربة عند أول إعداد سحابي لمساحة العمل:
+  ///  1) فحص فهرس /trials/$fp — بصمة سبق أن استهلكت تجربة تستأنف سجلها
+  ///     الأصلي (منع التصفير بإعادة التثبيت/مساحة جديدة).
+  ///  2) وإلا: كتابة سجل جديد بختم خادم، ثم write-back لحساب expires_at
+  ///     خادمياً (created_at + 24h) وتثبيته رقماً.
+  static Future<SubscriptionState> ensureTrialStarted(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final raw = await hardwareFingerprintRaw() ??
+        'fallback:${await ensureDeviceId(repo)}';
+    final fp = fingerprintHash(raw);
+    final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+    final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
+    // (الخطط المزدوجة) plan_type يُستنتج تلقائياً: العمل المنفرد = فردي؛
+    // مجموعة قائمة (host/member) = مؤسسة بمقاعدها الافتراضية.
+    final planType = await _detectPlanType(repo);
+    final maxDevices =
+        planType == 'enterprise' ? kDefaultEnterpriseSeats : 1;
+
+    // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل أبداً — نعيد قراءتها.
+    //     (يشمل المستخدمين القدامى الذين هُيّئت عقدتهم في إقلاع سابق.)
+    final existing = await _readJson(wsSub);
+    if (existing != null && (existing['expires_at'] is num) &&
+        (existing['expires_at'] as num) > 0) {
+      return _stateFrom(existing, await serverNowMs(backendUrl));
+    }
+    // (1-ب) إصلاح عقدة نصف مكتوبة (انقطاع بين خطوتي الكتابة): created_at
+    //     الخادمي موجود لكن expires_at لم يُثبَّت — نكمل الحساب من الختم
+    //     الأصلي نفسه دون أي تصفير للعداد.
+    if (existing != null) {
+      final priorCreated = _asMs(existing['created_at']);
+      if (priorCreated > 0) {
+        final repaired = {
+          'status': '${existing['status'] ?? 'trial'}',
+          'created_at': priorCreated,
+          'expires_at': priorCreated + kTrialDuration.inMilliseconds,
+          'is_active': existing['is_active'] != false,
+          'device_fingerprint':
+              '${existing['device_fingerprint'] ?? ''}'.isNotEmpty
+                  ? existing['device_fingerprint']
+                  : fp,
+        };
+        await _putJson(wsSub, repaired);
+        await _putJson(trialIdx, {
+          ...repaired,
+          'workspace_id': workspaceId,
+          'first_seen': priorCreated,
+        });
+        return _stateFrom(
+            Map<String, dynamic>.from(repaired), await serverNowMs(backendUrl));
+      }
+    }
+
+    // (2) فهرس البصمة العالمي: تجربة سابقة لنفس العتاد = استئناف لا تصفير.
+    final prior = await _readJson(trialIdx);
+    if (prior != null && (prior['expires_at'] is num) &&
+        (prior['expires_at'] as num) > 0) {
+      final resumed = {
+        'status': '${prior['status'] ?? 'trial'}',
+        'created_at': prior['created_at'],
+        'expires_at': prior['expires_at'],
+        'is_active': true,
+        'device_fingerprint': fp,
+        'resumed': true,
+      };
+      await _putJson(wsSub, resumed);
+      return _stateFrom(resumed, await serverNowMs(backendUrl));
+    }
+
+    // (3) تفعيل جديد: ختم خادم ثم تثبيت expires_at رقمياً من قيمة الخادم
+    //     المكتوبة فعلاً (write-back) — الحساب خادمي بالكامل.
+    await _putJson(wsSub, {
+      'plan_type': planType,
+      'status': 'trial',
+      'max_devices': maxDevices,
+      'created_at': {'.sv': 'timestamp'},
+      'expires_at': 0,
+      'is_active': true,
+      'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
+    });
+    final written = await _readJson(wsSub) ?? {};
+    final createdMs = _asMs(written['created_at']);
+    final expiresMs = createdMs + kTrialDuration.inMilliseconds;
+    final finalRec = {
+      'plan_type': planType,
+      'status': 'trial',
+      'max_devices': maxDevices,
+      'created_at': createdMs,
+      'expires_at': expiresMs,
+      'is_active': true,
+      'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
+    };
+    await _putJson(wsSub, finalRec);
+    // فهرس البصمة العالمي — صمّام منع إعادة الاستغلال.
+    await _putJson(trialIdx, {
+      ...finalRec,
+      'workspace_id': workspaceId,
+      'first_seen': createdMs,
+    });
+    return _stateFrom(finalRec, createdMs);
+  }
+
+  /// الفحص المرجعي: يقرأ العقدة ويقارن بوقت الخادم. يحدّث الكاش
+  /// ويثبّت آخر حالة ناجحة محلياً (settings) حتى يبقى العدّاد ظاهراً
+  /// بعد إغلاق التطبيق وفتحه ولو تعذرت الشبكة لحظة الإقلاع.
+  static Future<SubscriptionState> check(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    bool force = false,
+  }) async {
+    if (!force &&
+        _everChecked &&
+        _sinceCheck.elapsed < cacheTtl) {
+      // إسناد لحظي: نقدّم وقت الخادم المرجعي بعمر الكاش (ساعة أحادية
+      // لا تتأثر بتلاعب ساعة الهاتف) — العدّاد يتجدد بين الفحوصات
+      // بدل التجمد على قيمة آخر فحص.
+      return _advanced();
+    }
+    try {
+      final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+      var rec = await _readJson(wsSub);
+      final now = await serverNowMs(backendUrl);
+      if (rec == null) {
+        // لا عقدة اشتراك بعد — فعّل التجربة الآن (أول استخدام سحابي).
+        final st = await ensureTrialStarted(repo,
+            backendUrl: backendUrl, workspaceId: workspaceId);
+        _cache(st);
+        await _persist(repo, st);
+        return st;
+      }
+      final st = _stateFrom(rec, now);
+      _cache(st);
+      await _persist(repo, st);
+      return st;
+    } catch (_) {
+      // شبكة غائبة: آخر حالة معروفة في الذاكرة، وإلا (إقلاع جديد بلا
+      // شبكة) الحالة المثبّتة محلياً من آخر فحص ناجح — الشريط لا يختفي.
+      if (_everChecked) return _advanced();
+      final persisted = await _loadPersisted(repo);
+      if (persisted != null) {
+        _cache(persisted);
+        return persisted;
+      }
+      return _last;
+    }
+  }
+
+  /// آخر حالة مع تقديم وقت الخادم المرجعي بعمر الكاش (monotonic).
+  static SubscriptionState _advanced() {
+    if (!_everChecked || _last.serverNowMs <= 0) return _last;
+    return SubscriptionState(
+      status: _last.status,
+      createdAtMs: _last.createdAtMs,
+      expiresAtMs: _last.expiresAtMs,
+      isActive: _last.isActive,
+      deviceFingerprint: _last.deviceFingerprint,
+      serverNowMs: _last.serverNowMs + _sinceCheck.elapsedMilliseconds,
+    );
+  }
+
+  /// تثبيت آخر حالة ناجحة محلياً — تُقرأ عند الإقلاع بلا شبكة.
+  static Future<void> _persist(Repo repo, SubscriptionState st) async {
+    try {
+      if (st.status == 'none') return;
+      await repo.setSetting(
+          'subCachedState',
+          jsonEncode({
+            'status': st.status,
+            'plan_type': st.planType,
+            'max_devices': st.maxDevices,
+            'created_at': st.createdAtMs,
+            'expires_at': st.expiresAtMs,
+            'is_active': st.isActive,
+            'fp': st.deviceFingerprint,
+            'features': st.features.toMap(),
+            'server_now': st.serverNowMs,
+            'device_ms': DateTime.now().millisecondsSinceEpoch,
+          }));
+    } catch (_) {}
+  }
+
+  /// استرجاع الحالة المثبّتة محلياً مع إسناد تقديري لوقت الخادم
+  /// (لأغراض العرض فقط — البوابات تُحسم بفحص سحابي حقيقي عند توفر
+  /// الشبكة، ولا يُسمح للإسناد بإرجاع الساعة للخلف).
+  /// (للاختبار فقط) كشف مسار الاسترجاع المحلي — يمر عبر نفس منطق
+  /// كشف التراجع الزمني الحقيقي.
+  static Future<SubscriptionState?> debugLoadPersisted(Repo repo) =>
+      _loadPersisted(repo);
+
+  static Future<SubscriptionState?> _loadPersisted(Repo repo) async {
+    try {
+      final raw = (await repo.settings())['subCachedState'] ?? '';
+      if (raw.isEmpty) return null;
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final serverNow = _asMs(m['server_now']);
+      final deviceMs = _asMs(m['device_ms']);
+      final nowDevice = DateTime.now().millisecondsSinceEpoch;
+      // 🛡️ (كشف التلاعب) ساعة الهاتف الآن أقدم من لحظة آخر تثبيت =
+      // المستخدم أرجع الساعة للخلف وهو بلا شبكة. لا نكافئه: نعتبر
+      // الجلسة المحلية منتهية الصلاحية فوراً (المزايا المدفوعة تُقفل)
+      // حتى يتصل بالإنترنت ويحسم فحص سحابي حقيقي بساعة الخادم.
+      // هامش دقيقتين يمتص فروق NTP/التوقيت الصيفي المشروعة.
+      const rollbackGraceMs = 2 * 60 * 1000;
+      if (deviceMs > 0 && nowDevice < deviceMs - rollbackGraceMs) {
+        final rawFeat0 = m['features'];
+        return SubscriptionState(
+          status: '${m['status'] ?? 'trial'}' == 'active'
+              ? 'active' // المشترك المدفوع لا يعاقَب — الخادم يحسم لاحقاً.
+              : 'trial',
+          planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+              ? 'enterprise'
+              : 'individual',
+          maxDevices:
+              _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
+          createdAtMs: _asMs(m['created_at']),
+          expiresAtMs: _asMs(m['expires_at']),
+          isActive: m['is_active'] != false,
+          deviceFingerprint: '${m['fp'] ?? ''}',
+          features: PlanFeatures.fromMap(rawFeat0 is Map
+              ? Map<String, dynamic>.from(rawFeat0)
+              : null),
+          // إسناد وقت الخادم إلى expires_at مباشرة ⇒ expired=true
+          // للتجربة، فتُقفل كل المزايا المدفوعة حتى الفحص السحابي.
+          serverNowMs: _asMs(m['expires_at']) > 0
+              ? _asMs(m['expires_at'])
+              : serverNow,
+        );
+      }
+      // الإسناد للأمام فقط: إرجاع ساعة الهاتف لا يُرجع وقت الخادم.
+      final drift = (nowDevice - deviceMs).clamp(0, 1 << 62);
+      final rawFeat = m['features'];
+      return SubscriptionState(
+        status: '${m['status'] ?? 'trial'}',
+        planType:
+            '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+                ? 'enterprise'
+                : 'individual',
+        maxDevices: _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
+        createdAtMs: _asMs(m['created_at']),
+        expiresAtMs: _asMs(m['expires_at']),
+        isActive: m['is_active'] != false,
+        deviceFingerprint: '${m['fp'] ?? ''}',
+        features: PlanFeatures.fromMap(
+            rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
+        serverNowMs: serverNow + drift,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// البوابة المركزية: true = السحابة محظورة (التجربة انتهت وغير مدفوع).
+  /// تُستدعى قبل أي دفع/سحب/ربط/نسخ سحابي.
+  static Future<bool> isBlocked(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final st = await check(repo,
+        backendUrl: backendUrl, workspaceId: workspaceId);
+    if (st.status == 'active') return false; // اشتراك مدفوع فعّال.
+    if (st.status == 'none') return false; // لا سحابة — لا حظر.
+    return st.expired;
+  }
+
+  static void _cache(SubscriptionState st) {
+    _last = st;
+    _everChecked = true;
+    _sinceCheck
+      ..reset()
+      ..start();
+  }
+
+  /// (للاختبارات) تصفير الكاش.
+  static void debugReset() {
+    _last = SubscriptionState.none;
+    _everChecked = false;
+    _sinceCheck
+      ..stop()
+      ..reset();
+  }
+
+  static SubscriptionState _stateFrom(Map<String, dynamic> m, int nowMs) {
+    final rawFeat = m['features'];
+    return SubscriptionState(
+      status: '${m['status'] ?? 'trial'}',
+      planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+          ? 'enterprise'
+          : 'individual',
+      maxDevices: (() {
+        final v = m['max_devices'];
+        if (v is int && v > 0) return v;
+        if (v is num && v > 0) return v.toInt();
+        return '${m['plan_type'] ?? ''}' == 'enterprise'
+            ? kDefaultEnterpriseSeats
+            : 1;
+      })(),
+      createdAtMs: _asMs(m['created_at']),
+      expiresAtMs: _asMs(m['expires_at']),
+      isActive: m['is_active'] != false,
+      deviceFingerprint: '${m['device_fingerprint'] ?? ''}',
+      features: PlanFeatures.fromMap(
+          rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
+      serverNowMs: nowMs,
+    );
+  }
+
+  /// استنتاج المسار تلقائياً: مجموعة قائمة (مضيف أو عضو) = مؤسسة؛
+  /// العمل المنفرد = فردي.
+  static Future<String> _detectPlanType(Repo repo) async {
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'host' || mode == 'member') return 'enterprise';
+      // مضيف فعلي بأجهزة مقترنة أخرى (حتى لو تلكأ الوضع) = مؤسسة.
+      final db = await repo.database;
+      final peers = await db.rawQuery(
+          "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+          "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+      final c = (peers.first['c'] as int?) ?? 0;
+      if (c > 1) return 'enterprise';
+    } catch (_) {}
+    return 'individual';
+  }
+
+  /// الترقية التلقائية للمسار: بمجرد إنشاء مجموعة/فتح كود ربط لجهاز ثانٍ
+  /// يتحول الاشتراك إلى enterprise بمقاعده — دون المساس بالعداد الزمني
+  /// (created_at/expires_at يبقيان كما هما بختم الخادم الأصلي).
+  static Future<void> promoteToEnterprise(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    int? maxDevices,
+  }) async {
+    final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+    final rec = await _readJson(wsSub);
+    if (rec == null) return; // لا عقدة بعد — ensureTrialStarted سينشئها.
+    if ('${rec['plan_type'] ?? ''}' == 'enterprise') return; // مرقّاة أصلاً.
+    final seats = maxDevices ?? kDefaultEnterpriseSeats;
+    await _putJson(wsSub, {
+      ...rec,
+      'plan_type': 'enterprise',
+      'max_devices':
+          (rec['max_devices'] is num && (rec['max_devices'] as num) > seats)
+              ? rec['max_devices']
+              : seats,
+      'features': (rec['features'] is Map)
+          ? rec['features']
+          : PlanFeatures.allOn.toMap(),
+    });
+    debugReset(); // الفحص التالي يقرأ الخطة الجديدة فوراً.
+  }
+
+  static int _asMs(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v') ?? 0;
+  }
+
+  static Future<Map<String, dynamic>?> _readJson(String url) async {
+    final res =
+        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('subscription-http-${res.statusCode}');
+    }
+    final t = res.body.trim();
+    if (t.isEmpty || t == 'null') return null;
+    final d = jsonDecode(t);
+    return d is Map ? Map<String, dynamic>.from(d) : null;
+  }
+
+  static Future<void> _putJson(String url, Object body) async {
+    final res = await http
+        .put(Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('subscription-put-http-${res.statusCode}');
+    }
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [5/7] lib/ui/trial_ui.dart
+██  واجهات الاشتراك — تأكيد الشراء بالرابط المضمن + واتساب مباشر
+██  929 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// 🔒 واجهات الفترة التجريبية: نافذة الترحيب (مرة واحدة) + الشريط العلوي
+// الأنيق للوقت المتبقي + بطاقة انتهاء التجربة مع خيارات التجديد والتواصل.
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../core/cloud_config.dart';
+import '../core/sfx.dart';
+import '../core/theme.dart';
+import '../data/providers.dart';
+import '../data/sync/device_id.dart';
+import '../data/sync/subscription_guard.dart';
+import 'widgets.dart' show showSnack;
+
+/// رقم التواصل المباشر للتفعيل (واتساب المدير/الدعم).
+const String kActivationContact = '+96774190040';
+
+/// نافذة الترحيب بالفترة التجريبية — تظهر مرة واحدة فقط عند أول تفعيل.
+Future<void> showTrialWelcomeDialog(BuildContext context) async {
+  Sfx.notify();
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Icon(Icons.workspace_premium,
+                  color: Colors.white, size: 40),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '🎉 تجربتك المجانية بدأت!',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'استمتع بكافة المزايا كاملة لمدة 24 ساعة:\n'
+              '☁️ مزامنة سحابية لحظية بين أجهزتك\n'
+              '👥 ربط أجهزة الفريق وإدارة الصلاحيات\n'
+              '💾 نسخ احتياطي سحابي آمن\n\n'
+              'العدّاد يُحتسب بتوقيت الخادم — يظهر الوقت المتبقي '
+              'أعلى الشاشة الرئيسية.',
+              style: TextStyle(fontSize: 13.5, height: 1.7),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF7C3AED),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('ابدأ الاستخدام',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// صياغة الوقت المتبقي: «X يوماً وY ساعة» فوق اليومين، «X ساعة وY دقيقة»
+/// دونهما — للاستخدام الموحد في الشريط وقسم تفاصيل الاشتراك.
+String formatTrialRemaining(Duration rem) {
+  if (rem.inHours >= 48) {
+    final d = rem.inDays;
+    final h = rem.inHours % 24;
+    return h == 0 ? '$d أيام' : '$d أيام و$h ساعة';
+  }
+  final h = rem.inHours;
+  final m = rem.inMinutes % 60;
+  if (h == 0) return '$m دقيقة';
+  return '$h ساعة و$m دقيقة';
+}
+
+/// الشريط الدائم أعلى الشاشة الرئيسية (للمدير فقط): عدّاد تنازلي حي
+/// يحسب الفارق بين expires_at ووقت الخادم اللحظي، ويتجدد كل دقيقة.
+/// يبقى ظاهراً طوال سريان التجربة — عبر كل الإقلاعات — ولا يختفي إلا
+/// عند اشتراك مدفوع (active) أو بعد الانتهاء (تحل محله بطاقة الانتهاء).
+class TrialCountdownBanner extends ConsumerStatefulWidget {
+  const TrialCountdownBanner({super.key});
+
+  @override
+  ConsumerState<TrialCountdownBanner> createState() =>
+      _TrialCountdownBannerState();
+}
+
+class _TrialCountdownBannerState extends ConsumerState<TrialCountdownBanner> {
+  // نبضة عرض محلية كل 30 ثانية: تعيد بناء النص من نفس حالة المزود
+  // (التي تسند وقت الخادم لحظياً) دون انتظار دورة المزود الدقيقية.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // (المتطلب) الشريط للمدير فقط — تحصين مزدوج كبقية واجهات المالك.
+    final isOwner = (ref.watch(isOwnerProvider).valueOrNull ?? false) ||
+        ref.watch(workspaceModeProvider).valueOrNull == 'host';
+    if (!isOwner) return const SizedBox.shrink();
+    final sub = ref.watch(subscriptionProvider).valueOrNull;
+    if (sub == null || sub.status != 'trial' || sub.expiresAtMs <= 0) {
+      return const SizedBox.shrink();
+    }
+    if (sub.expired) {
+      // شريط انتهاء مصغر دائم (بدل الاختفاء): تفعيل بنقرة.
+      const color = Color(0xFFDC2626);
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.lock_clock, size: 16, color: color),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'انتهت الفترة التجريبية — المزايا السحابية متوقفة',
+                style: TextStyle(
+                    fontSize: 11.5, fontWeight: FontWeight.w700, color: color),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () => showTrialExpiredSheet(context),
+              child: const Text('تفعيل الآن',
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: color)),
+            ),
+          ],
+        ),
+      );
+    }
+    final rem = sub.remaining;
+    final urgent = rem < const Duration(hours: 3);
+    final color = urgent ? const Color(0xFFDC2626) : const Color(0xFF7C3AED);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(urgent ? Icons.hourglass_bottom : Icons.workspace_premium,
+              size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              urgent
+                  ? '⏳ تنتهي تجربتك خلال ${formatTrialRemaining(rem)} — فعّل اشتراكك الآن'
+                  : 'الفترة التجريبية: متبقٍ ${formatTrialRemaining(rem)}',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => showTrialExpiredSheet(context, expired: false),
+            child: Text(urgent ? 'تفعيل' : 'ترقية',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: color)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// (الإعدادات — للمدير) قسم «تفاصيل الاشتراك»: حالة الترخيص، تاريخ
+/// الانتهاء، الوقت المتبقي، وزر تجديد/ترقية الاشتراك.
+class SubscriptionDetailsSection extends ConsumerWidget {
+  const SubscriptionDetailsSection({super.key});
+
+  String _fmtDate(int ms) {
+    if (ms <= 0) return '—';
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year}/${two(d.month)}/${two(d.day)} — ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final subAsync = ref.watch(subscriptionProvider);
+    final sub = subAsync.valueOrNull;
+    if (sub == null || sub.status == 'none') {
+      return Card(
+        child: ListTile(
+          leading: const Icon(Icons.workspace_premium_outlined),
+          title: const Text('تفاصيل الاشتراك'),
+          subtitle: Text(
+            subAsync.isLoading
+                ? 'جارٍ تحميل حالة الاشتراك…'
+                : 'فعّل المزامنة السحابية أولاً لبدء الفترة التجريبية.',
+            style: const TextStyle(fontSize: 11.5, height: 1.5),
+          ),
+        ),
+      );
+    }
+    final (label, color, icon) = switch ((sub.status, sub.expired)) {
+      ('active', _) => (
+          'اشتراك مدفوع فعّال',
+          const Color(0xFF16A34A),
+          Icons.verified,
+        ),
+      ('trial', false) => (
+          'فترة تجريبية سارية',
+          const Color(0xFF7C3AED),
+          Icons.workspace_premium,
+        ),
+      _ => (
+          'انتهت الفترة التجريبية',
+          const Color(0xFFDC2626),
+          Icons.lock_clock,
+        ),
+    };
+    Widget row(String k, String v, {Color? vColor}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Text(k,
+                  style: TextStyle(
+                      fontSize: 12.5, color: AppColors.text2Of(context))),
+              const Spacer(),
+              Text(v,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      color: vColor ?? AppColors.textOf(context))),
+            ],
+          ),
+        );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('تفاصيل الاشتراك',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w800)),
+                      Text(label,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: color)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            row('حالة الترخيص', label, vColor: color),
+            if (sub.status != 'active') ...[
+              row('تاريخ بداية التجربة', _fmtDate(sub.createdAtMs)),
+              row('تاريخ الانتهاء', _fmtDate(sub.expiresAtMs)),
+              if (!sub.expired)
+                row('الوقت المتبقي', formatTrialRemaining(sub.remaining),
+                    vColor: color),
+            ],
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor:
+                    sub.expired ? const Color(0xFFDC2626) : color,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () =>
+                  showTrialExpiredSheet(context, expired: sub.expired),
+              icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+              label: Text(
+                sub.status == 'active'
+                    ? 'إدارة الاشتراك'
+                    : sub.expired
+                        ? 'تجديد الاشتراك الآن'
+                        : 'ترقية الاشتراك',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// بطاقة التفعيل/التجديد: تُستخدم بعد الانتهاء (تجديد) وأثناء السريان
+/// (ترقية مبكرة) — العنوان والنبرة يتكيفان مع الحالة.
+Future<void> showTrialExpiredSheet(BuildContext context,
+    {bool expired = true}) async {
+  if (expired) {
+    Sfx.warning();
+  } else {
+    Sfx.notify();
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, 20 + MediaQuery.viewInsetsOf(ctx).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(expired ? Icons.lock_clock : Icons.rocket_launch,
+              size: 52,
+              color: expired
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF7C3AED)),
+          const SizedBox(height: 12),
+          Text(
+            expired ? 'انتهت الفترة التجريبية' : 'ترقية / تجديد الاشتراك',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            expired
+                ? 'بياناتك المحلية بأمان ويمكنك مواصلة العمل عليها، لكن المزايا '
+                    'السحابية توقفت:\n'
+                    '• المزامنة اللحظية بين الأجهزة\n'
+                    '• ربط أجهزة جديدة\n'
+                    '• النسخ الاحتياطي السحابي\n\n'
+                    'فعّل اشتراكك لاستئناف كل شيء فوراً من حيث توقف.'
+                : 'فعّل اشتراكك الدائم قبل انتهاء التجربة لتستمر كل المزايا '
+                    'السحابية دون أي انقطاع:\n'
+                    '• المزامنة اللحظية بين الأجهزة\n'
+                    '• ربط أجهزة الفريق\n'
+                    '• النسخ الاحتياطي السحابي',
+            style: const TextStyle(fontSize: 13, height: 1.7),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () async {
+              final msg = expired
+                  ? 'مرحباً، انتهت فترتي التجريبية في تطبيق مدير الحسابات '
+                      'وأرغب بتفعيل الاشتراك.'
+                  : 'مرحباً، أستخدم تطبيق مدير الحسابات وأرغب بترقية/تجديد '
+                      'اشتراكي.';
+              await launchActivationWhatsApp(msg);
+            },
+            icon: const Icon(Icons.chat),
+            label: const Text('تواصل مع المدير للتفعيل (واتساب)',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () async {
+              final tel = Uri.parse('tel:$kActivationContact');
+              try {
+                await launchUrl(tel);
+              } catch (_) {}
+            },
+            icon: const Icon(Icons.call_outlined),
+            label: const Text('اتصال مباشر'),
+          ),
+          const SizedBox(height: 8),
+          // شاشة الشراء الكاملة: المزايا + إرسال كود التفعيل + تأكيد الشراء.
+          FilledButton.tonalIcon(
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const PurchaseScreen()));
+            },
+            icon: const Icon(Icons.workspace_premium),
+            label: const Text('شراء التطبيق — عرض كل المزايا',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 6),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(expired ? 'متابعة بالعمل المحلي فقط' : 'لاحقاً',
+                style: TextStyle(color: AppColors.text3Of(ctx))),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+
+/// فتح محادثة واتساب على رقم التفعيل — متانة أندرويد 11+:
+/// (1) الرابط المباشر whatsapp://send (يتطلب <queries> المصرّح بها)،
+/// (2) احتياط wa.me في المتصفح الخارجي، (3) احتياط أخير بالوضع الافتراضي.
+Future<bool> launchActivationWhatsApp(String text) async {
+  final phone = kActivationContact.replaceAll('+', '');
+  final encoded = Uri.encodeComponent(text);
+  final direct = Uri.parse('whatsapp://send?phone=$phone&text=$encoded');
+  final web = Uri.parse('https://wa.me/$phone?text=$encoded');
+  try {
+    if (await canLaunchUrl(direct)) {
+      if (await launchUrl(direct, mode: LaunchMode.externalApplication)) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  try {
+    if (await launchUrl(web, mode: LaunchMode.externalApplication)) {
+      return true;
+    }
+  } catch (_) {}
+  try {
+    return await launchUrl(web); // آخر احتياط: الوضع الافتراضي للمنصة.
+  } catch (_) {
+    return false;
+  }
+}
+
+// ==================== شاشة شراء التطبيق (الخطة الفردية) ====================
+
+/// صف ميزة في شاشة الشراء.
+class _FeatureRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+  const _FeatureRow(this.icon, this.title, this.desc);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 18, color: const Color(0xFF7C3AED)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w800)),
+                  Text(desc,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.5,
+                          color: AppColors.text2Of(context))),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// شاشة «شراء التطبيق»: مزايا الاشتراك + [إرسال كود التفعيل] عبر واتساب
+/// برسالة مجهزة تحمل معرف الجهاز + [تأكيد عملية الشراء] بفحص التفعيل
+/// السحابي فوراً — الترقية تسري دون مسح بيانات أو إعادة تثبيت.
+class PurchaseScreen extends ConsumerStatefulWidget {
+  /// اسم الميزة التي قادت المستخدم هنا (للعنوان التسويقي) — اختياري.
+  final String? lockedFeature;
+  const PurchaseScreen({super.key, this.lockedFeature});
+
+  @override
+  ConsumerState<PurchaseScreen> createState() => _PurchaseScreenState();
+}
+
+class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
+  bool _verifying = false;
+
+  Future<void> _sendActivationRequest() async {
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final devId = await ensureDeviceId(repo);
+      final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final fp = SubscriptionGuard.fingerprintHash(raw);
+      final ok = await launchActivationWhatsApp(
+          'مرحباً، أرغب بشراء اشتراك تطبيق مدير الحسابات.\n'
+          'معرف الجهاز: $devId\n'
+          'بصمة التفعيل: $fp');
+      if (!ok) throw Exception('wa-launch-failed');
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.',
+            error: true);
+      }
+    }
+  }
+
+  /// التحقق من التفعيل السحابي: فحص قسري لعقدة الاشتراك — إن قلبها
+  /// المشغّل إلى active تسري الترقية فوراً على هذا الجهاز.
+  Future<void> _confirmPurchase() async {
+    setState(() => _verifying = true);
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      // (تفعيل الفردي بنقرة) لا نشترط ضبط المزامنة يدوياً: المستخدم
+      // الفردي يتحقق عبر الرابط الرسمي المضمّن برمجياً مباشرة.
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      if (url.isEmpty) {
+        if (mounted) {
+          showSnack(context,
+              'فعّل المزامنة السحابية أولاً من الإعدادات ليكتمل التحقق.',
+              error: true);
+        }
+        return;
+      }
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      SubscriptionGuard.debugReset(); // تجاوز الكاش — قراءة حقيقية الآن.
+      final sub = await SubscriptionGuard.check(repo,
+          backendUrl: url, workspaceId: ws, force: true);
+      if (!mounted) return;
+      if (sub.isSubscribed) {
+        Sfx.success();
+        bump(ref);
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.verified,
+                color: Color(0xFF16A34A), size: 44),
+            title: const Text('🎉 تم تفعيل اشتراكك بنجاح'),
+            content: const Text(
+              'كل المزايا فُتحت فوراً على هذا الجهاز — دون مسح بيانات '
+              'أو إعادة تثبيت. شكراً لثقتك!',
+              style: TextStyle(height: 1.6),
+              textAlign: TextAlign.center,
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('ابدأ الاستخدام'),
+              ),
+            ],
+          ),
+        );
+        if (mounted) Navigator.of(context).maybePop();
+      } else {
+        Sfx.warning();
+        showSnack(
+            context,
+            'لم يُرصد تفعيل بعد. أرسل كود التفعيل عبر واتساب وسيُفعَّل '
+            'اشتراكك خلال دقائق، ثم اضغط هنا مجدداً.',
+            error: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر التحقق — تأكد من اتصال الإنترنت.',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _verifying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('شراء التطبيق')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.workspace_premium,
+                    color: Colors.white, size: 44),
+                const SizedBox(height: 8),
+                Text(
+                  widget.lockedFeature == null
+                      ? 'افتح كل المزايا — اشتراك واحد'
+                      : '«${widget.lockedFeature}» ميزة مدفوعة',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'فعّل اشتراكك وافتح كل القدرات فوراً — بياناتك تبقى كما هي.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          const _FeatureRow(Icons.category_outlined, 'التصنيفات',
+              'إنشاء واستخدام تصنيفات الحسابات والأصناف بلا حدود.'),
+          const _FeatureRow(Icons.notifications_active_outlined,
+              'الإشعارات والرسائل التلقائية',
+              'رسائل الرصيد للعملاء وتنبيهات تلقائية ذكية.'),
+          const _FeatureRow(Icons.cloud_upload_outlined,
+              'النسخ الاحتياطي السحابي',
+              'نسخة يومية آمنة ومزامنة بياناتك عبر السحابة.'),
+          const _FeatureRow(Icons.settings_backup_restore_outlined,
+              'نقاط الاسترجاع',
+              'استرجاع بياناتك لأي نقطة محددة أو دمج قواعد البيانات.'),
+          const _FeatureRow(Icons.manage_search_outlined,
+              'البحث الشامل المتقدم',
+              'بحث فوري عميق في الحسابات والعمليات والتصنيفات.'),
+          const _FeatureRow(Icons.devices_other_outlined,
+              'تعدد الأجهزة (باقة المؤسسات)',
+              'فريق كامل بأدوار وصلاحيات ومزامنة لحظية وسجل تدقيق.'),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _sendActivationRequest,
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('إرسال كود التفعيل (واتساب)',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _verifying ? null : _confirmPurchase,
+            icon: _verifying
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2))
+                : const Icon(Icons.verified_outlined),
+            label: Text(
+                _verifying
+                    ? 'جارٍ التحقق من التفعيل…'
+                    : 'اضغط هنا لتأكيد عملية الشراء',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              'بعد الدفع يُفعَّل اشتراكك سحابياً خلال دقائق — اضغط زر '
+              'التأكيد ليسري فوراً.',
+              style:
+                  TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== ودجة القفل 🔒 للمزايا المدفوعة ====================
+
+/// تغلّف أي قسم/بلاطة ميزة مدفوعة: مفتوحة = تُعرض كما هي؛ مقفلة = تبقى
+/// ظاهرة بتدرج رمادي ومؤشر 🔒، والضغط يعرض رسالة تعريفية ثم شاشة الشراء.
+class FeatureGate extends ConsumerWidget {
+  /// مفتاح الميزة في featureUnlockedProvider.
+  final String featureKey;
+
+  /// اسم الميزة للعرض في الرسالة التعريفية.
+  final String featureName;
+
+  /// وصف تسويقي قصير يظهر في الرسالة التعريفية.
+  final String description;
+  final Widget child;
+
+  const FeatureGate({
+    super.key,
+    required this.featureKey,
+    required this.featureName,
+    required this.description,
+    required this.child,
+  });
+
+  static Future<void> showLockedNotice(
+    BuildContext context, {
+    required String featureName,
+    required String description,
+  }) async {
+    Sfx.warning();
+    final buy = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.lock_outline,
+            color: Color(0xFF7C3AED), size: 42),
+        title: Text('«$featureName» ميزة مدفوعة'),
+        content: Text('$description\n\nفعّل اشتراكك لفتحها فوراً — '
+            'بياناتك الحالية تبقى كما هي دون أي مسح.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('لاحقاً'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED)),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.workspace_premium, size: 18),
+            label: const Text('شراء التطبيق'),
+          ),
+        ],
+      ),
+    );
+    if (buy == true && context.mounted) {
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PurchaseScreen(lockedFeature: featureName)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unlocked =
+        ref.watch(featureUnlockedProvider(featureKey)).valueOrNull ?? true;
+    if (unlocked) return child;
+    // مقفلة: تظل ظاهرة (تشويق) بتدرج رمادي + قفل، والضغط يفتح التعريف.
+    return Stack(
+      children: [
+        // امتصاص كل النقرات الداخلية ثم تحويلها لرسالة التعريف.
+        AbsorbPointer(
+          child: Opacity(
+            opacity: 0.45,
+            child: ColorFiltered(
+              colorFilter: const ColorFilter.matrix(<double>[
+                0.2126, 0.7152, 0.0722, 0, 0, //
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0, 0, 0, 1, 0,
+              ]),
+              child: child,
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => showLockedNotice(context,
+                  featureName: featureName, description: description),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Container(
+                  margin: const EdgeInsets.all(8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, size: 12, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text('مدفوعة',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// (باقة المؤسسات) شارة عدّاد المقاعد: «الأجهزة 3/5» — تظهر للمدير في
+/// شاشة إدارة المجموعة وتفاصيل الاشتراك.
+class SeatUsageBadge extends ConsumerWidget {
+  const SeatUsageBadge({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final usage = ref.watch(seatUsageProvider).valueOrNull;
+    if (usage == null) return const SizedBox.shrink();
+    final (connected, maxSeats) = usage;
+    final full = connected >= maxSeats;
+    final color = full ? const Color(0xFFDC2626) : const Color(0xFF0EA5E9);
+    return Tooltip(
+      message: full
+          ? 'استُنفدت مقاعد الباقة — رقِّ الاشتراك لإضافة أجهزة'
+          : 'الأجهزة المتصلة من أصل الحد الأقصى للباقة',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .10),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: .35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(full ? Icons.event_busy : Icons.devices, size: 13,
+                color: color),
+            const SizedBox(width: 5),
+            Text('الأجهزة $connected/$maxSeats',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// بوابة نقرة لميزة مدفوعة: true = مفتوحة فامضِ؛ false = عُرضت رسالة
+/// التعريف (مع زر شاشة الشراء) وعلى المستدعي التوقف.
+Future<bool> ensureFeatureUnlocked(
+  BuildContext context,
+  WidgetRef ref, {
+  required String featureKey,
+  required String featureName,
+  required String description,
+}) async {
+  bool ok = true;
+  try {
+    ok = await ref.read(featureUnlockedProvider(featureKey).future);
+  } catch (_) {}
+  if (ok) return true;
+  if (context.mounted) {
+    await FeatureGate.showLockedNotice(context,
+        featureName: featureName, description: description);
+  }
+  return false;
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [6/7] lib/data/sync/cloud_join.dart
+██  الربط السحابي — الاحتساب الذري للمقاعد من roster
+██  1569 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// الانضمام إلى المجموعة عبر السحابة (بدون شبكة محلية) + سجل الأجهزة السحابي.
+//
+// الفكرة:
+//  - المدير ينشئ «دعوة سحابية»: يرفع لقطة كاملة من بيانات المجموعة إلى
+//    {base}/workspaces/{ws}/joinSnapshot ورمز دعوة مؤقت (24 ساعة، يُستخدم مرة
+//    واحدة) إلى {base}/workspaces/{ws}/invites/{TOKEN}.
+//  - الجهاز الجديد يُدخل الرابط + رمز الدعوة (أو يمسح QR): تُحذف جميع بياناته
+//    المحلية بالكامل داخل معاملة واحدة وتُستبدل بنسخة المجموعة، ثم يصبح عضواً
+//    ويتزامن تلقائياً عبر نفس رابط السحابة الذي يستخدمه المدير.
+//  - سجل الأجهزة السحابي (roster): كل جهاز يرفع سجله (بلا أسرار) إلى
+//    {base}/workspaces/{ws}/roster/{deviceId}؛ المدير يرفع سجلات كل الأجهزة
+//    (هو المرجع في التعيين/الحظر/الطرد). عند كل سحب سحابي تُدمج السجلات
+//    بالأحدث (updated_at) فيرى المدير جهاز العضو البعيد ويعيّن له مستخدماً
+//    وصلاحيات، ويصل التعيين/الطرد للعضو خلال دورة سحب واحدة.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:http/http.dart' as http;
+import 'package:sqflite/sqflite.dart';
+
+import '../../core/models.dart';
+import '../repository.dart';
+import 'device_id.dart';
+import 'snapshot_apply.dart';
+import 'subscription_guard.dart';
+
+const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+String _newToken([int len = 8]) {
+  final rnd = Random.secure();
+  return List.generate(len, (_) => _tokenChars[rnd.nextInt(_tokenChars.length)])
+      .join();
+}
+
+/// رمز PIN رقمي من 6 خانات — لأجهزة سطح المكتب بلا كاميرا.
+String newPairPin() {
+  final rnd = Random.secure();
+  return List.generate(6, (_) => '${rnd.nextInt(10)}').join();
+}
+
+/// بيانات دعوة انضمام سحابية جاهزة للعرض/المشاركة.
+class CloudInviteInfo {
+  final String backendUrl;
+  final String workspaceId;
+  final String token;
+  final String cloudCode;
+  final DateTime expiresAt;
+
+  /// PIN بشري من 6 أرقام يظهر تحت QR — لأجهزة سطح المكتب بلا كاميرا.
+  final String pin;
+  const CloudInviteInfo({
+    required this.backendUrl,
+    required this.workspaceId,
+    required this.token,
+    required this.cloudCode,
+    required this.expiresAt,
+    this.pin = '',
+  });
+
+  /// محتوى QR: nexora://cloudjoin?url=...&ws=...&tok=...&code=...
+  String get qrContent => Uri(
+        scheme: 'nexora',
+        host: 'cloudjoin',
+        queryParameters: {
+          'url': backendUrl,
+          'ws': workspaceId,
+          'tok': token,
+          if (cloudCode.isNotEmpty) 'code': cloudCode,
+        },
+      ).toString();
+
+  static Map<String, String>? parseQr(String raw) {
+    try {
+      final uri = Uri.parse(raw);
+      if (uri.scheme != 'nexora' || uri.host != 'cloudjoin') return null;
+      return {
+        'url': uri.queryParameters['url'] ?? '',
+        'ws': uri.queryParameters['ws'] ?? 'default',
+        'tok': uri.queryParameters['tok'] ?? '',
+        'code': uri.queryParameters['code'] ?? '',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// (دفعة 57) مراقب SSE لطلبات الانضمام — يستبدل استطلاع الـ 5 ثوانٍ:
+/// قناة بث حيّة على /workspaces/$ws/joinRequests.json تُنبّه المدير
+/// لحظياً (صفر كمون) عند وصول طلب اقتران جديد. أول حدث put يحمل
+/// اللقطة الحالية فيلتقط الطلبات المعلقة سلفاً أيضاً. إعادة اتصال
+/// بتراجع أسّي 4→180 ثانية عند انقطاع الشبكة.
+///
+/// (تكملة) [nodePath] يعمّم القناة: العضو المنتظر يراقب عقدته
+/// 'joinRequests/&lt;deviceId&gt;' فيلتقط قرار المدير (approve/reject)
+/// لحظة كتابته بدل انتظار دورة الاستطلاع.
+class JoinRequestWatcher {
+  final String backendUrl;
+  final String workspaceId;
+  final String nodePath;
+  final void Function() onRequestsChanged;
+
+  JoinRequestWatcher({
+    required this.backendUrl,
+    this.workspaceId = 'default',
+    this.nodePath = 'joinRequests',
+    required this.onRequestsChanged,
+  });
+
+  bool _running = false;
+  HttpClient? _client;
+  int _retrySeconds = 4;
+
+  bool get isRunning => _running;
+
+  void start() {
+    if (_running) return;
+    _running = true;
+    unawaited(_loop());
+  }
+
+  void stop() {
+    _running = false;
+    try {
+      _client?.close(force: true);
+    } catch (_) {}
+    _client = null;
+  }
+
+  Future<void> _loop() async {
+    final root =
+        '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(workspaceId)}';
+    while (_running) {
+      try {
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 15);
+        _client = client;
+        final req = await client.getUrl(Uri.parse('$root/$nodePath.json'));
+        req.headers.set('Accept', 'text/event-stream');
+        req.headers.set('Cache-Control', 'no-cache');
+        final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw StateError('join-sse-http-${resp.statusCode}');
+        }
+        _retrySeconds = 4;
+        String? eventName;
+        await for (final line in resp
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
+          if (!_running) break;
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (eventName == 'put' || eventName == 'patch') {
+              final raw = line.substring(5).trim();
+              try {
+                final m = jsonDecode(raw);
+                if (m is Map && m['data'] != null) {
+                  onRequestsChanged();
+                }
+              } catch (_) {}
+            } else if (eventName == 'auth_revoked') {
+              break; // أعد الاتصال.
+            }
+          }
+        }
+      } catch (_) {
+        // شبكة — تراجع ثم إعادة محاولة.
+      } finally {
+        try {
+          _client?.close(force: true);
+        } catch (_) {}
+        _client = null;
+      }
+      if (!_running) break;
+      await Future<void>.delayed(Duration(seconds: _retrySeconds));
+      _retrySeconds = (_retrySeconds * 2).clamp(4, 180);
+    }
+  }
+}
+
+class CloudJoinException implements Exception {
+  final String message;
+  const CloudJoinException(this.message);
+  @override
+  String toString() => message;
+}
+
+class CloudJoin {
+  /// (دفعة 53) خطاف الطرد الذاتي: يضبطه SyncEngine عند الإقلاع ليتولى
+  /// المعالجة المركزية (إيقاف SSE/الدفع + تنظيف الجلسة + بث للواجهة)
+  /// بدل الاكتفاء بإعادة الضبط الصامتة.
+  static Future<void> Function()? onSelfEvicted;
+
+  /// 🔒 (التجربة) يرمي CloudJoinException إذا انتهت الفترة التجريبية —
+  /// حارس ربط الأجهزة الجديدة (دعوة/موافقة).
+  static Future<void> _ensureSubscriptionAllows(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final blocked = await SubscriptionGuard.isBlocked(repo,
+          backendUrl: url, workspaceId: ws);
+      if (blocked) {
+        throw const CloudJoinException(
+            '⏳ انتهت الفترة التجريبية — ربط الأجهزة الجديدة متوقف. '
+            'فعّل اشتراكك لاستئناف كل المزايا السحابية.');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {
+      // تعذر الفحص (شبكة) — لا نمنع؛ بوابة المزامنة الدورية تحسم لاحقاً.
+    }
+  }
+
+  /// (باقة المؤسسات) عدد الأجهزة المتصلة حالياً بالمجموعة: مقترنة وغير
+  /// مطرودة/ملغاة — يُعرض في عدّاد المقاعد ويُفحص قبل أي ربط جديد.
+  static Future<int> connectedDevicesCount(Repo repo) async {
+    final db = await repo.database;
+    final rows = await db.rawQuery(
+        "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+        "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+    return (rows.first['c'] as int?) ?? 0;
+  }
+
+  /// (باقة المؤسسات) بوابة المقاعد: ربط جهاز جديد يتجاوز max_devices
+  /// يُرفض برسالة المدير الواضحة. الجهاز المنضم مجدداً (سجله قائم) لا
+  /// يستهلك مقعداً جديداً. فشل قراءة العقدة سحابياً = سماح (fail-open،
+  /// بوابة المزامنة الدورية تحسم لاحقاً).
+  static Future<void> _ensureSeatAvailable(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String joiningDeviceId,
+  }) async {
+    int maxDevices;
+    Map<String, dynamic>? rosterCloud;
+    try {
+      final rec = await _getJson(
+          '${_root(backendUrl, workspaceId)}/subscription.json');
+      if (rec == null) return; // لا عقدة اشتراك بعد — لا حد مفروضاً.
+      final v = rec['max_devices'];
+      maxDevices = v is num ? v.toInt() : 0;
+      if (maxDevices <= 0) return; // غير محدد = بلا حد.
+      // (احتساب ذري) roster السحابي هو المصدر المشترك اللحظي بين كل
+      // الأجهزة — الجدول المحلي قد يتخلف عن موافقات جرت على جهاز آخر
+      // للتو، فكان يرفض/يقبل خطأً. نقرأه في نفس لحظة القرار.
+      final r = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+      if (r != null) rosterCloud = Map<String, dynamic>.from(r);
+    } catch (_) {
+      return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
+    }
+    // إعادة انضمام جهاز قائم (له مقعد في roster أو محلياً) لا تستهلك
+    // مقعداً جديداً — تجديد لسجله القديم.
+    bool activeRow(Map d) =>
+        '${d['revoked_at'] ?? ''}'.isEmpty &&
+        '${d['expelled_at'] ?? ''}'.isEmpty;
+    if (rosterCloud != null) {
+      final mine = rosterCloud[joiningDeviceId];
+      if (mine is Map && activeRow(mine)) return;
+    }
+    final db = await repo.database;
+    final existing = await db.query('devices',
+        where: "id = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' "
+            "AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [joiningDeviceId],
+        limit: 1);
+    if (existing.isNotEmpty) return;
+    // العدد الفعلي: الأكبر بين roster السحابي والمحلي (أيهما أحدث) —
+    // لا يُرفض جهاز ضمن الحصة، ولا يُقبل جهاز فوقها بسباق تحديث.
+    int current = await connectedDevicesCount(repo);
+    if (rosterCloud != null) {
+      final cloudCount = rosterCloud.values
+          .whereType<Map>()
+          .where(activeRow)
+          .length;
+      if (cloudCount > current) current = cloudCount;
+    }
+    if (current >= maxDevices) {
+      throw CloudJoinException(
+          '🪑 تم استنفاد عدد الأجهزة المسموح بها لهذه الباقة '
+          '($current/$maxDevices). يرجى ترقية الاشتراك لإضافة أجهزة جديدة.');
+    }
+  }
+
+  static String _root(String base, String ws) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
+
+  // ============ (الاسترداد السيادي) سجل منشئ المساحة الدائم ============
+
+  /// يسجل creator_device_id لمساحة العمل مرة واحدة فقط — إن كانت العقدة
+  /// موجودة لا تُلمس أبداً (غير قابلة للتغيير)، مهما تنقّلت الملكية.
+  static Future<void> registerCreatorIfAbsent(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String deviceId,
+  }) async {
+    final path = '${_root(backendUrl, workspaceId)}/creator.json';
+    final existing = await _getJson(path);
+    if (existing != null &&
+        '${existing['creator_device_id'] ?? ''}'.isNotEmpty) {
+      return; // مسجل مسبقاً — لا يتغير أبداً.
+    }
+    await _putJson(path, {
+      'creator_device_id': deviceId,
+      'registered_at': DateTime.now().toIso8601String(),
+      'immutable': true,
+    }, timeout: const Duration(seconds: 20));
+    // نسخة محلية للعرض السريع دون شبكة.
+    try {
+      await repo.setSetting('creatorDeviceId', deviceId);
+    } catch (_) {}
+  }
+
+  /// يجلب معرف جهاز منشئ المساحة من السحابة (أو '' إن لم يسجل بعد).
+  static Future<String> fetchCreatorDeviceId({
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final rec =
+        await _getJson('${_root(backendUrl, workspaceId)}/creator.json');
+    return '${rec?['creator_device_id'] ?? ''}';
+  }
+
+  static Future<Map<String, dynamic>?> _getJson(String url) async {
+    final res =
+        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
+    }
+    final t = res.body.trim();
+    if (t.isEmpty || t == 'null') return null;
+    final d = jsonDecode(t);
+    return d is Map ? Map<String, dynamic>.from(d) : null;
+  }
+
+  static Future<void> _putJson(String url, Object body,
+      {Duration timeout = const Duration(seconds: 60)}) async {
+    final res = await http
+        .put(Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body))
+        .timeout(timeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
+    }
+  }
+
+  static Future<void> _delete(String url) async {
+    try {
+      await http.delete(Uri.parse(url)).timeout(const Duration(seconds: 20));
+    } catch (_) {}
+  }
+
+  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم (يُعاد المحاولة
+  /// مرة واحدة). يُستخدم لإبطال توكن الدعوة — تركه حياً ثغرة أمنية.
+  static Future<void> _deleteStrict(String url) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final res = await http
+            .delete(Uri.parse(url))
+            .timeout(const Duration(seconds: 20));
+        // فيربيس يرد 200 على حذف مسار (حتى غير الموجود) — أي 2xx يكفي.
+        if (res.statusCode >= 200 && res.statusCode < 300) return;
+      } catch (_) {
+        // خطأ شبكة — جرّب مرة أخيرة.
+      }
+    }
+    throw const CloudJoinException(
+        'تعذّر إبطال رمز الدعوة على السحابة — أُلغي الانضمام حفاظاً على الأمان. '
+        'تحقق من الاتصال وأعد المحاولة بدعوة جديدة.');
+  }
+
+  static void _validateHttps(String url) {
+    final u = Uri.tryParse(url.trim());
+    if (u == null || !u.hasScheme || !u.isScheme('https')) {
+      throw const CloudJoinException(
+          'رابط قاعدة البيانات يجب أن يبدأ بـ https://');
+    }
+  }
+
+  /// سجل جهاز بصيغة آمنة للرفع (بلا أسرار ولا رموز اقتران).
+  static Map<String, Object?> _safeDeviceRow(Map<String, Object?> d) {
+    final m = Map<String, Object?>.from(d);
+    m['auth_secret'] = '';
+    m['pair_token'] = '';
+    m['pair_token_exp'] = '';
+    // (دفعة 58) أعمدة LAN أُسقطت من المخطط — صفوف roster من إصدارات
+    // أقدم قد تحملها فتفشل الإدراج/التحديث.
+    m.remove('ip_address');
+    m.remove('port');
+    return m;
+  }
+
+  // ==================== إنشاء الدعوة (المدير) ====================
+
+  /// يرفع لقطة كاملة + رمز دعوة صالح 24 ساعة، ويعيد بيانات الدعوة للعرض.
+  static Future<CloudInviteInfo> createInvite(Repo repo) async {
+    // الملكية الفعلية (is_owner) هي الحكم — لا وضع sync_meta وحده:
+    // خلل سابق كان ينسخ workspaceMode من جهاز عضو أثناء المصالحة فيقلب
+    // جهاز المدير إلى «member» زوراً. إن كنا المالك فعلاً نصلح الوضع ذاتياً.
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
+      throw const CloudJoinException(
+          'إنشاء دعوة سحابية متاح لجهاز المدير (المالك) فقط.');
+    }
+    // 🔒 (التجربة) انتهاء الفترة يمنع ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
+    // (الخطط المزدوجة) فتح كود ربط لجهاز ثانٍ = تحول تلقائي لمسار
+    // المؤسسات بمقاعده — دون المساس بالعداد الزمني للتجربة.
+    try {
+      final st0 = await repo.settings();
+      final url0 = (st0['cloudBackendUrl'] ?? '').trim();
+      if (url0.isNotEmpty) {
+        final db0 = await repo.database;
+        final wsRows0 = await db0.query('workspaces', limit: 1);
+        final ws0 =
+            wsRows0.isNotEmpty ? '${wsRows0.first['id']}' : 'default';
+        await SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url0, workspaceId: ws0);
+        // 🪑 حد المقاعد: لا معنى لدعوة جديدة والمقاعد مستنفدة — نرفض
+        // مبكراً برسالة المدير بدل فشل متأخر عند موافقة العضو.
+        await _ensureSeatAvailable(repo,
+            backendUrl: url0,
+            workspaceId: ws0,
+            joiningDeviceId: '__new__');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {}
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      final db0 = await repo.database;
+      await db0.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    final st = await repo.settings();
+    final url = (st['cloudBackendUrl'] ?? '').trim();
+    if (url.isEmpty) {
+      throw const CloudJoinException(
+          'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');
+    }
+    _validateHttps(url);
+
+    final db = await repo.database;
+    final wsRows = await db.query('workspaces', limit: 1);
+    final ws = wsRows.isNotEmpty ? (wsRows.first['id'] as String) : 'default';
+    final ourId = await ensureDeviceId(repo);
+
+    // لقطة بنفس بنية لقطة الاقتران المحلي (تُطبَّق بنفس الدالة عند العضو).
+    final snapshot = <String, Object?>{};
+    const tables = [
+      'accounts',
+      'transactions',
+      'transaction_items',
+      'vouchers',
+      'currencies',
+      'categories',
+      'item_categories',
+      'items',
+      'stock_moves',
+      'conversations',
+      'messages',
+      'users',
+      'trash',
+      'activity',
+      'workspaces',
+      'devices',
+    ];
+    for (final t in tables) {
+      final rows = await db.query(t);
+      snapshot[t] = rows.map((source) {
+        final row = Map<String, Object?>.from(source);
+        if (t == 'users') {
+          row['pin'] = '';
+          row['password'] = '';
+        }
+        if (t == 'devices') {
+          // عبر السحابة لا نوزّع أسرار الأجهزة إطلاقاً — المصادقة السحابية
+          // لا تحتاجها، والدعوة نفسها هي إثبات الانضمام.
+          row['auth_secret'] = '';
+          row['pair_token'] = '';
+          row['pair_token_exp'] = '';
+        }
+        return row;
+      }).toList();
+    }
+    snapshot['workspaceMode'] = 'member';
+    snapshot['hostDeviceId'] = ourId;
+    // إعدادات المؤسسة (اسم/عنوان/تذييل السند...) تُنقل مع اللقطة لتحل
+    // محل إعدادات الجهاز المنضم القديمة — «حذف كامل» يشمل هويته السابقة.
+    try {
+      final orgRows = await db.query('settings',
+          where:
+              "key IN ('businessName','businessNameEn','address','phone','whatsapp','email','managerName','voucherFooter','defaultVoucherNotes')");
+      snapshot['orgSettings'] = {
+        for (final r in orgRows) '${r['key']}': r['value']
+      };
+    } catch (_) {}
+
+    final now = DateTime.now();
+    final root = _root(url, ws);
+    await _putJson('$root/joinSnapshot.json', {
+      'createdAt': now.toIso8601String(),
+      'hostDeviceId': ourId,
+      // (دفعة 57) علامة الضغط: كل عمليات السحابة الأقدم من هذه اللحظة
+      // أصبحت مادةً مجسّدة داخل هذه اللقطة — روتين الضغط الدوري يحذفها
+      // بأمان (المنضمون الجدد يرتوون من اللقطة لا من إعادة تشغيل السجل).
+      'compacted_through_ts': now.millisecondsSinceEpoch,
+      'data': snapshot,
+    });
+    // نسجّل العلامة محلياً أيضاً ليعتمدها روتين الضغط.
+    try {
+      final db2 = await repo.database;
+      await db2.insert(
+          'sync_meta',
+          {
+            'key': 'snapshotThroughTs:$ws',
+            'value': '${now.millisecondsSinceEpoch}',
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (_) {}
+
+    // (الاسترداد السيادي) تسجيل منشئ المساحة مرة واحدة وإلى الأبد:
+    // creator_device_id يُكتب فقط إن لم يوجد — لا يتغير مع نقل الملكية
+    // أبداً، وهو صمام الأمان الأخير لاسترداد المجموعة. المجموعات القائمة
+    // قبل هذه الميزة تُسجَّل بأثر رجعي: المالك الحالي وقت أول دعوة جديدة.
+    try {
+      await registerCreatorIfAbsent(repo,
+          backendUrl: url, workspaceId: ws, deviceId: ourId);
+    } catch (_) {}
+
+    final token = _newToken();
+    final pin = newPairPin();
+    // TTL دقيق: 15 دقيقة لمسار الموافقة التفاعلي (كانت 24 ساعة — نافذة
+    // أوسع من اللازم أمنياً بعد اعتماد موافقة المدير الصريحة).
+    final expires = now.add(const Duration(minutes: 15));
+    await _putJson('$root/invites/$token.json', {
+      'createdAt': now.toIso8601String(),
+      'expiresAt': expires.toIso8601String(),
+      'ws': ws,
+      'pin': pin,
+    }, timeout: const Duration(seconds: 20));
+
+    // رفع سجل الأجهزة أيضاً حتى تكون الحالة السحابية كاملة قبل انضمام العضو.
+    try {
+      final devices = await db.query('devices');
+      for (final d in devices) {
+        await _putJson('$root/roster/${Uri.encodeComponent('${d['id']}')}.json',
+            _safeDeviceRow(d),
+            timeout: const Duration(seconds: 20));
+      }
+    } catch (_) {}
+
+    return CloudInviteInfo(
+      backendUrl: url,
+      workspaceId: ws,
+      token: token,
+      cloudCode: (st['cloudCode'] ?? '').trim(),
+      expiresAt: expires,
+      pin: pin,
+    );
+  }
+
+  // ==================== الانضمام (الجهاز الجديد) ====================
+
+  /// ينضم إلى المجموعة عبر السحابة:
+  /// يتحقق من الدعوة ← يجلب اللقطة ← يحذف كل البيانات المحلية ويستبدلها
+  /// بنسخة المجموعة (معاملة واحدة) ← يضبط إعدادات السحابة بنفس رابط المدير
+  /// ← يسجل جهازه في سجل الأجهزة السحابي.
+  static Future<void> join(
+    Repo repo, {
+    required String backendUrl,
+    required String token,
+    String workspaceId = 'default',
+    String cloudCode = '',
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final tok = token.trim().toUpperCase();
+    if (tok.isEmpty) {
+      throw const CloudJoinException('أدخل رمز الدعوة.');
+    }
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      throw const CloudJoinException(
+          'هذا الجهاز عضو في مجموعة قائمة بالفعل — لا يمكن الانضمام لمجموعة أخرى.');
+    }
+
+    final root = _root(url, workspaceId);
+    final invite = await _getJson('$root/invites/$tok.json');
+    if (invite == null) {
+      throw const CloudJoinException(
+          'رمز الدعوة غير صحيح أو انتهت صلاحيته أو استُخدم من قبل.');
+    }
+    final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
+    if (exp == null || DateTime.now().isAfter(exp)) {
+      await _delete('$root/invites/$tok.json');
+      throw const CloudJoinException(
+          'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
+    }
+    // إبطال فوري وحتمي (استخدام لمرة واحدة): تُحذف الدعوة الآن — قبل تطبيق
+    // اللقطة — حتى لا يستطيع أي جهاز آخر (أو إعادة تشغيل لنفس الرابط)
+    // استعمال الرمز نفسه أثناء أو بعد الانضمام. الحذف شرط للمتابعة:
+    // إن تعذّر إبطال الدعوة يُلغى الانضمام كله (لا نترك رمزاً حياً قابلاً
+    // لإعادة الاستخدام). فشل الانضمام يتطلب دعوة جديدة من المدير —
+    // أرخص أمنياً من دعوة مفتوحة.
+    await _deleteStrict('$root/invites/$tok.json');
+
+    final snapRec = await _getJson('$root/joinSnapshot.json');
+    final snapData = snapRec?['data'];
+    if (snapData is! Map) {
+      throw const CloudJoinException(
+          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
+    }
+    final snap = Map<String, Object?>.from(snapData);
+
+    final db = await repo.database;
+    final ourId = await ensureDeviceId(repo);
+    // نلتقط سجل جهازنا قبل الاستبدال: إعادة إدراج workspaces بنمط REPLACE
+    // قد تحذف سجلنا عبر قيد ON DELETE CASCADE، فنعيد إنشاءه بعد اللقطة.
+    final ourRowBefore = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourId], limit: 1);
+    // حذف كامل البيانات المحلية واستبدالها بنسخة المجموعة (معاملة واحدة):
+    // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
+    await SnapshotApply.applySnapshot(() async => db, ourId, snap);
+
+    // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
+    final ourRowAfter = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourId], limit: 1);
+    if (ourRowAfter.isEmpty) {
+      final wsRows2 = await db.query('workspaces', limit: 1);
+      final ws2 =
+          wsRows2.isNotEmpty ? (wsRows2.first['id'] as String) : workspaceId;
+      final nowIso = DateTime.now().toIso8601String();
+      final before = ourRowBefore.isNotEmpty
+          ? Map<String, Object?>.from(ourRowBefore.first)
+          : <String, Object?>{};
+      await db.insert(
+          'devices',
+          {
+            'id': ourId,
+            'workspace_id': ws2,
+            'name': before['name'] ?? kDefaultMemberName,
+            'platform': before['platform'] ?? '',
+            'auth_secret': before['auth_secret'] ?? '',
+            'is_paired': 1,
+            'is_owner': 0,
+            'revoked_at': '',
+            'expelled_at': '',
+            'last_seen_at': nowIso,
+            'created_at': '${before['created_at'] ?? nowIso}',
+            'updated_at': nowIso,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+
+    // إعدادات السحابة بنفس رابط المدير حتى تعمل المزامنة الفورية مباشرة.
+    await repo.setSetting('cloudBackendUrl', url);
+    await repo.setSetting('cloudAutoSync', '1');
+    // (الاسترداد السيادي) كاش سجل المنشئ الدائم محلياً: تتحقق منه
+    // apply_remote عند وصول عملية creator_recovery.
+    try {
+      final creator = await fetchCreatorDeviceId(
+          backendUrl: url, workspaceId: workspaceId);
+      if (creator.isNotEmpty) {
+        await repo.setSetting('creatorDeviceId', creator);
+      }
+    } catch (_) {}
+    if (cloudCode.trim().isNotEmpty) {
+      await repo.setSetting('cloudCode', cloudCode.trim().toUpperCase());
+    }
+    // صفّر كل مؤشرات المزامنة (سحابة/roster/LAN) حتى يُعاد تشغيل كامل
+    // تاريخ العمليات فوق اللقطة (idempotent) — الترطيب النظيف يبدأ من
+    // إصدار اللقطة بالضبط قبل الاستماع للعمليات الجديدة.
+    await db.delete('sync_meta',
+        where: "key LIKE 'lastCloudTs:%' OR key LIKE 'lastRosterPush:%' "
+            "OR key LIKE 'lastLanTs:%'");
+
+    // مضاد الأشباح: deviceId حتمي من بصمة العتاد — إعادة التثبيت تعيد
+    // إنتاج نفس المعرف. إن وُجد سجلنا القديم في roster السحابي (بدوره
+    // وصلاحياته) نحييه: نستعيد user_id والاسم ونمسح أي طرد قديم بدل
+    // إنشاء جهاز مكرر جديد.
+    try {
+      final oldRec = await _getJson(
+          '$root/roster/${Uri.encodeComponent(ourId)}.json');
+      if (oldRec != null && oldRec.isNotEmpty) {
+        final nowIso = DateTime.now().toIso8601String();
+        await db.update(
+          'devices',
+          {
+            'user_id': oldRec['user_id'],
+            'name': (oldRec['name'] as String?)?.trim().isNotEmpty == true
+                ? oldRec['name']
+                : null,
+            'revoked_at': '',
+            'expelled_at': '',
+            'is_paired': 1,
+            'last_seen_at': nowIso,
+            'updated_at': nowIso,
+          }..removeWhere((k, v) => v == null),
+          where: 'id = ?',
+          whereArgs: [ourId],
+        );
+      }
+    } catch (_) {}
+
+    // سجّل جهازنا في السجل السحابي حتى يراه المدير ويعيّن له الصلاحيات.
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourId], limit: 1);
+    if (own.isNotEmpty) {
+      try {
+        await _putJson(
+            '$root/roster/${Uri.encodeComponent(ourId)}.json',
+            _safeDeviceRow(own.first),
+            timeout: const Duration(seconds: 20));
+      } catch (_) {}
+    }
+
+    // الدعوة تُستخدم مرة واحدة (حُذفت مبكراً؛ هذا حذف احتياطي idempotent).
+    try {
+      await _delete('$root/invites/$tok.json');
+    } catch (_) {}
+  }
+
+  // ==================== سجل الأجهزة السحابي (roster) ====================
+
+  /// دمج + رفع سجل الأجهزة. تُستدعى مع كل سحب سحابي:
+  ///  - الدمج: أي سجل سحابي أحدث من المحلي (updated_at) يُطبَّق محلياً
+  ///    (بلا مساس بأسرار المصادقة المحلية ولا بملكية جهازنا).
+  ///  - الرفع: المدير يرفع سجلات كل الأجهزة التي تغيّرت، والعضو يرفع سجله فقط.
+  static Future<bool> syncRoster(
+    Repo repo,
+    Database db, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+    if (ourId.isEmpty) return false;
+    final isOwner = await repo.isWorkspaceOwner();
+    var changed = false;
+
+    // 1) الدمج من السحابة.
+    Map<String, dynamic>? remote;
+    try {
+      remote = await _getJson('$root/roster.json');
+    } catch (_) {
+      remote = null;
+    }
+    if (remote != null && remote.isNotEmpty) {
+      final localRows = await db.query('devices');
+      final localById = {
+        for (final r in localRows) '${r['id']}': Map<String, Object?>.from(r)
+      };
+      final wsRows = await db.query('workspaces', limit: 1);
+      final localWs =
+          wsRows.isNotEmpty ? (wsRows.first['id'] as String) : workspaceId;
+      var sawNewPeer = false;
+      for (final entry in remote.entries) {
+        final v = entry.value;
+        if (v is! Map) continue;
+        final r = Map<String, Object?>.from(v);
+        final id = '${r['id'] ?? entry.key}';
+        if (id.isEmpty) continue;
+        final remoteUpd = '${r['updated_at'] ?? ''}';
+        final local = localById[id];
+        if (id == ourId) {
+          // سجلنا: المدير هو المرجع في التعيين/التسمية/الحظر/الطرد فقط.
+          if (local == null) continue;
+          final localUpd = '${local['updated_at'] ?? ''}';
+          if (remoteUpd.compareTo(localUpd) <= 0) continue;
+          await db.update(
+            'devices',
+            {
+              'user_id': r['user_id'],
+              'name': r['name'] ?? local['name'],
+              'revoked_at': r['revoked_at'] ?? '',
+              'expelled_at': r['expelled_at'] ?? '',
+              'is_paired': r['is_paired'] ?? local['is_paired'],
+              'updated_at': remoteUpd,
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          changed = true;
+          // إبطال فوري من جهة العميل: المدير طردنا عبر السحابة →
+          // مسح بيانات المجموعة والعودة مستقلين + شاشة الإعداد الأول.
+          final expelledNow = '${r['expelled_at'] ?? ''}'.isNotEmpty ||
+              '${r['revoked_at'] ?? ''}'.isNotEmpty;
+          if (expelledNow && !isOwner) {
+            try {
+              // (دفعة 53) الخطاف المركزي أولاً: المحرك يوقف SSE/الدفع،
+              // ينظف الجلسة، يعيد الضبط، ويبث onDeviceEvicted للواجهة.
+              final hook = onSelfEvicted;
+              if (hook != null) {
+                await hook();
+              } else {
+                await repo.resetToStandaloneAfterExpulsion();
+              }
+            } catch (_) {}
+            return true;
+          }
+          continue;
+        }
+        if (local == null) {
+          final row = _safeDeviceRow(r);
+          // (دفعة 56) user_role حقل عرضي للشارات فقط — ليس عموداً في
+          // جدول devices، وإبقاؤه يفشل الإدراج بصمت ويعطل مزامنة السجل.
+          row.remove('user_role');
+          row['id'] = id;
+          row['workspace_id'] = localWs;
+          row['created_at'] =
+              '${r['created_at'] ?? DateTime.now().toIso8601String()}';
+          row['updated_at'] = remoteUpd.isEmpty
+              ? DateTime.now().toIso8601String()
+              : remoteUpd;
+          try {
+            await db.insert('devices', row,
+                conflictAlgorithm: ConflictAlgorithm.ignore);
+            changed = true;
+            sawNewPeer = true;
+          } catch (_) {}
+        } else {
+          final localUpd = '${local['updated_at'] ?? ''}';
+          if (remoteUpd.compareTo(localUpd) <= 0) continue;
+          final row = _safeDeviceRow(r);
+          row.remove('id');
+          row.remove('created_at');
+          // (دفعة 56) حقل عرضي — ليس عموداً في devices (انظر أعلاه).
+          row.remove('user_role');
+          // لا نلمس سرّ المصادقة المحلي (قد يكون تعلّمه عبر اقتران LAN).
+          row.remove('auth_secret');
+          row['workspace_id'] = localWs;
+          try {
+            await db.update('devices', row, where: 'id = ?', whereArgs: [id]);
+            changed = true;
+            // طرد كامل: انتقال القرين إلى مطرود يطهّر محادثته الفردية
+            // من قوائم الدردشة لدى كل الأجهزة التي تصلها المصالحة.
+            final wasExpelled =
+                '${local['expelled_at'] ?? ''}'.isNotEmpty ||
+                    '${local['revoked_at'] ?? ''}'.isNotEmpty;
+            final nowExpelled = '${row['expelled_at'] ?? ''}'.isNotEmpty ||
+                '${row['revoked_at'] ?? ''}'.isNotEmpty;
+            if (nowExpelled && !wasExpelled) {
+              try {
+                await repo.purgePeerChat(id);
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+      }
+      // مدير مستقل انضم إليه أول عضو عن بُعد → المساحة أصبحت مُدارة.
+      if (isOwner && sawNewPeer) {
+        final mode = await repo.workspaceMode();
+        if (mode == 'standalone') {
+          await db.insert(
+              'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+    }
+
+    // 2) الرفع إلى السحابة (التغييرات فقط منذ آخر رفع).
+    try {
+      final metaKey = 'lastRosterPush:$workspaceId';
+      final metaRows = await db.query('sync_meta',
+          where: 'key = ?', whereArgs: [metaKey], limit: 1);
+      final lastPush =
+          metaRows.isEmpty ? '' : '${metaRows.first['value'] ?? ''}';
+      // (دفعة 56) ضمّ دور المستخدم المرتبط لكل جهاز — حتى تعرض بقية
+      // الأجهزة شارة الدور الصحيحة فور تغييرها من المدير.
+      final rows = isOwner
+          ? await db.rawQuery('SELECT d.*, u.role AS user_role '
+              'FROM devices d LEFT JOIN users u ON u.id = d.user_id')
+          : await db.rawQuery(
+              'SELECT d.*, u.role AS user_role FROM devices d '
+              'LEFT JOIN users u ON u.id = d.user_id WHERE d.id = ?',
+              [ourId]);
+      var maxUpd = lastPush;
+      for (final d in rows) {
+        final upd = '${d['updated_at'] ?? ''}';
+        if (upd.compareTo(lastPush) <= 0) continue;
+        await _putJson(
+            '$root/roster/${Uri.encodeComponent('${d['id']}')}.json',
+            _safeDeviceRow(Map<String, Object?>.from(d)),
+            timeout: const Duration(seconds: 20));
+        if (upd.compareTo(maxUpd) > 0) maxUpd = upd;
+      }
+      if (maxUpd.compareTo(lastPush) > 0) {
+        await db.insert('sync_meta', {'key': metaKey, 'value': maxUpd},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    } catch (_) {}
+
+    return changed;
+  }
+
+  // ══════════ خط أنابيب الانضمام بموافقة المدير (دفعة 51) ══════════
+  //
+  // التدفق: الجهاز الجديد يتحقق من الدعوة (QR أو PIN من 6 أرقام) ثم يدفع
+  // طلباً إلى /workspaces/$ws/joinRequests/$deviceId ويدخل حالة
+  // «بانتظار موافقة المدير» — حارس صارم: لا سحب لللقطة ولا أي بيانات
+  // قبل الموافقة. المدير يرى الطلب، يعيّن دوراً، ويوافق/يرفض. عند
+  // الموافقة فقط يُنفَّذ الترطيب النظيف (join الكامل).
+
+  static String requestPath(String base, String ws, String deviceId) =>
+      '${_root(base, ws)}/joinRequests/${Uri.encodeComponent(deviceId)}.json';
+
+  /// (الجهاز الجديد — خطوة 3) التحقق من الدعوة/PIN ودفع طلب الانضمام.
+  /// لا يمس أي بيانات محلية ولا يسحب اللقطة — يسجّل الطلب فقط.
+  /// يتحقق من التوكن الكامل أو رمز PIN المرافق للدعوة (invite.pin).
+  static Future<void> requestJoin(
+    Repo repo, {
+    required String backendUrl,
+    required String tokenOrPin,
+    required String deviceName,
+    String workspaceId = 'default',
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final input = tokenOrPin.trim().toUpperCase();
+    if (input.isEmpty) throw const CloudJoinException('أدخل رمز الاقتران.');
+    if (deviceName.trim().isEmpty) {
+      throw const CloudJoinException('أدخل اسم الجهاز أولاً.');
+    }
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      throw const CloudJoinException(
+          'هذا الجهاز عضو في مجموعة قائمة بالفعل.');
+    }
+    final root = _root(url, workspaceId);
+    // مطابقة الدعوة: توكن كامل، أو PIN من 6 أرقام (نمسح كل الدعوات الحية).
+    String? matchedToken;
+    Map<String, dynamic>? invite;
+    if (RegExp(r'^\d{6}$').hasMatch(input)) {
+      final all = await _getJson('$root/invites.json');
+      if (all != null) {
+        for (final e in all.entries) {
+          final v = e.value;
+          if (v is Map && '${v['pin'] ?? ''}' == input) {
+            matchedToken = e.key;
+            invite = Map<String, dynamic>.from(v);
+            break;
+          }
+        }
+      }
+    } else {
+      invite = await _getJson('$root/invites/$input.json');
+      if (invite != null) matchedToken = input;
+    }
+    if (invite == null || matchedToken == null) {
+      throw const CloudJoinException(
+          'رمز الاقتران غير صحيح أو انتهت صلاحيته.');
+    }
+    final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
+    if (exp == null || DateTime.now().isAfter(exp)) {
+      await _delete('$root/invites/$matchedToken.json');
+      throw const CloudJoinException(
+          'انتهت صلاحية رمز الاقتران — اطلب من المدير رمزاً جديداً.');
+    }
+    // حفظ اسم الجهاز محلياً + دفع الطلب.
+    await setDeviceName(repo, deviceName.trim());
+    final ourId = await ensureDeviceId(repo);
+    final fp = await hardwareFingerprintRaw();
+    await _putJson(requestPath(url, workspaceId, ourId), {
+      'deviceId': ourId,
+      'deviceName': deviceName.trim(),
+      'fingerprint': fp == null ? '' : fp.hashCode.toRadixString(16),
+      'platform': Platform.operatingSystem,
+      'token': matchedToken,
+      'status': 'pending',
+      'requestedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
+    // حفظ سياق الانتظار محلياً لاستئناف الاستطلاع بعد إعادة التشغيل.
+    await repo.setSetting('pendingJoin.url', url);
+    await repo.setSetting('pendingJoin.ws', workspaceId);
+    await repo.setSetting('pendingJoin.token', matchedToken);
+  }
+
+  /// (الجهاز الجديد — استطلاع الحالة) يعيد: pending | approved | rejected |
+  /// missing. عند approved تُعاد أيضاً بيانات الدور المعيّن.
+  static Future<Map<String, String>> pollJoinStatus(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final rec =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    if (rec == null) return {'status': 'missing'};
+    return {
+      'status': '${rec['status'] ?? 'pending'}',
+      'role': '${rec['role'] ?? ''}',
+      'token': '${rec['token'] ?? ''}',
+    };
+  }
+
+  /// (الجهاز الجديد — خطوة 4ب) بعد الموافقة: الترطيب النظيف الكامل —
+  /// مسح ذري + لقطة + مؤشرات. ثم حذف الطلب من السحابة (نظافة).
+  static Future<void> completeApprovedJoin(
+    Repo repo, {
+    required String backendUrl,
+    required String token,
+    String workspaceId = 'default',
+    String cloudCode = '',
+  }) async {
+    await join(repo,
+        backendUrl: backendUrl,
+        token: token,
+        workspaceId: workspaceId,
+        cloudCode: cloudCode);
+    final ourId = await ensureDeviceId(repo);
+    try {
+      await _delete(requestPath(backendUrl, workspaceId, ourId));
+    } catch (_) {}
+    // تنظيف سياق الانتظار.
+    final db = await repo.database;
+    await db.delete('settings',
+        where: "key LIKE 'pendingJoin.%'");
+  }
+
+  /// (دفعة 58 — متطلب 11) «طلب مغادرة»: العضو يكتب طلباً في نفس عقدة
+  /// /joinRequests بوسم kind=leave — يصل للمدير لحظياً عبر نفس قناة SSE
+  /// ليقرّه (طرد نظيف + بث شاهدة) أو يرفضه.
+  /// (إصلاح تسليم الإدارة) رفع فوري لعلم الملكية الجديد إلى roster:
+  /// عقدة المالك الجديد تُرفع بـ is_owner=1 ودور admin، وعقدة المدير
+  /// السابق بـ is_owner=0 — حتى تلتقط المصالحة الدورية على كل الأجهزة
+  /// الملكية الجديدة حتى لو سبقت وصولَ العمليات.
+  static Future<void> pushOwnershipToRoster(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String newOwnerDeviceId,
+    required String previousOwnerDeviceId,
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final root = _root(url, workspaceId);
+    final db = await repo.database;
+    for (final id in [newOwnerDeviceId, previousOwnerDeviceId]) {
+      final rows = await db.rawQuery(
+          'SELECT d.*, u.role AS user_role FROM devices d '
+          'LEFT JOIN users u ON u.id = d.user_id WHERE d.id = ?',
+          [id]);
+      if (rows.isEmpty) continue;
+      await _putJson(
+          '$root/roster/${Uri.encodeComponent(id)}.json',
+          _safeDeviceRow(Map<String, Object?>.from(rows.first)),
+          timeout: const Duration(seconds: 20));
+    }
+  }
+
+  static Future<void> requestLeave(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final url = backendUrl.trim();
+    _validateHttps(url);
+    final ourId = await ensureDeviceId(repo);
+    final db = await repo.database;
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [ourId], limit: 1);
+    final name = own.isNotEmpty ? '${own.first['name'] ?? ''}'.trim() : '';
+    await _putJson(requestPath(url, workspaceId, ourId), {
+      'deviceId': ourId,
+      'deviceName': name.isEmpty ? 'جهاز عضو' : name,
+      'kind': 'leave',
+      'platform': Platform.operatingSystem,
+      'status': 'pending',
+      'requestedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
+  }
+
+  /// (المدير) حذف طلب انضمام/مغادرة من السحابة (رفض أو تنظيف).
+  static Future<void> deleteJoinRequest({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required String deviceId,
+  }) =>
+      _delete(requestPath(backendUrl, workspaceId, deviceId));
+
+  /// (المدير) جلب طلبات الانضمام المعلّقة.
+  static Future<List<Map<String, Object?>>> fetchJoinRequests(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final all =
+        await _getJson('${_root(backendUrl, workspaceId)}/joinRequests.json');
+    if (all == null) return const [];
+    final out = <Map<String, Object?>>[];
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final m = Map<String, Object?>.from(v);
+      if ('${m['status'] ?? 'pending'}' != 'pending') continue;
+      m['deviceId'] = '${m['deviceId'] ?? e.key}';
+      out.add(m);
+    }
+    out.sort((a, b) =>
+        '${a['requestedAt']}'.compareTo('${b['requestedAt']}'));
+    return out;
+  }
+
+  /// (المدير — خطوة 4أ) الموافقة: تعيين الدور + تسجيل الجهاز في roster
+  /// + تحديث الطلب إلى approved ليستلمه الجهاز المنتظر فوراً.
+  static Future<void> approveJoinRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    required String deviceName,
+    required String roleCode,
+    String workspaceId = 'default',
+  }) async {
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
+      throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
+    }
+    // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
+    // 🪑 (باقة المؤسسات) حد المقاعد max_devices: الموافقة على جهاز يتجاوز
+    // الحد تُرفض برسالة واضحة للمدير.
+    await _ensureSeatAvailable(repo,
+        backendUrl: backendUrl,
+        workspaceId: workspaceId,
+        joiningDeviceId: deviceId);
+    final db = await repo.database;
+    final now = DateTime.now().toIso8601String();
+    // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).
+    final role = UserRole.values.firstWhere((r) => r.code == roleCode,
+        orElse: () => UserRole.viewer);
+    final perms = defaultPerms(role);
+    final permStr =
+        perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+    // (دفعة 58 — متطلب 3) لا مستخدمي ظل مكررين: انضمام نفس الجهاز مجدداً
+    // يعيد استخدام مستخدم الظل القائم بنفس الاسم بدل إنشاء نسخة ثانية.
+    int uid;
+    final existing = await db.query('users',
+        columns: ['id'],
+        where:
+            "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
+        whereArgs: [deviceName],
+        limit: 1);
+    if (existing.isNotEmpty) {
+      uid = existing.first['id'] as int;
+      await db.update(
+          'users',
+          {
+            'role': role.code,
+            'permissions': permStr,
+            'active': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [uid]);
+    } else {
+      uid = await db.insert('users', {
+        'name': deviceName,
+        'role': role.code,
+        'pin': '',
+        'password': '',
+        'permissions': permStr,
+        'is_me': 0,
+        'active': 1,
+        'workspace_id': repo.requireWorkspaceId,
+        'deleted_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+    }
+    // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
+    // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
+    await db.insert(
+        'devices',
+        {
+          'id': deviceId,
+          'workspace_id': repo.requireWorkspaceId,
+          'name': deviceName,
+          'is_paired': 1,
+          'is_owner': 0,
+          'user_id': uid,
+          'revoked_at': '',
+          'expelled_at': '',
+          'last_seen_at': now,
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    // رفع للسحابة: roster + حالة الطلب approved.
+    final root = _root(backendUrl, workspaceId);
+    // (دفعة 56) كسر حلقة إعادة الطرد: إن كان الجهاز مطروداً سابقاً فلديه
+    // شاهدة في /evictions — يجب حذفها قبل تسجيله في roster وإلا طرد
+    // نفسه فور أول مصافحة بعد إعادة الربط.
+    try {
+      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (own.isNotEmpty) {
+      await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+          {..._safeDeviceRow(own.first), 'user_role': role.code},
+          timeout: const Duration(seconds: 20));
+    }
+    final req =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+      ...?req,
+      'status': 'approved',
+      'role': role.code,
+      'approvedAt': now,
+    }, timeout: const Duration(seconds: 20));
+  }
+
+  /// (دفعة 54) مسار شاهدة الطرد الصريحة لجهاز معيّن.
+  static String evictionPath(String base, String ws, String deviceId) =>
+      '${_root(base, ws)}/evictions/${Uri.encodeComponent(deviceId)}.json';
+
+  /// (المدير — بروتوكول الطرد النشط، دفعة 54) عند «طرد نهائي» أو حظر:
+  ///  1) كتابة شاهدة طرد صريحة في /evictions/$deviceId بختم وقت الخادم —
+  ///     الجهاز المستهدف يستمع عليها عبر SSE فيبطل جلسته لحظياً.
+  ///  2) حذف عقدته نهائياً من /roster/$deviceId — غياب العقدة محفّز طرد
+  ///     ثانٍ لدى مصافحة العضوية (دفاع مزدوج).
+  ///  3) حذف أي طلب انضمام قديم له (نظافة).
+  static Future<void> purgePeerFromCloud(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+    String reason = 'revoked_by_manager',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    // 1) الشاهدة الصريحة أولاً — أهم خطوة: تصل المستهدف عبر SSE فوراً،
+    //    وختم {".sv":"timestamp"} يمنع تلاعب ساعات الأجهزة.
+    await _putJson(evictionPath(backendUrl, workspaceId, deviceId), {
+      'deviceId': deviceId,
+      'expelled_at': {'.sv': 'timestamp'},
+      'reason': reason,
+      // (دفعة 57) TTL: بعد 7 أيام تُقلَّم الشاهدة تلقائياً في دورة صيانة
+      // المدير — لا ركام أبدياً في /evictions، والمستهدف المطفأ لديه
+      // أسبوع كامل ليلتقطها عند أول إقلاع.
+      'expires_at': DateTime.now()
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch,
+    }, timeout: const Duration(seconds: 20));
+    // 2) إزالة العقدة من السجل نهائياً (لا مجرد وسمها).
+    try {
+      await _delete('$root/roster/${Uri.encodeComponent(deviceId)}.json');
+    } catch (_) {}
+    // 3) حذف أي طلب انضمام قديم له.
+    try {
+      await _delete(requestPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+  }
+
+  /// (المدير — دفعة 55) حل المجموعة نهائياً وإلغاء كل الارتباطات:
+  ///  1) كتابة شاهدة طرد لكل جهاز عضو (غير المالك) في /evictions —
+  ///     تصلهم لحظياً عبر قنواتهم المخصصة فيبطلون جلساتهم ويعودون مستقلين.
+  ///  2) مهلة سماح قصيرة ليلتقط الأعضاء المتصلون الشواهد عبر SSE.
+  ///  3) حذف عقدة المجموعة بأكملها من السحابة:
+  ///     roster + operations + invites + joinRequests + joinSnapshot —
+  ///     تُترك /evictions وحدها مدة سماح ليلتقطها من كان مطفأً عند الحل
+  ///     (مصافحته عند الإقلاع تفحصها قبل أي شيء).
+  /// يعيد عدد الأجهزة التي بُثّت لها شواهد.
+  static Future<int> dissolveGroup(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    if (!await repo.isWorkspaceOwner()) {
+      throw const CloudJoinException('حل المجموعة متاح لجهاز المدير فقط.');
+    }
+    final root = _root(backendUrl, workspaceId);
+    final db = await repo.database;
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+
+    // 1) اجمع كل معرفات الأجهزة: المحلية + السحابية (roster) — اتحاداً،
+    //    حتى لا يفلت جهاز موجود سحابياً فقط.
+    final ids = <String>{};
+    // لا تُكتب شواهد لأجهزة المالك إطلاقاً (جهاز المدير نفسه).
+    for (final r in await db.query('devices',
+        columns: ['id'], where: 'COALESCE(is_owner, 0) <> 1')) {
+      ids.add('${r['id']}');
+    }
+    try {
+      final remote = await _getJson('$root/roster.json');
+      if (remote != null) ids.addAll(remote.keys);
+    } catch (_) {}
+    ids.remove(ourId);
+    ids.removeWhere((e) => e.isEmpty);
+
+    // 2) شاهدة طرد لكل عضو — كل شاهدة مستقلة حتى لا يوقف فشلُ واحدة البقية.
+    var broadcast = 0;
+    for (final id in ids) {
+      try {
+        await _putJson(evictionPath(backendUrl, workspaceId, id), {
+          'deviceId': id,
+          'expelled_at': {'.sv': 'timestamp'},
+          'reason': 'group_dissolved',
+          'expires_at': DateTime.now()
+              .add(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+        }, timeout: const Duration(seconds: 15));
+        broadcast++;
+      } catch (_) {}
+    }
+
+    // 3) مهلة سماح: الأعضاء المتصلون يلتقطون الشواهد عبر SSE فوراً.
+    await Future<void>.delayed(const Duration(seconds: 3));
+
+    // 4) تفكيك عقدة المجموعة السحابية (كل قسم على حدة — أفضل جهد،
+    //    ونُبقي /evictions للأعضاء المطفأين).
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+    return broadcast;
+  }
+
+  /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،
+  /// وإن لم تبق أي دعوة حيّة يحذف joinSnapshot.json نهائياً — لقطة
+  /// الأعمال الكاملة لا تبقى معلقة بمسار قابل للتخمين بعد انتهاء
+  /// نافذة الانضمام (15 دقيقة). يعيد true إن حُذفت اللقطة.
+  static Future<bool> purgeStaleInviteArtifacts({
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? invites;
+    try {
+      invites = await _getJson('$root/invites.json');
+    } catch (_) {
+      return false; // شبكة — لا نحذف اللقطة على عمى.
+    }
+    final now = DateTime.now();
+    var liveInvite = false;
+    if (invites != null) {
+      for (final e in invites.entries) {
+        final v = e.value;
+        if (v is! Map) continue;
+        final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+        if (exp != null && now.isBefore(exp)) {
+          liveInvite = true; // دعوة سارية — اللقطة ما تزال مطلوبة.
+          continue;
+        }
+        // دعوة منتهية → تُحذف.
+        try {
+          await _delete('$root/invites/${Uri.encodeComponent(e.key)}.json');
+        } catch (_) {}
+      }
+    }
+    if (liveInvite) return false;
+    // لا دعوات حية: هل توجد لقطة أصلاً؟ احذفها.
+    try {
+      final snap = await _getJson('$root/joinSnapshot.json');
+      if (snap == null) return false;
+      await _delete('$root/joinSnapshot.json');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (المدير — دفعة 57) ضغط سجل العمليات السحابي: يحذف كل عملية
+  /// server_ts ≤ [throughTsMs] — تُستدعى فقط من SyncEngine بعد التحقق
+  /// من أن الحد مغطى بلقطة موثّقة. تحذف على دفعات (استعلام مرشّح
+  /// بالفهرس، وتراجع «جلب كامل» عند غياب .indexOn). تعيد عدد المحذوف.
+  /// (دفعة 58 — متطلب 4) تطهير سحابي لرسائل الدردشة الأقدم من 24 ساعة:
+  /// يحذف من /operations كل عملية entity=message تجاوز server_ts عمرها
+  /// المقرر — حمولات المرفقات (base64) تختفي من السحابة نهائياً.
+  /// يستدعيها المدير في دورة الصيانة. يعيد عدد العقد المحذوفة.
+  static Future<int> purgeOldChatOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    Duration ttl = const Duration(hours: 24),
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final cutoffMs = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
+    Map<String, dynamic>? all;
+    try {
+      final uri = Uri.parse('$root/operations.json').replace(
+        queryParameters: {
+          'orderBy': jsonEncode('server_ts'),
+          'endAt': '$cutoffMs',
+        },
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if (res.statusCode == 400 && res.body.contains('Index not defined')) {
+        all = await _getJson('$root/operations.json');
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
+        final d = jsonDecode(res.body);
+        all = d is Map ? Map<String, dynamic>.from(d) : null;
+      }
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    var removed = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      if ('${v['entity_type'] ?? ''}' != 'message') continue;
+      final ts = (v['server_ts'] as num?)?.toInt() ?? 0;
+      if (ts == 0 || ts > cutoffMs) continue;
+      try {
+        await _delete('$root/operations/${Uri.encodeComponent(e.key)}.json');
+        removed++;
+      } catch (_) {}
+    }
+    return removed;
+  }
+
+  static Future<int> compactOperations({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required int throughTsMs,
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      // ترشيح خادمي إن توفر الفهرس.
+      final uri = Uri.parse('$root/operations.json').replace(
+        queryParameters: {
+          'orderBy': jsonEncode('server_ts'),
+          'endAt': '$throughTsMs',
+        },
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if (res.statusCode == 400 && res.body.contains('Index not defined')) {
+        all = await _getJson('$root/operations.json');
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
+        final d = jsonDecode(res.body);
+        all = d is Map ? Map<String, dynamic>.from(d) : null;
+      }
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    var removed = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final ts = (v['server_ts'] as num?)?.toInt() ?? 0;
+      if (ts == 0 || ts > throughTsMs) continue;
+      try {
+        await _delete(
+            '$root/operations/${Uri.encodeComponent(e.key)}.json');
+        removed++;
+      } catch (_) {}
+    }
+    return removed;
+  }
+
+  /// (المدير — دفعة 57) تقليم شواهد الطرد المنتهية (TTL 7 أيام):
+  /// يقرأ /evictions كاملة ويحذف كل شاهدة تجاوزت expires_at.
+  /// الشواهد القديمة (قبل الدفعة، بلا expires_at) تُمنح مهلة سماح شهراً
+  /// من expelled_at ثم تُقلَّم. يعيد عدد الشواهد المحذوفة.
+  static Future<int> pruneExpiredEvictions({
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      all = await _getJson('$root/evictions.json');
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    var pruned = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      var expMs = (v['expires_at'] as num?)?.toInt() ?? 0;
+      if (expMs == 0) {
+        // شاهدة قديمة بلا TTL: مهلة شهر من وقت الطرد ثم تقليم.
+        final at = (v['expelled_at'] as num?)?.toInt() ?? 0;
+        if (at == 0) continue; // شكل مجهول — لا نلمسها.
+        expMs = at + const Duration(days: 30).inMilliseconds;
+      }
+      if (nowMs < expMs) continue;
+      try {
+        await _delete(
+            '$root/evictions/${Uri.encodeComponent(e.key)}.json');
+        pruned++;
+      } catch (_) {}
+    }
+    return pruned;
+  }
+
+  /// (المدير — دفعة 56) «حذف نهائي من السجل»: محو كل أثر سحابي لجهاز
+  /// مطرود — roster + شاهدة الطرد + طلب الانضمام. يُستدعى بعد أن يكون
+  /// الجهاز قد استهلك شاهدته (أو لم يعد يهمنا وصولها): البطاقة تختفي
+  /// من كل الأجهزة ولا يبقى ركام في /evictions.
+  static Future<void> purgeDeviceRecordFromCloud({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final enc = Uri.encodeComponent(deviceId);
+    for (final url in [
+      '$root/roster/$enc.json',
+      '$root/evictions/$enc.json',
+      '$root/joinRequests/$enc.json',
+    ]) {
+      try {
+        await _delete(url);
+      } catch (_) {}
+    }
+  }
+
+  /// (المدير — دفعة 54) إزالة شاهدة الطرد عند «إعادة السماح» — وإلا
+  /// سيطرد الجهاز المستعاد نفسه فور فحصه القادم.
+  static Future<void> clearEvictionTombstone({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    try {
+      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+  }
+
+  /// (العضو — المصافحة، دفعة 54) هل توجد شاهدة طرد لهذا الجهاز؟
+  static Future<bool> hasEvictionTombstone({
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final rec =
+        await _getJson(evictionPath(backendUrl, workspaceId, deviceId));
+    return rec != null;
+  }
+
+  /// (المدير) الرفض: تحديث الحالة rejected — الجهاز المنتظر يتلقاها
+  /// ويعرضها للمستخدم دون أي مساس ببياناته.
+  static Future<void> rejectJoinRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final req =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+      ...?req,
+      'status': 'rejected',
+      'rejectedAt': DateTime.now().toIso8601String(),
+    }, timeout: const Duration(seconds: 20));
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [7/7] admin_app/lib/rtdb.dart
+██  مدير التراخيص — قراءات مجمعة + resolveWorkspaceId ثلاثي الأشكال
+██  386 سطراً
+████████████████████████████████████████████████████████████████████████
+
+// خدمة Firebase RTDB عبر REST — نفس قاعدة بيانات تطبيق «مدير الحسابات».
+// لا تحتاج SDK: قراءة/كتابة JSON مباشرة + وقت الخادم بختم {".sv":"timestamp"}.
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// مدة الخطة المتاحة للاختيار.
+enum PlanDuration {
+  month('شهر واحد (30 يوماً)', Duration(days: 30)),
+  quarter('3 أشهر (90 يوماً)', Duration(days: 90)),
+  year('سنة كاملة (365 يوماً)', Duration(days: 365)),
+  lifetime('تفعيل دائم (Lifetime)', Duration(days: 365 * 100));
+
+  final String label;
+  final Duration span;
+  const PlanDuration(this.label, this.span);
+}
+
+/// نتيجة تفعيل ناجحة — للعرض في الرسالة الخضراء.
+class ActivationResult {
+  final String workspaceId;
+  final String planType;
+  final int maxDevices;
+  final int expiresAtMs;
+  final bool lifetime;
+  const ActivationResult({
+    required this.workspaceId,
+    required this.planType,
+    required this.maxDevices,
+    required this.expiresAtMs,
+    required this.lifetime,
+  });
+}
+
+/// سجل مشترك للعرض في القائمة.
+class SubscriberEntry {
+  final String workspaceId;
+  final String planType;
+  final String status;
+  final int maxDevices;
+  final int expiresAtMs;
+  final int activatedAtMs;
+  final String deviceRef; // المعرف/البصمة التي أُدخلت وقت التفعيل.
+  const SubscriberEntry({
+    required this.workspaceId,
+    required this.planType,
+    required this.status,
+    required this.maxDevices,
+    required this.expiresAtMs,
+    required this.activatedAtMs,
+    required this.deviceRef,
+  });
+}
+
+class Rtdb {
+  Rtdb._();
+  static final Rtdb instance = Rtdb._();
+
+  /// عميل HTTP موحد: يعيد استخدام اتصال TCP/TLS نفسه عبر كل الطلبات
+  /// (keep-alive) بدل فتح اتصال جديد لكل طلب — أسرع بمرات على الجوال.
+  final http.Client _client = http.Client();
+
+  String baseUrl = '';
+  String authToken = ''; // اختياري: legacy secret أو ID token.
+
+  static const _kUrl = 'rtdbUrl';
+  static const _kAuth = 'rtdbAuth';
+
+  Future<void> load() async {
+    final sp = await SharedPreferences.getInstance();
+    baseUrl = sp.getString(_kUrl) ?? '';
+    authToken = sp.getString(_kAuth) ?? '';
+  }
+
+  Future<void> save(String url, String auth) async {
+    baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    authToken = auth.trim();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kUrl, baseUrl);
+    await sp.setString(_kAuth, authToken);
+  }
+
+  bool get configured => baseUrl.isNotEmpty;
+
+  Uri _u(String path, [Map<String, String>? q]) {
+    final qp = <String, String>{...?q};
+    if (authToken.isNotEmpty) qp['auth'] = authToken;
+    return Uri.parse('$baseUrl/$path.json')
+        .replace(queryParameters: qp.isEmpty ? null : qp);
+  }
+
+  Future<dynamic> _get(String path, [Map<String, String>? q]) async {
+    final r = await _client.get(_u(path, q)).timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('قراءة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+    return jsonDecode(utf8.decode(r.bodyBytes));
+  }
+
+  Future<void> _patch(String path, Map<String, dynamic> body) async {
+    final r = await _client
+        .patch(_u(path), body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('كتابة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+  }
+
+  Future<void> _put(String path, Object body) async {
+    final r = await _client
+        .put(_u(path), body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('كتابة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+  }
+
+  /// وقت خادم فيربيس الحقيقي — نكتب {".sv":"timestamp"} ونقرأ الناتج.
+  /// كل الحسابات الزمنية بساعة الخادم حصراً، لا ساعة الهاتف.
+  Future<int> serverNowMs() async {
+    await _put('server_clock', {'.sv': 'timestamp'});
+    final v = await _get('server_clock');
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    throw Exception('تعذّر قراءة ساعة الخادم');
+  }
+
+  /// تحويل المدخل إلى معرف مساحة عمل — يقبل ثلاثة أشكال تلقائياً:
+  ///  1) بصمة التفعيل (32 خانة hex من رسالة واتساب) ⇒ فهرس /trials/<fp>.
+  ///  2) معرف الجهاز (DEVICE-XXXXXXXX…) ⇒ بحث في roster كل المساحات.
+  ///  3) معرف مساحة العمل مباشرة ⇒ تحقق من وجود العقدة.
+  Future<String> resolveWorkspaceId(String input) async {
+    final id = input.trim();
+    if (id.isEmpty) throw Exception('أدخل معرف الجهاز أو مساحة العمل أولاً');
+
+    // (1) بصمة تفعيل 32-hex.
+    if (RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(id)) {
+      final t = await _get('trials/${Uri.encodeComponent(id)}');
+      if (t is Map && '${t['workspace_id'] ?? ''}'.isNotEmpty) {
+        return '${t['workspace_id']}';
+      }
+      throw Exception('لم يُعثر على مساحة عمل مرتبطة بهذه البصمة.\n'
+          'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
+    }
+
+    // (2) معرف جهاز DEVICE-… ⇒ نفتش سجل التفعيلات ثم بصمات /trials ثم
+    //     roster المساحات عن هذا الجهاز.
+    if (RegExp(r'^DEVICE-[A-Z2-9]{6,}', caseSensitive: false).hasMatch(id)) {
+      final devId = id.toUpperCase();
+      // فهرس التجارب يحمل workspace_id — أرخص مسح.
+      final trials = await _get('trials');
+      if (trials is Map) {
+        for (final v in trials.values) {
+          if (v is Map && '${v['device_id'] ?? ''}'.toUpperCase() == devId) {
+            final ws = '${v['workspace_id'] ?? ''}';
+            if (ws.isNotEmpty) return ws;
+          }
+        }
+      }
+      // مسح roster لكل مساحة (قراءة مفاتيح سطحية ثم roster المطابق).
+      final keys = await _get('workspaces', {'shallow': 'true'});
+      if (keys is Map) {
+        for (final ws in keys.keys) {
+          final roster =
+              await _get('workspaces/${Uri.encodeComponent('$ws')}/roster');
+          if (roster is Map &&
+              roster.keys.any((k) => '$k'.toUpperCase() == devId)) {
+            return '$ws';
+          }
+        }
+      }
+      throw Exception('لم يُعثر على جهاز بهذا المعرف في أي مساحة عمل.\n'
+          'جرّب لصق «بصمة التفعيل» من رسالة العميل بدلاً منه.');
+    }
+
+    // (3) معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
+    final sub = await _get('workspaces/${Uri.encodeComponent(id)}/subscription');
+    if (sub != null) return id;
+    final ws = await _get('workspaces/${Uri.encodeComponent(id)}',
+        {'shallow': 'true'});
+    if (ws != null) return id;
+    throw Exception('لا توجد مساحة عمل بهذا المعرف في قاعدة البيانات.');
+  }
+
+  /// التفعيل/الترقية: تحديث عقدة الاشتراك في المكان (PATCH يحفظ الحقول
+  /// الأخرى مثل created_at وdevice_fingerprint) وفتح كل المزايا.
+  Future<ActivationResult> activate({
+    required String rawInput,
+    required String planType, // individual | enterprise
+    required PlanDuration duration,
+    required int maxDevices,
+    bool extend = false, // تمديد: يضيف المدة فوق expires_at الحالي إن كان أبعد.
+  }) async {
+    final ws = await resolveWorkspaceId(rawInput);
+    final now = await serverNowMs();
+    final lifetime = duration == PlanDuration.lifetime;
+
+    int base = now;
+    if (extend) {
+      final cur = await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+      if (cur is Map) {
+        final e = cur['expires_at'];
+        final curExp = e is num ? e.toInt() : 0;
+        if (curExp > now) base = curExp; // التمديد يبني على المتبقي.
+      }
+    }
+    final expires = base + duration.span.inMilliseconds;
+
+    await _patch('workspaces/${Uri.encodeComponent(ws)}/subscription', {
+      'status': 'active',
+      'is_active': true,
+      'plan_type': planType,
+      'max_devices': planType == 'enterprise' ? maxDevices : 1,
+      'expires_at': expires,
+      'activated_at': now,
+      'activated_by': 'license_admin',
+      'features': {
+        'can_use_categories': true,
+        'can_send_notifications': true,
+        'can_cloud_backup': true,
+        'can_restore_data': true,
+        'can_advanced_search': true,
+        'multi_device_sync': true,
+        'role_permissions': true,
+        'audit_log': true,
+      },
+    });
+
+    // مزامنة فهرس /trials (مصدر العدادات المجمعة): التفعيل يقلب حالة
+    // المساحة فيه أيضاً حتى تعكس بطاقة «مشتركون مدفوعون» الحقيقة فوراً.
+    try {
+      final cur =
+          await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+      final fp = cur is Map ? '${cur['device_fingerprint'] ?? ''}' : '';
+      if (fp.isNotEmpty) {
+        await _patch('trials/${Uri.encodeComponent(fp)}', {
+          'status': 'active',
+          'expires_at': expires,
+          'workspace_id': ws,
+        });
+      }
+    } catch (_) {} // الفهرس تحسيني — فشله لا يفسد التفعيل.
+
+    // سجل إداري للمشتركين — يغذي شاشة «سجل المشتركين».
+    await _put('admin/activations/$now', {
+      'workspace_id': ws,
+      'device_ref': rawInput.trim(),
+      'plan_type': planType,
+      'max_devices': planType == 'enterprise' ? maxDevices : 1,
+      'expires_at': expires,
+      'activated_at': now,
+      'lifetime': lifetime,
+    });
+
+    return ActivationResult(
+      workspaceId: ws,
+      planType: planType,
+      maxDevices: planType == 'enterprise' ? maxDevices : 1,
+      expiresAtMs: expires,
+      lifetime: lifetime,
+    );
+  }
+
+  /// آخر الاشتراكات المفعلة (من السجل الإداري) مع الحالة الحية لكل مساحة.
+  Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
+    final raw = await _get('admin/activations', {
+      'orderBy': '"\$key"',
+      'limitToLast': '$limit',
+    });
+    if (raw is! Map) return const [];
+    final out = <SubscriberEntry>[];
+    for (final e in raw.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final ws = '${v['workspace_id'] ?? ''}';
+      // الحالة الحية من عقدة الاشتراك نفسها (قد تكون مُدِّدت لاحقاً).
+      String status = 'active';
+      int expires = (v['expires_at'] is num) ? (v['expires_at'] as num).toInt() : 0;
+      int maxDev = (v['max_devices'] is num) ? (v['max_devices'] as num).toInt() : 1;
+      String plan = '${v['plan_type'] ?? 'individual'}';
+      try {
+        final live =
+            await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+        if (live is Map) {
+          status = '${live['status'] ?? status}';
+          if (live['expires_at'] is num) {
+            expires = (live['expires_at'] as num).toInt();
+          }
+          if (live['max_devices'] is num) {
+            maxDev = (live['max_devices'] as num).toInt();
+          }
+          plan = '${live['plan_type'] ?? plan}';
+        }
+      } catch (_) {}
+      out.add(SubscriberEntry(
+        workspaceId: ws,
+        planType: plan,
+        status: status,
+        maxDevices: maxDev,
+        expiresAtMs: expires,
+        activatedAtMs:
+            (v['activated_at'] is num) ? (v['activated_at'] as num).toInt() : 0,
+        deviceRef: '${v['device_ref'] ?? ''}',
+      ));
+    }
+    out.sort((a, b) => b.activatedAtMs.compareTo(a.activatedAtMs));
+    return out;
+  }
+}
+
+/// إحصائيات لوحة المدير — تُقرأ حياً من قاعدة البيانات.
+class AdminMetrics {
+  final int totalWorkspaces; // إجمالي مساحات العمل المسجلة.
+  final int activePaid; // مشتركون مدفوعون فعّالون.
+  final int activeTrials; // في الفترة التجريبية (سارية).
+  final int expired; // منتهية (تجربة أو اشتراك) = الفئة المجانية.
+  const AdminMetrics({
+    required this.totalWorkspaces,
+    required this.activePaid,
+    required this.activeTrials,
+    required this.expired,
+  });
+}
+
+extension RtdbMetrics on Rtdb {
+  /// جمع العدادات بلا اختناق: كان الشكل القديم يطلق طلب HTTP منفصلاً
+  /// لكل مساحة (N+1). الآن قراءة مجمعة واحدة لفهرس /trials (يحمل
+  /// status/expires_at لكل مساحة مفعّلة) + مفاتيح المساحات السطحية —
+  /// طلبان اثنان مهما بلغ عدد العملاء، عبر عميل keep-alive موحد.
+  Future<AdminMetrics> metrics() async {
+    final keys = await _get('workspaces', {'shallow': 'true'});
+    if (keys is! Map || keys.isEmpty) {
+      return const AdminMetrics(
+          totalWorkspaces: 0, activePaid: 0, activeTrials: 0, expired: 0);
+    }
+    final now = await serverNowMs();
+    int paid = 0, trials = 0, expired = 0;
+
+    // القراءة المجمعة: فهرس التجارب يحمل حالة كل مساحة مفعّلة.
+    final trialIdx = await _get('trials');
+    final byWs = <String, Map>{};
+    if (trialIdx is Map) {
+      for (final v in trialIdx.values) {
+        if (v is Map) {
+          final ws = '${v['workspace_id'] ?? ''}';
+          if (ws.isNotEmpty) byWs[ws] = v;
+        }
+      }
+    }
+    // مساحات غير مفهرسة في /trials (نادرة — قديمة جداً): قراءة مفردة
+    // كاحتياط، بحد أقصى 25 حتى لا نعود للاختناق.
+    final missing =
+        keys.keys.map((k) => '$k').where((w) => !byWs.containsKey(w)).toList();
+    for (final ws in missing.take(25)) {
+      try {
+        final sub =
+            await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+        if (sub is Map) byWs[ws] = sub;
+      } catch (_) {}
+    }
+
+    for (final ws in keys.keys) {
+      final sub = byWs['$ws'];
+      if (sub == null) continue; // مساحة بلا عقدة اشتراك بعد.
+      final status = '${sub['status'] ?? ''}';
+      final e = sub['expires_at'];
+      final exp = e is num ? e.toInt() : 0;
+      final alive = exp > now;
+      if (status == 'active' && alive) {
+        paid++;
+      } else if (status == 'trial' && alive) {
+        trials++;
+      } else {
+        expired++;
+      }
+    }
+    return AdminMetrics(
+      totalWorkspaces: keys.length,
+      activePaid: paid,
+      activeTrials: trials,
+      expired: expired,
+    );
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  نهاية التصدير — النصوص أعلاه هي النسخ الحية من المستودع حرفياً
+████████████████████████████████████████████████████████████████████████

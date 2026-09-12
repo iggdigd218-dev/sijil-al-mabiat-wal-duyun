@@ -573,4 +573,34 @@ void main() {
     expect(st.featureUnlocked((f) => f.canCloudBackup), isFalse,
         reason: 'المزايا المدفوعة مقفلة حتى فحص سحابي حقيقي');
   });
+
+  test('PLAN-08 (مطابقة الأدمن) عقدة /trials تحمل device_id صراحة عند '
+      'التفعيل وتُرقَّع للسجلات القديمة عند الفحص', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP8'),
+        cloud.client);
+    // (أ) سجل التفعيل الجديد يحمل device_id بصيغة DEVICE-…
+    final key = cloud.store.keys.firstWhere((k) => k.contains('/trials/'));
+    final rec = Map<String, dynamic>.from(cloud.store[key] as Map);
+    final devId = '${rec['device_id'] ?? ''}';
+    expect(devId, startsWith('DEVICE-'),
+        reason: 'تطبيق الأدمن يطابق DEVICE-… مباشرة من الفهرس');
+    expect(rec['workspace_id'], 'wsP8');
+    // (ب) الترقيع: سجل قديم بلا device_id يُرقّع عند أول فحص ناجح.
+    rec.remove('device_id');
+    cloud.store[key] = rec;
+    SubscriptionGuard.debugReset();
+    await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP8', force: true),
+        cloud.client);
+    // الترقيع غير متزامن (unawaited) — نمهله دورة.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final patched = Map<String, dynamic>.from(cloud.store[key] as Map);
+    expect('${patched['device_id'] ?? ''}', startsWith('DEVICE-'),
+        reason: 'السجلات القديمة تصبح قابلة للمطابقة دون إعادة تفعيل');
+  });
 }

@@ -279,8 +279,8 @@ class SubscriptionGuard {
     required String backendUrl,
     required String workspaceId,
   }) async {
-    final raw = await hardwareFingerprintRaw() ??
-        'fallback:${await ensureDeviceId(repo)}';
+    final devId = await ensureDeviceId(repo);
+    final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
     final fp = fingerprintHash(raw);
     final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
     final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
@@ -318,6 +318,8 @@ class SubscriptionGuard {
           ...repaired,
           'workspace_id': workspaceId,
           'first_seen': priorCreated,
+          // معرف الجهاز صراحة: تطبيق الأدمن يطابق DEVICE-… مباشرة.
+          'device_id': devId,
         });
         return _stateFrom(
             Map<String, dynamic>.from(repaired), await serverNowMs(backendUrl));
@@ -337,6 +339,17 @@ class SubscriptionGuard {
         'resumed': true,
       };
       await _putJson(wsSub, resumed);
+      // ترقيع الفهرس القديم: سجلات ما قبل هذا الإصدار بلا device_id —
+      // نضيفه ليتمكن تطبيق الأدمن من المطابقة المباشرة.
+      if ('${prior['device_id'] ?? ''}'.isEmpty) {
+        await _putJson(trialIdx, {
+          ...prior,
+          'workspace_id': '${prior['workspace_id'] ?? ''}'.isEmpty
+              ? workspaceId
+              : prior['workspace_id'],
+          'device_id': devId,
+        });
+      }
       return _stateFrom(resumed, await serverNowMs(backendUrl));
     }
 
@@ -371,6 +384,8 @@ class SubscriptionGuard {
       ...finalRec,
       'workspace_id': workspaceId,
       'first_seen': createdMs,
+      // معرف الجهاز صراحة: تطبيق الأدمن يطابق DEVICE-… مباشرة.
+      'device_id': devId,
     });
     return _stateFrom(finalRec, createdMs);
   }
@@ -407,6 +422,10 @@ class SubscriptionGuard {
       final st = _stateFrom(rec, now);
       _cache(st);
       await _persist(repo, st);
+      // (ترقيع صامت) سجلات /trials القديمة بلا device_id: نضيفه مرة
+      // واحدة عند أول فحص ناجح — الأجهزة القائمة تصبح قابلة للمطابقة
+      // في تطبيق الأدمن دون انتظار إعادة تفعيل.
+      unawaited(_backfillTrialDeviceId(repo, backendUrl));
       return st;
     } catch (_) {
       // شبكة غائبة: آخر حالة معروفة في الذاكرة، وإلا (إقلاع جديد بلا
@@ -419,6 +438,23 @@ class SubscriptionGuard {
       }
       return _last;
     }
+  }
+
+  /// ترقيع لمرة واحدة: إضافة device_id لسجل /trials القديم إن غاب.
+  static bool _backfilledOnce = false;
+  static Future<void> _backfillTrialDeviceId(
+      Repo repo, String backendUrl) async {
+    if (_backfilledOnce) return;
+    _backfilledOnce = true;
+    try {
+      final devId = await ensureDeviceId(repo);
+      final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final idx = '${_trialsRoot(backendUrl)}/${fingerprintHash(raw)}.json';
+      final rec = await _readJson(idx);
+      if (rec == null) return; // لا سجل — لا شيء يُرقّع.
+      if ('${rec['device_id'] ?? ''}'.isNotEmpty) return; // مرقّع أصلاً.
+      await _putJson(idx, {...rec, 'device_id': devId});
+    } catch (_) {} // تحسيني بحت — لا يعطل الفحص.
   }
 
   /// آخر حالة مع تقديم وقت الخادم المرجعي بعمر الكاش (monotonic).
@@ -552,6 +588,7 @@ class SubscriptionGuard {
   static void debugReset() {
     _last = SubscriptionState.none;
     _everChecked = false;
+    _backfilledOnce = false;
     _sinceCheck
       ..stop()
       ..reset();

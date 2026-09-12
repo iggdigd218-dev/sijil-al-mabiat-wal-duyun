@@ -212,6 +212,15 @@ class UpdateService {
       if (minSupported != null && current < minSupported) {
         return UpdateStatus.required_;
       }
+      // مقارنة صريحة لرقم البناء: تطابق major.minor.patch مع بناء أحدث
+      // (مثل 3.50.0+86 → 3.50.0+87) = تحديث متاح فوراً. (compareTo يشمل
+      // build أصلاً — هذا التصريح توثيق وضمانة ضد أي تعديل مستقبلي.)
+      if (latest.major == current.major &&
+          latest.minor == current.minor &&
+          latest.patch == current.patch &&
+          latest.build > current.build) {
+        return UpdateStatus.available;
+      }
       if (latest > current) return UpdateStatus.available;
       return UpdateStatus.upToDate;
     }();
