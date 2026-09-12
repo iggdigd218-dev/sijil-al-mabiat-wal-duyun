@@ -53,6 +53,12 @@ class SubscriberEntry {
   });
 }
 
+/// الرابط الرسمي الإقليمي لقاعدة النظام — نفس المضمّن في تطبيق المستخدم
+/// (المعمارية الصامتة): الأدمن يعمل فوراً بلا إعداد يدوي، مع إمكانية
+/// التجاوز من حوار «الاتصال بقاعدة البيانات».
+const String kOfficialRtdbUrl =
+    'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app';
+
 class Rtdb {
   Rtdb._();
   static final Rtdb instance = Rtdb._();
@@ -69,12 +75,15 @@ class Rtdb {
 
   Future<void> load() async {
     final sp = await SharedPreferences.getInstance();
-    baseUrl = sp.getString(_kUrl) ?? '';
+    baseUrl = (sp.getString(_kUrl) ?? '').trim();
+    // (المعمارية الصامتة) لا رابط محفوظاً؟ اعتمد الرسمي المضمّن فوراً.
+    if (baseUrl.isEmpty) baseUrl = kOfficialRtdbUrl;
     authToken = sp.getString(_kAuth) ?? '';
   }
 
   Future<void> save(String url, String auth) async {
     baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (baseUrl.isEmpty) baseUrl = kOfficialRtdbUrl; // فارغ = عودة للرسمي.
     authToken = auth.trim();
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kUrl, baseUrl);

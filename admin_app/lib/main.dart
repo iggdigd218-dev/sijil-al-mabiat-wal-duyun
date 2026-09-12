@@ -118,7 +118,7 @@ class _ConfigDialogState extends State<_ConfigDialog> {
             textDirection: TextDirection.ltr,
             decoration: const InputDecoration(
               labelText: 'رابط Firebase RTDB',
-              hintText: 'https://xxxx-default-rtdb.firebaseio.com',
+              hintText: kOfficialRtdbUrl,
             ),
           ),
           const SizedBox(height: 10),

@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/cloud_config.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -87,14 +88,40 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   }
 
   // ---------- خطوة 2ب: PIN يدوي ----------
+  // (المعمارية الصامتة) لا حقل رابط بعد اليوم: الرابط الرسمي مضمّن،
+  // ومساحة عمل المدير تُكتشف تلقائياً من رمز الدعوة نفسه.
   Future<void> _submitPin() async {
-    final url = _urlCtrl.text.trim();
     final pin = _pinCtrl.text.trim();
-    if (url.isEmpty || pin.isEmpty) {
-      setState(() => _error = 'أدخل رابط المجموعة والرمز.');
+    if (pin.isEmpty) {
+      setState(() => _error = 'أدخل رمز الاقتران.');
       return;
     }
-    await _sendRequest(url: url, ws: 'default', tokenOrPin: pin);
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      final ws = await CloudJoin.findWorkspaceByInvite(
+          backendUrl: url, tokenOrPin: pin);
+      if (ws == null) {
+        setState(() {
+          _busy = false;
+          _error = 'رمز الاقتران غير صحيح أو انتهت صلاحيته.';
+        });
+        return;
+      }
+      _busy = false;
+      await _sendRequest(url: url, ws: ws, tokenOrPin: pin);
+    } catch (e) {
+      setState(() {
+        _busy = false;
+        _error = e is CloudJoinException ? e.message : '$e';
+      });
+    }
   }
 
   // ---------- خطوة 3: دفع الطلب والانتظار ----------
@@ -374,16 +401,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
                     style:
                         TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: _urlCtrl,
-                  textDirection: TextDirection.ltr,
-                  decoration: const InputDecoration(
-                    labelText: 'رابط المجموعة (https://...)',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
+                // (المعمارية الصامتة) حقل الرابط أُزيل — يكفي رمز الاقتران.
                 TextField(
                   controller: _pinCtrl,
                   textDirection: TextDirection.ltr,

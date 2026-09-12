@@ -76,12 +76,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _saveCloudConfig() async {
     final repo = ref.read(repoProvider);
-    try {
-      await CloudSync.setBackendUrl(repo, _cloudUrlCtrl.text);
-    } on ArgumentError catch (e) {
-      if (mounted) showSnack(context, '${e.message}', error: true);
-      return;
-    }
+    // (المعمارية الصامتة) الرابط لم يعد يُحرَّر من هنا — الرسمي مضمّن
+    // برمجياً ويُعتمد تلقائياً عبر effectiveBackendUrl.
     var code = _cloudCodeCtrl.text.trim();
     if (code.isEmpty) code = CloudSync.generateCode();
     final clean = await CloudSync.setCode(repo, code);
@@ -603,7 +599,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         if (cloudAllowed) ...[
         const SizedBox(height: 20),
         const SectionTitle(
-          'المزامنة السحابية (Firebase — رابط ورمز، بلا تسجيل دخول)',
+          'النسخ السحابي (تلقائي — رمز موحَّد، بلا تسجيل دخول)',
         ),
         Card(
           child: Padding(
@@ -612,25 +608,17 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'ضع رابط قاعدة Firebase ورمزًا سحابيًا موحَّدًا على كل أجهزتك، فتتزامن '
-                  'البيانات بدون حساب أو تسجيل دخول. ارفع النسخة من هنا واسحبها على الجهاز الآخر.',
+                  'ضع رمزًا سحابيًا موحَّدًا على كل أجهزتك، فتتزامن النسخ '
+                  'بدون حساب أو تسجيل دخول — الاتصال بالسحابة تلقائي بالكامل. '
+                  'ارفع النسخة من هنا واسحبها على الجهاز الآخر.',
                   style: TextStyle(
                     fontSize: 12.5,
                     height: 1.6,
                     color: AppColors.text2Of(context),
                   ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _cloudUrlCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'رابط قاعدة البيانات السحابية',
-                    hintText: 'https://xxxx-default-rtdb.firebaseio.com',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  keyboardType: TextInputType.url,
-                ),
+                // (المعمارية الصامتة) حقل الرابط التقني أُخفي — الرابط
+                // الرسمي مضمّن برمجياً ويُعتمد تلقائياً.
                 const SizedBox(height: 10),
                 Row(
                   children: [

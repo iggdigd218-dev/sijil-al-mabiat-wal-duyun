@@ -918,6 +918,52 @@ class CloudJoin {
   /// (الجهاز الجديد — خطوة 3) التحقق من الدعوة/PIN ودفع طلب الانضمام.
   /// لا يمس أي بيانات محلية ولا يسحب اللقطة — يسجّل الطلب فقط.
   /// يتحقق من التوكن الكامل أو رمز PIN المرافق للدعوة (invite.pin).
+  /// (المعمارية الصامتة) اكتشاف مساحة العمل من رمز الدعوة وحده:
+  /// المستخدم يُدخل PIN من 6 أرقام (أو توكن الدعوة) فقط — لا يعرف معرف
+  /// WS-XXXXXXXX الخاص بمدير المجموعة. نمسح مفاتيح /workspaces (shallow)
+  /// ونبحث عن دعوة حية مطابقة؛ نعيد معرف المساحة أو null.
+  static Future<String?> findWorkspaceByInvite({
+    required String backendUrl,
+    required String tokenOrPin,
+  }) async {
+    final url = backendUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final input = tokenOrPin.trim().toUpperCase();
+    if (input.isEmpty) return null;
+    final isPin = RegExp(r'^\d{6}$').hasMatch(input);
+    final keys = await _getJson('$url/workspaces.json?shallow=true');
+    if (keys == null) return null;
+    // الأحدث إنشاءً لا يمكن تمييزه من shallow — نمسح بالترتيب مع سقف
+    // حماية (500 مساحة) يبقي الفحص سريعاً على القاعدة المشتركة.
+    var scanned = 0;
+    for (final ws in keys.keys) {
+      if (++scanned > 500) break;
+      try {
+        if (isPin) {
+          final all = await _getJson(
+              '${_root(url, ws)}/invites.json');
+          if (all == null) continue;
+          for (final e in all.entries) {
+            final v = e.value;
+            if (v is Map && '${v['pin'] ?? ''}' == input) {
+              final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+              if (exp != null && DateTime.now().isBefore(exp)) return ws;
+            }
+          }
+        } else {
+          final inv = await _getJson(
+              '${_root(url, ws)}/invites/${Uri.encodeComponent(input)}.json');
+          if (inv != null) {
+            final exp = DateTime.tryParse('${inv['expiresAt'] ?? ''}');
+            if (exp != null && DateTime.now().isBefore(exp)) return ws;
+          }
+        }
+      } catch (_) {
+        // مساحة معطوبة/محظورة قراءةً — تُتجاوز.
+      }
+    }
+    return null;
+  }
+
   static Future<void> requestJoin(
     Repo repo, {
     required String backendUrl,
