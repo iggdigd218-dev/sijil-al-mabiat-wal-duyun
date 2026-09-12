@@ -15,10 +15,12 @@ void main() {
     expect(kDefaultCloudBackendUrl, startsWith('https://'));
   });
 
-  test('CLOUD-CFG-02 فارغ/null/مسافات ⇒ التراجع للرابط الرسمي', () {
-    expect(effectiveBackendUrl(null), kDefaultCloudBackendUrl);
-    expect(effectiveBackendUrl(''), kDefaultCloudBackendUrl);
-    expect(effectiveBackendUrl('   '), kDefaultCloudBackendUrl);
+  test('CLOUD-CFG-02 فارغ في بيئة الاختبار ⇒ لا تراجع للإنتاج أبداً', () {
+    // 🔒 حارس العزل: تحت flutter test (FLUTTER_TEST مضبوط) الرابط الفعّال
+    // يعود '' — الاختبارات لا تلمس قاعدة الإنتاج الرسمية إطلاقاً.
+    expect(effectiveBackendUrl(null), '');
+    expect(effectiveBackendUrl(''), '');
+    expect(effectiveBackendUrl('   '), '');
   });
 
   test('CLOUD-CFG-03 الرابط المخصص يتقدم على الافتراضي (مع التشذيب)', () {
@@ -45,12 +47,12 @@ void main() {
     expect(isLegacyWorkspaceId(generateWorkspaceId()), isFalse);
   });
 
-  test('CLOUD-CFG-04 تجاوز الاختبارات يحاكي «لا سحابة» ثم يعود طبيعياً', () {
-    debugDefaultBackendUrlOverride = '';
-    expect(effectiveBackendUrl(null), '');
+  test('CLOUD-CFG-04 التجاوز الاختباري يعمل والمخصص يتقدم دائماً', () {
+    debugDefaultBackendUrlOverride = 'https://fake-test-db.example.com';
+    expect(effectiveBackendUrl(null), 'https://fake-test-db.example.com');
     expect(effectiveBackendUrl('https://x.example.com'),
         'https://x.example.com'); // المخصص لا يتأثر بالتجاوز.
     debugDefaultBackendUrlOverride = null;
-    expect(effectiveBackendUrl(null), kDefaultCloudBackendUrl);
+    expect(effectiveBackendUrl(null), ''); // بيئة اختبار = معزولة.
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 // إعدادات السحابة المضمنة برمجياً.
 //
 // kDefaultCloudBackendUrl: رابط قاعدة Firebase RTDB الرسمي للنظام (النطاق
@@ -17,11 +19,27 @@ const String kDefaultCloudBackendUrl = String.fromEnvironment(
 /// لمحاكاة «لا سحابة»؛ null = السلوك الإنتاجي الطبيعي.
 String? debugDefaultBackendUrlOverride;
 
+/// 🔒 عزل بيئة الاختبار عن قاعدة الإنتاج: flutter test يضبط المتغير
+/// FLUTTER_TEST — أي تشغيل اختباري لا يتراجع أبداً للرابط الرسمي
+/// المضمّن، فلا تكتب الاختبارات على بيانات المستخدمين الحقيقية إطلاقاً
+/// (كانت اختبارات الشاشات/التفكيك تبث أجهزة وشواهد طرد على الإنتاج!).
+final bool _isTestEnvironment = () {
+  try {
+    return Platform.environment.containsKey('FLUTTER_TEST');
+  } catch (_) {
+    return false;
+  }
+}();
+
 /// الرابط الفعّال: المضبوط يدوياً في الإعدادات أولاً، ثم الرسمي المضمّن.
 String effectiveBackendUrl(String? customUrl) {
   final trimmed = (customUrl ?? '').trim().replaceAll(RegExp(r'/+$'), '');
   if (trimmed.isNotEmpty) return trimmed;
-  return debugDefaultBackendUrlOverride ?? kDefaultCloudBackendUrl;
+  if (debugDefaultBackendUrlOverride != null) {
+    return debugDefaultBackendUrlOverride!;
+  }
+  if (_isTestEnvironment) return ''; // الاختبارات لا تلمس الإنتاج أبداً.
+  return kDefaultCloudBackendUrl;
 }
 
 /// (المعمارية الصامتة) المزامنة التلقائية مثبتة دائماً في الخلفية —

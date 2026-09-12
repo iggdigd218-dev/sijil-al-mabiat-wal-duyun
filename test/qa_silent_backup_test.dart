@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
+import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/data/cloud_sync.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
@@ -23,6 +24,8 @@ void main() {
 
   setUp(() async {
     debugForceLegacyWorkspaceId = false;
+    // بيئة الاختبار معزولة عن الإنتاج — رابط زائف عبر التجاوز الاختباري.
+    debugDefaultBackendUrlOverride = 'https://qa-silent.example.com';
     tmp = await Directory.systemTemp.createTemp('nexora_silent_');
     db = await databaseFactory.openDatabase('${tmp.path}/silent.db',
         options: OpenDatabaseOptions(
@@ -33,6 +36,7 @@ void main() {
   });
 
   tearDown(() async {
+    debugDefaultBackendUrlOverride = null;
     await db.close();
     try {
       await tmp.delete(recursive: true);
