@@ -746,6 +746,35 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
   }
 
+  /// فحص تحديث التطبيق يدوياً (زر التحديث بسطح المكتب): يجري بالخلفية
+  /// وعند توفر إصدار أحدث يظهر إشعار فوري بزر يقود لشاشة الإعدادات
+  /// (قسم التحديث). الفشل صامت — الفحص الدوري يغطي لاحقاً.
+  bool _updateCheckBusy = false;
+  Future<void> _checkForAppUpdate() async {
+    if (_updateCheckBusy) return;
+    _updateCheckBusy = true;
+    try {
+      final info = await UpdateService().check();
+      if (!mounted) return;
+      if (info.hasUpdate) {
+        Sfx.notify();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Text(
+              '🚀 يتوفر إصدار أحدث: ${info.latest} — التحديث من الإعدادات'),
+          action: SnackBarAction(
+            label: 'فتح',
+            onPressed: () => _go(AppScreen.settings),
+          ),
+        ));
+      }
+    } catch (_) {
+      // صامت — لا نزعج المستخدم بفشل فحص خلفي.
+    } finally {
+      _updateCheckBusy = false;
+    }
+  }
+
   /// الشاشات الثلاث في الشريط السفلي؛ الوجهة الرابعة «المزيد» تفتح القائمة
   /// الجانبية التي تضم كل الشاشات الأخرى (لا يُخفى أي قسم).
   static const _bottomTabs = [
@@ -1230,7 +1259,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             // يعيد تحميل بيانات الشاشة الحالية ويحفّز مزامنة فورية.
             if (desktop)
               IconButton(
-                tooltip: 'تحديث البيانات',
+                tooltip: 'تحديث البيانات والتحقق من الإصدارات',
                 icon: const Icon(Icons.refresh_rounded),
                 onPressed: () {
                   bump(ref);
@@ -1238,6 +1267,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
                   try {
                     ref.read(syncEngineProvider).forceSyncNow();
                   } catch (_) {}
+                  // فحص تحديث التطبيق بالخلفية: إن وُجد إصدار أحدث يظهر
+                  // إشعار فوري يقود لقسم التحديث في الإعدادات.
+                  _checkForAppUpdate();
                 },
               ),
           ],

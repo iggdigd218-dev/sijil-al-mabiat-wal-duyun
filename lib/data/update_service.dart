@@ -124,9 +124,15 @@ class UpdateService {
         error: 'رابط بيان التحديث غير صالح (يجب أن يكون https).',
       );
     }
+    // كسر كاش CDN الوسيط: GitHub/Fastly قد يخدمان version.json قديماً
+    // لدقائق بعد النشر — معامل عشوائي لكل طلب يضمن قراءة أحدث بيان.
+    final uriWithBuster = uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      't': '${DateTime.now().millisecondsSinceEpoch}',
+    });
     final client = _clientFactory();
     try {
-      final res = await client.get(uri, headers: {
+      final res = await client.get(uriWithBuster, headers: {
         'Accept': 'application/json',
         'Cache-Control': 'no-cache',
       }).timeout(timeout);

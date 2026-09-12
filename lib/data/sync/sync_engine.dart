@@ -913,8 +913,12 @@ class SyncEngine {
     try {
       final t = _cloudTransport;
       if (t == null) return false;
+      // مهلة صارمة: فحص معلق (شبكة متجمدة) لا يحبس processQueue —
+      // _running يُصفَّر في finally دوماً، لكن بدون مهلة كانت الدورة
+      // كلها تبقى عالقة فيبدو المحرك «مجمداً» رغم تجديد الاشتراك.
       return await SubscriptionGuard.isBlocked(repo,
-          backendUrl: t.backendUrl, workspaceId: t.workspaceId);
+              backendUrl: t.backendUrl, workspaceId: t.workspaceId)
+          .timeout(const Duration(seconds: 15));
     } catch (_) {
       return false; // الشك لصالح الاستمرار — الفحص التالي يحسم.
     }

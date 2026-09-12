@@ -1,0 +1,3884 @@
+╔══════════════════════════════════════════════════════════════════╗
+║     تصدير الأكواد الحساسة للتدقيق اليدوي — Full Engine Code Dump  ║
+╚══════════════════════════════════════════════════════════════════╝
+التاريخ: 2026-09-12 08:08   |   الالتزام: 1b7d007 (main)   |   الإصدار: 3.49.0+85
+
+المحتويات:
+ [1] lib/data/sync/subscription_guard.dart ............ كامل الملف
+ [2] lib/ui/trial_ui.dart ............................. كامل الملف
+ [3] lib/data/sync/sync_engine.dart ................... مقتطعا _trialBlocked + processQueue
+ [4] lib/data/sync/cloud_join.dart .................... مقتطعات بوابات الاشتراك والمقاعد + approveJoinRequest
+ [5] lib/ui/home_shell.dart ........................... مقتطعا _watchTrialLifecycle + AppBar/زر التحديث
+ [6] lib/data/update_service.dart ..................... كامل الملف
+ [7] lib/data/update_installer.dart ................... كامل الملف
+ [8] admin_app/lib/rtdb.dart .......................... كامل الملف
+ [9] admin_app/lib/main.dart .......................... كامل الملف
+
+
+████████████████████████████████████████████████████████████████████████
+██  [1] منظومة التراخيص — محرك الاشتراك والتجربة
+██  المسار: lib/data/sync/subscription_guard.dart
+██  الأسطر: 578
+████████████████████████████████████████████████████████████████████████
+
+// 🔒 محرك الفترة التجريبية الذكية (1-Day Free Trial Engine).
+//
+// المبادئ الصارمة:
+//  1) توقيت الخادم حصراً: التفعيل يُختم بـ {".sv":"timestamp"} على فيربيس،
+//     والتحقق يقارن expires_at بوقت الخادم المُستنتج من ختم write-back —
+//     لا اعتماد على DateTime.now() للهاتف إطلاقاً في قرار الصلاحية.
+//  2) مقاومة التصفير: البصمة العتادية للجهاز تُسجل في فهرس سحابي عالمي
+//     (/trials/$fpHash) مستقل عن مساحة العمل — حذف التطبيق أو مسح بياناته
+//     أو إنشاء مساحة جديدة يعيد نفس البصمة فيُستأنف العدّاد من سجله الأول.
+//  3) بوابة مركزية واحدة (isBlocked) يستشيرها SyncEngine وCloudJoin
+//     وCloudSync — انتهاء التجربة يوقف المزامنة والربط والنسخ السحابي،
+//     ويبقى العمل المحلي سليماً.
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
+
+import '../repository.dart';
+import 'device_id.dart';
+
+/// مدة التجربة الحالية: يوم واحد (24 ساعة) — لأغراض الاختبار، وتُرفع
+/// لاحقاً بتغيير هذا الثابت وحده.
+const Duration kTrialDuration = Duration(hours: 24);
+
+/// المقاعد الافتراضية لباقة المؤسسات (يرفعها المشغّل من عقدة الاشتراك
+/// السحابية `max_devices` بحسب الباقة المباعة).
+const int kDefaultEnterpriseSeats = 5;
+
+/// هامش تسامح لانحراف الشبكة عند إسناد وقت الخادم (ثوانٍ قليلة).
+const int kServerSkewToleranceMs = 5000;
+
+/// مفاتيح المزايا الثمانية في عقدة features السحابية — القيم الافتراضية
+/// حسب الخطة: أثناء التجربة والاشتراك الفعّال كل شيء مفتوح؛ فردي منتهٍ
+/// تُقفل مزاياه المدفوعة؛ مؤسسة منتهية تُجمَّد سحابتها.
+class PlanFeatures {
+  final bool canUseCategories;
+  final bool canSendNotifications;
+  final bool canCloudBackup;
+  final bool canRestoreData;
+  final bool canAdvancedSearch;
+  final bool multiDeviceSync;
+  final bool rolePermissions;
+  final bool auditLog;
+
+  const PlanFeatures({
+    required this.canUseCategories,
+    required this.canSendNotifications,
+    required this.canCloudBackup,
+    required this.canRestoreData,
+    required this.canAdvancedSearch,
+    required this.multiDeviceSync,
+    required this.rolePermissions,
+    required this.auditLog,
+  });
+
+  static const allOn = PlanFeatures(
+    canUseCategories: true,
+    canSendNotifications: true,
+    canCloudBackup: true,
+    canRestoreData: true,
+    canAdvancedSearch: true,
+    multiDeviceSync: true,
+    rolePermissions: true,
+    auditLog: true,
+  );
+
+  /// فردي منتهي التجربة: يبقى التسجيل والحركات اليومية محلياً فقط.
+  static const individualLocked = PlanFeatures(
+    canUseCategories: false,
+    canSendNotifications: false,
+    canCloudBackup: false,
+    canRestoreData: false,
+    canAdvancedSearch: false,
+    multiDeviceSync: false,
+    rolePermissions: false,
+    auditLog: false,
+  );
+
+  factory PlanFeatures.fromMap(Map<String, dynamic>? m) {
+    if (m == null) return allOn;
+    bool b(String k, bool dflt) {
+      final v = m[k];
+      return v is bool ? v : dflt;
+    }
+
+    return PlanFeatures(
+      canUseCategories: b('can_use_categories', true),
+      canSendNotifications: b('can_send_notifications', true),
+      canCloudBackup: b('can_cloud_backup', true),
+      canRestoreData: b('can_restore_data', true),
+      canAdvancedSearch: b('can_advanced_search', true),
+      multiDeviceSync: b('multi_device_sync', true),
+      rolePermissions: b('role_permissions', true),
+      auditLog: b('audit_log', true),
+    );
+  }
+
+  Map<String, Object?> toMap() => {
+        'can_use_categories': canUseCategories,
+        'can_send_notifications': canSendNotifications,
+        'can_cloud_backup': canCloudBackup,
+        'can_restore_data': canRestoreData,
+        'can_advanced_search': canAdvancedSearch,
+        'multi_device_sync': multiDeviceSync,
+        'role_permissions': rolePermissions,
+        'audit_log': auditLog,
+      };
+}
+
+/// حالة الاشتراك كما تُقرأ من السحابة.
+class SubscriptionState {
+  /// trial | active | expired | none (لا سحابة مهيأة).
+  final String status;
+
+  /// individual | enterprise — يُستنتج تلقائياً (مستقل=فردي، مجموعة=مؤسسة).
+  final String planType;
+
+  /// الحد الأقصى للأجهزة (1 للفردي؛ بحسب الباقة للمؤسسة).
+  final int maxDevices;
+
+  final int createdAtMs; // ختم خادم فيربيس (ملي ثانية).
+  final int expiresAtMs; // ختم خادم.
+  final bool isActive;
+  final String deviceFingerprint;
+
+  /// مفاتيح المزايا من عقدة features السحابية.
+  final PlanFeatures features;
+
+  /// وقت الخادم التقريبي لحظة آخر فحص (server_ts المرجعي).
+  final int serverNowMs;
+
+  const SubscriptionState({
+    required this.status,
+    this.planType = 'individual',
+    this.maxDevices = 1,
+    required this.createdAtMs,
+    required this.expiresAtMs,
+    required this.isActive,
+    required this.deviceFingerprint,
+    this.features = PlanFeatures.allOn,
+    required this.serverNowMs,
+  });
+
+  /// هل انتهت التجربة؟ المقارنة بوقت الخادم حصراً.
+  bool get expired =>
+      status != 'active' && expiresAtMs > 0 && serverNowMs >= expiresAtMs;
+
+  /// هل الاشتراك مدفوع وفعّال؟
+  bool get isSubscribed => status == 'active';
+
+  /// هل الميزة المدفوعة مفتوحة الآن؟ (تجربة سارية أو اشتراك فعّال +
+  /// مفتاح الميزة نفسه غير مطفأ من الخادم).
+  bool featureUnlocked(bool Function(PlanFeatures) pick) {
+    if (status == 'none') return true; // لا سحابة بعد — لا قيود عرضية.
+    if (expired && !isSubscribed) return false;
+    return pick(features);
+  }
+
+  /// المتبقي بالملي ثانية (0 عند الانتهاء). بوقت الخادم.
+  int get remainingMs =>
+      expired ? 0 : (expiresAtMs - serverNowMs).clamp(0, 1 << 62);
+
+  Duration get remaining => Duration(milliseconds: remainingMs);
+
+  static const none = SubscriptionState(
+    status: 'none',
+    createdAtMs: 0,
+    expiresAtMs: 0,
+    isActive: true,
+    deviceFingerprint: '',
+    serverNowMs: 0,
+  );
+}
+
+/// حارس الاشتراك: التفعيل، الفحص الدوري بوقت الخادم، والبوابة المركزية.
+class SubscriptionGuard {
+  SubscriptionGuard._();
+
+  /// آخر حالة مفحوصة (كاش خفيف) + لحظة فحصها بساعة أحادية محلية —
+  /// نستخدم Stopwatch (monotonic) لا DateTime.now() حتى لا يكسر تقديم
+  /// ساعة الهاتف حساب «العمر منذ آخر فحص».
+  static SubscriptionState _last = SubscriptionState.none;
+  static final Stopwatch _sinceCheck = Stopwatch();
+  static bool _everChecked = false;
+
+  /// نافذة صلاحية الكاش قبل إعادة الفحص السحابي.
+  static Duration cacheTtl = const Duration(minutes: 5);
+
+  /// (للاختبارات) تجاوز جالب وقت الخادم — يعيد ملي ثانية خادم فيربيس.
+  static Future<int> Function(String backendUrl)? debugServerNowOverride;
+
+  static SubscriptionState get lastState => _last;
+
+  /// تجزئة البصمة العتادية إلى مفتاح سحابي ثابت وآمن (لا نص خام يصعد).
+  static String fingerprintHash(String raw) =>
+      sha256.convert(utf8.encode(raw.trim())).toString().substring(0, 32);
+
+  static String _wsRoot(String base, String ws) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
+
+  static String _trialsRoot(String base) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/trials';
+
+  /// وقت خادم فيربيس الحقيقي: نكتب {".sv":"timestamp"} في عقدة خردة
+  /// ونقرأ القيمة المستبدلة — يعمل عبر REST بلا SDK (بديل serverTimeOffset).
+  static Future<int> serverNowMs(String backendUrl) async {
+    final o = debugServerNowOverride;
+    if (o != null) return o(backendUrl);
+    final url =
+        '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/server_clock.json';
+    final res = await http
+        .put(Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'ts': {'.sv': 'timestamp'}}))
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('server-clock-http-${res.statusCode}');
+    }
+    final m = jsonDecode(res.body);
+    final ts = m is Map ? m['ts'] : null;
+    if (ts is int && ts > 0) return ts;
+    if (ts is num && ts > 0) return ts.toInt();
+    throw StateError('server-clock-bad-payload');
+  }
+
+  /// تفعيل التجربة عند أول إعداد سحابي لمساحة العمل:
+  ///  1) فحص فهرس /trials/$fp — بصمة سبق أن استهلكت تجربة تستأنف سجلها
+  ///     الأصلي (منع التصفير بإعادة التثبيت/مساحة جديدة).
+  ///  2) وإلا: كتابة سجل جديد بختم خادم، ثم write-back لحساب expires_at
+  ///     خادمياً (created_at + 24h) وتثبيته رقماً.
+  static Future<SubscriptionState> ensureTrialStarted(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final raw = await hardwareFingerprintRaw() ??
+        'fallback:${await ensureDeviceId(repo)}';
+    final fp = fingerprintHash(raw);
+    final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+    final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
+    // (الخطط المزدوجة) plan_type يُستنتج تلقائياً: العمل المنفرد = فردي؛
+    // مجموعة قائمة (host/member) = مؤسسة بمقاعدها الافتراضية.
+    final planType = await _detectPlanType(repo);
+    final maxDevices =
+        planType == 'enterprise' ? kDefaultEnterpriseSeats : 1;
+
+    // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل أبداً — نعيد قراءتها.
+    //     (يشمل المستخدمين القدامى الذين هُيّئت عقدتهم في إقلاع سابق.)
+    final existing = await _readJson(wsSub);
+    if (existing != null && (existing['expires_at'] is num) &&
+        (existing['expires_at'] as num) > 0) {
+      return _stateFrom(existing, await serverNowMs(backendUrl));
+    }
+    // (1-ب) إصلاح عقدة نصف مكتوبة (انقطاع بين خطوتي الكتابة): created_at
+    //     الخادمي موجود لكن expires_at لم يُثبَّت — نكمل الحساب من الختم
+    //     الأصلي نفسه دون أي تصفير للعداد.
+    if (existing != null) {
+      final priorCreated = _asMs(existing['created_at']);
+      if (priorCreated > 0) {
+        final repaired = {
+          'status': '${existing['status'] ?? 'trial'}',
+          'created_at': priorCreated,
+          'expires_at': priorCreated + kTrialDuration.inMilliseconds,
+          'is_active': existing['is_active'] != false,
+          'device_fingerprint':
+              '${existing['device_fingerprint'] ?? ''}'.isNotEmpty
+                  ? existing['device_fingerprint']
+                  : fp,
+        };
+        await _putJson(wsSub, repaired);
+        await _putJson(trialIdx, {
+          ...repaired,
+          'workspace_id': workspaceId,
+          'first_seen': priorCreated,
+        });
+        return _stateFrom(
+            Map<String, dynamic>.from(repaired), await serverNowMs(backendUrl));
+      }
+    }
+
+    // (2) فهرس البصمة العالمي: تجربة سابقة لنفس العتاد = استئناف لا تصفير.
+    final prior = await _readJson(trialIdx);
+    if (prior != null && (prior['expires_at'] is num) &&
+        (prior['expires_at'] as num) > 0) {
+      final resumed = {
+        'status': '${prior['status'] ?? 'trial'}',
+        'created_at': prior['created_at'],
+        'expires_at': prior['expires_at'],
+        'is_active': true,
+        'device_fingerprint': fp,
+        'resumed': true,
+      };
+      await _putJson(wsSub, resumed);
+      return _stateFrom(resumed, await serverNowMs(backendUrl));
+    }
+
+    // (3) تفعيل جديد: ختم خادم ثم تثبيت expires_at رقمياً من قيمة الخادم
+    //     المكتوبة فعلاً (write-back) — الحساب خادمي بالكامل.
+    await _putJson(wsSub, {
+      'plan_type': planType,
+      'status': 'trial',
+      'max_devices': maxDevices,
+      'created_at': {'.sv': 'timestamp'},
+      'expires_at': 0,
+      'is_active': true,
+      'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
+    });
+    final written = await _readJson(wsSub) ?? {};
+    final createdMs = _asMs(written['created_at']);
+    final expiresMs = createdMs + kTrialDuration.inMilliseconds;
+    final finalRec = {
+      'plan_type': planType,
+      'status': 'trial',
+      'max_devices': maxDevices,
+      'created_at': createdMs,
+      'expires_at': expiresMs,
+      'is_active': true,
+      'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
+    };
+    await _putJson(wsSub, finalRec);
+    // فهرس البصمة العالمي — صمّام منع إعادة الاستغلال.
+    await _putJson(trialIdx, {
+      ...finalRec,
+      'workspace_id': workspaceId,
+      'first_seen': createdMs,
+    });
+    return _stateFrom(finalRec, createdMs);
+  }
+
+  /// الفحص المرجعي: يقرأ العقدة ويقارن بوقت الخادم. يحدّث الكاش
+  /// ويثبّت آخر حالة ناجحة محلياً (settings) حتى يبقى العدّاد ظاهراً
+  /// بعد إغلاق التطبيق وفتحه ولو تعذرت الشبكة لحظة الإقلاع.
+  static Future<SubscriptionState> check(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    bool force = false,
+  }) async {
+    if (!force &&
+        _everChecked &&
+        _sinceCheck.elapsed < cacheTtl) {
+      // إسناد لحظي: نقدّم وقت الخادم المرجعي بعمر الكاش (ساعة أحادية
+      // لا تتأثر بتلاعب ساعة الهاتف) — العدّاد يتجدد بين الفحوصات
+      // بدل التجمد على قيمة آخر فحص.
+      return _advanced();
+    }
+    try {
+      final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+      var rec = await _readJson(wsSub);
+      final now = await serverNowMs(backendUrl);
+      if (rec == null) {
+        // لا عقدة اشتراك بعد — فعّل التجربة الآن (أول استخدام سحابي).
+        final st = await ensureTrialStarted(repo,
+            backendUrl: backendUrl, workspaceId: workspaceId);
+        _cache(st);
+        await _persist(repo, st);
+        return st;
+      }
+      final st = _stateFrom(rec, now);
+      _cache(st);
+      await _persist(repo, st);
+      return st;
+    } catch (_) {
+      // شبكة غائبة: آخر حالة معروفة في الذاكرة، وإلا (إقلاع جديد بلا
+      // شبكة) الحالة المثبّتة محلياً من آخر فحص ناجح — الشريط لا يختفي.
+      if (_everChecked) return _advanced();
+      final persisted = await _loadPersisted(repo);
+      if (persisted != null) {
+        _cache(persisted);
+        return persisted;
+      }
+      return _last;
+    }
+  }
+
+  /// آخر حالة مع تقديم وقت الخادم المرجعي بعمر الكاش (monotonic).
+  static SubscriptionState _advanced() {
+    if (!_everChecked || _last.serverNowMs <= 0) return _last;
+    return SubscriptionState(
+      status: _last.status,
+      createdAtMs: _last.createdAtMs,
+      expiresAtMs: _last.expiresAtMs,
+      isActive: _last.isActive,
+      deviceFingerprint: _last.deviceFingerprint,
+      serverNowMs: _last.serverNowMs + _sinceCheck.elapsedMilliseconds,
+    );
+  }
+
+  /// تثبيت آخر حالة ناجحة محلياً — تُقرأ عند الإقلاع بلا شبكة.
+  static Future<void> _persist(Repo repo, SubscriptionState st) async {
+    try {
+      if (st.status == 'none') return;
+      await repo.setSetting(
+          'subCachedState',
+          jsonEncode({
+            'status': st.status,
+            'plan_type': st.planType,
+            'max_devices': st.maxDevices,
+            'created_at': st.createdAtMs,
+            'expires_at': st.expiresAtMs,
+            'is_active': st.isActive,
+            'fp': st.deviceFingerprint,
+            'features': st.features.toMap(),
+            'server_now': st.serverNowMs,
+            'device_ms': DateTime.now().millisecondsSinceEpoch,
+          }));
+    } catch (_) {}
+  }
+
+  /// استرجاع الحالة المثبّتة محلياً مع إسناد تقديري لوقت الخادم
+  /// (لأغراض العرض فقط — البوابات تُحسم بفحص سحابي حقيقي عند توفر
+  /// الشبكة، ولا يُسمح للإسناد بإرجاع الساعة للخلف).
+  static Future<SubscriptionState?> _loadPersisted(Repo repo) async {
+    try {
+      final raw = (await repo.settings())['subCachedState'] ?? '';
+      if (raw.isEmpty) return null;
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final serverNow = _asMs(m['server_now']);
+      final deviceMs = _asMs(m['device_ms']);
+      final nowDevice = DateTime.now().millisecondsSinceEpoch;
+      // الإسناد للأمام فقط: إرجاع ساعة الهاتف لا يُرجع وقت الخادم.
+      final drift = (nowDevice - deviceMs).clamp(0, 1 << 62);
+      final rawFeat = m['features'];
+      return SubscriptionState(
+        status: '${m['status'] ?? 'trial'}',
+        planType:
+            '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+                ? 'enterprise'
+                : 'individual',
+        maxDevices: _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
+        createdAtMs: _asMs(m['created_at']),
+        expiresAtMs: _asMs(m['expires_at']),
+        isActive: m['is_active'] != false,
+        deviceFingerprint: '${m['fp'] ?? ''}',
+        features: PlanFeatures.fromMap(
+            rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
+        serverNowMs: serverNow + drift,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// البوابة المركزية: true = السحابة محظورة (التجربة انتهت وغير مدفوع).
+  /// تُستدعى قبل أي دفع/سحب/ربط/نسخ سحابي.
+  static Future<bool> isBlocked(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final st = await check(repo,
+        backendUrl: backendUrl, workspaceId: workspaceId);
+    if (st.status == 'active') return false; // اشتراك مدفوع فعّال.
+    if (st.status == 'none') return false; // لا سحابة — لا حظر.
+    return st.expired;
+  }
+
+  static void _cache(SubscriptionState st) {
+    _last = st;
+    _everChecked = true;
+    _sinceCheck
+      ..reset()
+      ..start();
+  }
+
+  /// (للاختبارات) تصفير الكاش.
+  static void debugReset() {
+    _last = SubscriptionState.none;
+    _everChecked = false;
+    _sinceCheck
+      ..stop()
+      ..reset();
+  }
+
+  static SubscriptionState _stateFrom(Map<String, dynamic> m, int nowMs) {
+    final rawFeat = m['features'];
+    return SubscriptionState(
+      status: '${m['status'] ?? 'trial'}',
+      planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+          ? 'enterprise'
+          : 'individual',
+      maxDevices: (() {
+        final v = m['max_devices'];
+        if (v is int && v > 0) return v;
+        if (v is num && v > 0) return v.toInt();
+        return '${m['plan_type'] ?? ''}' == 'enterprise'
+            ? kDefaultEnterpriseSeats
+            : 1;
+      })(),
+      createdAtMs: _asMs(m['created_at']),
+      expiresAtMs: _asMs(m['expires_at']),
+      isActive: m['is_active'] != false,
+      deviceFingerprint: '${m['device_fingerprint'] ?? ''}',
+      features: PlanFeatures.fromMap(
+          rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
+      serverNowMs: nowMs,
+    );
+  }
+
+  /// استنتاج المسار تلقائياً: مجموعة قائمة (مضيف أو عضو) = مؤسسة؛
+  /// العمل المنفرد = فردي.
+  static Future<String> _detectPlanType(Repo repo) async {
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'host' || mode == 'member') return 'enterprise';
+      // مضيف فعلي بأجهزة مقترنة أخرى (حتى لو تلكأ الوضع) = مؤسسة.
+      final db = await repo.database;
+      final peers = await db.rawQuery(
+          "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+          "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+      final c = (peers.first['c'] as int?) ?? 0;
+      if (c > 1) return 'enterprise';
+    } catch (_) {}
+    return 'individual';
+  }
+
+  /// الترقية التلقائية للمسار: بمجرد إنشاء مجموعة/فتح كود ربط لجهاز ثانٍ
+  /// يتحول الاشتراك إلى enterprise بمقاعده — دون المساس بالعداد الزمني
+  /// (created_at/expires_at يبقيان كما هما بختم الخادم الأصلي).
+  static Future<void> promoteToEnterprise(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    int? maxDevices,
+  }) async {
+    final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+    final rec = await _readJson(wsSub);
+    if (rec == null) return; // لا عقدة بعد — ensureTrialStarted سينشئها.
+    if ('${rec['plan_type'] ?? ''}' == 'enterprise') return; // مرقّاة أصلاً.
+    final seats = maxDevices ?? kDefaultEnterpriseSeats;
+    await _putJson(wsSub, {
+      ...rec,
+      'plan_type': 'enterprise',
+      'max_devices':
+          (rec['max_devices'] is num && (rec['max_devices'] as num) > seats)
+              ? rec['max_devices']
+              : seats,
+      'features': (rec['features'] is Map)
+          ? rec['features']
+          : PlanFeatures.allOn.toMap(),
+    });
+    debugReset(); // الفحص التالي يقرأ الخطة الجديدة فوراً.
+  }
+
+  static int _asMs(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v') ?? 0;
+  }
+
+  static Future<Map<String, dynamic>?> _readJson(String url) async {
+    final res =
+        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('subscription-http-${res.statusCode}');
+    }
+    final t = res.body.trim();
+    if (t.isEmpty || t == 'null') return null;
+    final d = jsonDecode(t);
+    return d is Map ? Map<String, dynamic>.from(d) : null;
+  }
+
+  static Future<void> _putJson(String url, Object body) async {
+    final res = await http
+        .put(Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('subscription-put-http-${res.statusCode}');
+    }
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [2] منظومة التراخيص — واجهات التجربة والشراء والأقفال
+██  المسار: lib/ui/trial_ui.dart
+██  الأسطر: 904
+████████████████████████████████████████████████████████████████████████
+
+// 🔒 واجهات الفترة التجريبية: نافذة الترحيب (مرة واحدة) + الشريط العلوي
+// الأنيق للوقت المتبقي + بطاقة انتهاء التجربة مع خيارات التجديد والتواصل.
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../core/sfx.dart';
+import '../core/theme.dart';
+import '../data/providers.dart';
+import '../data/sync/device_id.dart';
+import '../data/sync/subscription_guard.dart';
+import 'widgets.dart' show showSnack;
+
+/// رقم التواصل المباشر للتفعيل (واتساب المدير/الدعم).
+const String kActivationContact = '+96774190040';
+
+/// نافذة الترحيب بالفترة التجريبية — تظهر مرة واحدة فقط عند أول تفعيل.
+Future<void> showTrialWelcomeDialog(BuildContext context) async {
+  Sfx.notify();
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Icon(Icons.workspace_premium,
+                  color: Colors.white, size: 40),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '🎉 تجربتك المجانية بدأت!',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'استمتع بكافة المزايا كاملة لمدة 24 ساعة:\n'
+              '☁️ مزامنة سحابية لحظية بين أجهزتك\n'
+              '👥 ربط أجهزة الفريق وإدارة الصلاحيات\n'
+              '💾 نسخ احتياطي سحابي آمن\n\n'
+              'العدّاد يُحتسب بتوقيت الخادم — يظهر الوقت المتبقي '
+              'أعلى الشاشة الرئيسية.',
+              style: TextStyle(fontSize: 13.5, height: 1.7),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF7C3AED),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('ابدأ الاستخدام',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// صياغة الوقت المتبقي: «X يوماً وY ساعة» فوق اليومين، «X ساعة وY دقيقة»
+/// دونهما — للاستخدام الموحد في الشريط وقسم تفاصيل الاشتراك.
+String formatTrialRemaining(Duration rem) {
+  if (rem.inHours >= 48) {
+    final d = rem.inDays;
+    final h = rem.inHours % 24;
+    return h == 0 ? '$d أيام' : '$d أيام و$h ساعة';
+  }
+  final h = rem.inHours;
+  final m = rem.inMinutes % 60;
+  if (h == 0) return '$m دقيقة';
+  return '$h ساعة و$m دقيقة';
+}
+
+/// الشريط الدائم أعلى الشاشة الرئيسية (للمدير فقط): عدّاد تنازلي حي
+/// يحسب الفارق بين expires_at ووقت الخادم اللحظي، ويتجدد كل دقيقة.
+/// يبقى ظاهراً طوال سريان التجربة — عبر كل الإقلاعات — ولا يختفي إلا
+/// عند اشتراك مدفوع (active) أو بعد الانتهاء (تحل محله بطاقة الانتهاء).
+class TrialCountdownBanner extends ConsumerStatefulWidget {
+  const TrialCountdownBanner({super.key});
+
+  @override
+  ConsumerState<TrialCountdownBanner> createState() =>
+      _TrialCountdownBannerState();
+}
+
+class _TrialCountdownBannerState extends ConsumerState<TrialCountdownBanner> {
+  // نبضة عرض محلية كل 30 ثانية: تعيد بناء النص من نفس حالة المزود
+  // (التي تسند وقت الخادم لحظياً) دون انتظار دورة المزود الدقيقية.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // (المتطلب) الشريط للمدير فقط — تحصين مزدوج كبقية واجهات المالك.
+    final isOwner = (ref.watch(isOwnerProvider).valueOrNull ?? false) ||
+        ref.watch(workspaceModeProvider).valueOrNull == 'host';
+    if (!isOwner) return const SizedBox.shrink();
+    final sub = ref.watch(subscriptionProvider).valueOrNull;
+    if (sub == null || sub.status != 'trial' || sub.expiresAtMs <= 0) {
+      return const SizedBox.shrink();
+    }
+    if (sub.expired) {
+      // شريط انتهاء مصغر دائم (بدل الاختفاء): تفعيل بنقرة.
+      const color = Color(0xFFDC2626);
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.lock_clock, size: 16, color: color),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'انتهت الفترة التجريبية — المزايا السحابية متوقفة',
+                style: TextStyle(
+                    fontSize: 11.5, fontWeight: FontWeight.w700, color: color),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () => showTrialExpiredSheet(context),
+              child: const Text('تفعيل الآن',
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: color)),
+            ),
+          ],
+        ),
+      );
+    }
+    final rem = sub.remaining;
+    final urgent = rem < const Duration(hours: 3);
+    final color = urgent ? const Color(0xFFDC2626) : const Color(0xFF7C3AED);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(urgent ? Icons.hourglass_bottom : Icons.workspace_premium,
+              size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              urgent
+                  ? '⏳ تنتهي تجربتك خلال ${formatTrialRemaining(rem)} — فعّل اشتراكك الآن'
+                  : 'الفترة التجريبية: متبقٍ ${formatTrialRemaining(rem)}',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => showTrialExpiredSheet(context, expired: false),
+            child: Text(urgent ? 'تفعيل' : 'ترقية',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: color)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// (الإعدادات — للمدير) قسم «تفاصيل الاشتراك»: حالة الترخيص، تاريخ
+/// الانتهاء، الوقت المتبقي، وزر تجديد/ترقية الاشتراك.
+class SubscriptionDetailsSection extends ConsumerWidget {
+  const SubscriptionDetailsSection({super.key});
+
+  String _fmtDate(int ms) {
+    if (ms <= 0) return '—';
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year}/${two(d.month)}/${two(d.day)} — ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final subAsync = ref.watch(subscriptionProvider);
+    final sub = subAsync.valueOrNull;
+    if (sub == null || sub.status == 'none') {
+      return Card(
+        child: ListTile(
+          leading: const Icon(Icons.workspace_premium_outlined),
+          title: const Text('تفاصيل الاشتراك'),
+          subtitle: Text(
+            subAsync.isLoading
+                ? 'جارٍ تحميل حالة الاشتراك…'
+                : 'فعّل المزامنة السحابية أولاً لبدء الفترة التجريبية.',
+            style: const TextStyle(fontSize: 11.5, height: 1.5),
+          ),
+        ),
+      );
+    }
+    final (label, color, icon) = switch ((sub.status, sub.expired)) {
+      ('active', _) => (
+          'اشتراك مدفوع فعّال',
+          const Color(0xFF16A34A),
+          Icons.verified,
+        ),
+      ('trial', false) => (
+          'فترة تجريبية سارية',
+          const Color(0xFF7C3AED),
+          Icons.workspace_premium,
+        ),
+      _ => (
+          'انتهت الفترة التجريبية',
+          const Color(0xFFDC2626),
+          Icons.lock_clock,
+        ),
+    };
+    Widget row(String k, String v, {Color? vColor}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Text(k,
+                  style: TextStyle(
+                      fontSize: 12.5, color: AppColors.text2Of(context))),
+              const Spacer(),
+              Text(v,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      color: vColor ?? AppColors.textOf(context))),
+            ],
+          ),
+        );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('تفاصيل الاشتراك',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w800)),
+                      Text(label,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: color)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            row('حالة الترخيص', label, vColor: color),
+            if (sub.status != 'active') ...[
+              row('تاريخ بداية التجربة', _fmtDate(sub.createdAtMs)),
+              row('تاريخ الانتهاء', _fmtDate(sub.expiresAtMs)),
+              if (!sub.expired)
+                row('الوقت المتبقي', formatTrialRemaining(sub.remaining),
+                    vColor: color),
+            ],
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor:
+                    sub.expired ? const Color(0xFFDC2626) : color,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () =>
+                  showTrialExpiredSheet(context, expired: sub.expired),
+              icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+              label: Text(
+                sub.status == 'active'
+                    ? 'إدارة الاشتراك'
+                    : sub.expired
+                        ? 'تجديد الاشتراك الآن'
+                        : 'ترقية الاشتراك',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// بطاقة التفعيل/التجديد: تُستخدم بعد الانتهاء (تجديد) وأثناء السريان
+/// (ترقية مبكرة) — العنوان والنبرة يتكيفان مع الحالة.
+Future<void> showTrialExpiredSheet(BuildContext context,
+    {bool expired = true}) async {
+  if (expired) {
+    Sfx.warning();
+  } else {
+    Sfx.notify();
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, 20 + MediaQuery.viewInsetsOf(ctx).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(expired ? Icons.lock_clock : Icons.rocket_launch,
+              size: 52,
+              color: expired
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF7C3AED)),
+          const SizedBox(height: 12),
+          Text(
+            expired ? 'انتهت الفترة التجريبية' : 'ترقية / تجديد الاشتراك',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            expired
+                ? 'بياناتك المحلية بأمان ويمكنك مواصلة العمل عليها، لكن المزايا '
+                    'السحابية توقفت:\n'
+                    '• المزامنة اللحظية بين الأجهزة\n'
+                    '• ربط أجهزة جديدة\n'
+                    '• النسخ الاحتياطي السحابي\n\n'
+                    'فعّل اشتراكك لاستئناف كل شيء فوراً من حيث توقف.'
+                : 'فعّل اشتراكك الدائم قبل انتهاء التجربة لتستمر كل المزايا '
+                    'السحابية دون أي انقطاع:\n'
+                    '• المزامنة اللحظية بين الأجهزة\n'
+                    '• ربط أجهزة الفريق\n'
+                    '• النسخ الاحتياطي السحابي',
+            style: const TextStyle(fontSize: 13, height: 1.7),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () async {
+              final msg = Uri.encodeComponent(expired
+                  ? 'مرحباً، انتهت فترتي التجريبية في تطبيق مدير الحسابات '
+                      'وأرغب بتفعيل الاشتراك.'
+                  : 'مرحباً، أستخدم تطبيق مدير الحسابات وأرغب بترقية/تجديد '
+                      'اشتراكي.');
+              final wa = Uri.parse(
+                  'https://wa.me/${kActivationContact.replaceAll('+', '')}?text=$msg');
+              try {
+                await launchUrl(wa, mode: LaunchMode.externalApplication);
+              } catch (_) {}
+            },
+            icon: const Icon(Icons.chat),
+            label: const Text('تواصل مع المدير للتفعيل (واتساب)',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () async {
+              final tel = Uri.parse('tel:$kActivationContact');
+              try {
+                await launchUrl(tel);
+              } catch (_) {}
+            },
+            icon: const Icon(Icons.call_outlined),
+            label: const Text('اتصال مباشر'),
+          ),
+          const SizedBox(height: 8),
+          // شاشة الشراء الكاملة: المزايا + إرسال كود التفعيل + تأكيد الشراء.
+          FilledButton.tonalIcon(
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const PurchaseScreen()));
+            },
+            icon: const Icon(Icons.workspace_premium),
+            label: const Text('شراء التطبيق — عرض كل المزايا',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 6),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(expired ? 'متابعة بالعمل المحلي فقط' : 'لاحقاً',
+                style: TextStyle(color: AppColors.text3Of(ctx))),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+// ==================== شاشة شراء التطبيق (الخطة الفردية) ====================
+
+/// صف ميزة في شاشة الشراء.
+class _FeatureRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+  const _FeatureRow(this.icon, this.title, this.desc);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 18, color: const Color(0xFF7C3AED)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w800)),
+                  Text(desc,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.5,
+                          color: AppColors.text2Of(context))),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// شاشة «شراء التطبيق»: مزايا الاشتراك + [إرسال كود التفعيل] عبر واتساب
+/// برسالة مجهزة تحمل معرف الجهاز + [تأكيد عملية الشراء] بفحص التفعيل
+/// السحابي فوراً — الترقية تسري دون مسح بيانات أو إعادة تثبيت.
+class PurchaseScreen extends ConsumerStatefulWidget {
+  /// اسم الميزة التي قادت المستخدم هنا (للعنوان التسويقي) — اختياري.
+  final String? lockedFeature;
+  const PurchaseScreen({super.key, this.lockedFeature});
+
+  @override
+  ConsumerState<PurchaseScreen> createState() => _PurchaseScreenState();
+}
+
+class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
+  bool _verifying = false;
+
+  Future<void> _sendActivationRequest() async {
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final devId = await ensureDeviceId(repo);
+      final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final fp = SubscriptionGuard.fingerprintHash(raw);
+      final msg = Uri.encodeComponent(
+          'مرحباً، أرغب بشراء اشتراك تطبيق مدير الحسابات.\n'
+          'معرف الجهاز: $devId\n'
+          'بصمة التفعيل: $fp');
+      final wa = Uri.parse(
+          'https://wa.me/${kActivationContact.replaceAll('+', '')}?text=$msg');
+      await launchUrl(wa, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.',
+            error: true);
+      }
+    }
+  }
+
+  /// التحقق من التفعيل السحابي: فحص قسري لعقدة الاشتراك — إن قلبها
+  /// المشغّل إلى active تسري الترقية فوراً على هذا الجهاز.
+  Future<void> _confirmPurchase() async {
+    setState(() => _verifying = true);
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) {
+        if (mounted) {
+          showSnack(context,
+              'فعّل المزامنة السحابية أولاً من الإعدادات ليكتمل التحقق.',
+              error: true);
+        }
+        return;
+      }
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      SubscriptionGuard.debugReset(); // تجاوز الكاش — قراءة حقيقية الآن.
+      final sub = await SubscriptionGuard.check(repo,
+          backendUrl: url, workspaceId: ws, force: true);
+      if (!mounted) return;
+      if (sub.isSubscribed) {
+        Sfx.success();
+        bump(ref);
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.verified,
+                color: Color(0xFF16A34A), size: 44),
+            title: const Text('🎉 تم تفعيل اشتراكك بنجاح'),
+            content: const Text(
+              'كل المزايا فُتحت فوراً على هذا الجهاز — دون مسح بيانات '
+              'أو إعادة تثبيت. شكراً لثقتك!',
+              style: TextStyle(height: 1.6),
+              textAlign: TextAlign.center,
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('ابدأ الاستخدام'),
+              ),
+            ],
+          ),
+        );
+        if (mounted) Navigator.of(context).maybePop();
+      } else {
+        Sfx.warning();
+        showSnack(
+            context,
+            'لم يُرصد تفعيل بعد. أرسل كود التفعيل عبر واتساب وسيُفعَّل '
+            'اشتراكك خلال دقائق، ثم اضغط هنا مجدداً.',
+            error: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر التحقق — تأكد من اتصال الإنترنت.',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _verifying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('شراء التطبيق')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.workspace_premium,
+                    color: Colors.white, size: 44),
+                const SizedBox(height: 8),
+                Text(
+                  widget.lockedFeature == null
+                      ? 'افتح كل المزايا — اشتراك واحد'
+                      : '«${widget.lockedFeature}» ميزة مدفوعة',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'فعّل اشتراكك وافتح كل القدرات فوراً — بياناتك تبقى كما هي.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          const _FeatureRow(Icons.category_outlined, 'التصنيفات',
+              'إنشاء واستخدام تصنيفات الحسابات والأصناف بلا حدود.'),
+          const _FeatureRow(Icons.notifications_active_outlined,
+              'الإشعارات والرسائل التلقائية',
+              'رسائل الرصيد للعملاء وتنبيهات تلقائية ذكية.'),
+          const _FeatureRow(Icons.cloud_upload_outlined,
+              'النسخ الاحتياطي السحابي',
+              'نسخة يومية آمنة ومزامنة بياناتك عبر السحابة.'),
+          const _FeatureRow(Icons.settings_backup_restore_outlined,
+              'نقاط الاسترجاع',
+              'استرجاع بياناتك لأي نقطة محددة أو دمج قواعد البيانات.'),
+          const _FeatureRow(Icons.manage_search_outlined,
+              'البحث الشامل المتقدم',
+              'بحث فوري عميق في الحسابات والعمليات والتصنيفات.'),
+          const _FeatureRow(Icons.devices_other_outlined,
+              'تعدد الأجهزة (باقة المؤسسات)',
+              'فريق كامل بأدوار وصلاحيات ومزامنة لحظية وسجل تدقيق.'),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _sendActivationRequest,
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('إرسال كود التفعيل (واتساب)',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _verifying ? null : _confirmPurchase,
+            icon: _verifying
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2))
+                : const Icon(Icons.verified_outlined),
+            label: Text(
+                _verifying
+                    ? 'جارٍ التحقق من التفعيل…'
+                    : 'اضغط هنا لتأكيد عملية الشراء',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              'بعد الدفع يُفعَّل اشتراكك سحابياً خلال دقائق — اضغط زر '
+              'التأكيد ليسري فوراً.',
+              style:
+                  TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== ودجة القفل 🔒 للمزايا المدفوعة ====================
+
+/// تغلّف أي قسم/بلاطة ميزة مدفوعة: مفتوحة = تُعرض كما هي؛ مقفلة = تبقى
+/// ظاهرة بتدرج رمادي ومؤشر 🔒، والضغط يعرض رسالة تعريفية ثم شاشة الشراء.
+class FeatureGate extends ConsumerWidget {
+  /// مفتاح الميزة في featureUnlockedProvider.
+  final String featureKey;
+
+  /// اسم الميزة للعرض في الرسالة التعريفية.
+  final String featureName;
+
+  /// وصف تسويقي قصير يظهر في الرسالة التعريفية.
+  final String description;
+  final Widget child;
+
+  const FeatureGate({
+    super.key,
+    required this.featureKey,
+    required this.featureName,
+    required this.description,
+    required this.child,
+  });
+
+  static Future<void> showLockedNotice(
+    BuildContext context, {
+    required String featureName,
+    required String description,
+  }) async {
+    Sfx.warning();
+    final buy = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.lock_outline,
+            color: Color(0xFF7C3AED), size: 42),
+        title: Text('«$featureName» ميزة مدفوعة'),
+        content: Text('$description\n\nفعّل اشتراكك لفتحها فوراً — '
+            'بياناتك الحالية تبقى كما هي دون أي مسح.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('لاحقاً'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED)),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.workspace_premium, size: 18),
+            label: const Text('شراء التطبيق'),
+          ),
+        ],
+      ),
+    );
+    if (buy == true && context.mounted) {
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PurchaseScreen(lockedFeature: featureName)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unlocked =
+        ref.watch(featureUnlockedProvider(featureKey)).valueOrNull ?? true;
+    if (unlocked) return child;
+    // مقفلة: تظل ظاهرة (تشويق) بتدرج رمادي + قفل، والضغط يفتح التعريف.
+    return Stack(
+      children: [
+        // امتصاص كل النقرات الداخلية ثم تحويلها لرسالة التعريف.
+        AbsorbPointer(
+          child: Opacity(
+            opacity: 0.45,
+            child: ColorFiltered(
+              colorFilter: const ColorFilter.matrix(<double>[
+                0.2126, 0.7152, 0.0722, 0, 0, //
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0, 0, 0, 1, 0,
+              ]),
+              child: child,
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => showLockedNotice(context,
+                  featureName: featureName, description: description),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Container(
+                  margin: const EdgeInsets.all(8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, size: 12, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text('مدفوعة',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// (باقة المؤسسات) شارة عدّاد المقاعد: «الأجهزة 3/5» — تظهر للمدير في
+/// شاشة إدارة المجموعة وتفاصيل الاشتراك.
+class SeatUsageBadge extends ConsumerWidget {
+  const SeatUsageBadge({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final usage = ref.watch(seatUsageProvider).valueOrNull;
+    if (usage == null) return const SizedBox.shrink();
+    final (connected, maxSeats) = usage;
+    final full = connected >= maxSeats;
+    final color = full ? const Color(0xFFDC2626) : const Color(0xFF0EA5E9);
+    return Tooltip(
+      message: full
+          ? 'استُنفدت مقاعد الباقة — رقِّ الاشتراك لإضافة أجهزة'
+          : 'الأجهزة المتصلة من أصل الحد الأقصى للباقة',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .10),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: .35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(full ? Icons.event_busy : Icons.devices, size: 13,
+                color: color),
+            const SizedBox(width: 5),
+            Text('الأجهزة $connected/$maxSeats',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// بوابة نقرة لميزة مدفوعة: true = مفتوحة فامضِ؛ false = عُرضت رسالة
+/// التعريف (مع زر شاشة الشراء) وعلى المستدعي التوقف.
+Future<bool> ensureFeatureUnlocked(
+  BuildContext context,
+  WidgetRef ref, {
+  required String featureKey,
+  required String featureName,
+  required String description,
+}) async {
+  bool ok = true;
+  try {
+    ok = await ref.read(featureUnlockedProvider(featureKey).future);
+  } catch (_) {}
+  if (ok) return true;
+  if (context.mounted) {
+    await FeatureGate.showLockedNotice(context,
+        featureName: featureName, description: description);
+  }
+  return false;
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [3] محرك المزامنة — بوابة الاشتراك وتجميد الدفع
+██  المسار: lib/data/sync/sync_engine.dart
+██  الأسطر: 180  |  مقتطعات الأجزاء المطلوبة
+████████████████████████████████████████████████████████████████████████
+
+
+──── مقتطع: دورات المزامنة المجدولة واستدعاء _trialBlocked قبل الدفع (الأسطر 375–450) ────
+
+    try {
+      await _ensureCloudTransport();
+    } catch (_) {}
+    if (!_started || generation != _generation) return;
+    _timer ??= Timer.periodic(
+      const Duration(seconds: 8),
+      (_) async {
+        await processQueue();
+        await _checkDangerState();
+      },
+    );
+
+    Future(() async {
+      if (!_started || generation != _generation) return;
+      try {
+        await _ensureCloudTransport();
+        if (_cloudTransport != null) {
+          try {
+            await _cloudTransport!.pull(resolver: ConflictResolver());
+          } catch (_) {}
+        }
+      } catch (_) {}
+      await _checkExpulsionAndAutoPurge();
+      await processQueue();
+    });
+    // تفقد دوري كل 6 ساعات: هل طرأ طرد لنا، أو هناك أجهزة خاملة لنطرَدها تلقائياً.
+    _maintenanceTimer ??= Timer.periodic(
+      const Duration(hours: 6),
+      (_) async {
+        await _checkExpulsionAndAutoPurge();
+        try {
+          await _pruneOperationPayloads();
+        } catch (_) {}
+        // (دفعة 58) رسائل الدردشة تُحذف نهائياً بعد 24 ساعة (محلي).
+        try {
+          await repo.purgeExpiredChatMessages();
+        } catch (_) {}
+      },
+    );
+    // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
+    // الناقصة من الأقران (عمليات وصلت بالمزامنة بلا ملفاتها).
+    Future(() async {
+      try {
+        await _pruneOperationPayloads();
+      } catch (_) {}
+      // (دفعة 58) تنظيف الدردشة المنتهية عمرها فور الإقلاع أيضاً.
+      try {
+        await repo.purgeExpiredChatMessages();
+      } catch (_) {}
+    });
+    // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
+    // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
+    _rosterTimer ??= Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _reconcileRoster(),
+    );
+    // سحب سحابي دوري: بدون هذا كان السحب يحدث مرة واحدة فقط عند الإقلاع،
+    // فلا تصل عمليات الأجهزة الأخرى عبر السحابة إلا بعد إعادة تشغيل التطبيق.
+    _cloudPullTimer ??= Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => _periodicCloudPull(),
+    );
+  }
+
+  Future<void> _periodicCloudPull() async {
+    if (_cloudPulling || !_started) return;
+    if (_cloudTransport == null) return;
+    // 🔒 انتهاء التجربة يوقف السحب السحابي الدوري أيضاً.
+    if (await _trialBlocked()) return;
+    _cloudPulling = true;
+    try {
+      final applied = await _cloudTransport!.pull(resolver: ConflictResolver());
+      if (applied > 0) {
+        try {
+          onSyncActivity?.call();
+        } catch (_) {}
+
+
+──── مقتطع: _trialBlocked (البوابة) + processQueue (التجميد الكامل عند الانتهاء) (الأسطر 905–1000) ────
+
+    final pending = await q.countPending();
+    final failed = await q.countFailed();
+    return SyncSummary(pending: pending, failed: failed);
+  }
+
+  /// 🔒 (التجربة) هل السحابة محظورة لانتهاء الفترة التجريبية؟
+  /// فحص خفيف بكاش داخلي — لا يضرب الشبكة في كل دورة.
+  Future<bool> _trialBlocked() async {
+    try {
+      final t = _cloudTransport;
+      if (t == null) return false;
+      return await SubscriptionGuard.isBlocked(repo,
+          backendUrl: t.backendUrl, workspaceId: t.workspaceId);
+    } catch (_) {
+      return false; // الشك لصالح الاستمرار — الفحص التالي يحسم.
+    }
+  }
+
+  Future<void> processQueue() async {
+    if (_running) return;
+    _running = true;
+    try {
+      // 🔒 انتهاء التجربة يجمّد الدفع السحابي كلياً (العمل المحلي يستمر).
+      if (await _trialBlocked()) return;
+      final db = await _db;
+      final q = _queue ??= SyncQueueOps(db);
+      // السحابة أولاً: عند نجاح رفع العملية للسحابة تُعلَّم synced=1،
+      // فيعتبرها هدف LAN (في نفس الدورة) مُسلَّمة عبر السحابة للأجهزة
+      // غير القابلة للوصول محلياً — بدل بقائها awaiting-offline-peers.
+      final ordered = List<SyncTransport>.of(_transports)
+        ..sort((a, b) {
+          if (a.targetId == b.targetId) return 0;
+          if (a.targetId == SyncTarget.cloud) return -1;
+          if (b.targetId == SyncTarget.cloud) return 1;
+          return 0;
+        });
+      for (final t in ordered) {
+        List<Map<String, Object?>> rows;
+        try {
+          rows = await q
+              .pickPending(limit: 20, target: t.targetId)
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          continue;
+        }
+        for (final r in rows) {
+          final qid = r['id'] as int;
+          final opId = r['operation_id'] as String;
+          try {
+            await q.markSyncing(qid).timeout(const Duration(seconds: 5));
+          } catch (_) {
+            continue; // Do not send without a durable queue state.
+          }
+          String? entityTable;
+          String? entityId;
+          try {
+            final opRows = await db
+                .query(
+                  'operations',
+                  where: 'id = ?',
+                  whereArgs: [opId],
+                  limit: 1,
+                )
+                .timeout(const Duration(seconds: 5));
+            if (opRows.isEmpty) {
+              try {
+                await q.markSynced(qid).timeout(const Duration(seconds: 3));
+              } catch (_) {}
+              continue;
+            }
+            final op = SyncOperation.fromMap(opRows.first);
+            entityTable = switch (op.entityType) {
+              EntityKind.tx => 'transactions',
+              EntityKind.account => 'accounts',
+              EntityKind.item => 'items',
+              EntityKind.itemCategory => 'item_categories',
+              EntityKind.stockMove => 'stock_moves',
+              EntityKind.voucher => 'vouchers',
+              EntityKind.user => 'users',
+              EntityKind.currency => 'currencies',
+              EntityKind.setting => 'settings',
+              EntityKind.category => 'categories',
+              EntityKind.conversation => 'conversations',
+              EntityKind.message => 'messages',
+            };
+            entityId = op.entityId;
+            if (entityTable == 'transactions') {
+              try {
+                await db
+                    .update(
+                      'transactions',
+                      {'sync_state': 'syncing'},
+                      where: 'id = ?',
+                      whereArgs: [entityId],
+                    )
+                    .timeout(const Duration(seconds: 3));
+
+
+████████████████████████████████████████████████████████████████████████
+██  [4] شبكة الأجهزة — بوابات الانضمام وحد المقاعد
+██  المسار: lib/data/sync/cloud_join.dart
+██  الأسطر: 292  |  مقتطعات الأجزاء المطلوبة
+████████████████████████████████████████████████████████████████████████
+
+
+──── مقتطع: _ensureSubscriptionAllows + connectedDevicesCount + _ensureSeatAvailable (الأسطر 195–290) ────
+
+  static Future<void> Function()? onSelfEvicted;
+
+  /// 🔒 (التجربة) يرمي CloudJoinException إذا انتهت الفترة التجريبية —
+  /// حارس ربط الأجهزة الجديدة (دعوة/موافقة).
+  static Future<void> _ensureSubscriptionAllows(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final blocked = await SubscriptionGuard.isBlocked(repo,
+          backendUrl: url, workspaceId: ws);
+      if (blocked) {
+        throw const CloudJoinException(
+            '⏳ انتهت الفترة التجريبية — ربط الأجهزة الجديدة متوقف. '
+            'فعّل اشتراكك لاستئناف كل المزايا السحابية.');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {
+      // تعذر الفحص (شبكة) — لا نمنع؛ بوابة المزامنة الدورية تحسم لاحقاً.
+    }
+  }
+
+  /// (باقة المؤسسات) عدد الأجهزة المتصلة حالياً بالمجموعة: مقترنة وغير
+  /// مطرودة/ملغاة — يُعرض في عدّاد المقاعد ويُفحص قبل أي ربط جديد.
+  static Future<int> connectedDevicesCount(Repo repo) async {
+    final db = await repo.database;
+    final rows = await db.rawQuery(
+        "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+        "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+    return (rows.first['c'] as int?) ?? 0;
+  }
+
+  /// (باقة المؤسسات) بوابة المقاعد: ربط جهاز جديد يتجاوز max_devices
+  /// يُرفض برسالة المدير الواضحة. الجهاز المنضم مجدداً (سجله قائم) لا
+  /// يستهلك مقعداً جديداً. فشل قراءة العقدة سحابياً = سماح (fail-open،
+  /// بوابة المزامنة الدورية تحسم لاحقاً).
+  static Future<void> _ensureSeatAvailable(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String joiningDeviceId,
+  }) async {
+    int maxDevices;
+    try {
+      final rec = await _getJson(
+          '${_root(backendUrl, workspaceId)}/subscription.json');
+      if (rec == null) return; // لا عقدة اشتراك بعد — لا حد مفروضاً.
+      final v = rec['max_devices'];
+      maxDevices = v is num ? v.toInt() : 0;
+      if (maxDevices <= 0) return; // غير محدد = بلا حد.
+    } catch (_) {
+      return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
+    }
+    final db = await repo.database;
+    // إعادة انضمام جهاز قائم لا تستهلك مقعداً.
+    final existing = await db.query('devices',
+        where: "id = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' "
+            "AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [joiningDeviceId],
+        limit: 1);
+    if (existing.isNotEmpty) return;
+    final current = await connectedDevicesCount(repo);
+    if (current >= maxDevices) {
+      throw CloudJoinException(
+          '🪑 تم استنفاد عدد الأجهزة المسموح بها لهذه الباقة '
+          '($current/$maxDevices). يرجى ترقية الاشتراك لإضافة أجهزة جديدة.');
+    }
+  }
+
+  static String _root(String base, String ws) =>
+      '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
+
+  // ============ (الاسترداد السيادي) سجل منشئ المساحة الدائم ============
+
+  /// يسجل creator_device_id لمساحة العمل مرة واحدة فقط — إن كانت العقدة
+  /// موجودة لا تُلمس أبداً (غير قابلة للتغيير)، مهما تنقّلت الملكية.
+  static Future<void> registerCreatorIfAbsent(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String deviceId,
+  }) async {
+    final path = '${_root(backendUrl, workspaceId)}/creator.json';
+    final existing = await _getJson(path);
+    if (existing != null &&
+        '${existing['creator_device_id'] ?? ''}'.isNotEmpty) {
+      return; // مسجل مسبقاً — لا يتغير أبداً.
+    }
+    await _putJson(path, {
+      'creator_device_id': deviceId,
+      'registered_at': DateTime.now().toIso8601String(),
+      'immutable': true,
+
+
+──── مقتطع: createInvite: الترقية التلقائية للمؤسسة + فحص المقاعد المبكر (الأسطر 385–430) ────
+
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
+      throw const CloudJoinException(
+          'إنشاء دعوة سحابية متاح لجهاز المدير (المالك) فقط.');
+    }
+    // 🔒 (التجربة) انتهاء الفترة يمنع ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
+    // (الخطط المزدوجة) فتح كود ربط لجهاز ثانٍ = تحول تلقائي لمسار
+    // المؤسسات بمقاعده — دون المساس بالعداد الزمني للتجربة.
+    try {
+      final st0 = await repo.settings();
+      final url0 = (st0['cloudBackendUrl'] ?? '').trim();
+      if (url0.isNotEmpty) {
+        final db0 = await repo.database;
+        final wsRows0 = await db0.query('workspaces', limit: 1);
+        final ws0 =
+            wsRows0.isNotEmpty ? '${wsRows0.first['id']}' : 'default';
+        await SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url0, workspaceId: ws0);
+        // 🪑 حد المقاعد: لا معنى لدعوة جديدة والمقاعد مستنفدة — نرفض
+        // مبكراً برسالة المدير بدل فشل متأخر عند موافقة العضو.
+        await _ensureSeatAvailable(repo,
+            backendUrl: url0,
+            workspaceId: ws0,
+            joiningDeviceId: '__new__');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {}
+    final mode = await repo.workspaceMode();
+    if (mode == 'member') {
+      final db0 = await repo.database;
+      await db0.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    final st = await repo.settings();
+    final url = (st['cloudBackendUrl'] ?? '').trim();
+    if (url.isEmpty) {
+      throw const CloudJoinException(
+          'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');
+    }
+    _validateHttps(url);
+
+    final db = await repo.database;
+    final wsRows = await db.query('workspaces', limit: 1);
+
+
+──── مقتطع: approveJoinRequest كاملة (بوابتا الاشتراك والمقاعد + roster) (الأسطر 1093–1230) ────
+
+  static Future<void> approveJoinRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    required String deviceName,
+    required String roleCode,
+    String workspaceId = 'default',
+  }) async {
+    final owner = await repo.isWorkspaceOwner();
+    if (!owner) {
+      throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
+    }
+    // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
+    // 🪑 (باقة المؤسسات) حد المقاعد max_devices: الموافقة على جهاز يتجاوز
+    // الحد تُرفض برسالة واضحة للمدير.
+    await _ensureSeatAvailable(repo,
+        backendUrl: backendUrl,
+        workspaceId: workspaceId,
+        joiningDeviceId: deviceId);
+    final db = await repo.database;
+    final now = DateTime.now().toIso8601String();
+    // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).
+    final role = UserRole.values.firstWhere((r) => r.code == roleCode,
+        orElse: () => UserRole.viewer);
+    final perms = defaultPerms(role);
+    final permStr =
+        perms.entries.where((e) => e.value).map((e) => e.key).join(',');
+    // (دفعة 58 — متطلب 3) لا مستخدمي ظل مكررين: انضمام نفس الجهاز مجدداً
+    // يعيد استخدام مستخدم الظل القائم بنفس الاسم بدل إنشاء نسخة ثانية.
+    int uid;
+    final existing = await db.query('users',
+        columns: ['id'],
+        where:
+            "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
+        whereArgs: [deviceName],
+        limit: 1);
+    if (existing.isNotEmpty) {
+      uid = existing.first['id'] as int;
+      await db.update(
+          'users',
+          {
+            'role': role.code,
+            'permissions': permStr,
+            'active': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [uid]);
+    } else {
+      uid = await db.insert('users', {
+        'name': deviceName,
+        'role': role.code,
+        'pin': '',
+        'password': '',
+        'permissions': permStr,
+        'is_me': 0,
+        'active': 1,
+        'workspace_id': repo.requireWorkspaceId,
+        'deleted_at': '',
+        'created_at': now,
+        'updated_at': now,
+      });
+    }
+    // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
+    // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
+    await db.insert(
+        'devices',
+        {
+          'id': deviceId,
+          'workspace_id': repo.requireWorkspaceId,
+          'name': deviceName,
+          'is_paired': 1,
+          'is_owner': 0,
+          'user_id': uid,
+          'revoked_at': '',
+          'expelled_at': '',
+          'last_seen_at': now,
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    // رفع للسحابة: roster + حالة الطلب approved.
+    final root = _root(backendUrl, workspaceId);
+    // (دفعة 56) كسر حلقة إعادة الطرد: إن كان الجهاز مطروداً سابقاً فلديه
+    // شاهدة في /evictions — يجب حذفها قبل تسجيله في roster وإلا طرد
+    // نفسه فور أول مصافحة بعد إعادة الربط.
+    try {
+      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+    final own = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (own.isNotEmpty) {
+      await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+          {..._safeDeviceRow(own.first), 'user_role': role.code},
+          timeout: const Duration(seconds: 20));
+    }
+    final req =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+      ...?req,
+      'status': 'approved',
+      'role': role.code,
+      'approvedAt': now,
+    }, timeout: const Duration(seconds: 20));
+  }
+
+  /// (دفعة 54) مسار شاهدة الطرد الصريحة لجهاز معيّن.
+  static String evictionPath(String base, String ws, String deviceId) =>
+      '${_root(base, ws)}/evictions/${Uri.encodeComponent(deviceId)}.json';
+
+  /// (المدير — بروتوكول الطرد النشط، دفعة 54) عند «طرد نهائي» أو حظر:
+  ///  1) كتابة شاهدة طرد صريحة في /evictions/$deviceId بختم وقت الخادم —
+  ///     الجهاز المستهدف يستمع عليها عبر SSE فيبطل جلسته لحظياً.
+  ///  2) حذف عقدته نهائياً من /roster/$deviceId — غياب العقدة محفّز طرد
+  ///     ثانٍ لدى مصافحة العضوية (دفاع مزدوج).
+  ///  3) حذف أي طلب انضمام قديم له (نظافة).
+  static Future<void> purgePeerFromCloud(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+    String reason = 'revoked_by_manager',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    // 1) الشاهدة الصريحة أولاً — أهم خطوة: تصل المستهدف عبر SSE فوراً،
+    //    وختم {".sv":"timestamp"} يمنع تلاعب ساعات الأجهزة.
+    await _putJson(evictionPath(backendUrl, workspaceId, deviceId), {
+      'deviceId': deviceId,
+      'expelled_at': {'.sv': 'timestamp'},
+      'reason': reason,
+      // (دفعة 57) TTL: بعد 7 أيام تُقلَّم الشاهدة تلقائياً في دورة صيانة
+      // المدير — لا ركام أبدياً في /evictions، والمستهدف المطفأ لديه
+      // أسبوع كامل ليلتقطها عند أول إقلاع.
+      'expires_at': DateTime.now()
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch,
+    }, timeout: const Duration(seconds: 20));
+
+
+████████████████████████████████████████████████████████████████████████
+██  [5] الواجهة الرئيسية — دورة حياة التجربة وشريط العنوان
+██  المسار: lib/ui/home_shell.dart
+██  الأسطر: 250  |  مقتطعات الأجزاء المطلوبة
+████████████████████████████████████████████████████████████████████████
+
+
+──── مقتطع: _watchTrialLifecycle: التهيئة الكسولة + الترحيب + بطاقة الانتهاء/إشعار العضو (الأسطر 540–625) ────
+
+  }
+
+  /// 🔒 دورة حياة الفترة التجريبية على الشاشة الرئيسية:
+  ///  - نافذة ترحيب راقية مرة واحدة فقط عند أول تفعيل (trialWelcomed).
+  ///  - عند رصد الانتهاء لأول مرة: بطاقة «انتهت الفترة» مع خيارات
+  ///    التجديد والتواصل (trialExpiredShown يمنع التكرار المزعج).
+  Future<void> _watchTrialLifecycle() async {
+    try {
+      // مهلة قصيرة حتى تكتمل تهيئة السحابة والمزودات.
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) return;
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (الاسترداد السيادي) تسجيل منشئ المساحة بأثر رجعي عند الإقلاع:
+      // للمجموعات القائمة قبل الميزة — المالك الحالي يُسجَّل منشئاً إن
+      // كانت العقدة السحابية الدائمة غائبة (تُكتب مرة واحدة ولا تتغير).
+      try {
+        if (await repo.isWorkspaceOwner() &&
+            await repo.workspaceMode() != 'standalone') {
+          await CloudJoin.registerCreatorIfAbsent(repo,
+              backendUrl: url,
+              workspaceId: ws,
+              deviceId: repo.requireDeviceId);
+        } else {
+          // عضو: كاش سجل المنشئ محلياً (يلزم للتحقق من creator_recovery
+          // ولإظهار خيار الاسترداد على جهاز المنشئ الذي فقد الملكية).
+          final creator = await CloudJoin.fetchCreatorDeviceId(
+              backendUrl: url, workspaceId: ws);
+          if (creator.isNotEmpty) {
+            await repo.setSetting('creatorDeviceId', creator);
+          }
+        }
+      } catch (_) {}
+      // (ترحيل الاشتراك) تهيئة كسولة عند الإقلاع: المساحات القديمة
+      // المسجلة قبل نظام التجربة بلا عقدة subscription — الفحص القسري
+      // ينشئها تلقائياً بختم خادم (created_at = لحظة هذا الفتح،
+      // expires_at = +24h) مرة واحدة فقط، ثم لا تُعاد تهيئتها أبداً.
+      final sub = await SubscriptionGuard.check(repo,
+          backendUrl: url, workspaceId: ws, force: true);
+      if (!mounted || sub.status == 'none') return;
+      // (أ) الترحيب — مرة واحدة فقط.
+      if (sub.status == 'trial' &&
+          !sub.expired &&
+          (st['trialWelcomed'] ?? '') != '1') {
+        await repo.setSetting('trialWelcomed', '1');
+        if (mounted) await showTrialWelcomeDialog(context);
+      }
+      // (ب) الانتهاء — مرة واحدة لكل انتهاء، برسالة بحسب الدور والخطة:
+      // المدير يرى بطاقة الشراء/التجديد؛ جهاز الموظف في مؤسسة يرى تنبيه
+      // «راجع إدارة النظام» (القسم 3 — لا يُطالَب الموظف بالدفع).
+      if (sub.expired && (st['trialExpiredShown'] ?? '') != '1') {
+        await repo.setSetting('trialExpiredShown', '1');
+        final owner = await repo.isWorkspaceOwner();
+        if (!mounted) return;
+        if (owner) {
+          await showTrialExpiredSheet(context);
+        } else {
+          ChatHooks.onMemberNotice?.call(
+            '☁️ المزامنة السحابية متوقفة',
+            'المزامنة السحابية متوقفة؛ يرجى مراجعة إدارة النظام '
+                'لتجديد الباقة. عملك المحلي مستمر بأمان.',
+          );
+        }
+      }
+    } catch (_) {
+      // شبكة غائبة — الفحص الدوري في المحرك يغطي.
+    }
+  }
+
+  /// (دفعة 58 — متطلب 20) يشغّل قناة SSE عالمية على /joinRequests لجهاز
+  /// المدير: أي طلب انضمام يفتح حوار الموافقة فوق الشاشة الحالية أياً
+  /// كانت. تُعاد المحاولة تلقائياً داخل JoinRequestWatcher عند الانقطاع.
+  Future<void> _startGlobalJoinWatcher() async {
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty || !mounted) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+
+
+──── مقتطع: AppBar: العنوان، شارة الدور، الإشعارات، إخفاء الأرصدة، زر تحديث سطح المكتب (الأسطر 1095–1250) ────
+
+      onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
+      child: Scaffold(
+        key: _scaffoldKey,
+        appBar: AppBar(
+          title: Consumer(
+            builder: (ctx, rref, _) {
+              if (_screen != AppScreen.dashboard) return Text(_screen.title);
+              // أعلى الرئيسية يظهر اسم الجهاز الذي حدده المستخدم/المدير
+              // (نفس الاسم الظاهر أعلى القائمة الجانبية) بدل «مدير الحسابات».
+              final devName =
+                  rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
+              if (devName != null && devName.isNotEmpty) {
+                return Text(devName, overflow: TextOverflow.ellipsis);
+              }
+              return const Text('مدير الحسابات');
+            },
+          ),
+          actions: [
+            // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
+            Consumer(
+              builder: (ctx, rref, _) {
+                final modeAsync = rref.watch(workspaceModeProvider);
+                final roleAsync = rref.watch(deviceRoleProvider);
+                final mode = modeAsync.valueOrNull ?? 'standalone';
+                if (mode == 'standalone') return const SizedBox.shrink();
+                final role = roleAsync.valueOrNull;
+                final (label, color, icon) = switch (role?.role) {
+                  UserRole.admin => (
+                      'مدير',
+                      Colors.amber.shade700,
+                      Icons.security,
+                    ),
+                  UserRole.agent => (
+                      'وكيل المدير',
+                      Colors.green.shade700,
+                      Icons.verified_user,
+                    ),
+                  UserRole.accountant => (
+                      'محاسب',
+                      Colors.blue,
+                      Icons.calculate
+                    ),
+                  UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
+                  UserRole.viewer => (
+                      'عرض فقط',
+                      Colors.grey,
+                      Icons.visibility_outlined,
+                    ),
+                  _ => ('بلا صلاحية', Colors.red, Icons.block),
+                };
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Tooltip(
+                    message: mode == 'host'
+                        ? 'أنت مدير هذه المجموعة'
+                        : 'دورك في المجموعة: $label',
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: color.withValues(alpha: .3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(icon, size: 13, color: color),
+                          const SizedBox(width: 4),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: color,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
+            // الضغط عليه يفتح قسم «العمليات والمزامنة» مباشرة.
+            Consumer(
+              builder: (ctx, rref, _) {
+                final modeAsync = rref.watch(workspaceModeProvider);
+                final mode = modeAsync.valueOrNull ?? 'standalone';
+                if (mode == 'standalone') return const SizedBox.shrink();
+                return FutureBuilder<SyncStatusInfo>(
+                  future: _syncFuture,
+                  builder: (ctx, snap) {
+                    if (!snap.hasData) return const SizedBox.shrink();
+                    return SyncStatusBadge(
+                      info: snap.data!,
+                      onTap: () => _go(AppScreen.syncOps),
+                    );
+                  },
+                );
+              },
+            ),
+            // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
+            Consumer(
+              builder: (ctx, rref, _) {
+                final unread = rref.watch(unreadCountProvider).valueOrNull ?? 0;
+                return IconButton(
+                  tooltip: 'الإشعارات',
+                  icon: Badge(
+                    isLabelVisible: unread > 0,
+                    label: Text('$unread'),
+                    child: const Icon(Icons.notifications_outlined),
+                  ),
+                  onPressed: () => openNotifications(
+                    context,
+                    ref,
+                    onOpenEntity: openNotificationEntity,
+                  ),
+                );
+              },
+            ),
+            IconButton(
+              tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
+              icon: Icon(
+                hidden
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+              ),
+              onPressed: () =>
+                  ref.read(hideBalancesProvider.notifier).state = !hidden,
+            ),
+            // (دفعة 58) سطح المكتب بلا «سحب للتحديث» — زر تحديث دائم
+            // يعيد تحميل بيانات الشاشة الحالية ويحفّز مزامنة فورية.
+            if (desktop)
+              IconButton(
+                tooltip: 'تحديث البيانات',
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () {
+                  bump(ref);
+                  _refreshSync();
+                  try {
+                    ref.read(syncEngineProvider).forceSyncNow();
+                  } catch (_) {}
+                },
+              ),
+          ],
+        ),
+        drawer: _Drawer(current: _screen, onSelect: _go),
+        // سطح المكتب (>900dp): شريط جانبي قابل للطي على يمين الشاشة (RTL)
+        // بدل الشريط السفلي؛ الهاتف يبقى على الشريط السفلي كما هو.
+        // 🔒 شريط الفترة التجريبية أعلى المحتوى (غير مزعج، يختفي ذاتياً).
+        body: Column(
+          children: [
+
+
+████████████████████████████████████████████████████████████████████████
+██  [6] محرك التحديثات — فحص الإصدارات
+██  المسار: lib/data/update_service.dart
+██  الأسطر: 225
+████████████████████████████████████████████████████████████████████████
+
+// نظام التحديث المركزي.
+//
+// يقرأ بيان إصدار (version.json) يُنشر تلقائيًا مع كل إصدار على GitHub،
+// يقارنه بإصدار التطبيق الحالي، ويقرر: لا تحديث / تحديث اختياري / تحديث إجباري.
+// التنزيل والتثبيت يتمّان بفتح رابط الإصدار في المتصفح — لا نُنزّل ونُثبّت
+// حزمًا تلقائيًا لأن ذلك يتطلب أذونات خطرة على أندرويد ولا يعمل في المتاجر.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
+import '../core/app_version.dart';
+
+/// نتيجة فحص التحديث.
+enum UpdateStatus {
+  /// التطبيق محدّث.
+  upToDate,
+
+  /// يوجد إصدار أحدث (اختياري).
+  available,
+
+  /// يوجد إصدار أحدث وإلزامي (الإصدار الحالي أقدم من minSupported).
+  required_,
+
+  /// تعذّر الفحص (لا شبكة / خطأ خادم / بيان تالف).
+  unknown,
+}
+
+/// منصّة التنزيل المطلوبة.
+enum UpdatePlatform { android, windows, other }
+
+class UpdateInfo {
+  final UpdateStatus status;
+  final AppSemVer current;
+  final AppSemVer? latest;
+
+  /// أدنى إصدار مدعوم؛ أقل منه = تحديث إجباري.
+  final AppSemVer? minSupported;
+
+  /// رابط صفحة الإصدار (يُفتح في المتصفح).
+  final String? releaseUrl;
+
+  /// رابط الملف المباشر للمنصّة الحالية إن وُجد.
+  final String? downloadUrl;
+
+  /// ملاحظات الإصدار بالعربية.
+  final String notes;
+
+  /// تاريخ النشر إن وُجد.
+  final DateTime? publishedAt;
+
+  /// سبب الفشل عند status == unknown.
+  final String? error;
+
+  const UpdateInfo({
+    required this.status,
+    required this.current,
+    this.latest,
+    this.minSupported,
+    this.releaseUrl,
+    this.downloadUrl,
+    this.notes = '',
+    this.publishedAt,
+    this.error,
+  });
+
+  bool get hasUpdate =>
+      status == UpdateStatus.available || status == UpdateStatus.required_;
+
+  bool get isMandatory => status == UpdateStatus.required_;
+
+  /// نص مختصر للعرض.
+  String get headline => switch (status) {
+        UpdateStatus.upToDate => 'التطبيق محدَّث',
+        UpdateStatus.available => 'يتوفّر تحديث جديد',
+        UpdateStatus.required_ => 'تحديث إلزامي مطلوب',
+        UpdateStatus.unknown => 'تعذّر التحقق من التحديثات',
+      };
+}
+
+/// مزوّد الوقت — لتسهيل الاختبار.
+typedef NowFn = DateTime Function();
+
+class UpdateService {
+  /// الرابط الافتراضي لبيان الإصدار (يُنشر مع كل بناء ناجح).
+  static const String kDefaultManifestUrl =
+      'https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/download/latest/version.json';
+
+  /// صفحة الإصدار الرسمية (احتياطي إذا لم يذكر البيان رابطًا).
+  static const String kFallbackReleaseUrl =
+      'https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/latest';
+
+  final String manifestUrl;
+  final http.Client Function() _clientFactory;
+  final AppSemVer current;
+  final UpdatePlatform platform;
+  final Duration timeout;
+
+  UpdateService({
+    String? manifestUrl,
+    http.Client Function()? clientFactory,
+    AppSemVer? current,
+    UpdatePlatform? platform,
+    this.timeout = const Duration(seconds: 12),
+  })  : manifestUrl = manifestUrl ?? kDefaultManifestUrl,
+        _clientFactory = clientFactory ?? (() => http.Client()),
+        current = current ?? AppSemVer.current,
+        platform = platform ?? detectPlatform();
+
+  static UpdatePlatform detectPlatform() {
+    if (Platform.isAndroid) return UpdatePlatform.android;
+    if (Platform.isWindows) return UpdatePlatform.windows;
+    return UpdatePlatform.other;
+  }
+
+  /// يفحص وجود تحديث. لا يرمي استثناءً أبدًا — يُعيد status=unknown عند الفشل.
+  Future<UpdateInfo> check() async {
+    final uri = Uri.tryParse(manifestUrl);
+    if (uri == null || !uri.isScheme('https')) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'رابط بيان التحديث غير صالح (يجب أن يكون https).',
+      );
+    }
+    final client = _clientFactory();
+    try {
+      final res = await client.get(uri, headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache',
+      }).timeout(timeout);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return UpdateInfo(
+          status: UpdateStatus.unknown,
+          current: current,
+          error: 'الخادم أعاد الرمز ${res.statusCode}.',
+        );
+      }
+      // نفكّ البايتات بـ UTF-8 صراحةً: GitHub يقدّم version.json بنوع
+      // application/octet-stream بلا charset، فتتراجع res.body إلى Latin-1
+      // ويتشوّه النص العربي في الملاحظات (Ø§Ù…). allowMalformed حمايةً من بايتات شاذة.
+      return _parse(utf8.decode(res.bodyBytes, allowMalformed: true));
+    } on TimeoutException {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'انتهت مهلة الاتصال.',
+      );
+    } catch (e) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'تعذّر الاتصال بالإنترنت.',
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  UpdateInfo _parse(String body) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(body);
+    } catch (_) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث تالف.',
+      );
+    }
+    if (decoded is! Map) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث بصيغة غير متوقعة.',
+      );
+    }
+    final map = Map<String, Object?>.from(decoded);
+    final latest = AppSemVer.tryParse('${map['version'] ?? ''}');
+    if (latest == null) {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'بيان التحديث لا يحتوي رقم إصدار صالح.',
+      );
+    }
+    final minSupported = AppSemVer.tryParse('${map['minSupported'] ?? ''}');
+    final downloads = map['downloads'];
+    String? downloadUrl;
+    if (downloads is Map) {
+      final key = switch (platform) {
+        UpdatePlatform.android => 'android',
+        UpdatePlatform.windows => 'windows',
+        UpdatePlatform.other => '',
+      };
+      final v = downloads[key];
+      if (v is String && v.startsWith('https://')) downloadUrl = v;
+    }
+    final release = map['releaseUrl'];
+    final releaseUrl = (release is String && release.startsWith('https://'))
+        ? release
+        : kFallbackReleaseUrl;
+
+    final status = () {
+      if (minSupported != null && current < minSupported) {
+        return UpdateStatus.required_;
+      }
+      if (latest > current) return UpdateStatus.available;
+      return UpdateStatus.upToDate;
+    }();
+
+    return UpdateInfo(
+      status: status,
+      current: current,
+      latest: latest,
+      minSupported: minSupported,
+      releaseUrl: releaseUrl,
+      downloadUrl: downloadUrl,
+      notes: '${map['notes'] ?? ''}'.trim(),
+      publishedAt: DateTime.tryParse('${map['publishedAt'] ?? ''}'),
+    );
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [7] محرك التحديثات — التثبيت (ويندوز/أندرويد)
+██  المسار: lib/data/update_installer.dart
+██  الأسطر: 382
+████████████████████████████████████████████████████████████████████████
+
+// التحديث بنقرة واحدة (أندرويد):
+// ينزّل ملف الـ APK عبر DownloadManager (خدمة نظام) ثم يفتح شاشة تثبيت
+// النظام مباشرةً — يبقى القرار النهائي للمستخدم في حوار النظام (لا يسمح
+// أندرويد بتثبيت صامت لتطبيقات خارج المتجر، وهذا قيد أمني في النظام نفسه).
+//
+// لماذا DownloadManager بدل http داخل التطبيق؟
+// 1) السرعة: تنزيل داخل عملية التطبيق يخضع لكبح النظام للتطبيقات الخاملة
+//    ولقيود Dart isolate، بينما مدير التنزيلات خدمة نظام مخصصة لذلك.
+// 2) الاستمرارية: يواصل التنزيل حتى لو أُغلق التطبيق نهائياً.
+// 3) الاستئناف: يستأنف تلقائياً بعد انقطاع الشبكة (HTTP Range)، وعند فتح
+//    التطبيق مجدداً نلتقط التنزيل الجاري/المكتمل بدل البدء من الصفر.
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+
+/// مراحل عملية التحديث بنقرة واحدة.
+enum InstallPhase {
+  idle,
+  downloading,
+  launchingInstaller,
+  awaitingPermission,
+  failed,
+  done,
+}
+
+/// حالة لحظية تُبث أثناء التنزيل/التثبيت لعرض شريط التقدم.
+class InstallProgress {
+  final InstallPhase phase;
+
+  /// نسبة التنزيل 0..1 (أو null إذا كان الحجم مجهولاً).
+  final double? progress;
+  final String? error;
+
+  const InstallProgress(this.phase, {this.progress, this.error});
+}
+
+class UpdateInstaller {
+  static const _channel = MethodChannel('nexora/updates');
+
+  final http.Client Function() _clientFactory;
+
+  UpdateInstaller({http.Client Function()? clientFactory})
+      : _clientFactory = clientFactory ?? (() => http.Client());
+
+  /// هل منح المستخدم إذن «تثبيت التطبيقات غير المعروفة» لهذا التطبيق؟
+  Future<bool> canInstall() async {
+    // ويندوز لا يحتاج إذناً مسبقاً: تشغيل المُثبّت يُظهر حوار UAC للنظام.
+    if (Platform.isWindows) return true;
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('canInstall') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// يفتح صفحة إعدادات النظام لمنح إذن التثبيت (مرة واحدة فقط).
+  Future<void> openInstallSettings() async {
+    try {
+      await _channel.invokeMethod('openInstallSettings');
+    } catch (_) {}
+  }
+
+  // ------- تذكّر معرّف التنزيل بين تشغيلات التطبيق (للاستئناف) -------
+
+  Future<File> _idFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/update_download_id.txt');
+  }
+
+  Future<int?> _savedDownloadId() async {
+    try {
+      final f = await _idFile();
+      if (!f.existsSync()) return null;
+      return int.tryParse((await f.readAsString()).trim());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveDownloadId(int? id) async {
+    try {
+      final f = await _idFile();
+      if (id == null) {
+        if (f.existsSync()) await f.delete();
+      } else {
+        await f.writeAsString('$id');
+      }
+    } catch (_) {}
+  }
+
+  Future<Map<String, Object?>> _query(int id) async {
+    try {
+      final r = await _channel
+          .invokeMapMethod<String, Object?>('queryDownload', {'id': id});
+      return r ?? const {'status': 'unknown'};
+    } catch (_) {
+      return const {'status': 'unknown'};
+    }
+  }
+
+  /// ينزّل APK من [url] ويبث التقدم، ثم يفتح شاشة تثبيت النظام.
+  /// لا يرمي استثناءً — يبث InstallPhase.failed مع سبب عربي مفهوم.
+  Stream<InstallProgress> downloadAndInstall(String url) async* {
+    if (Platform.isWindows) {
+      yield* _windowsDownloadAndInstall(url);
+      return;
+    }
+    if (!Platform.isAndroid) {
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'التحديث المباشر متاح على أندرويد وويندوز فقط.');
+      return;
+    }
+
+    // 0) إذن «المصادر غير المعروفة»: إن لم يُمنح نفتح إعداداته وننتظر المستخدم.
+    if (!await canInstall()) {
+      yield const InstallProgress(InstallPhase.awaitingPermission);
+      await openInstallSettings();
+      // ننتظر عودة المستخدم من الإعدادات (فحص دوري بمهلة قصوى دقيقة واحدة).
+      for (var i = 0; i < 60; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (await canInstall()) break;
+      }
+      if (!await canInstall()) {
+        yield const InstallProgress(InstallPhase.failed,
+            error: 'لم يُمنح إذن تثبيت التحديثات. فعّله من إعدادات النظام '
+                'ثم أعد المحاولة.');
+        return;
+      }
+    }
+
+    yield const InstallProgress(InstallPhase.downloading, progress: 0);
+
+    // 1) استئناف تنزيل سابق إن وُجد (بدأ في جلسة سابقة واستمر في الخلفية).
+    var id = await _savedDownloadId();
+    if (id != null) {
+      final st = await _query(id);
+      final status = '${st['status']}';
+      if (status == 'done' && '${st['path']}'.isNotEmpty) {
+        // اكتمل في الخلفية — ثبّت مباشرة بلا إعادة تنزيل.
+        yield* _install('${st['path']}');
+        return;
+      }
+      if (status != 'running' && status != 'pending' && status != 'paused') {
+        id = null; // فشل/اختفى — نبدأ من جديد.
+      }
+    }
+
+    // 2) بدء تنزيل جديد عبر مدير تنزيلات النظام.
+    if (id == null) {
+      try {
+        final r = await _channel.invokeMethod<Object?>(
+            'startDownload', {'url': url});
+        final started = (r is int) ? r : int.tryParse('$r') ?? -1;
+        if (started >= 0) {
+          id = started;
+          await _saveDownloadId(id);
+        }
+      } catch (_) {}
+    }
+
+    if (id == null) {
+      // مسار احتياطي (أجهزة عطّل فيها مدير التنزيلات): تنزيل مباشر.
+      yield* _fallbackHttpDownload(url);
+      return;
+    }
+
+    // 3) متابعة التقدم — التنزيل نفسه بيد النظام ويستمر لو خرج المستخدم.
+    var stuckCount = 0;
+    while (true) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final st = await _query(id);
+      final status = '${st['status']}';
+      final bytes = (st['bytes'] as num?)?.toInt() ?? 0;
+      final total = (st['total'] as num?)?.toInt() ?? -1;
+      switch (status) {
+        case 'done':
+          final path = '${st['path']}';
+          if (path.isEmpty) {
+            await _saveDownloadId(null);
+            yield const InstallProgress(InstallPhase.failed,
+                error: 'اكتمل التنزيل لكن الملف غير موجود. أعد المحاولة.');
+            return;
+          }
+          yield* _install(path);
+          return;
+        case 'failed':
+          await _saveDownloadId(null);
+          yield InstallProgress(InstallPhase.failed,
+              error: 'فشل التنزيل (رمز ${st['reason'] ?? '?'}). '
+                  'تحقق من الاتصال ثم أعد المحاولة.');
+          return;
+        case 'paused':
+          // انقطاع مؤقت — النظام سيستأنف وحده؛ نُبقي الشريط ظاهراً.
+          yield InstallProgress(InstallPhase.downloading,
+              progress: (total > 0) ? bytes / total : null);
+          break;
+        case 'unknown':
+          // اختفى من قائمة التنزيلات (أُلغي من الإشعار مثلاً).
+          if (++stuckCount >= 6) {
+            await _saveDownloadId(null);
+            yield const InstallProgress(InstallPhase.failed,
+                error: 'أُلغي التنزيل. أعد المحاولة.');
+            return;
+          }
+          break;
+        default: // running / pending
+          stuckCount = 0;
+          yield InstallProgress(InstallPhase.downloading,
+              progress: (total > 0) ? bytes / total : null);
+      }
+    }
+  }
+
+  /// يتحقق من الملف ثم يطلق شاشة تثبيت النظام.
+  Stream<InstallProgress> _install(String path) async* {
+    final apk = File(path);
+    if (!apk.existsSync() || apk.lengthSync() < 1024 * 1024) {
+      await _saveDownloadId(null);
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'الملف المنزَّل غير مكتمل. أعد المحاولة.');
+      return;
+    }
+    yield const InstallProgress(InstallPhase.launchingInstaller, progress: 1);
+    try {
+      final r =
+          await _channel.invokeMethod<String>('installApk', {'path': path});
+      if (r == 'ok') {
+        await _saveDownloadId(null);
+        yield const InstallProgress(InstallPhase.done, progress: 1);
+      } else {
+        yield InstallProgress(InstallPhase.failed,
+            error: switch (r) {
+              'file_missing' => 'ملف التحديث اختفى بعد التنزيل.',
+              'uri_failed' => 'تعذّر تجهيز ملف التثبيت.',
+              _ => 'تعذّر فتح شاشة التثبيت.',
+            });
+      }
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed,
+          error: 'تعذّر فتح شاشة التثبيت: $e');
+    }
+  }
+
+  // ------------------------- مسار ويندوز -------------------------
+
+  /// ويندوز: ينزّل مُثبّت NexoraSetup.exe (أو الملف المتاح) داخل التطبيق
+  /// ثم يشغّله — معالج التثبيت يحدّث النسخة فوق الحالية مع بقاء البيانات.
+  Stream<InstallProgress> _windowsDownloadAndInstall(String url) async* {
+    yield const InstallProgress(InstallPhase.downloading, progress: 0);
+    final segs = Uri.tryParse(url)?.pathSegments ?? const <String>[];
+    final name = segs.isEmpty ? '' : segs.last;
+    final isExe = name.toLowerCase().endsWith('.exe');
+    final fileName = isExe ? 'NexoraSetup.exe' : 'nexora-update.zip';
+    yield* _httpDownload(url, fileName, (file) async* {
+      if (file.lengthSync() < 512 * 1024) {
+        yield const InstallProgress(InstallPhase.failed,
+            error: 'الملف المنزَّل غير مكتمل. أعد المحاولة.');
+        return;
+      }
+      yield const InstallProgress(InstallPhase.launchingInstaller,
+          progress: 1);
+      try {
+        if (isExe) {
+          // (دفعة 58) تشغيل المُثبّت عبر ShellExecute (Start-Process
+          // -Verb RunAs): الإطلاق المباشر بـ Process.start يفشل صامتاً
+          // عندما يتطلب المُثبّت صلاحية مسؤول (ERROR_ELEVATION_REQUIRED)
+          // — كان هذا سبب تعطل التحديث التلقائي على ويندوز.
+          try {
+            await Process.start(
+              'powershell.exe',
+              [
+                '-NoProfile',
+                '-NonInteractive',
+                '-Command',
+                'Start-Process -FilePath \'${file.path}\' -Verb RunAs',
+              ],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          } catch (_) {
+            // احتياط: cmd start يمرّ عبر ShellExecute أيضاً فيُظهر UAC.
+            await Process.start(
+              'cmd.exe',
+              ['/c', 'start', '', file.path],
+              mode: ProcessStartMode.detached,
+              runInShell: false,
+            );
+          }
+        } else {
+          // نسخة zip محمولة: نفتح مجلدها ليستخرجها المستخدم.
+          await Process.start('explorer.exe', ['/select,', file.path],
+              mode: ProcessStartMode.detached);
+        }
+        yield const InstallProgress(InstallPhase.done, progress: 1);
+        if (isExe) {
+          // نغلق التطبيق بعد مهلة كافية لظهور UAC حتى لا تبقى ملفاتنا
+          // مقفلة أثناء التثبيت (المثبّت يغلق التطبيق أيضاً احتياطاً).
+          Future.delayed(const Duration(seconds: 3), () => exit(0));
+        }
+      } catch (e) {
+        yield InstallProgress(InstallPhase.failed,
+            error: 'تعذّر تشغيل المُثبّت: $e');
+      }
+    });
+  }
+
+  /// مسار احتياطي: تنزيل http داخل التطبيق (كما في السابق) إذا تعذّر
+  /// استخدام مدير تنزيلات النظام.
+  Stream<InstallProgress> _fallbackHttpDownload(String url) async* {
+    yield* _httpDownload(url, 'nexora-update.apk', (f) => _install(f.path));
+  }
+
+  /// تنزيل http عام إلى ملف مؤقت ثم تمرير الملف لخطوة ما بعد التنزيل.
+  Stream<InstallProgress> _httpDownload(
+    String url,
+    String fileName,
+    Stream<InstallProgress> Function(File file) onDone,
+  ) async* {
+    final File apk;
+    try {
+      final cache = await getTemporaryDirectory();
+      final dir = Directory('${cache.path}/updates');
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      dir.createSync(recursive: true);
+      apk = File('${dir.path}/$fileName');
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed,
+          error: 'تعذّر تجهيز مجلد التنزيل: $e');
+      return;
+    }
+
+    final client = _clientFactory();
+    IOSink? sink;
+    try {
+      final req = http.Request('GET', Uri.parse(url));
+      final res = await client.send(req).timeout(const Duration(seconds: 30));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        yield InstallProgress(InstallPhase.failed,
+            error: 'الخادم أعاد الرمز ${res.statusCode}.');
+        return;
+      }
+      final total = res.contentLength;
+      var received = 0;
+      sink = apk.openWrite();
+      var lastYield = DateTime.now();
+      await for (final chunk
+          in res.stream.timeout(const Duration(seconds: 60))) {
+        sink.add(chunk);
+        received += chunk.length;
+        final now = DateTime.now();
+        if (now.difference(lastYield).inMilliseconds > 150) {
+          lastYield = now;
+          yield InstallProgress(
+            InstallPhase.downloading,
+            progress: (total != null && total > 0) ? received / total : null,
+          );
+        }
+      }
+      await sink.flush();
+      await sink.close();
+      sink = null;
+    } on TimeoutException {
+      yield const InstallProgress(InstallPhase.failed,
+          error: 'انقطع الاتصال أثناء التنزيل. أعد المحاولة.');
+      return;
+    } catch (e) {
+      yield InstallProgress(InstallPhase.failed, error: 'فشل التنزيل: $e');
+      return;
+    } finally {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      client.close();
+    }
+    yield* onDone(apk);
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [8] تطبيق المدير المستقل — خدمة RTDB والتفعيل
+██  المسار: admin_app/lib/rtdb.dart
+██  الأسطر: 314
+████████████████████████████████████████████████████████████████████████
+
+// خدمة Firebase RTDB عبر REST — نفس قاعدة بيانات تطبيق «مدير الحسابات».
+// لا تحتاج SDK: قراءة/كتابة JSON مباشرة + وقت الخادم بختم {".sv":"timestamp"}.
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// مدة الخطة المتاحة للاختيار.
+enum PlanDuration {
+  month('شهر واحد (30 يوماً)', Duration(days: 30)),
+  quarter('3 أشهر (90 يوماً)', Duration(days: 90)),
+  year('سنة كاملة (365 يوماً)', Duration(days: 365)),
+  lifetime('تفعيل دائم (Lifetime)', Duration(days: 365 * 100));
+
+  final String label;
+  final Duration span;
+  const PlanDuration(this.label, this.span);
+}
+
+/// نتيجة تفعيل ناجحة — للعرض في الرسالة الخضراء.
+class ActivationResult {
+  final String workspaceId;
+  final String planType;
+  final int maxDevices;
+  final int expiresAtMs;
+  final bool lifetime;
+  const ActivationResult({
+    required this.workspaceId,
+    required this.planType,
+    required this.maxDevices,
+    required this.expiresAtMs,
+    required this.lifetime,
+  });
+}
+
+/// سجل مشترك للعرض في القائمة.
+class SubscriberEntry {
+  final String workspaceId;
+  final String planType;
+  final String status;
+  final int maxDevices;
+  final int expiresAtMs;
+  final int activatedAtMs;
+  final String deviceRef; // المعرف/البصمة التي أُدخلت وقت التفعيل.
+  const SubscriberEntry({
+    required this.workspaceId,
+    required this.planType,
+    required this.status,
+    required this.maxDevices,
+    required this.expiresAtMs,
+    required this.activatedAtMs,
+    required this.deviceRef,
+  });
+}
+
+class Rtdb {
+  Rtdb._();
+  static final Rtdb instance = Rtdb._();
+
+  String baseUrl = '';
+  String authToken = ''; // اختياري: legacy secret أو ID token.
+
+  static const _kUrl = 'rtdbUrl';
+  static const _kAuth = 'rtdbAuth';
+
+  Future<void> load() async {
+    final sp = await SharedPreferences.getInstance();
+    baseUrl = sp.getString(_kUrl) ?? '';
+    authToken = sp.getString(_kAuth) ?? '';
+  }
+
+  Future<void> save(String url, String auth) async {
+    baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    authToken = auth.trim();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kUrl, baseUrl);
+    await sp.setString(_kAuth, authToken);
+  }
+
+  bool get configured => baseUrl.isNotEmpty;
+
+  Uri _u(String path, [Map<String, String>? q]) {
+    final qp = <String, String>{...?q};
+    if (authToken.isNotEmpty) qp['auth'] = authToken;
+    return Uri.parse('$baseUrl/$path.json')
+        .replace(queryParameters: qp.isEmpty ? null : qp);
+  }
+
+  Future<dynamic> _get(String path, [Map<String, String>? q]) async {
+    final r = await http.get(_u(path, q)).timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('قراءة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+    return jsonDecode(utf8.decode(r.bodyBytes));
+  }
+
+  Future<void> _patch(String path, Map<String, dynamic> body) async {
+    final r = await http
+        .patch(_u(path), body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('كتابة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+  }
+
+  Future<void> _put(String path, Object body) async {
+    final r = await http
+        .put(_u(path), body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw Exception('كتابة $path فشلت (${r.statusCode}): ${r.body}');
+    }
+  }
+
+  /// وقت خادم فيربيس الحقيقي — نكتب {".sv":"timestamp"} ونقرأ الناتج.
+  /// كل الحسابات الزمنية بساعة الخادم حصراً، لا ساعة الهاتف.
+  Future<int> serverNowMs() async {
+    await _put('server_clock', {'.sv': 'timestamp'});
+    final v = await _get('server_clock');
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    throw Exception('تعذّر قراءة ساعة الخادم');
+  }
+
+  /// تحويل المدخل إلى معرف مساحة عمل:
+  /// - إن كان بصمة تفعيل (32 خانة hex كما في رسالة واتساب) نبحث في فهرس
+  ///   /trials/<fp> عن workspace_id المرتبط بها.
+  /// - غير ذلك نعتبره workspace id مباشراً ونتحقق من وجود العقدة.
+  Future<String> resolveWorkspaceId(String input) async {
+    final id = input.trim();
+    if (id.isEmpty) throw Exception('أدخل معرف الجهاز أو مساحة العمل أولاً');
+    final isFp = RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(id);
+    if (isFp) {
+      final t = await _get('trials/${Uri.encodeComponent(id)}');
+      if (t is Map && '${t['workspace_id'] ?? ''}'.isNotEmpty) {
+        return '${t['workspace_id']}';
+      }
+      throw Exception('لم يُعثر على مساحة عمل مرتبطة بهذه البصمة.\n'
+          'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
+    }
+    // معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
+    final sub = await _get('workspaces/${Uri.encodeComponent(id)}/subscription');
+    if (sub != null) return id;
+    final ws = await _get('workspaces/${Uri.encodeComponent(id)}',
+        {'shallow': 'true'});
+    if (ws != null) return id;
+    throw Exception('لا توجد مساحة عمل بهذا المعرف في قاعدة البيانات.');
+  }
+
+  /// التفعيل/الترقية: تحديث عقدة الاشتراك في المكان (PATCH يحفظ الحقول
+  /// الأخرى مثل created_at وdevice_fingerprint) وفتح كل المزايا.
+  Future<ActivationResult> activate({
+    required String rawInput,
+    required String planType, // individual | enterprise
+    required PlanDuration duration,
+    required int maxDevices,
+    bool extend = false, // تمديد: يضيف المدة فوق expires_at الحالي إن كان أبعد.
+  }) async {
+    final ws = await resolveWorkspaceId(rawInput);
+    final now = await serverNowMs();
+    final lifetime = duration == PlanDuration.lifetime;
+
+    int base = now;
+    if (extend) {
+      final cur = await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+      if (cur is Map) {
+        final e = cur['expires_at'];
+        final curExp = e is num ? e.toInt() : 0;
+        if (curExp > now) base = curExp; // التمديد يبني على المتبقي.
+      }
+    }
+    final expires = base + duration.span.inMilliseconds;
+
+    await _patch('workspaces/${Uri.encodeComponent(ws)}/subscription', {
+      'status': 'active',
+      'is_active': true,
+      'plan_type': planType,
+      'max_devices': planType == 'enterprise' ? maxDevices : 1,
+      'expires_at': expires,
+      'activated_at': now,
+      'activated_by': 'license_admin',
+      'features': {
+        'can_use_categories': true,
+        'can_send_notifications': true,
+        'can_cloud_backup': true,
+        'can_restore_data': true,
+        'can_advanced_search': true,
+        'multi_device_sync': true,
+        'role_permissions': true,
+        'audit_log': true,
+      },
+    });
+
+    // سجل إداري للمشتركين — يغذي شاشة «سجل المشتركين».
+    await _put('admin/activations/$now', {
+      'workspace_id': ws,
+      'device_ref': rawInput.trim(),
+      'plan_type': planType,
+      'max_devices': planType == 'enterprise' ? maxDevices : 1,
+      'expires_at': expires,
+      'activated_at': now,
+      'lifetime': lifetime,
+    });
+
+    return ActivationResult(
+      workspaceId: ws,
+      planType: planType,
+      maxDevices: planType == 'enterprise' ? maxDevices : 1,
+      expiresAtMs: expires,
+      lifetime: lifetime,
+    );
+  }
+
+  /// آخر الاشتراكات المفعلة (من السجل الإداري) مع الحالة الحية لكل مساحة.
+  Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
+    final raw = await _get('admin/activations', {
+      'orderBy': '"\$key"',
+      'limitToLast': '$limit',
+    });
+    if (raw is! Map) return const [];
+    final out = <SubscriberEntry>[];
+    for (final e in raw.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final ws = '${v['workspace_id'] ?? ''}';
+      // الحالة الحية من عقدة الاشتراك نفسها (قد تكون مُدِّدت لاحقاً).
+      String status = 'active';
+      int expires = (v['expires_at'] is num) ? (v['expires_at'] as num).toInt() : 0;
+      int maxDev = (v['max_devices'] is num) ? (v['max_devices'] as num).toInt() : 1;
+      String plan = '${v['plan_type'] ?? 'individual'}';
+      try {
+        final live =
+            await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+        if (live is Map) {
+          status = '${live['status'] ?? status}';
+          if (live['expires_at'] is num) {
+            expires = (live['expires_at'] as num).toInt();
+          }
+          if (live['max_devices'] is num) {
+            maxDev = (live['max_devices'] as num).toInt();
+          }
+          plan = '${live['plan_type'] ?? plan}';
+        }
+      } catch (_) {}
+      out.add(SubscriberEntry(
+        workspaceId: ws,
+        planType: plan,
+        status: status,
+        maxDevices: maxDev,
+        expiresAtMs: expires,
+        activatedAtMs:
+            (v['activated_at'] is num) ? (v['activated_at'] as num).toInt() : 0,
+        deviceRef: '${v['device_ref'] ?? ''}',
+      ));
+    }
+    out.sort((a, b) => b.activatedAtMs.compareTo(a.activatedAtMs));
+    return out;
+  }
+}
+
+/// إحصائيات لوحة المدير — تُقرأ حياً من قاعدة البيانات.
+class AdminMetrics {
+  final int totalWorkspaces; // إجمالي مساحات العمل المسجلة.
+  final int activePaid; // مشتركون مدفوعون فعّالون.
+  final int activeTrials; // في الفترة التجريبية (سارية).
+  final int expired; // منتهية (تجربة أو اشتراك) = الفئة المجانية.
+  const AdminMetrics({
+    required this.totalWorkspaces,
+    required this.activePaid,
+    required this.activeTrials,
+    required this.expired,
+  });
+}
+
+extension RtdbMetrics on Rtdb {
+  /// جمع العدادات: مفاتيح المساحات (قراءة سطحية خفيفة) ثم عقدة الاشتراك
+  /// لكل مساحة. القرار الزمني بساعة الخادم حصراً.
+  Future<AdminMetrics> metrics() async {
+    final keys = await _get('workspaces', {'shallow': 'true'});
+    if (keys is! Map || keys.isEmpty) {
+      return const AdminMetrics(
+          totalWorkspaces: 0, activePaid: 0, activeTrials: 0, expired: 0);
+    }
+    final now = await serverNowMs();
+    int paid = 0, trials = 0, expired = 0;
+    for (final ws in keys.keys) {
+      dynamic sub;
+      try {
+        sub = await _get('workspaces/${Uri.encodeComponent('$ws')}/subscription');
+      } catch (_) {
+        continue;
+      }
+      if (sub is! Map) continue; // مساحة بلا عقدة اشتراك بعد.
+      final status = '${sub['status'] ?? ''}';
+      final e = sub['expires_at'];
+      final exp = e is num ? e.toInt() : 0;
+      final alive = exp > now;
+      if (status == 'active' && alive) {
+        paid++;
+      } else if (status == 'trial' && alive) {
+        trials++;
+      } else {
+        expired++;
+      }
+    }
+    return AdminMetrics(
+      totalWorkspaces: keys.length,
+      activePaid: paid,
+      activeTrials: trials,
+      expired: expired,
+    );
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  [9] تطبيق المدير المستقل — الواجهات واللوحة الإحصائية
+██  المسار: admin_app/lib/main.dart
+██  الأسطر: 676
+████████████████████████████████████████████████████████████████████████
+
+// تطبيق المدير المستقل — لوحة تفعيل تراخيص Nexora (مالك النظام فقط).
+import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart' hide TextDirection;
+
+import 'rtdb.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('ar');
+  await Rtdb.instance.load();
+  runApp(const AdminApp());
+}
+
+class AdminApp extends StatelessWidget {
+  const AdminApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'مدير التراخيص — Nexora',
+      debugShowCheckedModeBanner: false,
+      locale: const Locale('ar'),
+      builder: (context, child) =>
+          Directionality(textDirection: TextDirection.rtl, child: child!),
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: const Color(0xFF7C3AED),
+        fontFamily: 'Roboto',
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          isDense: true,
+        ),
+      ),
+      home: const HomeScreen(),
+    );
+  }
+}
+
+String fmtDate(int ms, {bool lifetime = false}) {
+  if (lifetime || ms > DateTime(2090).millisecondsSinceEpoch) return 'دائم ∞';
+  if (ms <= 0) return '—';
+  return DateFormat('yyyy/MM/dd — hh:mm a', 'ar')
+      .format(DateTime.fromMillisecondsSinceEpoch(ms));
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _tab = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('🔑 مدير التراخيص',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        actions: [
+          IconButton(
+            tooltip: 'إعدادات الاتصال بقاعدة البيانات',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () async {
+              await showDialog<void>(
+                  context: context, builder: (_) => const _ConfigDialog());
+              setState(() {});
+            },
+          ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _tab,
+        children: const [ActivationScreen(), SubscribersScreen()],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(
+              icon: Icon(Icons.verified_outlined),
+              selectedIcon: Icon(Icons.verified),
+              label: 'تفعيل حساب'),
+          NavigationDestination(
+              icon: Icon(Icons.people_outline),
+              selectedIcon: Icon(Icons.people),
+              label: 'سجل المشتركين'),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== إعدادات الاتصال ====================
+
+class _ConfigDialog extends StatefulWidget {
+  const _ConfigDialog();
+  @override
+  State<_ConfigDialog> createState() => _ConfigDialogState();
+}
+
+class _ConfigDialogState extends State<_ConfigDialog> {
+  late final _url = TextEditingController(text: Rtdb.instance.baseUrl);
+  late final _auth = TextEditingController(text: Rtdb.instance.authToken);
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('⚙️ الاتصال بقاعدة البيانات'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _url,
+            textDirection: TextDirection.ltr,
+            decoration: const InputDecoration(
+              labelText: 'رابط Firebase RTDB',
+              hintText: 'https://xxxx-default-rtdb.firebaseio.com',
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _auth,
+            textDirection: TextDirection.ltr,
+            decoration: const InputDecoration(
+              labelText: 'مفتاح المصادقة (اختياري)',
+              hintText: 'Database Secret أو ID Token',
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'نفس الرابط المستخدم في تطبيق مدير الحسابات — '
+            'يُحفظ محلياً على هذا الهاتف فقط.',
+            style: TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء')),
+        FilledButton(
+          onPressed: _busy
+              ? null
+              : () async {
+                  setState(() => _busy = true);
+                  await Rtdb.instance.save(_url.text, _auth.text);
+                  if (mounted) Navigator.pop(context);
+                },
+          child: const Text('حفظ'),
+        ),
+      ],
+    );
+  }
+}
+
+// ==================== بطاقات الإحصائيات ====================
+
+class MetricsBoard extends StatefulWidget {
+  const MetricsBoard({super.key});
+  @override
+  State<MetricsBoard> createState() => _MetricsBoardState();
+}
+
+class _MetricsBoardState extends State<MetricsBoard> {
+  AdminMetrics? _m;
+  bool _busy = false;
+  String _err = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load(); // تلقائياً فور فتح التطبيق.
+  }
+
+  Future<void> _load() async {
+    if (!Rtdb.instance.configured || _busy) return;
+    setState(() {
+      _busy = true;
+      _err = '';
+    });
+    try {
+      final m = await Rtdb.instance.metrics();
+      if (mounted) setState(() => _m = m);
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _card(String title, String emoji, int? value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: .25)),
+        ),
+        child: Column(
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 4),
+            value == null
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: color))
+                : Text('$value',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: color)),
+            const SizedBox(height: 2),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 10.5, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!Rtdb.instance.configured) return const SizedBox.shrink();
+    return Column(
+      children: [
+        Row(
+          children: [
+            const Text('📊 نظرة عامة',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+            const Spacer(),
+            IconButton(
+              tooltip: 'تحديث الأرقام',
+              visualDensity: VisualDensity.compact,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 15,
+                      height: 15,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh, size: 18),
+              onPressed: _busy ? null : _load,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            _card('إجمالي المساحات', '📱', _m?.totalWorkspaces,
+                const Color(0xFF2563EB)),
+            const SizedBox(width: 7),
+            _card('مشتركون مدفوعون', '💎', _m?.activePaid,
+                const Color(0xFF16A34A)),
+            const SizedBox(width: 7),
+            _card('فترة تجريبية', '⏳', _m?.activeTrials,
+                const Color(0xFFEA580C)),
+            const SizedBox(width: 7),
+            _card('منتهية / مجانية', '🔒', _m?.expired,
+                const Color(0xFFDC2626)),
+          ],
+        ),
+        if (_err.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('تعذّر تحميل الإحصائيات: $_err',
+                style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626))),
+          ),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+}
+
+// ==================== شاشة التفعيل ====================
+
+class ActivationScreen extends StatefulWidget {
+  const ActivationScreen({super.key});
+  @override
+  State<ActivationScreen> createState() => _ActivationScreenState();
+}
+
+class _ActivationScreenState extends State<ActivationScreen> {
+  final _id = TextEditingController();
+  String _plan = 'individual';
+  PlanDuration _duration = PlanDuration.month;
+  final _seats = TextEditingController(text: '5');
+  bool _busy = false;
+
+  Future<void> _activate() async {
+    final rtdb = Rtdb.instance;
+    if (!rtdb.configured) {
+      _snack('اضبط رابط قاعدة البيانات أولاً من ⚙️ الإعدادات', error: true);
+      return;
+    }
+    final seats = int.tryParse(_seats.text.trim()) ?? 0;
+    if (_plan == 'enterprise' && seats < 2) {
+      _snack('حدد سعة أجهزة صحيحة (2 فأكثر) لباقة المؤسسات', error: true);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final r = await rtdb.activate(
+        rawInput: _id.text,
+        planType: _plan,
+        duration: _duration,
+        maxDevices: seats,
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.check_circle,
+              color: Color(0xFF16A34A), size: 52),
+          title: const Text('✅ تم التفعيل بنجاح',
+              style: TextStyle(color: Color(0xFF16A34A))),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _row('مساحة العمل', r.workspaceId),
+              _row('الخطة',
+                  r.planType == 'enterprise' ? 'مؤسسة 🏢' : 'فردي 👤'),
+              if (r.planType == 'enterprise')
+                _row('سعة الأجهزة', '${r.maxDevices} أجهزة'),
+              _row('ينتهي في', fmtDate(r.expiresAtMs, lifetime: r.lifetime)),
+              const SizedBox(height: 8),
+              const Text(
+                'سيلمس العميل التفعيل فوراً عند ضغطه «تأكيد عملية الشراء» '
+                'أو خلال دقائق تلقائياً — دون مسح بيانات.',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('تم')),
+          ],
+        ),
+      );
+      _id.clear();
+    } catch (e) {
+      _snack('$e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _row(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(children: [
+          Text('$k: ', style: const TextStyle(fontWeight: FontWeight.w800)),
+          Expanded(child: Text(v, textDirection: TextDirection.ltr)),
+        ]),
+      );
+
+  void _snack(String msg, {bool error = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // 📊 البطاقات الإحصائية — تُحمَّل تلقائياً فور فتح التطبيق.
+        const MetricsBoard(),
+        if (!Rtdb.instance.configured)
+          Card(
+            color: const Color(0xFFFFF7ED),
+            child: ListTile(
+              leading: const Icon(Icons.warning_amber, color: Color(0xFFEA580C)),
+              title: const Text('لم يُضبط الاتصال بعد',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+              subtitle: const Text('اضغط ⚙️ أعلى الشاشة وألصق رابط RTDB.'),
+            ),
+          ),
+        const SizedBox(height: 4),
+        const Text('1️⃣ معرف العميل',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _id,
+          textDirection: TextDirection.ltr,
+          decoration: InputDecoration(
+            labelText: 'معرف الجهاز / بصمة التفعيل / معرف مساحة العمل',
+            hintText: 'ألصق ما وصلك في رسالة واتساب من العميل',
+            prefixIcon: const Icon(Icons.fingerprint),
+            suffixIcon: IconButton(
+              tooltip: 'مسح',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => _id.clear(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        const Text('2️⃣ نوع الخطة',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(
+                value: 'individual',
+                label: Text('👤 مستخدم فردي'),
+                icon: Icon(Icons.person_outline)),
+            ButtonSegment(
+                value: 'enterprise',
+                label: Text('🏢 مؤسسة / مجموعة'),
+                icon: Icon(Icons.business_outlined)),
+          ],
+          selected: {_plan},
+          onSelectionChanged: (s) => setState(() => _plan = s.first),
+        ),
+        if (_plan == 'enterprise') ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _seats,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'سعة الأجهزة (max_devices)',
+              hintText: 'مثال: 5',
+              prefixIcon: Icon(Icons.devices_other),
+            ),
+          ),
+        ],
+        const SizedBox(height: 18),
+        const Text('3️⃣ المدة الزمنية',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        ...PlanDuration.values.map((d) => RadioListTile<PlanDuration>(
+              value: d,
+              groupValue: _duration,
+              onChanged: (v) => setState(() => _duration = v!),
+              title: Text(d.label, style: const TextStyle(fontSize: 14)),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+            )),
+        const SizedBox(height: 22),
+        SizedBox(
+          height: 58,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              textStyle:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+            ),
+            onPressed: _busy ? null : _activate,
+            icon: _busy
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.5, color: Colors.white))
+                : const Icon(Icons.rocket_launch),
+            label: Text(_busy ? 'جارٍ التفعيل…' : 'تفعيل وترقية الحساب'),
+          ),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'يُحسب تاريخ الانتهاء بساعة خادم فيربيس حصراً (server_ts + المدة). '
+          'التفعيل يحدث عقدة workspaces/…/subscription في المكان ويفتح كل '
+          'المزايا فوراً دون أي تدخل يدوي.',
+          style: TextStyle(fontSize: 11.5, color: Colors.grey, height: 1.6),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+}
+
+// ==================== سجل المشتركين ====================
+
+class SubscribersScreen extends StatefulWidget {
+  const SubscribersScreen({super.key});
+  @override
+  State<SubscribersScreen> createState() => _SubscribersScreenState();
+}
+
+class _SubscribersScreenState extends State<SubscribersScreen> {
+  late Future<List<SubscriberEntry>> _future = _load();
+
+  Future<List<SubscriberEntry>> _load() =>
+      Rtdb.instance.configured
+          ? Rtdb.instance.recentSubscribers()
+          : Future.value(const []);
+
+  Future<void> _refresh() async => setState(() => _future = _load());
+
+  Future<void> _extend(SubscriberEntry s) async {
+    final d = await showModalBottomSheet<PlanDuration>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('⏳ تمديد الاشتراك — اختر المدة',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+            ...PlanDuration.values.map((x) => ListTile(
+                  leading: const Icon(Icons.add_alarm),
+                  title: Text(x.label),
+                  onTap: () => Navigator.pop(ctx, x),
+                )),
+          ],
+        ),
+      ),
+    );
+    if (d == null || !mounted) return;
+    try {
+      final r = await Rtdb.instance.activate(
+        rawInput: s.workspaceId,
+        planType: s.planType,
+        duration: d,
+        maxDevices: s.maxDevices,
+        extend: true, // يبني فوق المتبقي الحالي.
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: const Color(0xFF16A34A),
+        content: Text('✅ مُدِّد حتى ${fmtDate(r.expiresAtMs, lifetime: r.lifetime)}'),
+      ));
+      await _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: const Color(0xFFDC2626), content: Text('$e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: FutureBuilder<List<SubscriberEntry>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return ListView(children: [
+              Padding(
+                padding: const EdgeInsets.all(30),
+                child: Text('تعذّر التحميل: ${snap.error}',
+                    textAlign: TextAlign.center),
+              ),
+            ]);
+          }
+          final list = snap.data ?? const [];
+          if (list.isEmpty) {
+            return ListView(children: const [
+              Padding(
+                padding: EdgeInsets.all(40),
+                child: Column(children: [
+                  Icon(Icons.inbox_outlined, size: 56, color: Colors.grey),
+                  SizedBox(height: 10),
+                  Text('لا توجد تفعيلات مسجلة بعد',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  Text('كل تفعيل من الشاشة الأولى سيظهر هنا.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                ]),
+              ),
+            ]);
+          }
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          return ListView.separated(
+            padding: const EdgeInsets.all(12),
+            itemCount: list.length,
+            separatorBuilder: (_, i) => const SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final s = list[i];
+              final lifetime =
+                  s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch;
+              final expired = !lifetime && s.expiresAtMs <= nowMs;
+              final color = expired
+                  ? const Color(0xFFDC2626)
+                  : (lifetime
+                      ? const Color(0xFF7C3AED)
+                      : const Color(0xFF16A34A));
+              return Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(color: color.withValues(alpha: .3)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Icon(
+                            s.planType == 'enterprise'
+                                ? Icons.business
+                                : Icons.person,
+                            size: 18,
+                            color: color),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            s.workspaceId,
+                            textDirection: TextDirection.ltr,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 13),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: .12),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            expired
+                                ? 'منتهٍ'
+                                : (lifetime ? 'دائم ∞' : 'فعّال'),
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: color),
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${s.planType == 'enterprise' ? '🏢 مؤسسة — ${s.maxDevices} أجهزة' : '👤 فردي'}'
+                        '   •   ينتهي: ${fmtDate(s.expiresAtMs, lifetime: lifetime)}',
+                        style:
+                            const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      if (s.deviceRef.isNotEmpty &&
+                          s.deviceRef != s.workspaceId)
+                        Text('الجهاز: ${s.deviceRef}',
+                            textDirection: TextDirection.ltr,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11, color: Colors.grey)),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact),
+                          onPressed: () => _extend(s),
+                          icon: const Icon(Icons.more_time, size: 16),
+                          label: const Text('تمديد بنقرة',
+                              style: TextStyle(fontSize: 12)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+
+████████████████████████████████████████████████████████████████████████
+██  نهاية التصدير — كل المحتوى أعلاه منسوخ حرفياً من المستودع دون تعديل
+████████████████████████████████████████████████████████████████████████

@@ -12,6 +12,7 @@
 //     ويبقى العمل المحلي سليماً.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpDate;
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -202,26 +203,70 @@ class SubscriptionGuard {
   static String _trialsRoot(String base) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/trials';
 
-  /// وقت خادم فيربيس الحقيقي: نكتب {".sv":"timestamp"} في عقدة خردة
-  /// ونقرأ القيمة المستبدلة — يعمل عبر REST بلا SDK (بديل serverTimeOffset).
+  /// وقت خادم فيربيس الحقيقي — بطبقتين مؤمّنتين:
+  ///  1) الأساس: كتابة {".sv":"timestamp"} وقراءة الناتج (الختم يحسبه
+  ///     خادم فيربيس نفسه — الكتابة المشوّهة من عميل متلاعب لا تغيّره،
+  ///     وقواعد الأمان يمكنها حصر هذا المسار دون كسر الآلية).
+  ///  2) تحقق تقاطعي + احتياط: ترويسة HTTP `Date` من استجابة الخادم —
+  ///     إن انحرف الختم عنها انحرافاً فاحشاً (>10 دقائق) نرفض القيمة
+  ///     (حماية من backend مزيف يعيد أختاماً معدلة)، وإن فشلت الكتابة
+  ///     (قواعد أمان تمنعها) نعتمد الترويسة نفسها كمصدر وقت موثوق —
+  ///     فهي من خادم Google ولا سبيل للعميل للتلاعب بها.
   static Future<int> serverNowMs(String backendUrl) async {
     final o = debugServerNowOverride;
     if (o != null) return o(backendUrl);
-    final url =
-        '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/server_clock.json';
-    final res = await http
-        .put(Uri.parse(url),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'ts': {'.sv': 'timestamp'}}))
-        .timeout(const Duration(seconds: 15));
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final url = '$base/server_clock.json';
+    http.Response res;
+    try {
+      res = await http
+          .put(Uri.parse(url),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'ts': {'.sv': 'timestamp'}}))
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      return _serverNowFromDateHeader(base);
+    }
+    // ترويسة Date من نفس الاستجابة — للتقاطع أو الاحتياط.
+    final headerMs = _parseHttpDate(res.headers['date']);
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw StateError('server-clock-http-${res.statusCode}');
+      // قواعد الأمان تمنع الكتابة؟ الترويسة تكفي كمصدر خادمي موثوق.
+      if (headerMs > 0) return headerMs;
+      return _serverNowFromDateHeader(base);
     }
     final m = jsonDecode(res.body);
     final ts = m is Map ? m['ts'] : null;
-    if (ts is int && ts > 0) return ts;
-    if (ts is num && ts > 0) return ts.toInt();
+    final tsMs = ts is int ? ts : (ts is num ? ts.toInt() : 0);
+    if (tsMs > 0) {
+      // تقاطع: ختم منحرف >10 دقائق عن ترويسة الخادم = مصدر مشبوه.
+      const crossTolMs = 10 * 60 * 1000;
+      if (headerMs > 0 && (tsMs - headerMs).abs() > crossTolMs) {
+        throw StateError('server-clock-cross-check-failed');
+      }
+      return tsMs;
+    }
+    if (headerMs > 0) return headerMs;
     throw StateError('server-clock-bad-payload');
+  }
+
+  /// احتياط: وقت الخادم من ترويسة HTTP Date لطلب قراءة خفيف (لا كتابة).
+  static Future<int> _serverNowFromDateHeader(String base) async {
+    final res = await http
+        .get(Uri.parse('$base/server_clock.json'))
+        .timeout(const Duration(seconds: 15));
+    final ms = _parseHttpDate(res.headers['date']);
+    if (ms > 0) return ms;
+    throw StateError('server-clock-no-date-header');
+  }
+
+  /// تفكيك ترويسة HTTP Date (RFC 1123 بتوقيت GMT) إلى مللي ثانية UTC.
+  static int _parseHttpDate(String? v) {
+    if (v == null || v.isEmpty) return 0;
+    try {
+      return HttpDate.parse(v).millisecondsSinceEpoch;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// تفعيل التجربة عند أول إعداد سحابي لمساحة العمل:
@@ -413,6 +458,11 @@ class SubscriptionGuard {
   /// استرجاع الحالة المثبّتة محلياً مع إسناد تقديري لوقت الخادم
   /// (لأغراض العرض فقط — البوابات تُحسم بفحص سحابي حقيقي عند توفر
   /// الشبكة، ولا يُسمح للإسناد بإرجاع الساعة للخلف).
+  /// (للاختبار فقط) كشف مسار الاسترجاع المحلي — يمر عبر نفس منطق
+  /// كشف التراجع الزمني الحقيقي.
+  static Future<SubscriptionState?> debugLoadPersisted(Repo repo) =>
+      _loadPersisted(repo);
+
   static Future<SubscriptionState?> _loadPersisted(Repo repo) async {
     try {
       final raw = (await repo.settings())['subCachedState'] ?? '';
@@ -422,6 +472,37 @@ class SubscriptionGuard {
       final serverNow = _asMs(m['server_now']);
       final deviceMs = _asMs(m['device_ms']);
       final nowDevice = DateTime.now().millisecondsSinceEpoch;
+      // 🛡️ (كشف التلاعب) ساعة الهاتف الآن أقدم من لحظة آخر تثبيت =
+      // المستخدم أرجع الساعة للخلف وهو بلا شبكة. لا نكافئه: نعتبر
+      // الجلسة المحلية منتهية الصلاحية فوراً (المزايا المدفوعة تُقفل)
+      // حتى يتصل بالإنترنت ويحسم فحص سحابي حقيقي بساعة الخادم.
+      // هامش دقيقتين يمتص فروق NTP/التوقيت الصيفي المشروعة.
+      const rollbackGraceMs = 2 * 60 * 1000;
+      if (deviceMs > 0 && nowDevice < deviceMs - rollbackGraceMs) {
+        final rawFeat0 = m['features'];
+        return SubscriptionState(
+          status: '${m['status'] ?? 'trial'}' == 'active'
+              ? 'active' // المشترك المدفوع لا يعاقَب — الخادم يحسم لاحقاً.
+              : 'trial',
+          planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+              ? 'enterprise'
+              : 'individual',
+          maxDevices:
+              _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
+          createdAtMs: _asMs(m['created_at']),
+          expiresAtMs: _asMs(m['expires_at']),
+          isActive: m['is_active'] != false,
+          deviceFingerprint: '${m['fp'] ?? ''}',
+          features: PlanFeatures.fromMap(rawFeat0 is Map
+              ? Map<String, dynamic>.from(rawFeat0)
+              : null),
+          // إسناد وقت الخادم إلى expires_at مباشرة ⇒ expired=true
+          // للتجربة، فتُقفل كل المزايا المدفوعة حتى الفحص السحابي.
+          serverNowMs: _asMs(m['expires_at']) > 0
+              ? _asMs(m['expires_at'])
+              : serverNow,
+        );
+      }
       // الإسناد للأمام فقط: إرجاع ساعة الهاتف لا يُرجع وقت الخادم.
       final drift = (nowDevice - deviceMs).clamp(0, 1 << 62);
       final rawFeat = m['features'];

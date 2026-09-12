@@ -203,9 +203,49 @@ void main() {
     });
   });
 
-  test('يطلب البيان من الرابط الصحيح', () async {
+  test('يطلب البيان من الرابط الصحيح + معامل كسر الكاش', () async {
     Uri? seen;
     await svcReturning(manifest(), onRequest: (u) => seen = u).check();
-    expect(seen.toString(), 'https://example.com/version.json');
+    expect(seen!.host, 'example.com');
+    expect(seen!.path, '/version.json');
+    // (إصلاح CDN) كل طلب يحمل معاملاً زمنياً يمنع كاش السيرفرات الوسيطة.
+    final t = int.tryParse(seen!.queryParameters['t'] ?? '');
+    expect(t, isNotNull, reason: 'معامل كسر الكاش t مطلوب في كل طلب');
+    expect(t! > 0, isTrue);
+  });
+
+  test('معامل كسر الكاش يتغير بين الطلبات (لا قيمة ثابتة قابلة للكاش)',
+      () async {
+    final seen = <String>[];
+    final svc = svcReturning(manifest(),
+        onRequest: (u) => seen.add(u.queryParameters['t'] ?? ''));
+    await svc.check();
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    await svc.check();
+    expect(seen.length, 2);
+    expect(seen[0], isNot(seen[1]),
+        reason: 'قيمتان مختلفتان = لا يمكن للـ CDN إعادة استجابة مكاشة');
+  });
+
+  test('(إصلاح البناء) رفع رقم build وحده = تحديث متاح فوراً', () async {
+    // الحالي 3.49.0+85 والبيان 3.49.0+86 — نفس major.minor.patch.
+    final info = await svcReturning(
+      manifest(version: '3.49.0+86'),
+      current: const AppSemVer(3, 49, 0, 85),
+    ).check();
+    expect(info.status, UpdateStatus.available,
+        reason: '+86 أحدث من +85 حتى مع تطابق 3.49.0');
+    // والعكس: نفس البناء تماماً = محدَّث.
+    final same = await svcReturning(
+      manifest(version: '3.49.0+85'),
+      current: const AppSemVer(3, 49, 0, 85),
+    ).check();
+    expect(same.status, UpdateStatus.upToDate);
+    // بناء أقدم لا يُعرض كتحديث.
+    final older = await svcReturning(
+      manifest(version: '3.49.0+84'),
+      current: const AppSemVer(3, 49, 0, 85),
+    ).check();
+    expect(older.status, UpdateStatus.upToDate);
   });
 }

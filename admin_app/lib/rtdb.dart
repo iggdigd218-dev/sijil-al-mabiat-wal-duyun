@@ -57,6 +57,10 @@ class Rtdb {
   Rtdb._();
   static final Rtdb instance = Rtdb._();
 
+  /// عميل HTTP موحد: يعيد استخدام اتصال TCP/TLS نفسه عبر كل الطلبات
+  /// (keep-alive) بدل فتح اتصال جديد لكل طلب — أسرع بمرات على الجوال.
+  final http.Client _client = http.Client();
+
   String baseUrl = '';
   String authToken = ''; // اختياري: legacy secret أو ID token.
 
@@ -87,7 +91,7 @@ class Rtdb {
   }
 
   Future<dynamic> _get(String path, [Map<String, String>? q]) async {
-    final r = await http.get(_u(path, q)).timeout(const Duration(seconds: 20));
+    final r = await _client.get(_u(path, q)).timeout(const Duration(seconds: 20));
     if (r.statusCode != 200) {
       throw Exception('قراءة $path فشلت (${r.statusCode}): ${r.body}');
     }
@@ -95,7 +99,7 @@ class Rtdb {
   }
 
   Future<void> _patch(String path, Map<String, dynamic> body) async {
-    final r = await http
+    final r = await _client
         .patch(_u(path), body: jsonEncode(body))
         .timeout(const Duration(seconds: 20));
     if (r.statusCode != 200) {
@@ -104,7 +108,7 @@ class Rtdb {
   }
 
   Future<void> _put(String path, Object body) async {
-    final r = await http
+    final r = await _client
         .put(_u(path), body: jsonEncode(body))
         .timeout(const Duration(seconds: 20));
     if (r.statusCode != 200) {
@@ -122,15 +126,16 @@ class Rtdb {
     throw Exception('تعذّر قراءة ساعة الخادم');
   }
 
-  /// تحويل المدخل إلى معرف مساحة عمل:
-  /// - إن كان بصمة تفعيل (32 خانة hex كما في رسالة واتساب) نبحث في فهرس
-  ///   /trials/<fp> عن workspace_id المرتبط بها.
-  /// - غير ذلك نعتبره workspace id مباشراً ونتحقق من وجود العقدة.
+  /// تحويل المدخل إلى معرف مساحة عمل — يقبل ثلاثة أشكال تلقائياً:
+  ///  1) بصمة التفعيل (32 خانة hex من رسالة واتساب) ⇒ فهرس /trials/<fp>.
+  ///  2) معرف الجهاز (DEVICE-XXXXXXXX…) ⇒ بحث في roster كل المساحات.
+  ///  3) معرف مساحة العمل مباشرة ⇒ تحقق من وجود العقدة.
   Future<String> resolveWorkspaceId(String input) async {
     final id = input.trim();
     if (id.isEmpty) throw Exception('أدخل معرف الجهاز أو مساحة العمل أولاً');
-    final isFp = RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(id);
-    if (isFp) {
+
+    // (1) بصمة تفعيل 32-hex.
+    if (RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(id)) {
       final t = await _get('trials/${Uri.encodeComponent(id)}');
       if (t is Map && '${t['workspace_id'] ?? ''}'.isNotEmpty) {
         return '${t['workspace_id']}';
@@ -138,7 +143,38 @@ class Rtdb {
       throw Exception('لم يُعثر على مساحة عمل مرتبطة بهذه البصمة.\n'
           'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
     }
-    // معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
+
+    // (2) معرف جهاز DEVICE-… ⇒ نفتش سجل التفعيلات ثم بصمات /trials ثم
+    //     roster المساحات عن هذا الجهاز.
+    if (RegExp(r'^DEVICE-[A-Z2-9]{6,}', caseSensitive: false).hasMatch(id)) {
+      final devId = id.toUpperCase();
+      // فهرس التجارب يحمل workspace_id — أرخص مسح.
+      final trials = await _get('trials');
+      if (trials is Map) {
+        for (final v in trials.values) {
+          if (v is Map && '${v['device_id'] ?? ''}'.toUpperCase() == devId) {
+            final ws = '${v['workspace_id'] ?? ''}';
+            if (ws.isNotEmpty) return ws;
+          }
+        }
+      }
+      // مسح roster لكل مساحة (قراءة مفاتيح سطحية ثم roster المطابق).
+      final keys = await _get('workspaces', {'shallow': 'true'});
+      if (keys is Map) {
+        for (final ws in keys.keys) {
+          final roster =
+              await _get('workspaces/${Uri.encodeComponent('$ws')}/roster');
+          if (roster is Map &&
+              roster.keys.any((k) => '$k'.toUpperCase() == devId)) {
+            return '$ws';
+          }
+        }
+      }
+      throw Exception('لم يُعثر على جهاز بهذا المعرف في أي مساحة عمل.\n'
+          'جرّب لصق «بصمة التفعيل» من رسالة العميل بدلاً منه.');
+    }
+
+    // (3) معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
     final sub = await _get('workspaces/${Uri.encodeComponent(id)}/subscription');
     if (sub != null) return id;
     final ws = await _get('workspaces/${Uri.encodeComponent(id)}',
@@ -190,6 +226,21 @@ class Rtdb {
         'audit_log': true,
       },
     });
+
+    // مزامنة فهرس /trials (مصدر العدادات المجمعة): التفعيل يقلب حالة
+    // المساحة فيه أيضاً حتى تعكس بطاقة «مشتركون مدفوعون» الحقيقة فوراً.
+    try {
+      final cur =
+          await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+      final fp = cur is Map ? '${cur['device_fingerprint'] ?? ''}' : '';
+      if (fp.isNotEmpty) {
+        await _patch('trials/${Uri.encodeComponent(fp)}', {
+          'status': 'active',
+          'expires_at': expires,
+          'workspace_id': ws,
+        });
+      }
+    } catch (_) {} // الفهرس تحسيني — فشله لا يفسد التفعيل.
 
     // سجل إداري للمشتركين — يغذي شاشة «سجل المشتركين».
     await _put('admin/activations/$now', {
@@ -273,8 +324,10 @@ class AdminMetrics {
 }
 
 extension RtdbMetrics on Rtdb {
-  /// جمع العدادات: مفاتيح المساحات (قراءة سطحية خفيفة) ثم عقدة الاشتراك
-  /// لكل مساحة. القرار الزمني بساعة الخادم حصراً.
+  /// جمع العدادات بلا اختناق: كان الشكل القديم يطلق طلب HTTP منفصلاً
+  /// لكل مساحة (N+1). الآن قراءة مجمعة واحدة لفهرس /trials (يحمل
+  /// status/expires_at لكل مساحة مفعّلة) + مفاتيح المساحات السطحية —
+  /// طلبان اثنان مهما بلغ عدد العملاء، عبر عميل keep-alive موحد.
   Future<AdminMetrics> metrics() async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) {
@@ -283,14 +336,33 @@ extension RtdbMetrics on Rtdb {
     }
     final now = await serverNowMs();
     int paid = 0, trials = 0, expired = 0;
-    for (final ws in keys.keys) {
-      dynamic sub;
-      try {
-        sub = await _get('workspaces/${Uri.encodeComponent('$ws')}/subscription');
-      } catch (_) {
-        continue;
+
+    // القراءة المجمعة: فهرس التجارب يحمل حالة كل مساحة مفعّلة.
+    final trialIdx = await _get('trials');
+    final byWs = <String, Map>{};
+    if (trialIdx is Map) {
+      for (final v in trialIdx.values) {
+        if (v is Map) {
+          final ws = '${v['workspace_id'] ?? ''}';
+          if (ws.isNotEmpty) byWs[ws] = v;
+        }
       }
-      if (sub is! Map) continue; // مساحة بلا عقدة اشتراك بعد.
+    }
+    // مساحات غير مفهرسة في /trials (نادرة — قديمة جداً): قراءة مفردة
+    // كاحتياط، بحد أقصى 25 حتى لا نعود للاختناق.
+    final missing =
+        keys.keys.map((k) => '$k').where((w) => !byWs.containsKey(w)).toList();
+    for (final ws in missing.take(25)) {
+      try {
+        final sub =
+            await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+        if (sub is Map) byWs[ws] = sub;
+      } catch (_) {}
+    }
+
+    for (final ws in keys.keys) {
+      final sub = byWs['$ws'];
+      if (sub == null) continue; // مساحة بلا عقدة اشتراك بعد.
       final status = '${sub['status'] ?? ''}';
       final e = sub['expires_at'];
       final exp = e is num ? e.toInt() : 0;

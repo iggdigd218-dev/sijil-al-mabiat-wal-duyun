@@ -239,6 +239,7 @@ class CloudJoin {
     required String joiningDeviceId,
   }) async {
     int maxDevices;
+    Map<String, dynamic>? rosterCloud;
     try {
       final rec = await _getJson(
           '${_root(backendUrl, workspaceId)}/subscription.json');
@@ -246,18 +247,40 @@ class CloudJoin {
       final v = rec['max_devices'];
       maxDevices = v is num ? v.toInt() : 0;
       if (maxDevices <= 0) return; // غير محدد = بلا حد.
+      // (احتساب ذري) roster السحابي هو المصدر المشترك اللحظي بين كل
+      // الأجهزة — الجدول المحلي قد يتخلف عن موافقات جرت على جهاز آخر
+      // للتو، فكان يرفض/يقبل خطأً. نقرأه في نفس لحظة القرار.
+      final r = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+      if (r != null) rosterCloud = Map<String, dynamic>.from(r);
     } catch (_) {
       return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
     }
+    // إعادة انضمام جهاز قائم (له مقعد في roster أو محلياً) لا تستهلك
+    // مقعداً جديداً — تجديد لسجله القديم.
+    bool activeRow(Map d) =>
+        '${d['revoked_at'] ?? ''}'.isEmpty &&
+        '${d['expelled_at'] ?? ''}'.isEmpty;
+    if (rosterCloud != null) {
+      final mine = rosterCloud[joiningDeviceId];
+      if (mine is Map && activeRow(mine)) return;
+    }
     final db = await repo.database;
-    // إعادة انضمام جهاز قائم لا تستهلك مقعداً.
     final existing = await db.query('devices',
         where: "id = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' "
             "AND COALESCE(expelled_at,'') = ''",
         whereArgs: [joiningDeviceId],
         limit: 1);
     if (existing.isNotEmpty) return;
-    final current = await connectedDevicesCount(repo);
+    // العدد الفعلي: الأكبر بين roster السحابي والمحلي (أيهما أحدث) —
+    // لا يُرفض جهاز ضمن الحصة، ولا يُقبل جهاز فوقها بسباق تحديث.
+    int current = await connectedDevicesCount(repo);
+    if (rosterCloud != null) {
+      final cloudCount = rosterCloud.values
+          .whereType<Map>()
+          .where(activeRow)
+          .length;
+      if (cloudCount > current) current = cloudCount;
+    }
     if (current >= maxDevices) {
       throw CloudJoinException(
           '🪑 تم استنفاد عدد الأجهزة المسموح بها لهذه الباقة '

@@ -43,8 +43,13 @@ Future<String?> hardwareFingerprintRaw() async {
     final plugin = DeviceInfoPlugin();
     if (Platform.isAndroid) {
       final a = await plugin.androidInfo;
-      // ANDROID_ID ثابت عبر إعادة التثبيت لنفس الجهاز+المستخدم+توقيع التطبيق.
-      final parts = [a.id, a.brand, a.model, a.hardware, a.fingerprint];
+      // (تحصين البصمة) مكوّنات ثابتة فقط لا تتغير بإعادة التثبيت أو مسح
+      // SQLite أو حتى تحديث النظام OTA:
+      //  • ANDROID_ID: ثابت لنفس الجهاز+المستخدم+توقيع التطبيق.
+      //  • brand/model/hardware: صفات عتاد مصنعية لا تتبدل.
+      // أُسقط a.fingerprint عمداً: بصمة «البناء» تتغير مع كل تحديث نظام،
+      // فكانت تمنح تجربة جديدة بعد كل OTA — ثغرة تصفير مقنّعة.
+      final parts = [a.id, a.brand, a.model, a.hardware];
       return 'android:${parts.join('|')}';
     }
     if (Platform.isWindows) {

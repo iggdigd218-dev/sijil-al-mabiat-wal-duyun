@@ -543,4 +543,34 @@ void main() {
     expect(m['max_devices'], kDefaultEnterpriseSeats);
     expect((m['features'] as Map)['can_cloud_backup'], true);
   });
+
+  test('PLAN-07 (كشف التلاعب) إرجاع ساعة الهاتف دون شبكة = قفل فوري '
+      'للمزايا حتى فحص سحابي حقيقي', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP7'),
+        cloud.client);
+    // فحص ناجح يثبّت الحالة محلياً (device_ms = الآن الحقيقي).
+    await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP7', force: true),
+        cloud.client);
+    final raw = (await repo.settings())['subCachedState'] ?? '';
+    expect(raw, isNotEmpty);
+    // محاكاة إرجاع الساعة: نعدل device_ms المخزن ليكون في «مستقبل»
+    // الجهاز (ساعة الهاتف الآن أقدم منه بأكثر من هامش الدقيقتين).
+    final m = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    m['device_ms'] =
+        DateTime.now().millisecondsSinceEpoch + 3 * 60 * 60 * 1000;
+    await repo.setSetting('subCachedState', jsonEncode(m));
+    // استرجاع دون شبكة (كما يفعل البانر عند الإقلاع بلا إنترنت).
+    final st = await SubscriptionGuard.debugLoadPersisted(repo);
+    expect(st, isNotNull);
+    expect(st!.expired, isTrue,
+        reason: 'التراجع الزمني المكشوف يقفل الجلسة المحلية فوراً');
+    expect(st.featureUnlocked((f) => f.canCloudBackup), isFalse,
+        reason: 'المزايا المدفوعة مقفلة حتى فحص سحابي حقيقي');
+  });
 }

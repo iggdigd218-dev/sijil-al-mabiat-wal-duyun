@@ -163,6 +163,11 @@
             <action android:name="android.intent.action.OPEN_DOCUMENT"/>
             <data android:mimeType="*/*"/>
         </intent>
+        <!-- فتح روابط whatsapp:// المباشرة (أندرويد 11+ package visibility) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="whatsapp"/>
+        </intent>
         <package android:name="com.whatsapp"/>
         <package android:name="com.whatsapp.w4b"/>
         <package android:name="com.android.contacts"/>

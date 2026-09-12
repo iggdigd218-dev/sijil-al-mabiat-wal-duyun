@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/cloud_config.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -415,16 +416,12 @@ Future<void> showTrialExpiredSheet(BuildContext context,
               padding: const EdgeInsets.symmetric(vertical: 13),
             ),
             onPressed: () async {
-              final msg = Uri.encodeComponent(expired
+              final msg = expired
                   ? 'مرحباً، انتهت فترتي التجريبية في تطبيق مدير الحسابات '
                       'وأرغب بتفعيل الاشتراك.'
                   : 'مرحباً، أستخدم تطبيق مدير الحسابات وأرغب بترقية/تجديد '
-                      'اشتراكي.');
-              final wa = Uri.parse(
-                  'https://wa.me/${kActivationContact.replaceAll('+', '')}?text=$msg');
-              try {
-                await launchUrl(wa, mode: LaunchMode.externalApplication);
-              } catch (_) {}
+                      'اشتراكي.';
+              await launchActivationWhatsApp(msg);
             },
             icon: const Icon(Icons.chat),
             label: const Text('تواصل مع المدير للتفعيل (واتساب)',
@@ -469,6 +466,34 @@ Future<void> showTrialExpiredSheet(BuildContext context,
       ),
     ),
   );
+}
+
+
+/// فتح محادثة واتساب على رقم التفعيل — متانة أندرويد 11+:
+/// (1) الرابط المباشر whatsapp://send (يتطلب <queries> المصرّح بها)،
+/// (2) احتياط wa.me في المتصفح الخارجي، (3) احتياط أخير بالوضع الافتراضي.
+Future<bool> launchActivationWhatsApp(String text) async {
+  final phone = kActivationContact.replaceAll('+', '');
+  final encoded = Uri.encodeComponent(text);
+  final direct = Uri.parse('whatsapp://send?phone=$phone&text=$encoded');
+  final web = Uri.parse('https://wa.me/$phone?text=$encoded');
+  try {
+    if (await canLaunchUrl(direct)) {
+      if (await launchUrl(direct, mode: LaunchMode.externalApplication)) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  try {
+    if (await launchUrl(web, mode: LaunchMode.externalApplication)) {
+      return true;
+    }
+  } catch (_) {}
+  try {
+    return await launchUrl(web); // آخر احتياط: الوضع الافتراضي للمنصة.
+  } catch (_) {
+    return false;
+  }
 }
 
 // ==================== شاشة شراء التطبيق (الخطة الفردية) ====================
@@ -537,13 +562,11 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
       final devId = await ensureDeviceId(repo);
       final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
       final fp = SubscriptionGuard.fingerprintHash(raw);
-      final msg = Uri.encodeComponent(
+      final ok = await launchActivationWhatsApp(
           'مرحباً، أرغب بشراء اشتراك تطبيق مدير الحسابات.\n'
           'معرف الجهاز: $devId\n'
           'بصمة التفعيل: $fp');
-      final wa = Uri.parse(
-          'https://wa.me/${kActivationContact.replaceAll('+', '')}?text=$msg');
-      await launchUrl(wa, mode: LaunchMode.externalApplication);
+      if (!ok) throw Exception('wa-launch-failed');
     } catch (_) {
       if (mounted) {
         showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.',
@@ -560,7 +583,9 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
     try {
       final repo = ref.read(repoProvider);
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      // (تفعيل الفردي بنقرة) لا نشترط ضبط المزامنة يدوياً: المستخدم
+      // الفردي يتحقق عبر الرابط الرسمي المضمّن برمجياً مباشرة.
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) {
         if (mounted) {
           showSnack(context,

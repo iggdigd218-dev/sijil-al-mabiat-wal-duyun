@@ -296,11 +296,11 @@ class UpdateInstaller {
               mode: ProcessStartMode.detached);
         }
         yield const InstallProgress(InstallPhase.done, progress: 1);
-        if (isExe) {
-          // نغلق التطبيق بعد مهلة كافية لظهور UAC حتى لا تبقى ملفاتنا
-          // مقفلة أثناء التثبيت (المثبّت يغلق التطبيق أيضاً احتياطاً).
-          Future.delayed(const Duration(seconds: 3), () => exit(0));
-        }
+        // (إصلاح UAC) لا exit(0) هنا: قتل العملية بعد 3 ثوانٍ كان يقتل
+        // سلسلة الإطلاق قبل موافقة المستخدم على حوار صلاحيات المسؤول،
+        // فيموت المثبّت صامتاً. NexoraSetup.exe (Inno Setup) يغلق التطبيق
+        // بنفسه عبر CloseApplications عند بدء التثبيت الفعلي — نبقى أحياء
+        // حتى يتولى هو الإغلاق.
       } catch (e) {
         yield InstallProgress(InstallPhase.failed,
             error: 'تعذّر تشغيل المُثبّت: $e');
