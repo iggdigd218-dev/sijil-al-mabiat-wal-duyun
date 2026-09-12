@@ -579,7 +579,7 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
           return ListView.separated(
             padding: const EdgeInsets.all(12),
             itemCount: list.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            separatorBuilder: (_, i) => const SizedBox(height: 8),
             itemBuilder: (context, i) {
               final s = list[i];
               final lifetime =
