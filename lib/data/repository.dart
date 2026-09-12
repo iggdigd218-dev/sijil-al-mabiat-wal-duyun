@@ -16,6 +16,7 @@ import '../core/models.dart';
 import '../core/workspace_mode.dart';
 import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
+import 'sync/device_registry.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
 import 'sync/recorder.dart';
@@ -157,6 +158,9 @@ class Repo {
   }
 
   String get requireWorkspaceId => _workspaceId ?? defaultWorkspaceId;
+
+  /// (الاسترداد الذاتي) تحديث كاش معرف المساحة بعد تبديل مستعاد.
+  void debugSetWorkspaceId(String ws) => _workspaceId = ws;
 
   // ---------- حالة المساحة (مستقل/مرتبط) ----------
 
@@ -2100,6 +2104,14 @@ class Repo {
     try {
       final st = await settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      // (فهرس البصمة) تنازل صريح: سجل بصمتنا يُحدَّث بالقوة إلى member —
+      // هذه هي الحالة الوحيدة التي يتغير فيها دور المدير المسجل.
+      if (url.isNotEmpty) {
+        try {
+          await DeviceRegistry.upsertBinding(this,
+              backendUrl: url, force: true);
+        } catch (_) {}
+      }
       if (url.isNotEmpty) {
         final wsRows = await db.query('workspaces', limit: 1);
         final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';

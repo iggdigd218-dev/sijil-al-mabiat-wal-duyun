@@ -9,8 +9,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/accounting.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
+import '../core/cloud_config.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
+import '../data/sync/workspace_recovery.dart';
 import 'group_management_screen.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
@@ -103,6 +105,84 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
+  /// (هاتف بديل) استرداد يدوي: المدير يُدخل رمز مساحته القديمة
+  /// (WS-XXXXXXXX) فتُسحب نسخة مؤسسته الصامتة وتُستعاد كاملة،
+  /// ويُسجَّل هذا الهاتف مالكاً لها في فهرس البصمات.
+  Future<void> _restorePrevious() async {
+    final wsCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('استعادة مؤسسة سابقة'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'أدخل رمز مساحة العمل الخاص بمؤسستك (يبدأ بـ WS-، تجده في '
+              'إعدادات جهازك القديم أو لدى الدعم الفني). ستُستعاد بيانات '
+              'المؤسسة من آخر نسخة سحابية.',
+              style: TextStyle(fontSize: 12.5, height: 1.6),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: wsCtrl,
+              textDirection: TextDirection.ltr,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'رمز المساحة (WS-XXXXXXXX)',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('استعادة')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final wsId = wsCtrl.text.trim().toUpperCase();
+    if (wsId.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      final recovered = await WorkspaceRecovery.manualRestore(repo,
+          backendUrl: url, workspaceId: wsId);
+      if (!mounted) return;
+      if (recovered) {
+        Sfx.pair();
+        await repo.setSetting(kOnboardingDoneKey, '1');
+        bump(ref);
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+              builder: (_) => const LockGate(child: HomeShell())),
+        );
+        return;
+      }
+      Sfx.error();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'لم يُعثر على نسخة لهذه المساحة — تحقق من الرمز أو من اتصالك.')));
+    } catch (e) {
+      if (mounted) {
+        Sfx.error();
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('تعذّرت الاستعادة: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720;
@@ -151,6 +231,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   const SizedBox(height: 14),
                   _networkCard(),
                 ],
+                // ---------- استعادة مؤسسة سابقة (هاتف بديل) ----------
+                const SizedBox(height: 14),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _restorePrevious,
+                    icon: const Icon(Icons.restore_rounded, size: 20),
+                    label: const Text('استعادة مؤسسة سابقة'),
+                  ),
+                ),
                 // ---------- الإعداد المصغّر ----------
                 AnimatedSize(
                   duration: const Duration(milliseconds: 220),

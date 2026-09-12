@@ -23,6 +23,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
+import 'device_registry.dart';
 import 'snapshot_apply.dart';
 import 'subscription_guard.dart';
 import '../../core/cloud_config.dart';
@@ -1067,6 +1068,12 @@ class CloudJoin {
     final ourId = await ensureDeviceId(repo);
     try {
       await _delete(requestPath(backendUrl, workspaceId, ourId));
+    } catch (_) {}
+    // (استرداد بصمة العتاد) تسجيل بصمة العضو مربوطة بمساحة المجموعة —
+    // حذف التطبيق ثم إعادة تثبيته تعيده عضواً لنفس المجموعة تلقائياً.
+    try {
+      await DeviceRegistry.bindAsMember(repo,
+          backendUrl: backendUrl, workspaceId: workspaceId);
     } catch (_) {}
     // تنظيف سياق الانتظار.
     final db = await repo.database;

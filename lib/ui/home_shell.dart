@@ -9,6 +9,8 @@ import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/device_registry.dart';
+import '../data/sync/workspace_recovery.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
 import 'update_section.dart';
@@ -550,12 +552,27 @@ class _HomeShellState extends ConsumerState<HomeShell>
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
       final repo = ref.read(repoProvider);
+      // (استرداد بصمة العتاد) أول خطوة: تثبيت نظيف لجهاز معروف سابقاً؟
+      // تُستعاد مساحته ودوره وبياناته بصمت قبل أي تهيئة تجربة/مزامنة.
+      try {
+        final recovered = await WorkspaceRecovery.attemptSilentRecovery(repo);
+        if (recovered) {
+          final engine = ref.read(syncEngineProvider);
+          engine.stop();
+          await engine.start();
+          ref.read(refreshProvider.notifier).state++;
+        }
+      } catch (_) {}
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (الفهرس السحابي) تثبيت ربط بصمة الجهاز بمساحته ودوره الحاليين.
+      try {
+        await DeviceRegistry.upsertBinding(repo, backendUrl: url);
+      } catch (_) {}
       // (الاسترداد السيادي) تسجيل منشئ المساحة بأثر رجعي عند الإقلاع:
       // للمجموعات القائمة قبل الميزة — المالك الحالي يُسجَّل منشئاً إن
       // كانت العقدة السحابية الدائمة غائبة (تُكتب مرة واحدة ولا تتغير).

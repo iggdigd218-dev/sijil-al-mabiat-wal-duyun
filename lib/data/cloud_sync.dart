@@ -325,4 +325,27 @@ class CloudSync {
       return false;
     }
   }
+
+  /// (استرداد بصمة العتاد) سحب النسخة الصامتة لمساحة محددة —
+  /// تُستخدم أثناء الاسترداد الذاتي عند الإقلاع. null إن لم توجد نسخة.
+  static Future<Map<String, Object?>?> pullWorkspaceBackup(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final root = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    Map<String, dynamic>? rec;
+    try {
+      rec = await _requestJson(
+          '$root/workspaces/${Uri.encodeComponent(workspaceId)}/backup.json');
+    } catch (_) {
+      return null;
+    }
+    final payload = rec?['payload'];
+    if (payload is! Map) return null;
+    final map = Map<String, Object?>.from(payload);
+    final data = map['data'];
+    if (data is! Map || data.isEmpty) return null;
+    return map;
+  }
 }
