@@ -17,6 +17,7 @@ import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
 import 'recorder.dart';
+import 'subscription_guard.dart';
 import 'sync_activity.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
@@ -438,6 +439,8 @@ class SyncEngine {
   Future<void> _periodicCloudPull() async {
     if (_cloudPulling || !_started) return;
     if (_cloudTransport == null) return;
+    // 🔒 انتهاء التجربة يوقف السحب السحابي الدوري أيضاً.
+    if (await _trialBlocked()) return;
     _cloudPulling = true;
     try {
       final applied = await _cloudTransport!.pull(resolver: ConflictResolver());
@@ -904,10 +907,25 @@ class SyncEngine {
     return SyncSummary(pending: pending, failed: failed);
   }
 
+  /// 🔒 (التجربة) هل السحابة محظورة لانتهاء الفترة التجريبية؟
+  /// فحص خفيف بكاش داخلي — لا يضرب الشبكة في كل دورة.
+  Future<bool> _trialBlocked() async {
+    try {
+      final t = _cloudTransport;
+      if (t == null) return false;
+      return await SubscriptionGuard.isBlocked(repo,
+          backendUrl: t.backendUrl, workspaceId: t.workspaceId);
+    } catch (_) {
+      return false; // الشك لصالح الاستمرار — الفحص التالي يحسم.
+    }
+  }
+
   Future<void> processQueue() async {
     if (_running) return;
     _running = true;
     try {
+      // 🔒 انتهاء التجربة يجمّد الدفع السحابي كلياً (العمل المحلي يستمر).
+      if (await _trialBlocked()) return;
       final db = await _db;
       final q = _queue ??= SyncQueueOps(db);
       // السحابة أولاً: عند نجاح رفع العملية للسحابة تُعلَّم synced=1،

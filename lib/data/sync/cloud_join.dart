@@ -24,6 +24,7 @@ import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
 import 'snapshot_apply.dart';
+import 'subscription_guard.dart';
 
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -193,6 +194,30 @@ class CloudJoin {
   /// بدل الاكتفاء بإعادة الضبط الصامتة.
   static Future<void> Function()? onSelfEvicted;
 
+  /// 🔒 (التجربة) يرمي CloudJoinException إذا انتهت الفترة التجريبية —
+  /// حارس ربط الأجهزة الجديدة (دعوة/موافقة).
+  static Future<void> _ensureSubscriptionAllows(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final blocked = await SubscriptionGuard.isBlocked(repo,
+          backendUrl: url, workspaceId: ws);
+      if (blocked) {
+        throw const CloudJoinException(
+            '⏳ انتهت الفترة التجريبية — ربط الأجهزة الجديدة متوقف. '
+            'فعّل اشتراكك لاستئناف كل المزايا السحابية.');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {
+      // تعذر الفحص (شبكة) — لا نمنع؛ بوابة المزامنة الدورية تحسم لاحقاً.
+    }
+  }
+
   static String _root(String base, String ws) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
 
@@ -278,6 +303,8 @@ class CloudJoin {
       throw const CloudJoinException(
           'إنشاء دعوة سحابية متاح لجهاز المدير (المالك) فقط.');
     }
+    // 🔒 (التجربة) انتهاء الفترة يمنع ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
     final mode = await repo.workspaceMode();
     if (mode == 'member') {
       final db0 = await repo.database;
@@ -951,6 +978,8 @@ class CloudJoin {
     if (!owner) {
       throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
     }
+    // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
+    await _ensureSubscriptionAllows(repo);
     final db = await repo.database;
     final now = DateTime.now().toIso8601String();
     // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).

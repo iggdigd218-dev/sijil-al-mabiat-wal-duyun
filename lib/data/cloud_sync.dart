@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/app_version.dart';
 import 'repository.dart';
+import 'sync/subscription_guard.dart';
 
 const _alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -44,6 +45,18 @@ class CloudSync {
       }
     }
     await repo.setSetting('cloudBackendUrl', t);
+    // 🔒 أول ضبط لرابط سحابي = بدء الفترة التجريبية (خلفي، لا يعطل الحفظ).
+    if (t.isNotEmpty) {
+      try {
+        final db = await repo.database;
+        final wsRows = await db.query('workspaces', limit: 1);
+        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        await SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: t, workspaceId: ws);
+      } catch (_) {
+        // شبكة غائبة الآن — check() سيفعّلها عند أول فحص ناجح.
+      }
+    }
   }
 
   static String _cleanCode(String c) {
@@ -153,6 +166,22 @@ class CloudSync {
         'error': 'لم يُضبط رابط قاعدة البيانات السحابية بعد.',
       };
     }
+    // 🔒 (التجربة) انتهاء الفترة يوقف النسخ الاحتياطي السحابي.
+    try {
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final blocked = await SubscriptionGuard.isBlocked(repo,
+          backendUrl: c.backendUrl, workspaceId: ws);
+      if (blocked) {
+        return {
+          'ok': false,
+          'trialExpired': true,
+          'error': '⏳ انتهت الفترة التجريبية — النسخ السحابي متوقف. '
+              'فعّل اشتراكك لاستئناف النسخ الاحتياطي.',
+        };
+      }
+    } catch (_) {}
     final code = c.code.isNotEmpty ? c.code : await ensureCode(repo);
     final target = targetFor(c.backendUrl, code);
 

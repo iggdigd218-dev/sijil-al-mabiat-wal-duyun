@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../core/models.dart';
 import 'repository.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
+import 'sync/subscription_guard.dart';
 import 'sync/sync_engine.dart';
 import 'sync/sync_queue.dart';
 
@@ -1123,4 +1125,25 @@ final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
     'withError': withError,
     'synced': syncedToday,
   };
+});
+
+// ---------- 🔒 الفترة التجريبية (Trial Engine) ----------
+
+/// حالة الاشتراك/التجربة الحية — تُحدَّث كل دقيقة (العدّاد التنازلي في
+/// الشريط العلوي) وبنبضات refreshProvider. القرار بوقت خادم فيربيس حصراً.
+final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
+  ref.watch(refreshProvider);
+  // تحديث ذاتي كل دقيقة لعدّاد الوقت المتبقي.
+  final t = Timer(const Duration(minutes: 1), () => ref.invalidateSelf());
+  ref.onDispose(t.cancel);
+  final repo = ref.read(repoProvider);
+  final st = await repo.settings();
+  final url = (st['cloudBackendUrl'] ?? '').trim();
+  if (url.isEmpty) return SubscriptionState.none;
+  final db = await repo.database;
+  final wsRows = await db.query('workspaces', limit: 1);
+  final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+  return SubscriptionGuard.check(repo, backendUrl: url, workspaceId: ws)
+      .timeout(const Duration(seconds: 10),
+          onTimeout: () => SubscriptionGuard.lastState);
 });

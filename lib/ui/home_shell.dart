@@ -42,7 +42,9 @@ import '../core/keep_alive_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/sync_activity.dart';
+import '../data/sync/subscription_guard.dart';
 import '../data/sync/chat_hooks.dart';
+import 'trial_ui.dart';
 import 'widgets.dart' show showSnack;
 
 /// كل شاشات التطبيق الاثنتي عشرة.
@@ -151,6 +153,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
     // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
     _startGlobalJoinWatcher();
+    // 🔒 الفترة التجريبية: ترحيب أول مرة + رصد الانتهاء.
+    _watchTrialLifecycle();
     // (إصلاح تسليم الإدارة) أي دفعة عمليات مطبقة (ومنها نقل الملكية أو
     // تغيير دور) تعيد بناء كل المزودات المشتقة من refreshProvider —
     // الشريط الجانبي والإعدادات يعكسان الصلاحيات الجديدة لحظياً.
@@ -532,6 +536,42 @@ class _HomeShellState extends ConsumerState<HomeShell>
       );
     } catch (_) {
       // التحية كمالية — لا تعطل شيئاً.
+    }
+  }
+
+  /// 🔒 دورة حياة الفترة التجريبية على الشاشة الرئيسية:
+  ///  - نافذة ترحيب راقية مرة واحدة فقط عند أول تفعيل (trialWelcomed).
+  ///  - عند رصد الانتهاء لأول مرة: بطاقة «انتهت الفترة» مع خيارات
+  ///    التجديد والتواصل (trialExpiredShown يمنع التكرار المزعج).
+  Future<void> _watchTrialLifecycle() async {
+    try {
+      // مهلة قصيرة حتى تكتمل تهيئة السحابة والمزودات.
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) return;
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final sub = await SubscriptionGuard.check(repo,
+          backendUrl: url, workspaceId: ws, force: true);
+      if (!mounted || sub.status == 'none') return;
+      // (أ) الترحيب — مرة واحدة فقط.
+      if (sub.status == 'trial' &&
+          !sub.expired &&
+          (st['trialWelcomed'] ?? '') != '1') {
+        await repo.setSetting('trialWelcomed', '1');
+        if (mounted) await showTrialWelcomeDialog(context);
+      }
+      // (ب) الانتهاء — بطاقة مرة واحدة لكل انتهاء.
+      if (sub.expired && (st['trialExpiredShown'] ?? '') != '1') {
+        await repo.setSetting('trialExpiredShown', '1');
+        if (mounted) await showTrialExpiredSheet(context);
+      }
+    } catch (_) {
+      // شبكة غائبة — الفحص الدوري في المحرك يغطي.
     }
   }
 
@@ -1169,14 +1209,22 @@ class _HomeShellState extends ConsumerState<HomeShell>
         drawer: _Drawer(current: _screen, onSelect: _go),
         // سطح المكتب (>900dp): شريط جانبي قابل للطي على يمين الشاشة (RTL)
         // بدل الشريط السفلي؛ الهاتف يبقى على الشريط السفلي كما هو.
-        body: desktop
-            ? Row(
-                children: [
-                  _desktopRail(),
-                  Expanded(child: _body()),
-                ],
-              )
-            : _body(),
+        // 🔒 شريط الفترة التجريبية أعلى المحتوى (غير مزعج، يختفي ذاتياً).
+        body: Column(
+          children: [
+            const TrialCountdownBanner(),
+            Expanded(
+              child: desktop
+                  ? Row(
+                      children: [
+                        _desktopRail(),
+                        Expanded(child: _body()),
+                      ],
+                    )
+                  : _body(),
+            ),
+          ],
+        ),
         floatingActionButton: _fab(),
         bottomNavigationBar: desktop
             ? null
