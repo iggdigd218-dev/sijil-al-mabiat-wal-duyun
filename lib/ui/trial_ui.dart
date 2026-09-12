@@ -15,7 +15,7 @@ import '../data/sync/subscription_guard.dart';
 import 'widgets.dart' show showSnack;
 
 /// رقم التواصل المباشر للتفعيل (واتساب المدير/الدعم).
-const String kActivationContact = '+96774190040';
+const String kActivationContact = '+967774190040';
 
 /// نافذة الترحيب بالفترة التجريبية — تظهر مرة واحدة فقط عند أول تفعيل.
 Future<void> showTrialWelcomeDialog(BuildContext context) async {
