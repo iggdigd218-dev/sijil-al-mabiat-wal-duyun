@@ -250,6 +250,7 @@ extension ApplyRemoteOp on Repo {
       final newOwnerDev = '${decoded['owner_device_id'] ?? ''}';
       final newOwnerUid = decoded['owner_user_id'];
       final isReclaim = decoded['reclaim'] == true;
+      final isCreatorRecovery = decoded['creator_recovery'] == true;
       if (newOwnerDev.isEmpty) return;
       // تحقق سيادي: مصدر العملية يجب أن يكون المالك المعروف محلياً —
       // جهاز عضو لا يستطيع تزوير نقل ملكية لنفسه.
@@ -259,14 +260,25 @@ extension ApplyRemoteOp on Repo {
         // (صمام أمان) استثناء الاسترجاع: المدير السابق المسجل محلياً من
         // آخر تسليم يحق له استعادة الملكية خلال نافذة الاسترجاع — نتحقق
         // أن المصدر هو فعلاً المالك السابق المعروف لدينا، لا أي عضو.
-        bool allowReclaim = false;
+        bool allowed = false;
         if (isReclaim) {
           final prev = await txn.query('sync_meta',
               where: 'key = ?', whereArgs: ['prevOwnerDeviceId'], limit: 1);
-          allowReclaim =
+          allowed =
               prev.isNotEmpty && '${prev.first['value']}' == op.deviceId;
         }
-        if (!allowReclaim) return;
+        // (الاسترداد السيادي للمنشئ) creator_recovery: يُقبل حصراً إن
+        // طابق مصدر العملية سجل المنشئ الدائم — من الكاش المحلي الموثوق
+        // (creatorDeviceId يُروى من عقدة creator.json السحابية الثابتة).
+        if (!allowed && isCreatorRecovery) {
+          final c = await txn.query('settings',
+              where: 'key = ?', whereArgs: ['creatorDeviceId'], limit: 1);
+          allowed = c.isNotEmpty && '${c.first['value']}' == op.deviceId;
+          // لا كاش محلياً بعد؟ التحقق الشبكي خارج المعاملة غير ممكن هنا —
+          // نتحفظ بالرفض؛ المصالحة السحابية (roster) ستوصل الملكية لاحقاً
+          // لأن creatorRecoverOwnership يرفعها لـ roster مباشرة أيضاً.
+        }
+        if (!allowed) return;
       }
       final now = DateTime.now().toIso8601String();
       // ذاكرة المالك السابق: تُمكّن قبول عملية «استرجاع» شرعية لاحقاً،

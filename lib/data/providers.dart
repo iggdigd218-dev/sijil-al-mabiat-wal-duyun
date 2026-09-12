@@ -714,6 +714,61 @@ final reclaimOwnershipProvider = FutureProvider<bool>((ref) async {
       .timeout(const Duration(seconds: 8), onTimeout: () => false);
 });
 
+/// (استرداد طارئ) هل هذا الجهاز هو منشئ المساحة المسجل سحابياً وليس
+/// المالك الحالي؟ — يُظهر خيار «استرداد ملكية مساحة العمل».
+final creatorRecoveryProvider = FutureProvider<bool>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .creatorRecoveryAvailable()
+      .timeout(const Duration(seconds: 12), onTimeout: () => false);
+});
+
+/// (استرداد طارئ) اسم المدير السابق إن كان يمكن إرجاع الإدارة إليه من
+/// هذا الجهاز (نحن المالك الحالي بعد تسليم سابق) — null يخفي الخيار.
+final handbackTargetProvider = FutureProvider<String?>((ref) async {
+  ref.watch(refreshProvider);
+  try {
+    final repo = ref.read(repoProvider);
+    if (!await repo.isWorkspaceOwner()) return null;
+    if (await repo.workspaceMode() == 'standalone') return null;
+    final db = await repo.database;
+    // المدير السابق المعروف من آخر نقل ملكية وصلنا.
+    final mem = await db.query('sync_meta',
+        where: "key = 'prevOwnerDeviceId'", limit: 1);
+    String prev = mem.isNotEmpty ? '${mem.first['value']}' : '';
+    if (prev.isEmpty) {
+      final ops = await db.query('operations',
+          where: "entity_id = 'ownershipTransfer'",
+          orderBy: 'timestamp DESC',
+          limit: 5);
+      for (final o in ops) {
+        try {
+          final v = jsonDecode(
+              '${(jsonDecode('${o['payload']}') as Map)['value']}');
+          final cand = '${v['previous_owner_device_id'] ?? ''}';
+          if (cand.isNotEmpty) {
+            prev = cand;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+    if (prev.isEmpty) return null;
+    final rows = await db.query('devices',
+        where: 'id = ?', whereArgs: [prev], limit: 1);
+    if (rows.isEmpty) return null;
+    // لا نعرض الخيار إن كان «السابق» هو جهازنا نفسه.
+    try {
+      if (prev == repo.requireDeviceId) return null;
+    } catch (_) {}
+    final name = '${rows.first['name'] ?? ''}'.trim();
+    return name.isEmpty ? 'المدير السابق' : name;
+  } catch (_) {
+    return null;
+  }
+});
+
 /// دور الجهاز الحالي (للعرض في الشارة أعلى الشاشة).
 final deviceRoleProvider = FutureProvider<AppUser?>((ref) async {
   ref.watch(refreshProvider);

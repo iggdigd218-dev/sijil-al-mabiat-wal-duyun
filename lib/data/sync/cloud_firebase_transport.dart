@@ -489,11 +489,22 @@ class CloudFirebaseTransport implements SyncTransport {
           if (decoded is! Map) continue;
           final newOwnerDev = '${decoded['owner_device_id'] ?? ''}';
           if (newOwnerDev == ourId) {
-            ChatHooks.onMemberNotice?.call(
-              '👑 أنت الآن مدير المجموعة',
-              'سلّمك المدير السابق الإدارة — أصبحت مالك المجموعة بكل '
-                  'الصلاحيات، وظهرت لديك إدارة المجموعة والأجهزة فوراً.',
-            );
+            // (استرداد طارئ) تمييز الإرجاع الطوعي: المستلم يعيد الإدارة
+            // للمالك السابق — إشعار «عادت إليك» بدل «سلّمك».
+            if (decoded['handback'] == true) {
+              ChatHooks.onMemberNotice?.call(
+                '👑 عادت إليك الإدارة',
+                'لقد تم استلام صلاحية المدير وعادت إليك — أنت الآن مالك '
+                    'المجموعة بكل الصلاحيات، وظهرت لديك إدارة المجموعة '
+                    'والأجهزة فوراً.',
+              );
+            } else {
+              ChatHooks.onMemberNotice?.call(
+                '👑 أنت الآن مدير المجموعة',
+                'سلّمك المدير السابق الإدارة — أصبحت مالك المجموعة بكل '
+                    'الصلاحيات، وظهرت لديك إدارة المجموعة والأجهزة فوراً.',
+              );
+            }
           } else {
             final rows = await db.query('devices',
                 columns: ['name'],

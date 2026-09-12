@@ -555,6 +555,26 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (الاسترداد السيادي) تسجيل منشئ المساحة بأثر رجعي عند الإقلاع:
+      // للمجموعات القائمة قبل الميزة — المالك الحالي يُسجَّل منشئاً إن
+      // كانت العقدة السحابية الدائمة غائبة (تُكتب مرة واحدة ولا تتغير).
+      try {
+        if (await repo.isWorkspaceOwner() &&
+            await repo.workspaceMode() != 'standalone') {
+          await CloudJoin.registerCreatorIfAbsent(repo,
+              backendUrl: url,
+              workspaceId: ws,
+              deviceId: repo.requireDeviceId);
+        } else {
+          // عضو: كاش سجل المنشئ محلياً (يلزم للتحقق من creator_recovery
+          // ولإظهار خيار الاسترداد على جهاز المنشئ الذي فقد الملكية).
+          final creator = await CloudJoin.fetchCreatorDeviceId(
+              backendUrl: url, workspaceId: ws);
+          if (creator.isNotEmpty) {
+            await repo.setSetting('creatorDeviceId', creator);
+          }
+        }
+      } catch (_) {}
       // (ترحيل الاشتراك) تهيئة كسولة عند الإقلاع: المساحات القديمة
       // المسجلة قبل نظام التجربة بلا عقدة subscription — الفحص القسري
       // ينشئها تلقائياً بختم خادم (created_at = لحظة هذا الفتح،

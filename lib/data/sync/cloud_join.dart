@@ -221,6 +221,43 @@ class CloudJoin {
   static String _root(String base, String ws) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
 
+  // ============ (الاسترداد السيادي) سجل منشئ المساحة الدائم ============
+
+  /// يسجل creator_device_id لمساحة العمل مرة واحدة فقط — إن كانت العقدة
+  /// موجودة لا تُلمس أبداً (غير قابلة للتغيير)، مهما تنقّلت الملكية.
+  static Future<void> registerCreatorIfAbsent(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String deviceId,
+  }) async {
+    final path = '${_root(backendUrl, workspaceId)}/creator.json';
+    final existing = await _getJson(path);
+    if (existing != null &&
+        '${existing['creator_device_id'] ?? ''}'.isNotEmpty) {
+      return; // مسجل مسبقاً — لا يتغير أبداً.
+    }
+    await _putJson(path, {
+      'creator_device_id': deviceId,
+      'registered_at': DateTime.now().toIso8601String(),
+      'immutable': true,
+    }, timeout: const Duration(seconds: 20));
+    // نسخة محلية للعرض السريع دون شبكة.
+    try {
+      await repo.setSetting('creatorDeviceId', deviceId);
+    } catch (_) {}
+  }
+
+  /// يجلب معرف جهاز منشئ المساحة من السحابة (أو '' إن لم يسجل بعد).
+  static Future<String> fetchCreatorDeviceId({
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final rec =
+        await _getJson('${_root(backendUrl, workspaceId)}/creator.json');
+    return '${rec?['creator_device_id'] ?? ''}';
+  }
+
   static Future<Map<String, dynamic>?> _getJson(String url) async {
     final res =
         await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
@@ -399,6 +436,15 @@ class CloudJoin {
           conflictAlgorithm: ConflictAlgorithm.replace);
     } catch (_) {}
 
+    // (الاسترداد السيادي) تسجيل منشئ المساحة مرة واحدة وإلى الأبد:
+    // creator_device_id يُكتب فقط إن لم يوجد — لا يتغير مع نقل الملكية
+    // أبداً، وهو صمام الأمان الأخير لاسترداد المجموعة. المجموعات القائمة
+    // قبل هذه الميزة تُسجَّل بأثر رجعي: المالك الحالي وقت أول دعوة جديدة.
+    try {
+      await registerCreatorIfAbsent(repo,
+          backendUrl: url, workspaceId: ws, deviceId: ourId);
+    } catch (_) {}
+
     final token = _newToken();
     final pin = newPairPin();
     // TTL دقيق: 15 دقيقة لمسار الموافقة التفاعلي (كانت 24 ساعة — نافذة
@@ -527,6 +573,15 @@ class CloudJoin {
     // إعدادات السحابة بنفس رابط المدير حتى تعمل المزامنة الفورية مباشرة.
     await repo.setSetting('cloudBackendUrl', url);
     await repo.setSetting('cloudAutoSync', '1');
+    // (الاسترداد السيادي) كاش سجل المنشئ الدائم محلياً: تتحقق منه
+    // apply_remote عند وصول عملية creator_recovery.
+    try {
+      final creator = await fetchCreatorDeviceId(
+          backendUrl: url, workspaceId: workspaceId);
+      if (creator.isNotEmpty) {
+        await repo.setSetting('creatorDeviceId', creator);
+      }
+    } catch (_) {}
     if (cloudCode.trim().isNotEmpty) {
       await repo.setSetting('cloudCode', cloudCode.trim().toUpperCase());
     }

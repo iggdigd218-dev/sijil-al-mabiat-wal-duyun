@@ -1881,6 +1881,7 @@ class Repo {
   Future<void> transferOwnership(
     String newOwnerDeviceId, {
     String? newUserRoleForMe,
+    bool handback = false,
   }) async {
     await _ensureCan('manage_users');
     final db = await _db;
@@ -2067,6 +2068,7 @@ class Repo {
             'owner_device_id': newOwnerDeviceId,
             'owner_user_id': handoverUserId,
             'previous_owner_device_id': _deviceId,
+            if (handback) 'handback': true,
             'at': now,
           }),
         },
@@ -2090,6 +2092,191 @@ class Repo {
       }
     } catch (_) {
       // الشبكة غائبة الآن: العملية السيادية في الطابور ستوصل التغيير.
+    }
+  }
+
+  /// (استرداد طارئ — 1) «إرجاع الإدارة للمالك السابق»: يستدعيها الجهاز
+  /// المالك حالياً (المستلم في تسليم سابق) ليعيد الملكية طواعيةً للمدير
+  /// السابق بنقرة واحدة — حتى لو كانت واجهات الإدارة لا تظهر لديه بسبب
+  /// مشاكل عرض/توافق (أندرويد قديم). تعتمد transferOwnership نفسها مع
+  /// علامة handback تُظهر إشعار «عادت إليك الإدارة» عند المدير السابق.
+  Future<String> handbackOwnershipToPreviousOwner() async {
+    if (!await isWorkspaceOwner()) {
+      throw StateError('هذا الجهاز ليس المالك الحالي — لا شيء يُرجَع.');
+    }
+    final db = await _db;
+    // المدير السابق: من ذاكرة آخر نقل وصلنا (prevOwnerDeviceId) أو من
+    // حمولة آخر عملية ownershipTransfer مخزنة.
+    String prev = '';
+    final mem = await db.query('sync_meta',
+        where: 'key = ?', whereArgs: ['prevOwnerDeviceId'], limit: 1);
+    if (mem.isNotEmpty) prev = '${mem.first['value']}';
+    if (prev.isEmpty) {
+      final ops = await db.query('operations',
+          where: "entity_id = 'ownershipTransfer'",
+          orderBy: 'timestamp DESC',
+          limit: 5);
+      for (final o in ops) {
+        try {
+          final payload = jsonDecode('${o['payload']}');
+          final v = jsonDecode('${payload['value']}');
+          final cand = '${v['previous_owner_device_id'] ?? ''}';
+          if (cand.isNotEmpty && cand != _deviceId) {
+            prev = cand;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+    if (prev.isEmpty || prev == _deviceId) {
+      throw StateError('لا يوجد مدير سابق معروف لإرجاع الإدارة إليه.');
+    }
+    final rows = await db.query('devices',
+        where: 'id = ?', whereArgs: [prev], limit: 1);
+    if (rows.isEmpty) {
+      throw StateError('جهاز المدير السابق لم يعد ضمن المجموعة.');
+    }
+    final prevName = '${rows.first['name'] ?? 'المدير السابق'}';
+    await transferOwnership(prev, handback: true);
+    return prevName;
+  }
+
+  /// (استرداد طارئ — 2) الاسترداد السيادي للمنشئ: هل هذا الجهاز هو منشئ
+  /// المساحة المسجل سحابياً وليس المالك الحالي؟ (يُظهر خيار الاسترداد).
+  Future<bool> creatorRecoveryAvailable() async {
+    try {
+      if (_deviceId == null) return false;
+      if (await isWorkspaceOwner()) return false; // نحن المالك أصلاً.
+      final st = await settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) return false;
+      // المحلي أولاً (سريع بلا شبكة)، ثم السحابة للتوثيق.
+      var creator = (st['creatorDeviceId'] ?? '').trim();
+      if (creator.isEmpty) {
+        final db = await _db;
+        final wsRows = await db.query('workspaces', limit: 1);
+        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        creator = await CloudJoin.fetchCreatorDeviceId(
+            backendUrl: url, workspaceId: ws);
+        if (creator.isNotEmpty) {
+          await setSetting('creatorDeviceId', creator);
+        }
+      }
+      return creator.isNotEmpty && creator == _deviceId;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (استرداد طارئ — 2) تنفيذ الاسترداد السيادي: جهاز المنشئ يتحقق من
+  /// سجله السحابي الدائم ثم يستعيد الملكية محلياً ويبث عملية استرداد
+  /// فورية + يحدّث roster السحابي ليصبح Owner مجدداً — دون أي تدخل يدوي
+  /// في Firebase.
+  Future<void> creatorRecoverOwnership() async {
+    if (_deviceId == null) {
+      throw StateError('جهازك غير مُعرَّف — أعد تشغيل التطبيق.');
+    }
+    final st = await settings();
+    final url = (st['cloudBackendUrl'] ?? '').trim();
+    if (url.isEmpty) {
+      throw StateError('لا يوجد اتصال سحابي مهيأ على هذا الجهاز.');
+    }
+    final db = await _db;
+    final wsRows = await db.query('workspaces', limit: 1);
+    final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+    // توثيق سيادي من السحابة مباشرة (لا من الكاش المحلي): العقدة الدائمة
+    // creator.json هي الحكم — أي جهاز آخر يفشل هنا.
+    final creator =
+        await CloudJoin.fetchCreatorDeviceId(backendUrl: url, workspaceId: ws);
+    if (creator.isEmpty) {
+      throw StateError('لا يوجد سجل منشئ لهذه المساحة في السحابة.');
+    }
+    if (creator != _deviceId) {
+      throw StateError('هذا الجهاز ليس منشئ مساحة العمل — الاسترداد '
+          'السيادي حكر على جهاز المنشئ الأصلي.');
+    }
+    final now = DateTime.now().toIso8601String();
+    // المالك الحالي (لأغراض الإشعار وحمولة العملية).
+    final curRows = await db.query('devices',
+        columns: ['id'], where: 'is_owner = 1', limit: 1);
+    final curOwner = curRows.isNotEmpty ? '${curRows.first['id']}' : '';
+    await db.transaction((txn) async {
+      await txn.update('devices', {'is_owner': 0, 'updated_at': now});
+      await txn.update(
+          'devices',
+          {
+            'is_owner': 1,
+            'user_id': _currentUserId,
+            'revoked_at': '',
+            'expelled_at': '',
+            'is_paired': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [_deviceId]);
+      if (_currentUserId != null) {
+        final permStr = defaultPerms(UserRole.admin)
+            .entries
+            .where((e) => e.value)
+            .map((e) => e.key)
+            .join(',');
+        await txn.update(
+            'users',
+            {
+              'role': 'admin',
+              'permissions': permStr,
+              'active': 1,
+              'is_me': 1,
+              'deleted_at': '',
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [_currentUserId]);
+      }
+      await txn.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert(
+          'sync_meta', {'key': 'ownerDeviceId', 'value': _deviceId},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+    // عملية سيادية فورية لكل الأجهزة: creator_recovery تُقبل لدى الجميع
+    // بعد تحقق كلٍّ منها من عقدة creator.json السحابية الدائمة.
+    try {
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipTransfer',
+        opType: OpKind.settings,
+        payload: {
+          'key': 'ownershipTransfer',
+          'value': jsonEncode({
+            'owner_device_id': _deviceId,
+            'owner_user_id': _currentUserId,
+            'previous_owner_device_id': curOwner,
+            'creator_recovery': true,
+            'at': now,
+          }),
+        },
+      );
+      await setSetting('ownershipEpoch', now);
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipEpoch',
+        opType: OpKind.settings,
+        payload: {'key': 'ownershipEpoch', 'value': now},
+      );
+    } catch (_) {}
+    // تحديث السحابة فوراً: roster يعكس الملكية الجديدة حالاً.
+    try {
+      await CloudJoin.pushOwnershipToRoster(
+        this,
+        backendUrl: url,
+        workspaceId: ws,
+        newOwnerDeviceId: _deviceId!,
+        previousOwnerDeviceId: curOwner.isEmpty ? _deviceId! : curOwner,
+      );
+    } catch (_) {
+      // الشبكة غائبة الآن: العملية السيادية في الطابور ستوصل الاسترداد.
     }
   }
 

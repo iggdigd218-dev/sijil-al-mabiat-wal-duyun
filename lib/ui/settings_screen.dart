@@ -100,6 +100,106 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  /// (استرداد طارئ — 1) المالك الحالي يعيد الإدارة للمالك السابق طواعية
+  /// بنقرة واحدة — يعمل حتى لو كانت أزرار الإدارة الأخرى لا تظهر.
+  Future<void> _handbackOwnership(
+      BuildContext context, String prevName) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.assignment_return_outlined,
+            color: Color(0xFFB45309), size: 40),
+        title: const Text('إرجاع الإدارة للمالك السابق'),
+        content: Text(
+          'ستعود ملكية مساحة العمل فوراً إلى «$prevName» ويصله إشعار: '
+          '«لقد تم استلام صلاحية المدير وعادت إليك».\n\n'
+          'سيتحول جهازك إلى عضو بدور «عرض فقط» (يمكن للمدير تغييره '
+          'لاحقاً).\n\nهل تريد المتابعة؟',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB45309)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('إرجاع الإدارة'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final name =
+          await ref.read(repoProvider).handbackOwnershipToPreviousOwner();
+      try {
+        await ref.read(syncEngineProvider).forceSyncNow();
+      } catch (_) {}
+      bump(ref);
+      Sfx.success();
+      if (context.mounted) {
+        showSnack(context,
+            '✅ أُرجعت الإدارة إلى «$name» — وصله الإشعار وأنت الآن عضو.');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر الإرجاع: $e', error: true);
+      }
+    }
+  }
+
+  /// (استرداد طارئ — 2) منشئ المساحة يسترد الملكية سيادياً: تحقق سحابي
+  /// من creator.json ثم استعادة فورية + بث لكل الأجهزة وتحديث roster.
+  Future<void> _creatorRecover(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.workspace_premium,
+            color: Color(0xFF7C3AED), size: 40),
+        title: const Text('استرداد ملكية مساحة العمل'),
+        content: const Text(
+          'أنت منشئ هذه المساحة — سجلك محفوظ في السحابة بشكل دائم.\n\n'
+          'سيتم التحقق من سجل المنشئ سحابياً ثم تستعيد الملكية فوراً: '
+          'تصبح أنت المدير، ويتحول المالك الحالي إلى عضو، ويُبثّ التغيير '
+          'لكل الأجهزة.\n\nهل تريد الاسترداد الآن؟',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('استرداد الملكية'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(repoProvider).creatorRecoverOwnership();
+      try {
+        await ref.read(syncEngineProvider).forceSyncNow();
+      } catch (_) {}
+      bump(ref);
+      Sfx.success();
+      if (context.mounted) {
+        showSnack(context,
+            '✅ استُردت ملكية مساحة العمل — أنت المدير من جديد.');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر الاسترداد: $e', error: true);
+      }
+    }
+  }
+
   /// (صمام أمان) المدير السابق يسترجع الإدارة خلال 24 ساعة من تسليم
   /// متعثر — تأكيد صريح ثم استعادة محلية + بث سيادي لكل الأجهزة.
   Future<void> _reclaimOwnership(BuildContext context) async {
@@ -386,6 +486,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               children: [
                 const SectionTitle('الإعدادات'),
                 const SizedBox(height: 6),
+                // (استرداد طارئ — 1) «إرجاع الإدارة للمالك السابق»: بطاقة
+                // بارزة أعلى الإعدادات على جهاز المالك الحالي (المستلم في
+                // تسليم سابق) — مقصودة خارج أقسام الإدارة حتى تظهر حتى لو
+                // تعطلت واجهات الإدارة على الأجهزة القديمة (أندرويد 7).
+                if (ref.watch(handbackTargetProvider).valueOrNull
+                    case final String prevName) ...[
+                  Card(
+                    color: const Color(0xFFB45309).withValues(alpha: .08),
+                    child: ListTile(
+                      leading: const Icon(Icons.assignment_return_outlined,
+                          color: Color(0xFFB45309)),
+                      title: const Text(
+                        'إرجاع إدارة مساحة العمل للمالك السابق',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        'أنت المدير الحالي بعد تسليم سابق. بنقرة واحدة '
+                        'تعود الإدارة إلى «$prevName» ويصله إشعار فوري.',
+                        style:
+                            const TextStyle(fontSize: 11.5, height: 1.5),
+                      ),
+                      trailing: const Icon(Icons.chevron_left),
+                      onTap: () => _handbackOwnership(context, prevName),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (canEditOrg)
                 _Collapsible(
                   title: 'بيانات المؤسسة',
@@ -833,6 +960,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                     ],
                   ),
+                  // (استرداد طارئ — 2) الاسترداد السيادي للمنشئ: هذا
+                  // الجهاز أنشأ المساحة لكنه ليس المالك حالياً — خيار
+                  // أمان دائم لاسترداد الملكية دون تدخل يدوي في Firebase.
+                  if (ref.watch(creatorRecoveryProvider).valueOrNull ==
+                      true) ...[
+                    const SizedBox(height: 18),
+                    _Collapsible(
+                      title: 'استرداد ملكية مساحة العمل',
+                      icon: Icons.workspace_premium_outlined,
+                      color: const Color(0xFF7C3AED),
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.workspace_premium,
+                              color: Color(0xFF7C3AED)),
+                          title: const Text('استرداد ملكية مساحة العمل'),
+                          subtitle: const Text(
+                            'أنت منشئ هذه المساحة. إن فقدت الإدارة لأي '
+                            'سبب يمكنك استردادها فوراً — يُحدَّث السجل '
+                            'السحابي وتُبثّ الاستعادة لكل الأجهزة.',
+                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                          ),
+                          trailing: const Icon(Icons.chevron_left),
+                          onTap: () => _creatorRecover(context),
+                        ),
+                      ],
+                    ),
+                  ],
                   // (صمام أمان) استرجاع الإدارة: يظهر للمدير السابق فقط
                   // خلال 24 ساعة من التسليم — ينقذ الموقف إذا تعثر تفعيل
                   // الإدارة على الجهاز المستلم (جهاز قديم/أندرويد 7).
