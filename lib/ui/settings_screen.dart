@@ -17,6 +17,7 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import 'splash.dart' show SplashScreen;
+import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
 import 'appearance_screen.dart';
 import 'cloud_sync_section.dart';
@@ -875,6 +876,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                       ),
                     ],
+                  ),
+                ],
+                // (الاشتراك) تفاصيل الاشتراك: للمدير فقط — حالة الترخيص
+                // وتاريخ الانتهاء والوقت المتبقي وزر التجديد/الترقية.
+                if (wsOwner || wsMode == 'standalone') ...[
+                  const SizedBox(height: 18),
+                  const _Collapsible(
+                    title: 'تفاصيل الاشتراك',
+                    icon: Icons.workspace_premium_outlined,
+                    color: Color(0xFF7C3AED),
+                    children: [SubscriptionDetailsSection()],
                   ),
                 ],
                 // (دفعة 58 — متطلب 8) المزامنة السحابية: إعداد حساس —

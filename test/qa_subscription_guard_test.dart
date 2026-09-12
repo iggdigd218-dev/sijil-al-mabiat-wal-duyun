@@ -290,6 +290,59 @@ void main() {
         reason: 'استُهلكت 6 ساعات فعلاً — لا تصفير');
   });
 
+  test(
+      'TRIAL-09 (استمرارية العداد) الحالة تُثبّت محلياً بعد فحص ناجح، '
+      'وتُسترجع عند إقلاع جديد بلا شبكة — الشريط لا يختفي', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => cloud.serverClock;
+    // فحص ناجح يثبت الحالة محلياً.
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-persist', force: true),
+        cloud.client);
+    expect(st.status, 'trial');
+    final saved = (await repo.settings())['subCachedState'] ?? '';
+    expect(saved, isNotEmpty, reason: 'الحالة ثُبّتت في settings');
+    // «أُغلق التطبيق وفُتح بلا شبكة»: كاش الذاكرة صُفّر والشبكة ترمي.
+    SubscriptionGuard.debugReset();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => throw Exception('offline');
+    final offlineClient = MockClient((_) async =>
+        throw Exception('offline'));
+    final restored = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-persist', force: true),
+        () => offlineClient);
+    expect(restored.status, 'trial',
+        reason: 'الحالة المثبّتة استُرجعت — العداد يظهر فور الإقلاع');
+    expect(restored.expiresAtMs, st.expiresAtMs,
+        reason: 'نفس expires_at الخادمي — لا تغيير بلا شبكة');
+    expect(restored.expired, isFalse);
+  });
+
+  test(
+      'TRIAL-10 (تجدد العداد) بين الفحوصات السحابية يُسنَد وقت الخادم '
+      'المرجعي بساعة أحادية — العداد يتناقص لا يتجمد', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => cloud.serverClock;
+    final st1 = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-live', force: true),
+        cloud.client);
+    // قراءة كاش (بلا force وداخل TTL): وقت الخادم المُسنَد لا يقل عن
+    // قيمة آخر فحص (الإسناد للأمام فقط بساعة Stopwatch).
+    final st2 = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-live'),
+        cloud.client);
+    expect(st2.serverNowMs, greaterThanOrEqualTo(st1.serverNowMs));
+    expect(st2.expiresAtMs, st1.expiresAtMs);
+    expect(st2.remainingMs, lessThanOrEqualTo(st1.remainingMs),
+        reason: 'المتبقي لا يزيد بين قراءتين متتاليتين');
+  });
+
   test('TRIAL-05 دقة الحساب: الحدود الدقيقة قبل/عند/بعد لحظة الانتهاء',
       () async {
     final cloud = _FakeRtdb();

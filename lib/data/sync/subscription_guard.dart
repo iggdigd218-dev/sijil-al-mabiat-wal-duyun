@@ -213,9 +213,9 @@ class SubscriptionGuard {
     return _stateFrom(finalRec, createdMs);
   }
 
-  /// الفحص المرجعي: يقرأ العقدة ويقارن بوقت الخادم. يحدّث الكاش.
-  /// عند غياب الشبكة يعاد آخر كاش (سماحية قصيرة) — الانقطاع الطويل
-  /// بلا فحص ناجح يُعامل كحظر احترازي إن كانت آخر حالة معروفة منتهية.
+  /// الفحص المرجعي: يقرأ العقدة ويقارن بوقت الخادم. يحدّث الكاش
+  /// ويثبّت آخر حالة ناجحة محلياً (settings) حتى يبقى العدّاد ظاهراً
+  /// بعد إغلاق التطبيق وفتحه ولو تعذرت الشبكة لحظة الإقلاع.
   static Future<SubscriptionState> check(
     Repo repo, {
     required String backendUrl,
@@ -225,7 +225,10 @@ class SubscriptionGuard {
     if (!force &&
         _everChecked &&
         _sinceCheck.elapsed < cacheTtl) {
-      return _last;
+      // إسناد لحظي: نقدّم وقت الخادم المرجعي بعمر الكاش (ساعة أحادية
+      // لا تتأثر بتلاعب ساعة الهاتف) — العدّاد يتجدد بين الفحوصات
+      // بدل التجمد على قيمة آخر فحص.
+      return _advanced();
     }
     try {
       final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
@@ -236,14 +239,81 @@ class SubscriptionGuard {
         final st = await ensureTrialStarted(repo,
             backendUrl: backendUrl, workspaceId: workspaceId);
         _cache(st);
+        await _persist(repo, st);
         return st;
       }
       final st = _stateFrom(rec, now);
       _cache(st);
+      await _persist(repo, st);
       return st;
     } catch (_) {
-      // شبكة غائبة: أعد آخر حالة معروفة دون تحديث ساعة الفحص.
+      // شبكة غائبة: آخر حالة معروفة في الذاكرة، وإلا (إقلاع جديد بلا
+      // شبكة) الحالة المثبّتة محلياً من آخر فحص ناجح — الشريط لا يختفي.
+      if (_everChecked) return _advanced();
+      final persisted = await _loadPersisted(repo);
+      if (persisted != null) {
+        _cache(persisted);
+        return persisted;
+      }
       return _last;
+    }
+  }
+
+  /// آخر حالة مع تقديم وقت الخادم المرجعي بعمر الكاش (monotonic).
+  static SubscriptionState _advanced() {
+    if (!_everChecked || _last.serverNowMs <= 0) return _last;
+    return SubscriptionState(
+      status: _last.status,
+      createdAtMs: _last.createdAtMs,
+      expiresAtMs: _last.expiresAtMs,
+      isActive: _last.isActive,
+      deviceFingerprint: _last.deviceFingerprint,
+      serverNowMs: _last.serverNowMs + _sinceCheck.elapsedMilliseconds,
+    );
+  }
+
+  /// تثبيت آخر حالة ناجحة محلياً — تُقرأ عند الإقلاع بلا شبكة.
+  static Future<void> _persist(Repo repo, SubscriptionState st) async {
+    try {
+      if (st.status == 'none') return;
+      await repo.setSetting(
+          'subCachedState',
+          jsonEncode({
+            'status': st.status,
+            'created_at': st.createdAtMs,
+            'expires_at': st.expiresAtMs,
+            'is_active': st.isActive,
+            'fp': st.deviceFingerprint,
+            'server_now': st.serverNowMs,
+            'device_ms': DateTime.now().millisecondsSinceEpoch,
+          }));
+    } catch (_) {}
+  }
+
+  /// استرجاع الحالة المثبّتة محلياً مع إسناد تقديري لوقت الخادم
+  /// (لأغراض العرض فقط — البوابات تُحسم بفحص سحابي حقيقي عند توفر
+  /// الشبكة، ولا يُسمح للإسناد بإرجاع الساعة للخلف).
+  static Future<SubscriptionState?> _loadPersisted(Repo repo) async {
+    try {
+      final raw = (await repo.settings())['subCachedState'] ?? '';
+      if (raw.isEmpty) return null;
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final serverNow = _asMs(m['server_now']);
+      final deviceMs = _asMs(m['device_ms']);
+      final nowDevice = DateTime.now().millisecondsSinceEpoch;
+      // الإسناد للأمام فقط: إرجاع ساعة الهاتف لا يُرجع وقت الخادم.
+      final drift = (nowDevice - deviceMs).clamp(0, 1 << 62);
+      return SubscriptionState(
+        status: '${m['status'] ?? 'trial'}',
+        createdAtMs: _asMs(m['created_at']),
+        expiresAtMs: _asMs(m['expires_at']),
+        isActive: m['is_active'] != false,
+        deviceFingerprint: '${m['fp'] ?? ''}',
+        serverNowMs: serverNow + drift,
+      );
+    } catch (_) {
+      return null;
     }
   }
 
