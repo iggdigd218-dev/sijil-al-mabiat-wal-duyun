@@ -18,6 +18,17 @@ void main() {
     expect(re.hasMatch('a1b2c3d4e5f60718293a4b5c6d7e8f9'), isFalse);
   });
 
+  test('ADMIN-04 معرف الجهاز DEVICE-… يُلتقط بالنمط الموسع (أي لاحقة)', () {
+    final re = RegExp(r'^DEVICE-', caseSensitive: false);
+    expect(re.hasMatch('DEVICE-SSBGXYMEUBZ6'), isTrue,
+        reason: 'معرف العميل الفعلي من رسالة الواتساب');
+    expect(re.hasMatch('device-abc123'), isTrue, reason: 'غير حساس للحالة');
+    expect(re.hasMatch('DEVICE-XY'), isTrue,
+        reason: 'لا حد أدنى للطول — الحسم في البحث لا في النمط');
+    expect(re.hasMatch('ws-1755'), isFalse);
+    expect(re.hasMatch('a1b2c3d4e5f60718293a4b5c6d7e8f90'), isFalse);
+  });
+
   test('ADMIN-03 تصنيف العدادات: مدفوع/تجربة/منتهٍ بساعة الخادم', () {
     const now = 1770000000000;
     expect(classify('active', now + 1000, now), 'paid');

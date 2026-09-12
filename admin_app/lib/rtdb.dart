@@ -144,34 +144,78 @@ class Rtdb {
           'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
     }
 
-    // (2) معرف جهاز DEVICE-… ⇒ نفتش سجل التفعيلات ثم بصمات /trials ثم
-    //     roster المساحات عن هذا الجهاز.
-    if (RegExp(r'^DEVICE-[A-Z2-9]{6,}', caseSensitive: false).hasMatch(id)) {
+    // (2) معرف جهاز DEVICE-… ⇒ بحث متعدد الطبقات + ربط تلقائي:
+    //     (أ) فهرس /trials (device_id)، (ب) سجل التفعيلات الإداري،
+    //     (ج) roster كل المساحات، (د) الربط التلقائي عند مرشح وحيد.
+    //     عند العثور عبر مسار غير مفهرس نكتب device_id في /trials
+    //     ليكون البحث القادم فورياً.
+    if (RegExp(r'^DEVICE-', caseSensitive: false).hasMatch(id)) {
       final devId = id.toUpperCase();
-      // فهرس التجارب يحمل workspace_id — أرخص مسح.
+
+      // (أ) فهرس التجارب — أرخص مسح، ويجمع مرشحي الربط التلقائي.
       final trials = await _get('trials');
+      final unlabeled = <String>{}; // مساحات بلا device_id في فهرسها.
       if (trials is Map) {
         for (final v in trials.values) {
-          if (v is Map && '${v['device_id'] ?? ''}'.toUpperCase() == devId) {
+          if (v is! Map) continue;
+          final ws = '${v['workspace_id'] ?? ''}';
+          if ('${v['device_id'] ?? ''}'.toUpperCase() == devId) {
+            if (ws.isNotEmpty) return ws;
+          }
+          if (ws.isNotEmpty && '${v['device_id'] ?? ''}'.isEmpty) {
+            unlabeled.add(ws);
+          }
+        }
+      }
+
+      // (ب) سجل التفعيلات الإداري: تفعيل سابق بنفس المعرف.
+      final acts = await _get('admin/activations');
+      if (acts is Map) {
+        for (final v in acts.values) {
+          if (v is Map &&
+              '${v['device_ref'] ?? ''}'.trim().toUpperCase() == devId) {
             final ws = '${v['workspace_id'] ?? ''}';
             if (ws.isNotEmpty) return ws;
           }
         }
       }
-      // مسح roster لكل مساحة (قراءة مفاتيح سطحية ثم roster المطابق).
+
+      // (ج) مسح roster لكل مساحة عمل (أجهزة المجموعات).
       final keys = await _get('workspaces', {'shallow': 'true'});
-      if (keys is Map) {
-        for (final ws in keys.keys) {
-          final roster =
-              await _get('workspaces/${Uri.encodeComponent('$ws')}/roster');
-          if (roster is Map &&
-              roster.keys.any((k) => '$k'.toUpperCase() == devId)) {
-            return '$ws';
-          }
+      final wsKeys =
+          keys is Map ? keys.keys.map((k) => '$k').toList() : <String>[];
+      for (final ws in wsKeys) {
+        final roster =
+            await _get('workspaces/${Uri.encodeComponent(ws)}/roster');
+        if (roster is Map &&
+            roster.keys.any((k) => '$k'.toUpperCase() == devId)) {
+          await _linkDeviceToWorkspace(deviceId: devId, workspaceId: ws);
+          return ws;
         }
       }
-      throw Exception('لم يُعثر على جهاز بهذا المعرف في أي مساحة عمل.\n'
-          'جرّب لصق «بصمة التفعيل» من رسالة العميل بدلاً منه.');
+
+      // (د) الربط التلقائي — الجهاز الفردي لا يظهر في أي roster وسجله
+      // القديم في /trials بلا device_id بعد:
+      //   • مساحة وحيدة في القاعدة كلها ⇒ هي مساحة العميل حتماً.
+      //   • أو مرشح وحيد غير موسوم في الفهرس ⇒ نربطه به فوراً.
+      if (wsKeys.length == 1) {
+        await _linkDeviceToWorkspace(
+            deviceId: devId, workspaceId: wsKeys.first);
+        return wsKeys.first;
+      }
+      if (unlabeled.length == 1) {
+        final ws = unlabeled.first;
+        await _linkDeviceToWorkspace(deviceId: devId, workspaceId: ws);
+        return ws;
+      }
+
+      throw Exception(unlabeled.length > 1
+          ? 'المعرف غير موسوم بعد ويوجد ${unlabeled.length} عملاء غير '
+              'موسومين — لا يمكن الحسم تلقائياً.\n'
+              'ألصق «بصمة التفعيل» (32 خانة) من رسالة العميل، أو اطلب منه '
+              'فتح التطبيق مرة واحدة بعد التحديث ليُوسم تلقائياً.'
+          : 'لم يُعثر على جهاز بهذا المعرف في أي مساحة عمل.\n'
+              'جرّب لصق «بصمة التفعيل» من رسالة العميل بدلاً منه.');
     }
 
     // (3) معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
@@ -181,6 +225,29 @@ class Rtdb {
         {'shallow': 'true'});
     if (ws != null) return id;
     throw Exception('لا توجد مساحة عمل بهذا المعرف في قاعدة البيانات.');
+  }
+
+  /// (الربط التلقائي) وسم سجل /trials الخاص بالمساحة بمعرف الجهاز —
+  /// البحث القادم بنفس المعرف يصبح فورياً من الفهرس. تحسيني: فشله
+  /// لا يمنع إتمام التفعيل الجاري.
+  Future<void> _linkDeviceToWorkspace({
+    required String deviceId,
+    required String workspaceId,
+  }) async {
+    try {
+      final trials = await _get('trials');
+      if (trials is! Map) return;
+      for (final e in trials.entries) {
+        final v = e.value;
+        if (v is Map && '${v['workspace_id'] ?? ''}' == workspaceId) {
+          if ('${v['device_id'] ?? ''}'.isEmpty) {
+            await _patch('trials/${Uri.encodeComponent('${e.key}')}',
+                {'device_id': deviceId});
+          }
+          return;
+        }
+      }
+    } catch (_) {}
   }
 
   /// التفعيل/الترقية: تحديث عقدة الاشتراك في المكان (PATCH يحفظ الحقول
