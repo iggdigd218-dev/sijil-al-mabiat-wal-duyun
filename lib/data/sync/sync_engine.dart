@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/token_cipher.dart';
+import '../cloud_sync.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
@@ -410,8 +411,23 @@ class SyncEngine {
         try {
           await repo.purgeExpiredChatMessages();
         } catch (_) {}
+        // (المعمارية الصامتة) نسخة سحابية صامتة كل 24 ساعة كحد أقصى —
+        // بلا أي تدخل من المستخدم؛ فشلها الصامت يعاد في الدورة القادمة.
+        try {
+          if (await CloudSync.silentBackupDue(repo)) {
+            await CloudSync.silentWorkspaceBackup(repo);
+          }
+        } catch (_) {}
       },
     );
+    // نسخة صامتة عند الإقلاع إن كانت مستحقة (خلفية، لا تعطل الواجهة).
+    Future(() async {
+      try {
+        if (await CloudSync.silentBackupDue(repo)) {
+          await CloudSync.silentWorkspaceBackup(repo);
+        }
+      } catch (_) {}
+    });
     // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
     // الناقصة من الأقران (عمليات وصلت بالمزامنة بلا ملفاتها).
     Future(() async {

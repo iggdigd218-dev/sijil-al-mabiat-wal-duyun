@@ -10,7 +10,6 @@ import 'package:share_plus/share_plus.dart';
 import '../core/format.dart';
 import 'trial_ui.dart' show ensureFeatureUnlocked;
 import '../core/theme.dart';
-import '../data/cloud_sync.dart';
 import '../data/google_drive_service.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
@@ -35,11 +34,9 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   /// تضمين صور العمليات داخل ملف النسخة (البند ١٣).
   bool _withImages = true;
 
-  // ===== المزامنة السحابية عبر Firebase (رابط + رمز، بلا تسجيل دخول) =====
-  final _cloudUrlCtrl = TextEditingController();
-  final _cloudCodeCtrl = TextEditingController();
-  Map<String, dynamic>? _cloudStatus;
-  bool _cloudBusy = false;
+  // (المعمارية الصامتة) كرت «المزامنة السحابية Firebase» أُزيل بالكامل:
+  // النسخ السحابي يعمل تلقائياً وبصمت على الرابط المضمّن ومساحة العمل
+  // الحالية — لا حقول رابط/رمز ولا أزرار رفع/سحب يدوية بعد اليوم.
 
   final GoogleDriveService _drive = GoogleDriveService.instance;
 
@@ -47,113 +44,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   void initState() {
     super.initState();
     _loadCloudState();
-    _loadFirebaseState();
-  }
-
-  @override
-  void dispose() {
-    _cloudUrlCtrl.dispose();
-    _cloudCodeCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadFirebaseState() async {
-    final repo = ref.read(repoProvider);
-    try {
-      final cfg = await CloudSync.config(repo);
-      if (!mounted) return;
-      final status = await CloudSync.status(repo);
-      if (!mounted) return;
-      setState(() {
-        _cloudUrlCtrl.text = cfg.backendUrl;
-        _cloudCodeCtrl.text = cfg.code;
-        _cloudStatus = status;
-      });
-    } catch (e) {
-      if (mounted) setState(() => _cloudStatus = {'error': '$e'});
-    }
-  }
-
-  Future<void> _saveCloudConfig() async {
-    final repo = ref.read(repoProvider);
-    // (المعمارية الصامتة) الرابط لم يعد يُحرَّر من هنا — الرسمي مضمّن
-    // برمجياً ويُعتمد تلقائياً عبر effectiveBackendUrl.
-    var code = _cloudCodeCtrl.text.trim();
-    if (code.isEmpty) code = CloudSync.generateCode();
-    final clean = await CloudSync.setCode(repo, code);
-    _cloudCodeCtrl.text = clean;
-    // إعادة تهيئة ناقل المزامنة السحابية فوراً حتى تسري الإعدادات الجديدة
-    // على طابور العمليات دون انتظار إعادة تشغيل التطبيق.
-    try {
-      final engine = ref.read(syncEngineProvider);
-      if (engine.hasStarted) await engine.reconfigureCloud();
-    } catch (_) {}
-    await _loadFirebaseState();
-    if (mounted) showSnack(context, 'تم حفظ إعداد المزامنة السحابية ✅');
-  }
-
-  Future<void> _pushCloud() async {
-    setState(() => _cloudBusy = true);
-    try {
-      final repo = ref.read(repoProvider);
-      final payload = await repo.exportAll(withImages: _withImages);
-      final r = await CloudSync.push(repo, payload);
-      await _loadFirebaseState();
-      if (!mounted) return;
-      if (r['ok'] != true) {
-        showSnack(
-          context,
-          '${r['error'] ?? 'تعذّر الرفع السحابي'}',
-          error: true,
-        );
-      } else if (r['skipped'] == true) {
-        showSnack(
-          context,
-          'النسخة السحابية أحدث من المحلية — لم يُرفع لتفادي الكتابة فوقها.',
-        );
-      } else {
-        showSnack(context, 'تم رفع النسخة للسحابة ✅ (الرمز: ${r['code']})');
-      }
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر الرفع السحابي: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _cloudBusy = false);
-    }
-  }
-
-  Future<void> _pullCloud() async {
-    final repo = ref.read(repoProvider);
-    final r = await CloudSync.pull(repo);
-    if (r['ok'] != true) {
-      if (mounted)
-        showSnack(context, '${r['error'] ?? 'تعذّر السحب'}', error: true);
-      return;
-    }
-    if (r['exists'] != true) {
-      if (mounted) showSnack(context, 'لا توجد نسخة سحابية لهذا الرمز بعد.');
-      return;
-    }
-    final confirm = await confirmDialog(
-      context,
-      title: '⚠️ استعادة من السحابة',
-      message:
-          'سيتم استبدال كل البيانات الحالية بآخر نسخة سحابية (${r['date'] ?? ''}). هل تريد المتابعة؟',
-      danger: true,
-    );
-    if (!confirm) return;
-    setState(() => _busy = true);
-    try {
-      final payload = r['payload'] as Map<String, Object?>;
-      final count = await repo.importAll(payload);
-      await _resyncGroupAfterRestore();
-      bump(ref);
-      if (mounted)
-        showSnack(context, 'تمت الاستعادة من السحابة — $count سجل ✅');
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّرت الاستعادة: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
 
   Future<void> _loadCloudState() async {
@@ -597,105 +487,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           ),
         ),
         if (cloudAllowed) ...[
-        const SizedBox(height: 20),
-        const SectionTitle(
-          'النسخ السحابي (تلقائي — رمز موحَّد، بلا تسجيل دخول)',
-        ),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'ضع رمزًا سحابيًا موحَّدًا على كل أجهزتك، فتتزامن النسخ '
-                  'بدون حساب أو تسجيل دخول — الاتصال بالسحابة تلقائي بالكامل. '
-                  'ارفع النسخة من هنا واسحبها على الجهاز الآخر.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.6,
-                    color: AppColors.text2Of(context),
-                  ),
-                ),
-                // (المعمارية الصامتة) حقل الرابط التقني أُخفي — الرابط
-                // الرسمي مضمّن برمجياً ويُعتمد تلقائياً.
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _cloudCodeCtrl,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(
-                          labelText: 'الرمز السحابي (نفسه على أجهزتك)',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'رمز جديد',
-                      onPressed: () =>
-                          _cloudCodeCtrl.text = CloudSync.generateCode(),
-                      icon: const Icon(Icons.refresh),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (_cloudStatus != null &&
-                    _cloudStatus!['exists'] == true) ...[
-                  Text(
-                    'آخر نسخة سحابية: ${_cloudStatus!['updatedAt'] ?? ''}  ·  ${_cloudStatus!['sizeKb'] ?? ''}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.text3Of(context),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                if (_cloudStatus != null && _cloudStatus!['error'] != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'تعذّر الاتصال: ${_cloudStatus!['error']}',
-                      style: const TextStyle(fontSize: 12, color: Colors.red),
-                    ),
-                  ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _cloudBusy ? null : _saveCloudConfig,
-                        icon: const Icon(Icons.save_outlined),
-                        label: const Text('حفظ'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _cloudBusy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'cloud_backup', featureName: 'النسخ الاحتياطي السحابي', description: 'نسخة يومية آمنة لبياناتك على السحابة تحميك من فقدان الهاتف.')) await _pushCloud(); },
-                        icon: const Icon(Icons.cloud_upload_outlined),
-                        label: const Text('رفع'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: _cloudBusy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'restore', featureName: 'الاستعادة من السحابة', description: 'استرجع آخر نسخة سحابية لبياناتك في أي وقت وعلى أي جهاز.')) await _pullCloud(); },
-                        icon: const Icon(Icons.cloud_download_outlined),
-                        label: const Text('سحب'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_cloudBusy) ...[
-                  const SizedBox(height: 10),
-                  const LinearProgressIndicator(),
-                ],
-              ],
-            ),
-          ),
-        ),
+        // (المعمارية الصامتة) كرت النسخ السحابي اليدوي (Firebase) أُزيل —
+        // النسخ السحابي صامت وتلقائي على الرابط المضمّن ومساحة العمل الحالية.
         const SizedBox(height: 20),
         const SectionTitle('النسخ السحابي عبر Google Drive'),
         Card(

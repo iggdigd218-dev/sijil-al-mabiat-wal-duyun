@@ -268,4 +268,61 @@ class CloudSync {
       'sizeKb': rec?['sizeKb'] ?? '',
     };
   }
+
+  // ==================== النسخ السحابي الصامت (المعمارية الصامتة) ====================
+  //
+  // بلا رابط ولا رمز من المستخدم: النسخة الكاملة تُرفع تلقائياً إلى مسار
+  // مساحة العمل الحالية على القاعدة الرسمية المضمّنة:
+  //   /workspaces/{WS_ID}/backup.json
+  // تُستدعى من دورة صيانة محرك المزامنة مرة كل 24 ساعة كحد أقصى.
+
+  static const silentBackupInterval = Duration(hours: 24);
+
+  /// هل حان موعد النسخة الصامتة التالية؟
+  static Future<bool> silentBackupDue(Repo repo) async {
+    final st = await repo.settings();
+    final last = DateTime.tryParse(st['lastSilentBackupAt'] ?? '');
+    if (last == null) return true;
+    return DateTime.now().difference(last) >= silentBackupInterval;
+  }
+
+  /// يرفع نسخة كاملة صامتة لمسار مساحة العمل — أفضل جهد: أي فشل يُبتلع
+  /// (شبكة غائبة/اشتراك منتهٍ) وتُعاد المحاولة في الدورة القادمة.
+  static Future<bool> silentWorkspaceBackup(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      if (url.isEmpty) return false;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // 🔒 انتهاء الفترة التجريبية يوقف النسخ الصامت أيضاً.
+      final blocked = await SubscriptionGuard.isBlocked(repo,
+          backendUrl: url, workspaceId: ws);
+      if (blocked) return false;
+      final payload = await repo.exportAll(withImages: false);
+      final now = DateTime.now();
+      final rec = {
+        'app': 'sijil',
+        'appVersion': '$kAppVersion+$kAppBuild',
+        'workspaceId': ws,
+        'updatedAt': now.toIso8601String(),
+        'updatedAtLocal': now.toLocal().toString(),
+        'sizeKb':
+            '${(jsonEncode(payload).length / 1024).toStringAsFixed(1)} KB',
+        'payload': payload,
+      };
+      final root = url.replaceAll(RegExp(r'/+$'), '');
+      await _requestJson(
+        '$root/workspaces/${Uri.encodeComponent(ws)}/backup.json',
+        method: 'PUT',
+        body: rec,
+      );
+      await repo.setSetting('lastSilentBackupAt', now.toIso8601String());
+      await repo.setSetting('lastCloudSync', now.toLocal().toString());
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

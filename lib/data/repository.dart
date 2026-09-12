@@ -328,6 +328,11 @@ class Repo {
     final permStr =
         adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
     final newSecret = await SecretStore.protect(generateDeviceSecret());
+    // (عزل المساحات) مساحة جديدة معزولة تماماً: البقاء على معرف مساحة
+    // المجموعة السابقة كان يُبقي هذا الجهاز يكتب في مسارها السحابي.
+    final freshWs = debugForceLegacyWorkspaceId
+        ? defaultWorkspaceId
+        : generateWorkspaceId();
     await db.transaction((txn) async {
       const tables = [
         'accounts',
@@ -351,10 +356,21 @@ class Repo {
         await txn.delete(t);
       }
       await txn.delete('devices');
+      // مساحة العمل الجديدة تحل محل القديمة (حذف ثم إدراج يرضي FK).
+      await txn.delete('workspaces');
       final now = DateTime.now().toIso8601String();
+      await txn.insert('workspaces', {
+        'id': freshWs,
+        'name': 'متجري',
+        'owner_google_id': '',
+        'owner_email': '',
+        'owner_name': '',
+        'created_at': now,
+        'updated_at': now,
+      });
       await txn.insert('devices', {
         'id': _deviceId,
-        'workspace_id': requireWorkspaceId,
+        'workspace_id': freshWs,
         'name': devName,
         'platform': Platform.operatingSystem,
         'is_paired': 1,
@@ -374,7 +390,7 @@ class Repo {
         'permissions': permStr,
         'is_me': 1,
         'active': 1,
-        'workspace_id': requireWorkspaceId,
+        'workspace_id': freshWs,
         'deleted_at': '',
         'created_at': now,
         'updated_at': now,
@@ -387,6 +403,10 @@ class Repo {
           },
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
+    _workspaceId = freshWs;
+    try {
+      await setSetting('sync.workspaceId', freshWs);
+    } catch (_) {}
     _currentUserId = null;
     final me = await currentUser();
     _currentUserId = me?.id;
