@@ -622,6 +622,13 @@ class SyncEngine {
               await CloudJoin.pruneExpiredEvictions(
                   backendUrl: url, workspaceId: ws);
             } catch (_) {}
+            // (نظافة السجل) تطهير roster من الأجهزة الدخيلة — سجل
+            // المدير المحلي هو مصدر الحقيقة؛ أي مدخل غريب يُحذف مع
+            // شاهدة طرد تُقصيه ذاتياً لو أقلع لاحقاً.
+            try {
+              await CloudJoin.pruneForeignRosterEntries(repo,
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
             try {
               await compactCloudOperations(backendUrl: url, workspaceId: ws);
             } catch (_) {}
