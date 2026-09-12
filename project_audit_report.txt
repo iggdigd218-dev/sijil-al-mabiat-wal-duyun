@@ -1,0 +1,518 @@
+╔══════════════════════════════════════════════════════════════════╗
+║   تقرير التدقيق التقني الشامل — مشروع «مدير الحسابات» (Nexora)   ║
+╚══════════════════════════════════════════════════════════════════╝
+
+تاريخ التدقيق : 2026-09-12 08:01
+الإصدار الحالي : 3.49.0 (build 85)
+آخر التزام     : b4df79d (main) — CI أخضر بالكامل (4/4 سير عمل ناجحة)
+حجم الكود      : 87 ملف Dart في lib/ (~36,000 سطر)
+المشاريع       : التطبيق الرئيسي + admin_app/ (مدير التراخيص المستقل)
+
+════════════════════════════════════════════════════════════════════
+[1] شجرة الملفات والهيكلية البرمجية (lib/)
+════════════════════════════════════════════════════════════════════
+
+المعمارية: Clean Architecture بثلاث طبقات —
+  core/ (النماذج والمخطط) ← data/ (المستودع والمزامنة) ← ui/ (الشاشات)
+النمط: محلي أولاً (SQLite معاملات) + مزامنة سحابية Firebase RTDB (REST+SSE).
+(★ = ملف محوري في نظام الترخيص)
+
+📁 lib/core/
+   ├─ accounting.dart ← نماذج المحاسبة: Account/Tx/OpType/AccountKind والعملات
+   ├─ app_version.dart ← ثوابت الإصدار kAppVersion/kAppBuild
+   ├─ chat_media.dart
+   ├─ database.dart ← مخطط SQLite الكامل (جداول + ترقيات) — المصدر الوحيد للمخطط
+   ├─ db_init.dart
+   ├─ desktop.dart
+   ├─ desktop_net.dart
+   ├─ factory_reset.dart
+   ├─ format.dart ← تنسيق الأرقام والتواريخ Fmt
+   ├─ ids.dart
+   ├─ keep_alive_service.dart
+   ├─ media_paths.dart
+   ├─ models.dart
+   ├─ permission_dialog.dart
+   ├─ receipt_image.dart
+   ├─ secret_store.dart
+   ├─ security.dart
+   ├─ sfx.dart ← محرك الأصوات والاهتزاز (نجاح/تحذير/نقر…)
+   ├─ theme.dart ← ألوان الثيم AppColors (فاتح/داكن)
+   ├─ token_cipher.dart
+   ├─ whatsapp.dart
+   ├─ windows_firewall.dart
+   ├─ words.dart
+   ├─ workspace_mode.dart
+📁 lib/data/
+   ├─ cloud_sync.dart ← النسخ السحابي اليدوي (رفع/سحب snapshot كامل)
+   ├─ google_drive_service.dart
+   ├─ pos_cart.dart
+   ├─ providers.dart ← مزودات Riverpod: subscriptionProvider، featureUnlockedProvider، seatUsageProvider…
+   ├─ repository.dart ← المستودع المركزي Repo: كل عمليات القراءة/الكتابة والقفل التدقيقي
+📁 lib/data/sync/
+   ├─ apply_remote.dart ← تطبيق العمليات الواردة محلياً (idempotent)
+   ├─ backup_service.dart
+   ├─ chat_hooks.dart
+   ├─ cloud_firebase_transport.dart ← ناقل RTDB عبر REST+SSE (استقبال لحظي)
+   ├─ cloud_join.dart ← ★ الربط السحابي: الدعوات، approveJoinRequest، بوابة المقاعد _ensureSeatAvailable، roster
+   ├─ conflict_resolver.dart
+   ├─ device_id.dart ← معرف الجهاز الحتمي + بصمة العتاد hardwareFingerprintRaw
+   ├─ google_auth_service.dart
+   ├─ operation.dart
+   ├─ recorder.dart
+   ├─ snapshot_apply.dart
+   ├─ subscription_guard.dart ← ★ محرك التجربة والاشتراك: PlanFeatures/SubscriptionState/ensureTrialStarted/check/isBlocked/promoteToEnterprise
+   ├─ sync_activity.dart
+   ├─ sync_engine.dart ← ★ محرك المزامنة: processQueue، _trialBlocked (تجميد عند الانتهاء)
+   ├─ sync_queue.dart
+   ├─ sync_service.dart
+   ├─ workspace_service.dart
+📁 lib/data/
+   ├─ update_installer.dart
+   ├─ update_service.dart
+📁 lib/
+   ├─ main.dart ← نقطة الإقلاع: تهيئة قاعدة البيانات، Riverpod، الثيم، الاتجاه RTL
+📁 lib/ui/
+   ├─ account_detail.dart ← كشف الحساب (بوابة notifications على زر واتساب)
+   ├─ account_form.dart
+   ├─ accounts_screen.dart
+   ├─ app_notice.dart
+   ├─ appearance_screen.dart
+   ├─ backup_screen.dart ← النسخ الاحتياطي (بوابات cloud_backup/restore)
+   ├─ barcode_scanner.dart
+   ├─ calculator.dart
+   ├─ chat_screen.dart
+   ├─ cloud_sync_section.dart
+   ├─ currencies_screen.dart
+   ├─ dashboard_screen.dart
+   ├─ devices_screen.dart ← الأجهزة + شارة عدّاد المقاعد
+   ├─ group_chat_screen.dart
+   ├─ group_management_screen.dart ← إدارة المجموعة + شارة عدّاد المقاعد
+   ├─ home_shell.dart ← ★ الهيكل الرئيسي: AppBar، الدرج، الشريط السفلي، بانر العد التنازلي، دورة حياة التجربة
+   ├─ inventory_screen.dart
+   ├─ join_approval_flow.dart
+   ├─ lock_gate.dart
+   ├─ notifications_sheet.dart
+   ├─ onboarding_screen.dart
+   ├─ pos_screen.dart
+   ├─ qr_pair_scanner.dart
+   ├─ reports_screen.dart ← التقارير (تبويب التصنيفات مقفل ببوابة FeatureGate)
+   ├─ settings_screen.dart ← الإعدادات + قسم «تفاصيل الاشتراك»
+   ├─ splash.dart
+   ├─ sync_ops_screen.dart
+   ├─ sync_status_indicator.dart
+   ├─ transactions_screen.dart ← العمليات (بوابة advanced_search على زر الفلاتر)
+   ├─ trash_screen.dart
+   ├─ trial_ui.dart ← ★ واجهات الاشتراك: البانر، بطاقة الانتهاء، PurchaseScreen، FeatureGate، SeatUsageBadge
+   ├─ tx_form.dart
+   ├─ tx_share.dart
+   ├─ update_section.dart
+   ├─ users_screen.dart
+   ├─ voucher_doc.dart
+   ├─ vouchers_screen.dart
+   ├─ widgets.dart
+
+── مشروع مدير التراخيص المستقل ──
+📁 admin_app/lib/
+   ├─ main.dart ← لوحة المدير: MetricsBoard الإحصائية، ActivationScreen، SubscribersScreen
+   ├─ rtdb.dart ← خدمة RTDB عبر REST: serverNowMs، activate، metrics، recentSubscribers
+
+════════════════════════════════════════════════════════════════════
+[2] منطق الاشتراكات والترخيص المطبق حالياً
+════════════════════════════════════════════════════════════════════
+
+2.1 الملفات المسؤولة عن فحص الاشتراك
+──────────────────────────────────────
+• lib/data/sync/subscription_guard.dart  — المحرك الكامل (الفئات والدوال أدناه)
+• lib/data/providers.dart                — subscriptionProvider (‎:1210، تحديث ذاتي كل دقيقة)،
+  featureUnlockedProvider (بوابة ميزة للواجهة)، seatUsageProvider (عدّاد المقاعد)
+• lib/data/sync/sync_engine.dart         — _trialBlocked() (‎:912) يجمّد processQueue عند الانتهاء
+• lib/data/sync/cloud_join.dart          — _ensureSubscriptionAllows + _ensureSeatAvailable
+• lib/ui/home_shell.dart                 — _watchTrialLifecycle (‎:546): ترحيب/انتهاء/إشعار العضو
+• lib/ui/trial_ui.dart                   — كل واجهات العرض والشراء
+
+2.2 التمييز البرمجي بين «فردي» و«مؤسسة»
+──────────────────────────────────────
+الحقل: SubscriptionState.planType ('individual' | 'enterprise') — يُقرأ من
+RTDB: workspaces/$ws/subscription/plan_type.
+
+الاستنتاج التلقائي — SubscriptionGuard._detectPlanType(repo):
+  • repo.workspaceMode() == 'host' أو 'member'  ⇒ enterprise
+  • عدد صفوف devices المقترنة غير المطرودة > 1  ⇒ enterprise
+  • غير ذلك                                      ⇒ individual (مقعد واحد)
+
+الترقية في المكان — SubscriptionGuard.promoteToEnterprise():
+  تُستدعى من CloudJoin.createInvite (فتح كود ربط لجهاز ثانٍ) — تقلب
+  plan_type إلى enterprise وترفع max_devices إلى 5 (kDefaultEnterpriseSeats)
+  دون المساس بـ created_at/expires_at (مثبت باختبار PLAN-03).
+
+2.3 دوال مقارنة server_ts مع expires_at (كلها بساعة الخادم حصراً)
+──────────────────────────────────────
+الملف: lib/data/sync/subscription_guard.dart
+
+• serverNowMs(backendUrl)      (‎:207) — يكتب {".sv":"timestamp"} في
+  /server_clock.json ويقرأ الناتج = وقت خادم فيربيس الحقيقي عبر REST.
+• SubscriptionState.expired    (‎:146):
+      status != 'active' && expiresAtMs > 0 && serverNowMs >= expiresAtMs
+• SubscriptionState.remainingMs (‎:161):
+      expired ? 0 : (expiresAtMs - serverNowMs).clamp(0, 1<<62)
+• SubscriptionState.isSubscribed (‎:150): status == 'active'
+• featureUnlocked(pick)        (‎:154): none⇒مفتوح؛ منتهٍ وغير مشترك⇒مقفل؛
+      غير ذلك⇒قيمة مفتاح الميزة من الخادم.
+• ensureTrialStarted()         (‎:233) — التفعيل: expires_at = ختم الخادم
+      المكتوب فعلياً (write-back) + 24h. لا تُستخدم ساعة الهاتف إطلاقاً.
+• check(force:)                — فحص بكاش 5 دقائق + تثبيت محلي
+      (subCachedState) بإسناد أمامي فقط (Stopwatch أحادي — لا رجوع للخلف).
+• isBlocked()                  (‎:439) — البوابة المركزية للمزامنة.
+
+2.4 جدول المزايا لكل خطة ومواضع تطبيق القفل
+──────────────────────────────────────
+مفاتيح features في RTDB (فئة PlanFeatures — snake_case):
+
+┌──────────────────────┬────────────────────┬─────────────────────────┬──────────────────────────────────────────────┐
+│ الميزة               │ فردي مجاني (منتهٍ) │ تجربة/اشتراك فعّال      │ ملف تطبيق القفل                              │
+├──────────────────────┼────────────────────┼─────────────────────────┼──────────────────────────────────────────────┤
+│ الأصناف المحلية      │ ✅ مفتوحة للأبد     │ ✅                       │ — (خارج البوابات)                            │
+│ العمليات اليومية     │ ✅ مفتوحة للأبد     │ ✅                       │ — (خارج البوابات)                            │
+│ can_use_categories   │ 🔒 مقفلة            │ ✅                       │ ui/reports_screen.dart (FeatureGate على       │
+│                      │                    │                         │ تبويب «🗂️ التصنيفات»)                        │
+│ can_send_notifications│ 🔒 مقفلة           │ ✅                       │ ui/account_detail.dart (زر واتساب/رسالة      │
+│                      │                    │                         │ الرصيد — ensureFeatureUnlocked)              │
+│ can_cloud_backup     │ 🔒 مقفلة            │ ✅                       │ ui/backup_screen.dart (_pushCloud،           │
+│                      │                    │                         │ _uploadToGoogle)                             │
+│ can_restore_data     │ 🔒 مقفلة            │ ✅                       │ ui/backup_screen.dart (_restore، _pullCloud، │
+│                      │                    │                         │ _restoreFromGoogle)                          │
+│ can_advanced_search  │ 🔒 مقفلة            │ ✅                       │ ui/transactions_screen.dart (زر «تصفية       │
+│                      │                    │                         │ وبحث متقدّم»)                                │
+│ multi_device_sync    │ 🔒 (مزامنة مجمّدة)  │ ✅                       │ sync_engine.dart (_trialBlocked) +           │
+│                      │                    │                         │ cloud_join.dart (_ensureSubscriptionAllows)  │
+│ role_permissions     │ 🔒                  │ ✅ (مؤسسة)               │ منظومة الأدوار القائمة (users/devices)       │
+│ audit_log            │ 🔒                  │ ✅ (مؤسسة)               │ جدول operations: device_id+user_id+          │
+│                      │                    │                         │ device_time لكل عملية مالية                  │
+└──────────────────────┴────────────────────┴─────────────────────────┴──────────────────────────────────────────────┘
+
+سلوك القفل (تشويقي — وفق المواصفة): الأقسام تبقى ظاهرة بتدرج رمادي
+وشارة «🔒 مدفوعة» (FeatureGate في trial_ui.dart)؛ الضغط يعرض رسالة
+تعريفية ثم يفتح PurchaseScreen (زرا [إرسال كود التفعيل] واتساب برسالة
+تحمل معرف الجهاز والبصمة إلى +96774190040، و[اضغط هنا لتأكيد عملية
+الشراء] بفحص سحابي قسري فوري — الترقية تسري دون مسح بيانات).
+
+حد المقاعد (مؤسسة): cloud_join.dart → _ensureSeatAvailable (يُستدعى من
+createInvite وapproveJoinRequest) — تجاوز max_devices يرفض بالرسالة:
+«تم استنفاد عدد الأجهزة المسموح بها لهذه الباقة. يرجى ترقية الاشتراك
+لإضافة أجهزة جديدة». إعادة انضمام جهاز قائم لا تستهلك مقعداً.
+
+انتهاء المؤسسة: تجميد المزامنة فوراً (isBlocked) مع بقاء العمل المحلي؛
+جهاز العضو يتلقى إشعار «المزامنة السحابية متوقفة؛ يرجى مراجعة إدارة
+النظام لتجديد الباقة» (home_shell.dart ‎:593+ — المدير وحده يرى بطاقة
+التجديد/الشراء).
+
+التغطية الاختبارية: test/qa_subscription_guard_test.dart —
+TRIAL-01..10 + PLAN-01..06 = 16/16 ناجحة (الاستنتاج، القفل، الترقية
+دون تصفير العداد، التفعيل الفوري، تجميد المؤسسة، الكاش المحلي).
+
+════════════════════════════════════════════════════════════════════
+[3] تدقيق التوافق مع أندرويد 7 والشاشات الصغيرة
+════════════════════════════════════════════════════════════════════
+
+3.1 إعدادات android/app/build.gradle
+──────────────────────────────────────
+  compileSdk = 36
+  minSdk     = 24   ← أندرويد 7.0 Nougat مدعوم رسمياً ✅
+  targetSdk  = 34
+
+3.2 شريط العنوان (AppBar) — home_shell.dart ‎:1098+
+──────────────────────────────────────
+• العنوان: Text باسم الجهاز مع overflow: TextOverflow.ellipsis — لا
+  يفيض مهما طال الاسم على الشاشات الصغيرة ✅
+• شارة الدور: تظهر في الوضع المُدار فقط (standalone ⇒ SizedBox.shrink)
+  بحشوة أفقية 4px مضغوطة ✅
+• أزرار الإجراءات: الإشعارات (Badge)، إخفاء الأرصدة، وزر تحديث يظهر
+  لسطح المكتب فقط (if (desktop)) — عدد الأزرار على الهاتف محدود فلا
+  overflow ✅
+
+3.3 أيقونة «إدارة المجموعة» — ضمان عدم الاختفاء
+──────────────────────────────────────
+home_shell.dart ‎:1779-1784 (_DrawerItems.of):
+    if (s == AppScreen.group) return isOwner || workspaceMode == 'host';
+تحصين مزدوج مقصود (إصلاح أندرويد 7 — الإصدار 3.47.1): وضع host يُبقي
+«إدارة المجموعة» ظاهرة للمالك الجديد حتى لو تأخرت قراءة is_owner على
+الأجهزة البطيئة بعد تسليم الإدارة — لا تختفي أبداً ✅
+كما تُخفى عن الوضع المستقل بالكامل (عزل الجهاز الفردي عن أي أثر شبكي).
+
+3.4 عناصر صغيرة الشاشة الأخرى
+──────────────────────────────────────
+• التنقل: NavigationBar سفلي للهاتف / NavigationRail لسطح المكتب
+  (كسر kDesktopBreakpoint بالعرض) — لا ازدحام على الشاشات الضيقة.
+• شارة عدّاد المقاعد SeatUsageBadge: تُخفى تلقائياً (SizedBox.shrink)
+  خارج باقة المؤسسات — لا تشغل مساحة على الفردي.
+• نصوص القوائم والدرج تستخدم ellipsis/Expanded في المواضع الحرجة.
+
+════════════════════════════════════════════════════════════════════
+[4] بنية البيانات السحابية (Firebase RTDB Schema) — المعتمدة فعلياً
+════════════════════════════════════════════════════════════════════
+
+{
+  "server_clock": <ختم خادم — يُكتب {".sv":"timestamp"} ويُقرأ فوراً>,
+
+  "workspaces": {
+    "$ws": {
+      "subscription": {                     ← عقدة الترخيص المركزية
+        "plan_type":  "individual" | "enterprise",
+        "status":     "trial" | "active",
+        "max_devices": 1 (فردي) | 5+ (مؤسسة، بحسب الباقة),
+        "created_at": <ms ختم خادم>,
+        "expires_at": <ms = created_at + المدة>,
+        "is_active":  true,
+        "device_fingerprint": <hash 32 hex لبصمة عتاد جهاز التفعيل>,
+        "activated_at" / "activated_by": <من تطبيق مدير التراخيص>,
+        "features": {
+          "can_use_categories":    bool,
+          "can_send_notifications": bool,
+          "can_cloud_backup":      bool,
+          "can_restore_data":      bool,
+          "can_advanced_search":   bool,
+          "multi_device_sync":     bool,
+          "role_permissions":      bool,
+          "audit_log":             bool
+        }
+      },
+      "creator":      { سجل منشئ المساحة الدائم (الاسترداد السيادي) },
+      "roster":       { "$deviceId": صف الجهاز + user_role },
+      "joinRequests": { "$deviceId": طلبات الانضمام المعلقة },
+      "invites":      { "$TOKEN": دعوة مؤقتة 24h تستخدم مرة واحدة },
+      "joinSnapshot": <لقطة كاملة للعضو الجديد>,
+      "evictions":    { شواهد الطرد },
+      "ops":          { عمليات المزامنة (REST push + SSE استقبال) }
+    }
+  },
+
+  "trials": {
+    "$fingerprintHash": {                   ← فهرس عالمي لمنع تصفير التجربة
+      "workspace_id", "first_seen", "created_at", "expires_at", "status"
+    }
+  },
+
+  "admin": {
+    "activations": {                        ← سجل تطبيق مدير التراخيص
+      "$serverTs": { workspace_id, device_ref, plan_type, max_devices,
+                     expires_at, activated_at, lifetime }
+    }
+  }
+}
+
+ملاحظات:
+• تطبيق مدير التراخيص يكتب بـ PATCH — يحافظ على created_at
+  وdevice_fingerprint ولا يمس عداد التجربة.
+• «التفعيل الدائم» يُنفذ بـ expires_at بعيد جداً (+100 سنة).
+• مسارات الأجهزة محلياً: جدول devices (id حتمي من بصمة العتاد،
+  is_paired/is_owner/revoked_at/expelled_at) — يُرفع للسحابة في roster.
+
+════════════════════════════════════════════════════════════════════
+[5] فحص الأخطاء وسلامة الكود
+════════════════════════════════════════════════════════════════════
+
+5.1 نتيجة flutter analyze — المشروع الرئيسي (كاملة)
+──────────────────────────────────────
+الخلاصة: 71 ملاحظة، كلها من مستوى info (لا يوجد أي error أو warning) ✅
+وهي خط الأساس المعتمد: أنماط استحسانية (curly_braces، deprecated
+withOpacity في مواضع قديمة، إلخ) لا تؤثر على البناء أو التشغيل.
+
+Resolving dependencies...
+Downloading packages...
+  archive 4.0.9 (4.2.0 available)
+  characters 1.4.0 (1.4.1 available)
+  clock 1.1.2 (1.1.3 available)
+  cross_file 0.3.5+2 (0.3.5+5 available)
+  device_info_plus 11.5.0 (13.2.0 available)
+  device_info_plus_platform_interface 7.0.3 (8.1.0 available)
+  file_picker 8.3.7 (12.3.0 available)
+  file_selector_linux 0.9.4 (0.9.4+1 available)
+  file_selector_macos 0.9.5 (0.9.5+1 available)
+  file_selector_windows 0.9.3+5 (0.9.3+6 available)
+  flutter_contacts 1.1.9+2 (2.5.0 available)
+  flutter_lints 4.0.0 (6.0.0 available)
+  flutter_plugin_android_lifecycle 2.0.34 (2.0.35 available)
+  flutter_riverpod 2.6.1 (3.4.3 available)
+  google_sign_in 6.3.0 (7.2.0 available)
+  google_sign_in_android 6.2.1 (7.2.17 available)
+  google_sign_in_ios 5.9.0 (6.3.3 available)
+  google_sign_in_platform_interface 2.5.0 (3.1.0 available)
+  google_sign_in_web 0.12.4+4 (1.1.3 available)
+  image_picker 1.2.2 (1.2.3 available)
+  image_picker_android 0.8.13+17 (0.8.13+23 available)
+  image_picker_ios 0.8.13+3 (0.8.13+7 available)
+  intl 0.20.2 (0.20.3 available)
+  lints 4.0.0 (6.1.0 available)
+  local_auth 2.3.0 (3.0.2 available)
+  local_auth_android 1.0.56 (2.0.10 available)
+  local_auth_darwin 1.6.1 (2.0.4 available)
+  local_auth_windows 1.0.11 (2.0.2 available)
+  matcher 0.12.17 (0.12.20 available)
+  material_color_utilities 0.11.1 (0.13.1 available)
+  math_expressions 2.7.0 (3.2.0 available)
+  meta 1.16.0 (1.19.0 available)
+  mobile_scanner 5.2.3 (7.4.1 available)
+  path_provider 2.1.5 (2.1.6 available)
+  path_provider_android 2.2.23 (2.3.1 available)
+  path_provider_foundation 2.5.1 (2.6.0 available)
+  path_provider_linux 2.2.1 (2.2.2 available)
+  path_provider_platform_interface 2.1.2 (2.1.3 available)
+  pdf 3.12.0 (3.13.0 available)
+  petitparser 6.1.0 (7.0.2 available)
+  platform 3.1.6 (3.2.0 available)
+  printing 5.14.3 (5.15.0 available)
+  qr 3.0.2 (4.0.0 available)
+  riverpod 2.6.1 (3.4.3 available)
+  share_plus 10.1.4 (13.3.0 available)
+  share_plus_platform_interface 5.0.2 (7.2.0 available)
+  sqflite 2.4.2 (2.4.4 available)
+  sqflite_android 2.4.2+2 (2.4.4 available)
+  sqflite_common 2.5.6 (2.5.12 available)
+  sqflite_common_ffi 2.3.7+1 (2.4.3 available)
+  sqflite_darwin 2.4.2 (2.4.4 available)
+  sqflite_platform_interface 2.4.0 (2.4.2 available)
+  sqlite3 2.9.4 (3.5.2 available)
+  stack_trace 1.12.1 (1.12.2 available)
+  synchronized 3.4.0 (3.4.2 available)
+  test_api 0.7.6 (0.7.14 available)
+  url_launcher_android 6.3.29 (6.3.33 available)
+  url_launcher_ios 6.3.6 (6.4.2 available)
+  url_launcher_linux 3.2.2 (3.2.3 available)
+  url_launcher_macos 3.2.5 (3.2.6 available)
+  url_launcher_web 2.4.1 (2.4.3 available)
+  url_launcher_windows 3.1.5 (3.1.6 available)
+  vector_math 2.2.0 (2.4.2 available)
+  win32 5.15.0 (6.4.0 available)
+  win32_registry 2.1.0 (3.0.3 available)
+  xml 6.5.0 (7.0.1 available)
+Got dependencies!
+66 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Analyzing sijil-al-mabiat-wal-duyun...                          
+
+   info • Use 'const' with the constructor to improve performance • lib/core/receipt_image.dart:146:7 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/core/receipt_image.dart:149:7 • prefer_const_constructors
+   info • Use 'const' for final variables initialized to a constant value • lib/core/receipt_image.dart:235:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/core/receipt_image.dart:237:5 • prefer_const_declarations
+   info • Unnecessary braces in a string interpolation • lib/core/words.dart:84:46 • unnecessary_brace_in_string_interps
+   info • Use 'const' with the constructor to improve performance • lib/data/sync/backup_service.dart:93:13 • prefer_const_constructors
+   info • Statements in an if should be enclosed in a block • lib/data/sync/conflict_resolver.dart:64:11 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/data/sync/google_auth_service.dart:124:9 • curly_braces_in_flow_control_structures
+   info • Unnecessary use of string interpolation • lib/ui/accounts_screen.dart:52:27 • unnecessary_string_interpolations
+   info • Use interpolation to compose strings and values • lib/ui/accounts_screen.dart:52:50 • prefer_interpolation_to_compose_strings
+   info • Statements in an if should be enclosed in a block • lib/ui/backup_screen.dart:133:9 • curly_braces_in_flow_control_structures
+   info • Don't use 'BuildContext's across async gaps • lib/ui/backup_screen.dart:141:7 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block • lib/ui/backup_screen.dart:155:9 • curly_braces_in_flow_control_structures
+   info • Don't use 'BuildContext's across async gaps • lib/ui/backup_screen.dart:212:11 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block • lib/ui/backup_screen.dart:397:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/ui/backup_screen.dart:400:9 • curly_braces_in_flow_control_structures
+   info • Don't use 'BuildContext's across async gaps • lib/ui/backup_screen.dart:452:19 • use_build_context_synchronously
+   info • Use interpolation to compose strings and values • lib/ui/dashboard_screen.dart:65:56 • prefer_interpolation_to_compose_strings
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:405:9 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:407:18 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:465:26 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:470:24 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:694:11 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:695:20 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/dashboard_screen.dart:697:22 • prefer_const_constructors
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:251:33 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:313:35 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:316:46 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:322:35 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:349:35 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/devices_screen.dart:371:43 • use_build_context_synchronously
+   info • Constructors for public widgets should have a named 'key' parameter • lib/ui/devices_screen.dart:412:9 • use_key_in_widget_constructors
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/group_management_screen.dart:546:41 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/group_management_screen.dart:547:44 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/group_management_screen.dart:551:41 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/group_management_screen.dart:570:31 • use_build_context_synchronously
+   info • Constructors in '@immutable' classes should be declared as 'const' • lib/ui/group_management_screen.dart:606:3 • prefer_const_constructors_in_immutables
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/home_shell.dart:652:37 • use_build_context_synchronously
+   info • Use 'const' with the constructor to improve performance • lib/ui/home_shell.dart:1278:13 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/home_shell.dart:1457:27 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/inventory_screen.dart:813:21 • prefer_const_constructors
+   info • Don't use 'BuildContext's across async gaps • lib/ui/pos_screen.dart:1755:21 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/ui/pos_screen.dart:1761:39 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/settings_screen.dart:97:19 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/settings_screen.dart:100:30 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/settings_screen.dart:286:21 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/settings_screen.dart:297:19 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/ui/settings_screen.dart:301:30 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block • lib/ui/settings_screen.dart:309:7 • curly_braces_in_flow_control_structures
+   info • Use interpolation to compose strings and values • lib/ui/settings_screen.dart:458:52 • prefer_interpolation_to_compose_strings
+   info • Unnecessary use of string interpolation • lib/ui/transactions_screen.dart:50:27 • unnecessary_string_interpolations
+   info • Use interpolation to compose strings and values • lib/ui/transactions_screen.dart:50:50 • prefer_interpolation_to_compose_strings
+   info • Statements in an if should be enclosed in a block • lib/ui/tx_form.dart:322:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/ui/tx_form.dart:324:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/ui/tx_form.dart:326:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/ui/tx_form.dart:352:9 • curly_braces_in_flow_control_structures
+   info • Use 'const' with the constructor to improve performance • lib/ui/tx_form.dart:1033:14 • prefer_const_constructors
+   info • Use 'const' literals as arguments to constructors of '@immutable' classes • lib/ui/tx_form.dart:1034:19 • prefer_const_literals_to_create_immutables
+   info • Use 'const' with the constructor to improve performance • lib/ui/tx_form.dart:1035:11 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/tx_form.dart:1036:20 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/tx_form.dart:1046:11 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/tx_form.dart:1047:20 • prefer_const_constructors
+   info • Statements in an if should be enclosed in a block • lib/ui/tx_share.dart:195:7 • curly_braces_in_flow_control_structures
+   info • Constructors for public widgets should have a named 'key' parameter • lib/ui/users_screen.dart:90:9 • use_key_in_widget_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/voucher_doc.dart:101:9 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/voucher_doc.dart:102:20 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/voucher_doc.dart:104:9 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/voucher_doc.dart:105:20 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • lib/ui/voucher_doc.dart:289:31 • prefer_const_constructors
+   info • Use 'const' with the constructor to improve performance • test/qa_release_blockers_test.dart:93:11 • prefer_const_constructors
+   info • Statements in an if should be enclosed in a block • test/qa_screens_test.dart:153:13 • curly_braces_in_flow_control_structures
+
+71 issues found. (ran in 1.8s)
+
+5.2 نتيجة flutter analyze — admin_app
+──────────────────────────────────────
+4 ملاحظات info فقط (تعليقات توثيقية وأنماط) — صفر أخطاء ✅
+
+5.3 حالة مستودع Git
+──────────────────────────────────────
+On branch main
+nothing to commit, working tree clean
+
+• لا توجد أي تعارضات دمج (فحص <<<<<<< في lib/ وtest/: لا نتائج) ✅
+• آخر 8 التزامات:
+b4df79d fix(ci): exclude admin_app from root analyzer; avoid wildcard pattern variables for package language version
+61efa43 feat: standalone License Admin app (admin_app/) with live metrics dashboard
+98ce34f feat: dual-plan licensing (individual/enterprise) v3.49.0+85
+cd890c9 feat: عدّاد تنازلي دائم للمدير + قسم تفاصيل الاشتراك في الإعدادات
+312a7f7 feat: الاسترداد الطارئ للإدارة — إرجاع للمالك السابق + الاسترداد السيادي للمنشئ
+6340bec feat: ترحيل الاشتراك — شمول الفترة التجريبية للمساحات المسجلة مسبقاً
+cb92c20 fix: عطل أندرويد 7 — ظهور «إدارة المجموعة» بعد التسليم + صمام أمان الاسترجاع
+a9decf1 chore: تحديث رقم التواصل الفعلي لتفعيل الاشتراك (+96774190040)
+
+5.4 حالة CI (آخر تشغيل على b4df79d)
+──────────────────────────────────────
+  Verify (Analyze + Test)      : ✅ نجح
+  Build Flutter Android APK    : ✅ نجح (nexora-arm64.apk 24MB → release latest)
+  Build Windows EXE            : ✅ نجح (NexoraSetup.exe + zip)
+  Build License Admin APK      : ✅ نجح (license-admin.apk 16MB → admin-latest)
+
+5.5 التغطية الاختبارية الإجمالية
+──────────────────────────────────────
+  الرئيسي  : 40 حزمة اختبار — كلها ناجحة (آخر فحص شامل قبل شحن 3.49.0)
+  الاشتراك : qa_subscription_guard_test.dart — 16/16
+  admin_app: qa_admin_test.dart — ADMIN-01..03 = 3/3
+
+════════════════════════════════════════════════════════════════════
+[6] ملاحظات ختامية وتوصيات
+════════════════════════════════════════════════════════════════════
+
+✅ نقاط قوة مؤكدة:
+  • كل الحسابات الزمنية للترخيص بساعة الخادم حصراً — التلاعب بساعة
+    الهاتف بلا أثر (مثبت اختبارياً TRIAL-02).
+  • منع تصفير التجربة ببصمة عتاد عالمية (/trials) تنجو من حذف التطبيق.
+  • الترقية والتفعيل يسريان في المكان دون مسح بيانات (PLAN-03/04).
+  • القفل تشويقي وفق المواصفة: المزايا ظاهرة وتقود لشاشة الشراء.
+
+⚠️ توصيات (غير حارجة):
+  1) قواعد أمان RTDB: يُنصح بقصر الكتابة على workspaces/*/subscription
+     وadmin/** بمصادقة خاصة بالمالك، وإلا فالكتابة مفتوحة نظرياً.
+  2) رمز GitHub (ghp_…1dd7) المتداول في المحادثة ما زال فعالاً —
+     يجب إلغاؤه من إعدادات GitHub.
+  3) الملاحظات الـ71 (info) يمكن تصفيتها تدريجياً في دفعة صيانة.
+
+── نهاية التقرير ──
