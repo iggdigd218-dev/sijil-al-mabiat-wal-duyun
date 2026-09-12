@@ -134,11 +134,38 @@ class SubscriptionGuard {
     final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
     final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
 
-    // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل — نعيد قراءتها.
+    // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل أبداً — نعيد قراءتها.
+    //     (يشمل المستخدمين القدامى الذين هُيّئت عقدتهم في إقلاع سابق.)
     final existing = await _readJson(wsSub);
     if (existing != null && (existing['expires_at'] is num) &&
         (existing['expires_at'] as num) > 0) {
       return _stateFrom(existing, await serverNowMs(backendUrl));
+    }
+    // (1-ب) إصلاح عقدة نصف مكتوبة (انقطاع بين خطوتي الكتابة): created_at
+    //     الخادمي موجود لكن expires_at لم يُثبَّت — نكمل الحساب من الختم
+    //     الأصلي نفسه دون أي تصفير للعداد.
+    if (existing != null) {
+      final priorCreated = _asMs(existing['created_at']);
+      if (priorCreated > 0) {
+        final repaired = {
+          'status': '${existing['status'] ?? 'trial'}',
+          'created_at': priorCreated,
+          'expires_at': priorCreated + kTrialDuration.inMilliseconds,
+          'is_active': existing['is_active'] != false,
+          'device_fingerprint':
+              '${existing['device_fingerprint'] ?? ''}'.isNotEmpty
+                  ? existing['device_fingerprint']
+                  : fp,
+        };
+        await _putJson(wsSub, repaired);
+        await _putJson(trialIdx, {
+          ...repaired,
+          'workspace_id': workspaceId,
+          'first_seen': priorCreated,
+        });
+        return _stateFrom(
+            Map<String, dynamic>.from(repaired), await serverNowMs(backendUrl));
+      }
     }
 
     // (2) فهرس البصمة العالمي: تجربة سابقة لنفس العتاد = استئناف لا تصفير.

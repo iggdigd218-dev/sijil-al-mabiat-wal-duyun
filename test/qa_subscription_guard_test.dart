@@ -205,6 +205,91 @@ void main() {
         reason: 'الاشتراك المدفوع يتجاوز فحص الانتهاء');
   });
 
+  test(
+      'TRIAL-06 (ترحيل القدامى) مساحة مسجلة مسبقاً بلا عقدة اشتراك: '
+      'الفحص عند الإقلاع ينشئها تلقائياً بختم الخادم +24h', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => cloud.serverClock;
+    // مستخدم قديم: بياناته السحابية موجودة منذ زمن لكن لا عقدة subscription.
+    cloud.store['/workspaces/ws-legacy/roster/DEV-1.json'] = {'name': 'قديم'};
+    expect(
+        cloud.store.keys.any((k) => k.contains('/ws-legacy/subscription')),
+        isFalse);
+    // إقلاع التطبيق = check قسري — التهيئة الكسولة تنشئ العقدة.
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-legacy', force: true),
+        cloud.client);
+    expect(st.status, 'trial');
+    expect(st.createdAtMs, cloud.serverClock,
+        reason: 'created_at = لحظة الفتح الحالية بتوقيت الخادم');
+    expect(st.expiresAtMs, cloud.serverClock + dayMs,
+        reason: 'expires_at يمتد 24 ساعة من لحظة الفتح');
+    expect(
+        cloud.store.keys.any((k) => k.contains('/ws-legacy/subscription')),
+        isTrue,
+        reason: 'العقدة أُنشئت في السحابة');
+    // بيانات المستخدم القديم لم تُمسّ.
+    expect(cloud.store['/workspaces/ws-legacy/roster/DEV-1.json'], isNotNull);
+  });
+
+  test(
+      'TRIAL-07 (منع التكرار) العقدة المهيأة لا يُعاد تصفيرها أبداً — '
+      'إقلاعات متكررة وensureTrialStarted صريح لا يحركان العداد', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => cloud.serverClock;
+    // التهيئة الأولى لمستخدم قديم.
+    final first = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-legacy2', force: true),
+        cloud.client);
+    // «أعاد فتح التطبيق» بعد 10 ساعات — إقلاع جديد + فحص قسري.
+    cloud.serverClock += 10 * 60 * 60 * 1000;
+    SubscriptionGuard.debugReset();
+    final second = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'ws-legacy2', force: true),
+        cloud.client);
+    expect(second.createdAtMs, first.createdAtMs,
+        reason: 'لا إعادة تهيئة — نفس ختم البداية');
+    expect(second.expiresAtMs, first.expiresAtMs,
+        reason: 'العد التنازلي مستمر بلا تصفير');
+    expect(second.remaining.inHours, lessThanOrEqualTo(14));
+    // وحتى استدعاء التفعيل الصريح لا يصفّر.
+    final third = await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'ws-legacy2'),
+        cloud.client);
+    expect(third.expiresAtMs, first.expiresAtMs);
+  });
+
+  test(
+      'TRIAL-08 (متانة الترحيل) عقدة نصف مكتوبة — created_at موجود بلا '
+      'expires_at: تُصلَّح من الختم الأصلي دون تصفير', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride =
+        (_) async => cloud.serverClock;
+    // انقطاع سابق خلّف عقدة ناقصة عمرها 6 ساعات.
+    final origCreated = cloud.serverClock - 6 * 60 * 60 * 1000;
+    cloud.store['/workspaces/ws-broken/subscription.json'] = {
+      'status': 'trial',
+      'created_at': origCreated,
+      'expires_at': 0,
+      'is_active': true,
+    };
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'ws-broken'),
+        cloud.client);
+    expect(st.createdAtMs, origCreated,
+        reason: 'الإصلاح من الختم الأصلي لا من الآن');
+    expect(st.expiresAtMs, origCreated + dayMs);
+    expect(st.remaining.inHours, lessThanOrEqualTo(18),
+        reason: 'استُهلكت 6 ساعات فعلاً — لا تصفير');
+  });
+
   test('TRIAL-05 دقة الحساب: الحدود الدقيقة قبل/عند/بعد لحظة الانتهاء',
       () async {
     final cloud = _FakeRtdb();

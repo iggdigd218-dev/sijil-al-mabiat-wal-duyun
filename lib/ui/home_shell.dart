@@ -555,6 +555,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (ترحيل الاشتراك) تهيئة كسولة عند الإقلاع: المساحات القديمة
+      // المسجلة قبل نظام التجربة بلا عقدة subscription — الفحص القسري
+      // ينشئها تلقائياً بختم خادم (created_at = لحظة هذا الفتح،
+      // expires_at = +24h) مرة واحدة فقط، ثم لا تُعاد تهيئتها أبداً.
       final sub = await SubscriptionGuard.check(repo,
           backendUrl: url, workspaceId: ws, force: true);
       if (!mounted || sub.status == 'none') return;
