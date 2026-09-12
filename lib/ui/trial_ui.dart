@@ -9,7 +9,7 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 
 /// رقم التواصل المباشر للتفعيل (واتساب المدير/الدعم).
-const String kActivationContact = '+967700000000';
+const String kActivationContact = '+96774190040';
 
 /// نافذة الترحيب بالفترة التجريبية — تظهر مرة واحدة فقط عند أول تفعيل.
 Future<void> showTrialWelcomeDialog(BuildContext context) async {
