@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
+import '../../core/cloud_config.dart';
 
 typedef SyncNotifyFn = void Function();
 
@@ -105,7 +106,7 @@ class SyncRecorder {
         where: 'key IN (?, ?)',
         whereArgs: ['cloudBackendUrl', 'cloudAutoSync']);
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
-    final cloudOn = (map['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+    final cloudOn = effectiveBackendUrl(map['cloudBackendUrl']).isNotEmpty &&
         (map['cloudAutoSync'] ?? '1') != '0';
     // (دفعة 58) «السحابة حصرياً»: Firebase RTDB هو الناقل الوحيد —
     // اجتُثت طبقة LAN نهائياً، لا هدف lan في الطابور بعد اليوم.

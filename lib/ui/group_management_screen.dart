@@ -17,6 +17,7 @@ import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
 import 'trial_ui.dart' show SeatUsageBadge;
 import 'widgets.dart';
+import '../core/cloud_config.dart';
 
 class GroupManagementScreen extends ConsumerStatefulWidget {
   const GroupManagementScreen({super.key});
@@ -42,7 +43,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
       final repo = ref.read(repoProvider);
       if (!await repo.isWorkspaceOwner()) return;
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty || !mounted) return;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
@@ -72,7 +73,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
       final repo = ref.read(repoProvider);
       if (!await repo.isWorkspaceOwner()) return;
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);

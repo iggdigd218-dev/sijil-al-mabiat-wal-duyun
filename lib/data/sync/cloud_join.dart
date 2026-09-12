@@ -25,6 +25,7 @@ import '../repository.dart';
 import 'device_id.dart';
 import 'snapshot_apply.dart';
 import 'subscription_guard.dart';
+import '../../core/cloud_config.dart';
 
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -199,7 +200,7 @@ class CloudJoin {
   static Future<void> _ensureSubscriptionAllows(Repo repo) async {
     try {
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
@@ -416,7 +417,7 @@ class CloudJoin {
     // المؤسسات بمقاعده — دون المساس بالعداد الزمني للتجربة.
     try {
       final st0 = await repo.settings();
-      final url0 = (st0['cloudBackendUrl'] ?? '').trim();
+      final url0 = effectiveBackendUrl(st0['cloudBackendUrl']);
       if (url0.isNotEmpty) {
         final db0 = await repo.database;
         final wsRows0 = await db0.query('workspaces', limit: 1);
@@ -442,7 +443,7 @@ class CloudJoin {
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     final st = await repo.settings();
-    final url = (st['cloudBackendUrl'] ?? '').trim();
+    final url = effectiveBackendUrl(st['cloudBackendUrl']);
     if (url.isEmpty) {
       throw const CloudJoinException(
           'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');

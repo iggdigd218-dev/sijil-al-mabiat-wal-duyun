@@ -21,6 +21,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/sync/operation.dart';
 import 'widgets.dart';
+import '../core/cloud_config.dart';
 
 /// قسم إعدادات المزامنة السحابية — يُعرض داخل شاشة الإعدادات لكل الأدوار.
 class CloudSyncSettingsSection extends ConsumerStatefulWidget {
@@ -71,7 +72,7 @@ class _CloudSyncSettingsSectionState
     final st = await repo.settings();
     if (!mounted) return;
     setState(() {
-      _urlCtrl.text = (st['cloudBackendUrl'] ?? '').trim();
+      _urlCtrl.text = effectiveBackendUrl(st['cloudBackendUrl']);
       _codeCtrl.text = (st['cloudCode'] ?? '').trim();
       _autoSync = (st['cloudAutoSync'] ?? '1') != '0';
       _lastSync = st['lastCloudSync'] ?? '';

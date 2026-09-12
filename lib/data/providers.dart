@@ -14,6 +14,7 @@ import 'sync/google_auth_service.dart';
 import 'sync/subscription_guard.dart';
 import 'sync/sync_engine.dart';
 import 'sync/sync_queue.dart';
+import '../core/cloud_config.dart';
 
 /// Repo واحدة ومُهيّأة مسبقًا تُحقن عبر ProviderScope.override في main.
 /// لا ننشئ نسخة جديدة هنا لضمان أن initSyncInfra() استُدعيت مرة واحدة.
@@ -1215,7 +1216,7 @@ final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
   ref.onDispose(t.cancel);
   final repo = ref.read(repoProvider);
   final st = await repo.settings();
-  final url = (st['cloudBackendUrl'] ?? '').trim();
+  final url = effectiveBackendUrl(st['cloudBackendUrl']);
   if (url.isEmpty) return SubscriptionState.none;
   final db = await repo.database;
   final wsRows = await db.query('workspaces', limit: 1);

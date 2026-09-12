@@ -3,6 +3,7 @@ import '../repository.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
 import 'sync_queue.dart';
+import '../../core/cloud_config.dart';
 
 enum SyncState {
   synced, // 🟢 لا توجد عمليات معلقة
@@ -50,7 +51,7 @@ class SyncService {
     final st = await repo.settings();
     // (دفعة 58) القناة الوحيدة سحابية — لا lastLanSync/lanSyncEnabled.
     final lastSync = st['lastCloudSync'];
-    final cloudUrl = (st['cloudBackendUrl'] ?? '').trim();
+    final cloudUrl = effectiveBackendUrl(st['cloudBackendUrl']);
     final cloudConfigured =
         cloudUrl.isNotEmpty && (st['cloudAutoSync'] ?? '1') != '0';
     final mode = await repo.workspaceMode();

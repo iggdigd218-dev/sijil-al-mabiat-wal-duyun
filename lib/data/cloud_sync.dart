@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../core/app_version.dart';
 import 'repository.dart';
 import 'sync/subscription_guard.dart';
+import '../core/cloud_config.dart';
 
 const _alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -28,7 +29,7 @@ class CloudSync {
   static Future<CloudConfig> config(Repo repo) async {
     final st = await repo.settings();
     return CloudConfig(
-      backendUrl: (st['cloudBackendUrl'] ?? '').trim(),
+      backendUrl: effectiveBackendUrl(st['cloudBackendUrl']),
       code: (st['cloudCode'] ?? '').trim(),
       autoSync: (st['cloudAutoSync'] ?? '1') != '0',
     );

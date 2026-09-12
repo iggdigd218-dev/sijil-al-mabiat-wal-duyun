@@ -21,6 +21,7 @@ import 'subscription_guard.dart';
 import 'sync_activity.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
+import '../../core/cloud_config.dart';
 
 abstract class SyncTransport {
   String get targetId; // 'cloud' or 'device:xxx'
@@ -260,7 +261,7 @@ class SyncEngine {
 
   Future<void> _ensureCloudTransport() async {
     final st = await repo.settings();
-    final url = (st['cloudBackendUrl'] ?? '').trim();
+    final url = effectiveBackendUrl(st['cloudBackendUrl']);
     final autoSync = (st['cloudAutoSync'] ?? '1') != '0';
     if (!autoSync || url.isEmpty) {
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
@@ -479,7 +480,7 @@ class SyncEngine {
   Future<void> _backfillMissedCloudOps() async {
     final db = await _db;
     final st = await repo.settings();
-    final cloudOn = (st['cloudBackendUrl'] ?? '').trim().isNotEmpty &&
+    final cloudOn = effectiveBackendUrl(st['cloudBackendUrl']).isNotEmpty &&
         (st['cloudAutoSync'] ?? '1') != '0';
     if (!cloudOn) return;
     final ourId = st['sync.deviceId'] ?? '';
@@ -597,7 +598,7 @@ class SyncEngine {
         //  2) ضغط سجل العمليات السحابي (أقدم من 30 يوماً ومغطاة باللقطة).
         try {
           final st = await repo.settings();
-          final url = (st['cloudBackendUrl'] ?? '').trim();
+          final url = effectiveBackendUrl(st['cloudBackendUrl']);
           if (url.isNotEmpty) {
             final ws = _cloudTransport?.workspaceId ?? 'default';
             try {
@@ -629,7 +630,7 @@ class SyncEngine {
       // يغطي حالة إقلاع الجهاز بعد أن طُرد وهو مطفأ (قبل فتح قنوات SSE).
       if (await repo.workspaceMode() == 'member') {
         final st = await repo.settings();
-        final url = (st['cloudBackendUrl'] ?? '').trim();
+        final url = effectiveBackendUrl(st['cloudBackendUrl']);
         final devId = (st['sync.deviceId'] ?? '').trim();
         if (url.isNotEmpty && devId.isNotEmpty) {
           try {
@@ -757,7 +758,7 @@ class SyncEngine {
     int latencyMs = -1;
     try {
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isNotEmpty) {
         final ws = t?.workspaceId ?? 'default';
         final sw = Stopwatch()..start();
@@ -821,7 +822,7 @@ class SyncEngine {
     await repo.purgeDeviceRecord(targetDeviceId);
     try {
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isNotEmpty) {
         await CloudJoin.purgeDeviceRecordFromCloud(
           backendUrl: url,
@@ -840,7 +841,7 @@ class SyncEngine {
     try {
       if (!await repo.isWorkspaceOwner()) return;
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       final t = _cloudTransport;
       await CloudJoin.purgePeerFromCloud(
@@ -862,7 +863,7 @@ class SyncEngine {
     try {
       if (!await repo.isWorkspaceOwner()) return;
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       await CloudJoin.clearEvictionTombstone(
         backendUrl: url,

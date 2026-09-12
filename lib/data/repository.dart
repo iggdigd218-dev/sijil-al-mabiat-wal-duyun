@@ -21,6 +21,7 @@ import 'sync/operation.dart';
 import 'sync/recorder.dart';
 import 'sync/sync_queue.dart';
 import 'sync/workspace_service.dart';
+import '../core/cloud_config.dart';
 
 /// خطأ استعادة واضح؛ لا تُعاد رسالة نجاح عند حدوثه.
 class BackupImportException implements Exception {
@@ -2078,7 +2079,7 @@ class Repo {
     // حتى الأجهزة التي تصلها المصالحة قبل العمليات ترى الملكية الجديدة.
     try {
       final st = await settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isNotEmpty) {
         final wsRows = await db.query('workspaces', limit: 1);
         final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
@@ -2148,7 +2149,7 @@ class Repo {
       if (_deviceId == null) return false;
       if (await isWorkspaceOwner()) return false; // نحن المالك أصلاً.
       final st = await settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return false;
       // المحلي أولاً (سريع بلا شبكة)، ثم السحابة للتوثيق.
       var creator = (st['creatorDeviceId'] ?? '').trim();
@@ -2177,7 +2178,7 @@ class Repo {
       throw StateError('جهازك غير مُعرَّف — أعد تشغيل التطبيق.');
     }
     final st = await settings();
-    final url = (st['cloudBackendUrl'] ?? '').trim();
+    final url = effectiveBackendUrl(st['cloudBackendUrl']);
     if (url.isEmpty) {
       throw StateError('لا يوجد اتصال سحابي مهيأ على هذا الجهاز.');
     }
@@ -2424,7 +2425,7 @@ class Repo {
     } catch (_) {}
     try {
       final st = await settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isNotEmpty && _deviceId != null) {
         final wsRows = await db.query('workspaces', limit: 1);
         final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';

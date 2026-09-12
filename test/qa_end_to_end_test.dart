@@ -17,6 +17,7 @@ import 'package:nexora_app/data/sync/sync_engine.dart';
 import 'package:nexora_app/ui/home_shell.dart';
 import 'package:nexora_app/ui/tx_form.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:nexora_app/core/cloud_config.dart';
 
 Future<void> _drain(WidgetTester tester) async {
   for (var i = 0; i < 5; i++) {
@@ -27,6 +28,9 @@ Future<void> _drain(WidgetTester tester) async {
 }
 
 void main() {
+  // هذه الحزمة تحاكي سيناريوهات «لا سحابة» — نلغي الرابط الافتراضي
+  // المضمن (Zero-Config) حتى تبقى فرضياتها صالحة.
+  debugDefaultBackendUrlOverride = '';
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;

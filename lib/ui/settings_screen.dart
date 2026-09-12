@@ -24,6 +24,7 @@ import 'cloud_sync_section.dart';
 import 'join_approval_flow.dart' show startJoinApprovalFlow;
 import 'group_management_screen.dart';
 import 'widgets.dart';
+import '../core/cloud_config.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -280,7 +281,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     try {
       final repo = ref.read(repoProvider);
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) {
         if (mounted) {
           showSnack(context, 'لا يوجد اتصال سحابي مهيأ على هذا الجهاز.',
@@ -1530,7 +1531,7 @@ class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
       var broadcast = 0;
       // 3) البث السحابي: شاهدة طرد لكل جهاز + تفكيك عقدة المجموعة.
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isNotEmpty) {
         try {
           broadcast = await CloudJoin.dissolveGroup(repo, backendUrl: url);

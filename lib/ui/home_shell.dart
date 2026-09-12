@@ -46,6 +46,7 @@ import '../data/sync/subscription_guard.dart';
 import '../data/sync/chat_hooks.dart';
 import 'trial_ui.dart';
 import 'widgets.dart' show showSnack;
+import '../core/cloud_config.dart';
 
 /// كل شاشات التطبيق الاثنتي عشرة.
 enum AppScreen {
@@ -550,7 +551,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (!mounted) return;
       final repo = ref.read(repoProvider);
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
@@ -619,7 +620,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final repo = ref.read(repoProvider);
       if (!await repo.isWorkspaceOwner()) return;
       final st = await repo.settings();
-      final url = (st['cloudBackendUrl'] ?? '').trim();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty || !mounted) return;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);

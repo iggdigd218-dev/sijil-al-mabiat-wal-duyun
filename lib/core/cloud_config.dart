@@ -1,18 +1,22 @@
 // إعدادات السحابة المضمنة برمجياً.
 //
-// kDefaultBackendUrl: رابط قاعدة Firebase RTDB الرسمي للنظام — يُستخدم
-// كمسار تراجع للمستخدم الفردي الذي لم يضبط المزامنة السحابية يدوياً:
-// زر «تأكيد عملية الشراء» يتحقق من التفعيل عبره مباشرة بنقرة واحدة.
-//
-// ⚠️ إن تُرك فارغاً يتراجع التطبيق للسلوك القديم (يطلب ضبط الرابط يدوياً).
-const String kDefaultBackendUrl = String.fromEnvironment(
+// kDefaultCloudBackendUrl: رابط قاعدة Firebase RTDB الرسمي للنظام —
+// مثبّت كرابط افتراضي دائم (Zero-Config Cloud Onboarding): المستخدم
+// الجديد تبدأ تجربته ويعمل محرك المزامنة فوراً دون أي إعداد يدوي.
+// يمكن تجاوزه وقت البناء عبر --dart-define=NEXORA_BACKEND_URL=...
+// أو وقت التشغيل بضبط رابط مخصص في الإعدادات ← المزامنة السحابية.
+const String kDefaultCloudBackendUrl = String.fromEnvironment(
   'NEXORA_BACKEND_URL',
-  defaultValue: '', // ← يُضبط برابط قاعدة النظام الرسمية (أو عبر --dart-define)
+  defaultValue: 'https://nexora-ledger-default-rtdb.firebaseio.com',
 );
 
-/// الرابط الفعّال: المضبوط يدوياً في الإعدادات أولاً، ثم المضمّن.
-String effectiveBackendUrl(String? fromSettings) {
-  final s = (fromSettings ?? '').trim();
-  if (s.isNotEmpty) return s;
-  return kDefaultBackendUrl;
+/// (اختبارات فقط) تجاوز الرابط الافتراضي — تضبطه حزم الاختبار على ''
+/// لمحاكاة «لا سحابة»؛ null = السلوك الإنتاجي الطبيعي.
+String? debugDefaultBackendUrlOverride;
+
+/// الرابط الفعّال: المضبوط يدوياً في الإعدادات أولاً، ثم الرسمي المضمّن.
+String effectiveBackendUrl(String? customUrl) {
+  final trimmed = (customUrl ?? '').trim();
+  if (trimmed.isNotEmpty) return trimmed;
+  return debugDefaultBackendUrlOverride ?? kDefaultCloudBackendUrl;
 }
