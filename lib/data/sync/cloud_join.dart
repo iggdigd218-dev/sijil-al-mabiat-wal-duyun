@@ -218,6 +218,53 @@ class CloudJoin {
     }
   }
 
+  /// (باقة المؤسسات) عدد الأجهزة المتصلة حالياً بالمجموعة: مقترنة وغير
+  /// مطرودة/ملغاة — يُعرض في عدّاد المقاعد ويُفحص قبل أي ربط جديد.
+  static Future<int> connectedDevicesCount(Repo repo) async {
+    final db = await repo.database;
+    final rows = await db.rawQuery(
+        "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+        "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+    return (rows.first['c'] as int?) ?? 0;
+  }
+
+  /// (باقة المؤسسات) بوابة المقاعد: ربط جهاز جديد يتجاوز max_devices
+  /// يُرفض برسالة المدير الواضحة. الجهاز المنضم مجدداً (سجله قائم) لا
+  /// يستهلك مقعداً جديداً. فشل قراءة العقدة سحابياً = سماح (fail-open،
+  /// بوابة المزامنة الدورية تحسم لاحقاً).
+  static Future<void> _ensureSeatAvailable(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String joiningDeviceId,
+  }) async {
+    int maxDevices;
+    try {
+      final rec = await _getJson(
+          '${_root(backendUrl, workspaceId)}/subscription.json');
+      if (rec == null) return; // لا عقدة اشتراك بعد — لا حد مفروضاً.
+      final v = rec['max_devices'];
+      maxDevices = v is num ? v.toInt() : 0;
+      if (maxDevices <= 0) return; // غير محدد = بلا حد.
+    } catch (_) {
+      return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
+    }
+    final db = await repo.database;
+    // إعادة انضمام جهاز قائم لا تستهلك مقعداً.
+    final existing = await db.query('devices',
+        where: "id = ? AND is_paired = 1 AND COALESCE(revoked_at,'') = '' "
+            "AND COALESCE(expelled_at,'') = ''",
+        whereArgs: [joiningDeviceId],
+        limit: 1);
+    if (existing.isNotEmpty) return;
+    final current = await connectedDevicesCount(repo);
+    if (current >= maxDevices) {
+      throw CloudJoinException(
+          '🪑 تم استنفاد عدد الأجهزة المسموح بها لهذه الباقة '
+          '($current/$maxDevices). يرجى ترقية الاشتراك لإضافة أجهزة جديدة.');
+    }
+  }
+
   static String _root(String base, String ws) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
 
@@ -342,6 +389,28 @@ class CloudJoin {
     }
     // 🔒 (التجربة) انتهاء الفترة يمنع ربط أجهزة جديدة.
     await _ensureSubscriptionAllows(repo);
+    // (الخطط المزدوجة) فتح كود ربط لجهاز ثانٍ = تحول تلقائي لمسار
+    // المؤسسات بمقاعده — دون المساس بالعداد الزمني للتجربة.
+    try {
+      final st0 = await repo.settings();
+      final url0 = (st0['cloudBackendUrl'] ?? '').trim();
+      if (url0.isNotEmpty) {
+        final db0 = await repo.database;
+        final wsRows0 = await db0.query('workspaces', limit: 1);
+        final ws0 =
+            wsRows0.isNotEmpty ? '${wsRows0.first['id']}' : 'default';
+        await SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url0, workspaceId: ws0);
+        // 🪑 حد المقاعد: لا معنى لدعوة جديدة والمقاعد مستنفدة — نرفض
+        // مبكراً برسالة المدير بدل فشل متأخر عند موافقة العضو.
+        await _ensureSeatAvailable(repo,
+            backendUrl: url0,
+            workspaceId: ws0,
+            joiningDeviceId: '__new__');
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {}
     final mode = await repo.workspaceMode();
     if (mode == 'member') {
       final db0 = await repo.database;
@@ -1035,6 +1104,12 @@ class CloudJoin {
     }
     // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
     await _ensureSubscriptionAllows(repo);
+    // 🪑 (باقة المؤسسات) حد المقاعد max_devices: الموافقة على جهاز يتجاوز
+    // الحد تُرفض برسالة واضحة للمدير.
+    await _ensureSeatAvailable(repo,
+        backendUrl: backendUrl,
+        workspaceId: workspaceId,
+        joiningDeviceId: deviceId);
     final db = await repo.database;
     final now = DateTime.now().toIso8601String();
     // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).

@@ -9,6 +9,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import 'trial_ui.dart' show FeatureGate;
 import 'widgets.dart';
 
 /// أنواع التقارير — نقل حرفي لـ `REPORT_TABS` في نسخة الويب.
@@ -99,7 +100,20 @@ class ReportsScreen extends ConsumerWidget {
                   kDefaultCurrencies;
               final unit = ref.watch(periodUnitProvider);
               final table = buildReport(tab, d, currencies, unit);
-              return _ReportView(tab: tab, table: table);
+              final view = _ReportView(tab: tab, table: table);
+              // 🔒 (الخطة الفردية) تقرير التصنيفات ميزة مدفوعة — يبقى
+              // ظاهراً بمؤشر القفل ويقود لشاشة الشراء.
+              if (tab == ReportTab.categories) {
+                return FeatureGate(
+                  featureKey: 'categories',
+                  featureName: 'التصنيفات',
+                  description:
+                      'صنّف حساباتك وأصنافك واستعرض تقارير مجمّعة لكل '
+                      'تصنيف بضغطة واحدة.',
+                  child: view,
+                );
+              }
+              return view;
             },
           ),
         ),

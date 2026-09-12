@@ -589,10 +589,22 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await repo.setSetting('trialWelcomed', '1');
         if (mounted) await showTrialWelcomeDialog(context);
       }
-      // (ب) الانتهاء — بطاقة مرة واحدة لكل انتهاء.
+      // (ب) الانتهاء — مرة واحدة لكل انتهاء، برسالة بحسب الدور والخطة:
+      // المدير يرى بطاقة الشراء/التجديد؛ جهاز الموظف في مؤسسة يرى تنبيه
+      // «راجع إدارة النظام» (القسم 3 — لا يُطالَب الموظف بالدفع).
       if (sub.expired && (st['trialExpiredShown'] ?? '') != '1') {
         await repo.setSetting('trialExpiredShown', '1');
-        if (mounted) await showTrialExpiredSheet(context);
+        final owner = await repo.isWorkspaceOwner();
+        if (!mounted) return;
+        if (owner) {
+          await showTrialExpiredSheet(context);
+        } else {
+          ChatHooks.onMemberNotice?.call(
+            '☁️ المزامنة السحابية متوقفة',
+            'المزامنة السحابية متوقفة؛ يرجى مراجعة إدارة النظام '
+                'لتجديد الباقة. عملك المحلي مستمر بأمان.',
+          );
+        }
       }
     } catch (_) {
       // شبكة غائبة — الفحص الدوري في المحرك يغطي.

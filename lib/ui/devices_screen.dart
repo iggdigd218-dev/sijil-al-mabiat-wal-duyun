@@ -7,6 +7,7 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'cloud_sync_section.dart';
+import 'trial_ui.dart' show SeatUsageBadge;
 import 'widgets.dart';
 
 /// شاشة إدارة الأجهزة المرتبطة: عرض/ربط/إلغاء/تحديد الصلاحيات.
@@ -111,7 +112,14 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        const SectionTitle('الأجهزة'),
+        // (باقة المؤسسات) عدّاد المقاعد الدائم: المتصلة/الحد الأقصى.
+        const Row(
+          children: [
+            Expanded(child: SectionTitle('الأجهزة')),
+            SeatUsageBadge(),
+            SizedBox(width: 14),
+          ],
+        ),
         devicesAsync.when(
           loading: () => const Padding(
             padding: EdgeInsets.all(24),

@@ -9,6 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/device_id.dart';
+import '../data/sync/subscription_guard.dart';
+import 'widgets.dart' show showSnack;
 
 /// رقم التواصل المباشر للتفعيل (واتساب المدير/الدعم).
 const String kActivationContact = '+96774190040';
@@ -441,6 +444,21 @@ Future<void> showTrialExpiredSheet(BuildContext context,
             icon: const Icon(Icons.call_outlined),
             label: const Text('اتصال مباشر'),
           ),
+          const SizedBox(height: 8),
+          // شاشة الشراء الكاملة: المزايا + إرسال كود التفعيل + تأكيد الشراء.
+          FilledButton.tonalIcon(
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const PurchaseScreen()));
+            },
+            icon: const Icon(Icons.workspace_premium),
+            label: const Text('شراء التطبيق — عرض كل المزايا',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
           const SizedBox(height: 6),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -451,4 +469,435 @@ Future<void> showTrialExpiredSheet(BuildContext context,
       ),
     ),
   );
+}
+
+// ==================== شاشة شراء التطبيق (الخطة الفردية) ====================
+
+/// صف ميزة في شاشة الشراء.
+class _FeatureRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+  const _FeatureRow(this.icon, this.title, this.desc);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 18, color: const Color(0xFF7C3AED)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w800)),
+                  Text(desc,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.5,
+                          color: AppColors.text2Of(context))),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// شاشة «شراء التطبيق»: مزايا الاشتراك + [إرسال كود التفعيل] عبر واتساب
+/// برسالة مجهزة تحمل معرف الجهاز + [تأكيد عملية الشراء] بفحص التفعيل
+/// السحابي فوراً — الترقية تسري دون مسح بيانات أو إعادة تثبيت.
+class PurchaseScreen extends ConsumerStatefulWidget {
+  /// اسم الميزة التي قادت المستخدم هنا (للعنوان التسويقي) — اختياري.
+  final String? lockedFeature;
+  const PurchaseScreen({super.key, this.lockedFeature});
+
+  @override
+  ConsumerState<PurchaseScreen> createState() => _PurchaseScreenState();
+}
+
+class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
+  bool _verifying = false;
+
+  Future<void> _sendActivationRequest() async {
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final devId = await ensureDeviceId(repo);
+      final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final fp = SubscriptionGuard.fingerprintHash(raw);
+      final msg = Uri.encodeComponent(
+          'مرحباً، أرغب بشراء اشتراك تطبيق مدير الحسابات.\n'
+          'معرف الجهاز: $devId\n'
+          'بصمة التفعيل: $fp');
+      final wa = Uri.parse(
+          'https://wa.me/${kActivationContact.replaceAll('+', '')}?text=$msg');
+      await launchUrl(wa, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.',
+            error: true);
+      }
+    }
+  }
+
+  /// التحقق من التفعيل السحابي: فحص قسري لعقدة الاشتراك — إن قلبها
+  /// المشغّل إلى active تسري الترقية فوراً على هذا الجهاز.
+  Future<void> _confirmPurchase() async {
+    setState(() => _verifying = true);
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isEmpty) {
+        if (mounted) {
+          showSnack(context,
+              'فعّل المزامنة السحابية أولاً من الإعدادات ليكتمل التحقق.',
+              error: true);
+        }
+        return;
+      }
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      SubscriptionGuard.debugReset(); // تجاوز الكاش — قراءة حقيقية الآن.
+      final sub = await SubscriptionGuard.check(repo,
+          backendUrl: url, workspaceId: ws, force: true);
+      if (!mounted) return;
+      if (sub.isSubscribed) {
+        Sfx.success();
+        bump(ref);
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.verified,
+                color: Color(0xFF16A34A), size: 44),
+            title: const Text('🎉 تم تفعيل اشتراكك بنجاح'),
+            content: const Text(
+              'كل المزايا فُتحت فوراً على هذا الجهاز — دون مسح بيانات '
+              'أو إعادة تثبيت. شكراً لثقتك!',
+              style: TextStyle(height: 1.6),
+              textAlign: TextAlign.center,
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('ابدأ الاستخدام'),
+              ),
+            ],
+          ),
+        );
+        if (mounted) Navigator.of(context).maybePop();
+      } else {
+        Sfx.warning();
+        showSnack(
+            context,
+            'لم يُرصد تفعيل بعد. أرسل كود التفعيل عبر واتساب وسيُفعَّل '
+            'اشتراكك خلال دقائق، ثم اضغط هنا مجدداً.',
+            error: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'تعذّر التحقق — تأكد من اتصال الإنترنت.',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _verifying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('شراء التطبيق')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.workspace_premium,
+                    color: Colors.white, size: 44),
+                const SizedBox(height: 8),
+                Text(
+                  widget.lockedFeature == null
+                      ? 'افتح كل المزايا — اشتراك واحد'
+                      : '«${widget.lockedFeature}» ميزة مدفوعة',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'فعّل اشتراكك وافتح كل القدرات فوراً — بياناتك تبقى كما هي.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          const _FeatureRow(Icons.category_outlined, 'التصنيفات',
+              'إنشاء واستخدام تصنيفات الحسابات والأصناف بلا حدود.'),
+          const _FeatureRow(Icons.notifications_active_outlined,
+              'الإشعارات والرسائل التلقائية',
+              'رسائل الرصيد للعملاء وتنبيهات تلقائية ذكية.'),
+          const _FeatureRow(Icons.cloud_upload_outlined,
+              'النسخ الاحتياطي السحابي',
+              'نسخة يومية آمنة ومزامنة بياناتك عبر السحابة.'),
+          const _FeatureRow(Icons.settings_backup_restore_outlined,
+              'نقاط الاسترجاع',
+              'استرجاع بياناتك لأي نقطة محددة أو دمج قواعد البيانات.'),
+          const _FeatureRow(Icons.manage_search_outlined,
+              'البحث الشامل المتقدم',
+              'بحث فوري عميق في الحسابات والعمليات والتصنيفات.'),
+          const _FeatureRow(Icons.devices_other_outlined,
+              'تعدد الأجهزة (باقة المؤسسات)',
+              'فريق كامل بأدوار وصلاحيات ومزامنة لحظية وسجل تدقيق.'),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _sendActivationRequest,
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('إرسال كود التفعيل (واتساب)',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: _verifying ? null : _confirmPurchase,
+            icon: _verifying
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2))
+                : const Icon(Icons.verified_outlined),
+            label: Text(
+                _verifying
+                    ? 'جارٍ التحقق من التفعيل…'
+                    : 'اضغط هنا لتأكيد عملية الشراء',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              'بعد الدفع يُفعَّل اشتراكك سحابياً خلال دقائق — اضغط زر '
+              'التأكيد ليسري فوراً.',
+              style:
+                  TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== ودجة القفل 🔒 للمزايا المدفوعة ====================
+
+/// تغلّف أي قسم/بلاطة ميزة مدفوعة: مفتوحة = تُعرض كما هي؛ مقفلة = تبقى
+/// ظاهرة بتدرج رمادي ومؤشر 🔒، والضغط يعرض رسالة تعريفية ثم شاشة الشراء.
+class FeatureGate extends ConsumerWidget {
+  /// مفتاح الميزة في featureUnlockedProvider.
+  final String featureKey;
+
+  /// اسم الميزة للعرض في الرسالة التعريفية.
+  final String featureName;
+
+  /// وصف تسويقي قصير يظهر في الرسالة التعريفية.
+  final String description;
+  final Widget child;
+
+  const FeatureGate({
+    super.key,
+    required this.featureKey,
+    required this.featureName,
+    required this.description,
+    required this.child,
+  });
+
+  static Future<void> showLockedNotice(
+    BuildContext context, {
+    required String featureName,
+    required String description,
+  }) async {
+    Sfx.warning();
+    final buy = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.lock_outline,
+            color: Color(0xFF7C3AED), size: 42),
+        title: Text('«$featureName» ميزة مدفوعة'),
+        content: Text('$description\n\nفعّل اشتراكك لفتحها فوراً — '
+            'بياناتك الحالية تبقى كما هي دون أي مسح.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('لاحقاً'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED)),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.workspace_premium, size: 18),
+            label: const Text('شراء التطبيق'),
+          ),
+        ],
+      ),
+    );
+    if (buy == true && context.mounted) {
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PurchaseScreen(lockedFeature: featureName)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unlocked =
+        ref.watch(featureUnlockedProvider(featureKey)).valueOrNull ?? true;
+    if (unlocked) return child;
+    // مقفلة: تظل ظاهرة (تشويق) بتدرج رمادي + قفل، والضغط يفتح التعريف.
+    return Stack(
+      children: [
+        // امتصاص كل النقرات الداخلية ثم تحويلها لرسالة التعريف.
+        AbsorbPointer(
+          child: Opacity(
+            opacity: 0.45,
+            child: ColorFiltered(
+              colorFilter: const ColorFilter.matrix(<double>[
+                0.2126, 0.7152, 0.0722, 0, 0, //
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0.2126, 0.7152, 0.0722, 0, 0,
+                0, 0, 0, 1, 0,
+              ]),
+              child: child,
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => showLockedNotice(context,
+                  featureName: featureName, description: description),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Container(
+                  margin: const EdgeInsets.all(8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, size: 12, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text('مدفوعة',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// (باقة المؤسسات) شارة عدّاد المقاعد: «الأجهزة 3/5» — تظهر للمدير في
+/// شاشة إدارة المجموعة وتفاصيل الاشتراك.
+class SeatUsageBadge extends ConsumerWidget {
+  const SeatUsageBadge({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final usage = ref.watch(seatUsageProvider).valueOrNull;
+    if (usage == null) return const SizedBox.shrink();
+    final (connected, maxSeats) = usage;
+    final full = connected >= maxSeats;
+    final color = full ? const Color(0xFFDC2626) : const Color(0xFF0EA5E9);
+    return Tooltip(
+      message: full
+          ? 'استُنفدت مقاعد الباقة — رقِّ الاشتراك لإضافة أجهزة'
+          : 'الأجهزة المتصلة من أصل الحد الأقصى للباقة',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .10),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: .35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(full ? Icons.event_busy : Icons.devices, size: 13,
+                color: color),
+            const SizedBox(width: 5),
+            Text('الأجهزة $connected/$maxSeats',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// بوابة نقرة لميزة مدفوعة: true = مفتوحة فامضِ؛ false = عُرضت رسالة
+/// التعريف (مع زر شاشة الشراء) وعلى المستدعي التوقف.
+Future<bool> ensureFeatureUnlocked(
+  BuildContext context,
+  WidgetRef ref, {
+  required String featureKey,
+  required String featureName,
+  required String description,
+}) async {
+  bool ok = true;
+  try {
+    ok = await ref.read(featureUnlockedProvider(featureKey).future);
+  } catch (_) {}
+  if (ok) return true;
+  if (context.mounted) {
+    await FeatureGate.showLockedNotice(context,
+        featureName: featureName, description: description);
+  }
+  return false;
 }

@@ -9,6 +9,7 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_form.dart';
 import 'tx_form.dart';
+import 'trial_ui.dart' show ensureFeatureUnlocked;
 import 'widgets.dart';
 
 /// كشف حساب: الرصيد والسجل الزمني وأدوات التواصل.
@@ -253,7 +254,18 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _whatsapp(context, a, balance, c),
+                        // 🔒 رسائل الرصيد للعملاء ميزة مدفوعة.
+                        onPressed: () async {
+                          final ok = await ensureFeatureUnlocked(context, ref,
+                              featureKey: 'notifications',
+                              featureName: 'رسائل الرصيد للعملاء',
+                              description:
+                                  'أرسل رصيد العميل وكشف حسابه عبر واتساب '
+                                  'برسالة جاهزة بضغطة واحدة.');
+                          if (ok && context.mounted) {
+                            await _whatsapp(context, a, balance, c);
+                          }
+                        },
                         icon: const Icon(Icons.chat, size: 18),
                         label: const Text('واتساب'),
                       ),

@@ -15,6 +15,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
+import 'trial_ui.dart' show SeatUsageBadge;
 import 'widgets.dart';
 
 class GroupManagementScreen extends ConsumerStatefulWidget {
@@ -121,6 +122,9 @@ class _State extends ConsumerState<GroupManagementScreen> {
           appBar: AppBar(
             title: const Text('الأجهزة والمستخدمين'),
             actions: [
+              // (باقة المؤسسات) عدّاد المقاعد الدائم أمام المدير.
+              const Center(child: SeatUsageBadge()),
+              const SizedBox(width: 8),
               // (دفعة 56) تنظيف كل الأجهزة المطرودة دفعة واحدة.
               IconButton(
                 tooltip: 'تنظيف الأجهزة المطرودة',

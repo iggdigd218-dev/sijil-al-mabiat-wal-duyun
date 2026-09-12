@@ -371,4 +371,176 @@ void main() {
         cloud.client);
     expect(st.expired, isTrue, reason: 'server_ts >= expires_at بالضبط');
   });
+
+  // ==================== (الخطط المزدوجة) فردي/مؤسسات ====================
+
+  test('PLAN-01 الاستنتاج التلقائي: مساحة منفردة = فردي بمقعد واحد وكل '
+      'المزايا مفتوحة أثناء التجربة', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP1'),
+        cloud.client);
+    expect(st.planType, 'individual');
+    expect(st.maxDevices, 1);
+    // كل المزايا مفتوحة أثناء التجربة.
+    expect(st.featureUnlocked((f) => f.canUseCategories), isTrue);
+    expect(st.featureUnlocked((f) => f.canCloudBackup), isTrue);
+    // العقدة السحابية تحمل المخطط الكامل.
+    final rec = cloud.store.entries
+        .firstWhere((e) => e.key.contains('/wsP1/subscription'))
+        .value as Map;
+    expect(rec['plan_type'], 'individual');
+    expect(rec['max_devices'], 1);
+    expect((rec['features'] as Map)['can_use_categories'], true);
+    expect((rec['features'] as Map)['audit_log'], true);
+  });
+
+  test('PLAN-02 انتهاء التجربة (فردي غير مشترك): المزايا المدفوعة تُقفل '
+      'والعمل المحلي الأساسي يستمر', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP2'),
+        cloud.client);
+    cloud.serverClock += dayMs + 1000; // تجاوز الانتهاء.
+    SubscriptionGuard.debugReset();
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP2', force: true),
+        cloud.client);
+    expect(st.expired, isTrue);
+    expect(st.isSubscribed, isFalse);
+    // كل بوابات المزايا المدفوعة مقفلة.
+    expect(st.featureUnlocked((f) => f.canUseCategories), isFalse);
+    expect(st.featureUnlocked((f) => f.canSendNotifications), isFalse);
+    expect(st.featureUnlocked((f) => f.canCloudBackup), isFalse);
+    expect(st.featureUnlocked((f) => f.canRestoreData), isFalse);
+    expect(st.featureUnlocked((f) => f.canAdvancedSearch), isFalse);
+  });
+
+  test('PLAN-03 الترقية للمؤسسات عند فتح كود ربط: plan_type يتحول '
+      'و max_devices يرتفع دون المساس بعداد التجربة', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    final st0 = await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP3'),
+        cloud.client);
+    expect(st0.planType, 'individual');
+    await http.runWithClient(
+        () => SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url, workspaceId: 'wsP3'),
+        cloud.client);
+    final st1 = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP3', force: true),
+        cloud.client);
+    expect(st1.planType, 'enterprise');
+    expect(st1.maxDevices, kDefaultEnterpriseSeats);
+    // العداد الزمني لم يُمس: نفس created_at/expires_at.
+    expect(st1.createdAtMs, st0.createdAtMs,
+        reason: 'الترقية لا تعيد ضبط بداية التجربة');
+    expect(st1.expiresAtMs, st0.expiresAtMs,
+        reason: 'الترقية لا تمدد ولا تقلص مدة التجربة');
+    // الترقية idempotent: استدعاء ثانٍ لا يغير شيئاً.
+    await http.runWithClient(
+        () => SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url, workspaceId: 'wsP3', maxDevices: 3),
+        cloud.client);
+    final rec = cloud.store.entries
+        .firstWhere((e) => e.key.contains('/wsP3/subscription'))
+        .value as Map;
+    expect(rec['max_devices'], kDefaultEnterpriseSeats,
+        reason: 'الترقية المكررة لا تخفض المقاعد');
+  });
+
+  test('PLAN-04 التفعيل المدفوع يفتح كل المزايا فوراً دون مسح بيانات '
+      '(الترقية في المكان)', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP4'),
+        cloud.client);
+    cloud.serverClock += dayMs + 1000; // انتهت التجربة.
+    // المشغل يفعّل الاشتراك سحابياً (كما يفعل بعد الدفع عبر واتساب).
+    final key = cloud.store.keys
+        .firstWhere((k) => k.contains('/wsP4/subscription'));
+    final rec = Map<String, dynamic>.from(cloud.store[key] as Map);
+    rec['status'] = 'active';
+    rec['expires_at'] = cloud.serverClock + 30 * dayMs;
+    cloud.store[key] = rec;
+    SubscriptionGuard.debugReset();
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP4', force: true),
+        cloud.client);
+    expect(st.isSubscribed, isTrue);
+    expect(st.expired, isFalse);
+    expect(st.featureUnlocked((f) => f.canUseCategories), isTrue,
+        reason: 'التفعيل يفتح المزايا فوراً على نفس العقدة — لا مسح ولا '
+            'إعادة تثبيت');
+    final blocked = await http.runWithClient(
+        () => SubscriptionGuard.isBlocked(repo,
+            backendUrl: url, workspaceId: 'wsP4'),
+        cloud.client);
+    expect(blocked, isFalse, reason: 'المزامنة تعود فور التفعيل');
+  });
+
+  test('PLAN-05 مؤسسة منتهية: isBlocked يجمّد المزامنة فوراً '
+      '(العمل المحلي محفوظ خارج هذه البوابة)', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP5'),
+        cloud.client);
+    await http.runWithClient(
+        () => SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url, workspaceId: 'wsP5'),
+        cloud.client);
+    cloud.serverClock += dayMs + 1000;
+    SubscriptionGuard.debugReset();
+    final blocked = await http.runWithClient(
+        () => SubscriptionGuard.isBlocked(repo,
+            backendUrl: url, workspaceId: 'wsP5'),
+        cloud.client);
+    expect(blocked, isTrue,
+        reason: 'انتهاء باقة المؤسسات = تجميد SyncEngine فوراً');
+    // ميزة المزامنة متعددة الأجهزة مقفلة أيضاً.
+    final st = await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP5', force: true),
+        cloud.client);
+    expect(st.planType, 'enterprise');
+    expect(st.featureUnlocked((f) => f.multiDeviceSync), isFalse);
+  });
+
+  test('PLAN-06 الحالة المثبّتة محلياً تحفظ الخطة والمقاعد والمزايا '
+      'وتُسترجع دون شبكة', () async {
+    final cloud = _FakeRtdb();
+    SubscriptionGuard.debugServerNowOverride = (_) async => cloud.serverClock;
+    await http.runWithClient(
+        () => SubscriptionGuard.ensureTrialStarted(repo,
+            backendUrl: url, workspaceId: 'wsP6'),
+        cloud.client);
+    await http.runWithClient(
+        () => SubscriptionGuard.promoteToEnterprise(repo,
+            backendUrl: url, workspaceId: 'wsP6'),
+        cloud.client);
+    await http.runWithClient(
+        () => SubscriptionGuard.check(repo,
+            backendUrl: url, workspaceId: 'wsP6', force: true),
+        cloud.client);
+    // قراءة الكاش المحلي مباشرة (كما يفعل البانر عند الإقلاع دون شبكة).
+    final raw = (await repo.settings())['subCachedState'] ?? '';
+    expect(raw, isNotEmpty);
+    final m = jsonDecode(raw) as Map;
+    expect(m['plan_type'], 'enterprise');
+    expect(m['max_devices'], kDefaultEnterpriseSeats);
+    expect((m['features'] as Map)['can_cloud_backup'], true);
+  });
 }

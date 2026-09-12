@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/format.dart';
+import 'trial_ui.dart' show ensureFeatureUnlocked;
 import '../core/theme.dart';
 import '../data/cloud_sync.dart';
 import '../data/google_drive_service.dart';
@@ -570,7 +571,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: _busy ? null : _restore,
+                          onPressed: _busy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'restore', featureName: 'نقاط الاسترجاع', description: 'استرجع بياناتك من أي نسخة احتياطية أو ادمج قواعد البيانات بأمان.')) await _restore(); },
                           icon: const Icon(Icons.restore_outlined),
                           label: const Text('استعادة'),
                         ),
@@ -684,7 +685,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: _cloudBusy ? null : _pushCloud,
+                        onPressed: _cloudBusy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'cloud_backup', featureName: 'النسخ الاحتياطي السحابي', description: 'نسخة يومية آمنة لبياناتك على السحابة تحميك من فقدان الهاتف.')) await _pushCloud(); },
                         icon: const Icon(Icons.cloud_upload_outlined),
                         label: const Text('رفع'),
                       ),
@@ -692,7 +693,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: FilledButton.tonalIcon(
-                        onPressed: _cloudBusy ? null : _pullCloud,
+                        onPressed: _cloudBusy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'restore', featureName: 'الاستعادة من السحابة', description: 'استرجع آخر نسخة سحابية لبياناتك في أي وقت وعلى أي جهاز.')) await _pullCloud(); },
                         icon: const Icon(Icons.cloud_download_outlined),
                         label: const Text('سحب'),
                       ),
@@ -798,7 +799,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     children: [
                       Expanded(
                         child: FilledButton.icon(
-                          onPressed: _busy ? null : _uploadToGoogle,
+                          onPressed: _busy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'cloud_backup', featureName: 'النسخ السحابي عبر Google Drive', description: 'نسخة احتياطية خاصة داخل Google Drive تُحدَّث بضغطة واحدة.')) await _uploadToGoogle(); },
                           icon: const Icon(Icons.cloud_upload_outlined),
                           label: const Text('رفع / تحديث'),
                         ),
@@ -806,7 +807,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: _busy ? null : _restoreFromGoogle,
+                          onPressed: _busy ? null : () async { if (await ensureFeatureUnlocked(context, ref, featureKey: 'restore', featureName: 'الاستعادة من Google Drive', description: 'استرجع نسختك المحفوظة في Google Drive متى احتجتها.')) await _restoreFromGoogle(); },
                           icon: const Icon(Icons.cloud_download_outlined),
                           label: const Text('استعادة'),
                         ),

@@ -23,33 +23,139 @@ import 'device_id.dart';
 /// لاحقاً بتغيير هذا الثابت وحده.
 const Duration kTrialDuration = Duration(hours: 24);
 
+/// المقاعد الافتراضية لباقة المؤسسات (يرفعها المشغّل من عقدة الاشتراك
+/// السحابية `max_devices` بحسب الباقة المباعة).
+const int kDefaultEnterpriseSeats = 5;
+
 /// هامش تسامح لانحراف الشبكة عند إسناد وقت الخادم (ثوانٍ قليلة).
 const int kServerSkewToleranceMs = 5000;
+
+/// مفاتيح المزايا الثمانية في عقدة features السحابية — القيم الافتراضية
+/// حسب الخطة: أثناء التجربة والاشتراك الفعّال كل شيء مفتوح؛ فردي منتهٍ
+/// تُقفل مزاياه المدفوعة؛ مؤسسة منتهية تُجمَّد سحابتها.
+class PlanFeatures {
+  final bool canUseCategories;
+  final bool canSendNotifications;
+  final bool canCloudBackup;
+  final bool canRestoreData;
+  final bool canAdvancedSearch;
+  final bool multiDeviceSync;
+  final bool rolePermissions;
+  final bool auditLog;
+
+  const PlanFeatures({
+    required this.canUseCategories,
+    required this.canSendNotifications,
+    required this.canCloudBackup,
+    required this.canRestoreData,
+    required this.canAdvancedSearch,
+    required this.multiDeviceSync,
+    required this.rolePermissions,
+    required this.auditLog,
+  });
+
+  static const allOn = PlanFeatures(
+    canUseCategories: true,
+    canSendNotifications: true,
+    canCloudBackup: true,
+    canRestoreData: true,
+    canAdvancedSearch: true,
+    multiDeviceSync: true,
+    rolePermissions: true,
+    auditLog: true,
+  );
+
+  /// فردي منتهي التجربة: يبقى التسجيل والحركات اليومية محلياً فقط.
+  static const individualLocked = PlanFeatures(
+    canUseCategories: false,
+    canSendNotifications: false,
+    canCloudBackup: false,
+    canRestoreData: false,
+    canAdvancedSearch: false,
+    multiDeviceSync: false,
+    rolePermissions: false,
+    auditLog: false,
+  );
+
+  factory PlanFeatures.fromMap(Map<String, dynamic>? m) {
+    if (m == null) return allOn;
+    bool b(String k, bool dflt) {
+      final v = m[k];
+      return v is bool ? v : dflt;
+    }
+
+    return PlanFeatures(
+      canUseCategories: b('can_use_categories', true),
+      canSendNotifications: b('can_send_notifications', true),
+      canCloudBackup: b('can_cloud_backup', true),
+      canRestoreData: b('can_restore_data', true),
+      canAdvancedSearch: b('can_advanced_search', true),
+      multiDeviceSync: b('multi_device_sync', true),
+      rolePermissions: b('role_permissions', true),
+      auditLog: b('audit_log', true),
+    );
+  }
+
+  Map<String, Object?> toMap() => {
+        'can_use_categories': canUseCategories,
+        'can_send_notifications': canSendNotifications,
+        'can_cloud_backup': canCloudBackup,
+        'can_restore_data': canRestoreData,
+        'can_advanced_search': canAdvancedSearch,
+        'multi_device_sync': multiDeviceSync,
+        'role_permissions': rolePermissions,
+        'audit_log': auditLog,
+      };
+}
 
 /// حالة الاشتراك كما تُقرأ من السحابة.
 class SubscriptionState {
   /// trial | active | expired | none (لا سحابة مهيأة).
   final String status;
+
+  /// individual | enterprise — يُستنتج تلقائياً (مستقل=فردي، مجموعة=مؤسسة).
+  final String planType;
+
+  /// الحد الأقصى للأجهزة (1 للفردي؛ بحسب الباقة للمؤسسة).
+  final int maxDevices;
+
   final int createdAtMs; // ختم خادم فيربيس (ملي ثانية).
   final int expiresAtMs; // ختم خادم.
   final bool isActive;
   final String deviceFingerprint;
+
+  /// مفاتيح المزايا من عقدة features السحابية.
+  final PlanFeatures features;
 
   /// وقت الخادم التقريبي لحظة آخر فحص (server_ts المرجعي).
   final int serverNowMs;
 
   const SubscriptionState({
     required this.status,
+    this.planType = 'individual',
+    this.maxDevices = 1,
     required this.createdAtMs,
     required this.expiresAtMs,
     required this.isActive,
     required this.deviceFingerprint,
+    this.features = PlanFeatures.allOn,
     required this.serverNowMs,
   });
 
   /// هل انتهت التجربة؟ المقارنة بوقت الخادم حصراً.
   bool get expired =>
       status != 'active' && expiresAtMs > 0 && serverNowMs >= expiresAtMs;
+
+  /// هل الاشتراك مدفوع وفعّال؟
+  bool get isSubscribed => status == 'active';
+
+  /// هل الميزة المدفوعة مفتوحة الآن؟ (تجربة سارية أو اشتراك فعّال +
+  /// مفتاح الميزة نفسه غير مطفأ من الخادم).
+  bool featureUnlocked(bool Function(PlanFeatures) pick) {
+    if (status == 'none') return true; // لا سحابة بعد — لا قيود عرضية.
+    if (expired && !isSubscribed) return false;
+    return pick(features);
+  }
 
   /// المتبقي بالملي ثانية (0 عند الانتهاء). بوقت الخادم.
   int get remainingMs =>
@@ -133,6 +239,11 @@ class SubscriptionGuard {
     final fp = fingerprintHash(raw);
     final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
     final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
+    // (الخطط المزدوجة) plan_type يُستنتج تلقائياً: العمل المنفرد = فردي؛
+    // مجموعة قائمة (host/member) = مؤسسة بمقاعدها الافتراضية.
+    final planType = await _detectPlanType(repo);
+    final maxDevices =
+        planType == 'enterprise' ? kDefaultEnterpriseSeats : 1;
 
     // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل أبداً — نعيد قراءتها.
     //     (يشمل المستخدمين القدامى الذين هُيّئت عقدتهم في إقلاع سابق.)
@@ -187,21 +298,27 @@ class SubscriptionGuard {
     // (3) تفعيل جديد: ختم خادم ثم تثبيت expires_at رقمياً من قيمة الخادم
     //     المكتوبة فعلاً (write-back) — الحساب خادمي بالكامل.
     await _putJson(wsSub, {
+      'plan_type': planType,
       'status': 'trial',
+      'max_devices': maxDevices,
       'created_at': {'.sv': 'timestamp'},
       'expires_at': 0,
       'is_active': true,
       'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
     });
     final written = await _readJson(wsSub) ?? {};
     final createdMs = _asMs(written['created_at']);
     final expiresMs = createdMs + kTrialDuration.inMilliseconds;
     final finalRec = {
+      'plan_type': planType,
       'status': 'trial',
+      'max_devices': maxDevices,
       'created_at': createdMs,
       'expires_at': expiresMs,
       'is_active': true,
       'device_fingerprint': fp,
+      'features': PlanFeatures.allOn.toMap(),
     };
     await _putJson(wsSub, finalRec);
     // فهرس البصمة العالمي — صمّام منع إعادة الاستغلال.
@@ -280,10 +397,13 @@ class SubscriptionGuard {
           'subCachedState',
           jsonEncode({
             'status': st.status,
+            'plan_type': st.planType,
+            'max_devices': st.maxDevices,
             'created_at': st.createdAtMs,
             'expires_at': st.expiresAtMs,
             'is_active': st.isActive,
             'fp': st.deviceFingerprint,
+            'features': st.features.toMap(),
             'server_now': st.serverNowMs,
             'device_ms': DateTime.now().millisecondsSinceEpoch,
           }));
@@ -304,12 +424,20 @@ class SubscriptionGuard {
       final nowDevice = DateTime.now().millisecondsSinceEpoch;
       // الإسناد للأمام فقط: إرجاع ساعة الهاتف لا يُرجع وقت الخادم.
       final drift = (nowDevice - deviceMs).clamp(0, 1 << 62);
+      final rawFeat = m['features'];
       return SubscriptionState(
         status: '${m['status'] ?? 'trial'}',
+        planType:
+            '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+                ? 'enterprise'
+                : 'individual',
+        maxDevices: _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
         createdAtMs: _asMs(m['created_at']),
         expiresAtMs: _asMs(m['expires_at']),
         isActive: m['is_active'] != false,
         deviceFingerprint: '${m['fp'] ?? ''}',
+        features: PlanFeatures.fromMap(
+            rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
         serverNowMs: serverNow + drift,
       );
     } catch (_) {
@@ -348,15 +476,75 @@ class SubscriptionGuard {
       ..reset();
   }
 
-  static SubscriptionState _stateFrom(Map<String, dynamic> m, int nowMs) =>
-      SubscriptionState(
-        status: '${m['status'] ?? 'trial'}',
-        createdAtMs: _asMs(m['created_at']),
-        expiresAtMs: _asMs(m['expires_at']),
-        isActive: m['is_active'] != false,
-        deviceFingerprint: '${m['device_fingerprint'] ?? ''}',
-        serverNowMs: nowMs,
-      );
+  static SubscriptionState _stateFrom(Map<String, dynamic> m, int nowMs) {
+    final rawFeat = m['features'];
+    return SubscriptionState(
+      status: '${m['status'] ?? 'trial'}',
+      planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
+          ? 'enterprise'
+          : 'individual',
+      maxDevices: (() {
+        final v = m['max_devices'];
+        if (v is int && v > 0) return v;
+        if (v is num && v > 0) return v.toInt();
+        return '${m['plan_type'] ?? ''}' == 'enterprise'
+            ? kDefaultEnterpriseSeats
+            : 1;
+      })(),
+      createdAtMs: _asMs(m['created_at']),
+      expiresAtMs: _asMs(m['expires_at']),
+      isActive: m['is_active'] != false,
+      deviceFingerprint: '${m['device_fingerprint'] ?? ''}',
+      features: PlanFeatures.fromMap(
+          rawFeat is Map ? Map<String, dynamic>.from(rawFeat) : null),
+      serverNowMs: nowMs,
+    );
+  }
+
+  /// استنتاج المسار تلقائياً: مجموعة قائمة (مضيف أو عضو) = مؤسسة؛
+  /// العمل المنفرد = فردي.
+  static Future<String> _detectPlanType(Repo repo) async {
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'host' || mode == 'member') return 'enterprise';
+      // مضيف فعلي بأجهزة مقترنة أخرى (حتى لو تلكأ الوضع) = مؤسسة.
+      final db = await repo.database;
+      final peers = await db.rawQuery(
+          "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
+          "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+      final c = (peers.first['c'] as int?) ?? 0;
+      if (c > 1) return 'enterprise';
+    } catch (_) {}
+    return 'individual';
+  }
+
+  /// الترقية التلقائية للمسار: بمجرد إنشاء مجموعة/فتح كود ربط لجهاز ثانٍ
+  /// يتحول الاشتراك إلى enterprise بمقاعده — دون المساس بالعداد الزمني
+  /// (created_at/expires_at يبقيان كما هما بختم الخادم الأصلي).
+  static Future<void> promoteToEnterprise(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    int? maxDevices,
+  }) async {
+    final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
+    final rec = await _readJson(wsSub);
+    if (rec == null) return; // لا عقدة بعد — ensureTrialStarted سينشئها.
+    if ('${rec['plan_type'] ?? ''}' == 'enterprise') return; // مرقّاة أصلاً.
+    final seats = maxDevices ?? kDefaultEnterpriseSeats;
+    await _putJson(wsSub, {
+      ...rec,
+      'plan_type': 'enterprise',
+      'max_devices':
+          (rec['max_devices'] is num && (rec['max_devices'] as num) > seats)
+              ? rec['max_devices']
+              : seats,
+      'features': (rec['features'] is Map)
+          ? rec['features']
+          : PlanFeatures.allOn.toMap(),
+    });
+    debugReset(); // الفحص التالي يقرأ الخطة الجديدة فوراً.
+  }
 
   static int _asMs(Object? v) {
     if (v is int) return v;

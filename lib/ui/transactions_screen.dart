@@ -7,6 +7,7 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'tx_form.dart';
+import 'trial_ui.dart' show ensureFeatureUnlocked;
 import 'tx_share.dart';
 import 'widgets.dart';
 
@@ -156,7 +157,17 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _openFilters(f, accounts, currencies),
+                  // 🔒 البحث المتقدم ميزة مدفوعة — يبقى الزر ظاهراً
+                  // ويقود لشاشة الشراء عند القفل.
+                  onPressed: () async {
+                    final ok = await ensureFeatureUnlocked(context, ref,
+                        featureKey: 'advanced_search',
+                        featureName: 'البحث الشامل المتقدم',
+                        description:
+                            'فلترة عميقة بالحساب والعملة والنوع والفترة '
+                            'الزمنية للوصول لأي عملية في ثوانٍ.');
+                    if (ok) _openFilters(f, accounts, currencies);
+                  },
                   icon: Icon(
                     Icons.tune,
                     size: 18,

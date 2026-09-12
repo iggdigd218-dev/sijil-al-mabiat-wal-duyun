@@ -8,6 +8,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import 'repository.dart';
+import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/subscription_guard.dart';
@@ -1222,4 +1223,40 @@ final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
   return SubscriptionGuard.check(repo, backendUrl: url, workspaceId: ws)
       .timeout(const Duration(seconds: 10),
           onTimeout: () => SubscriptionGuard.lastState);
+});
+
+/// (الخطط المزدوجة) بوابة ميزة مدفوعة للواجهة: true = الميزة مفتوحة.
+/// أثناء التجربة/الاشتراك الفعّال كل شيء مفتوح؛ بعد الانتهاء تُقفل
+/// المزايا المدفوعة (تبقى ظاهرة بمؤشر 🔒 وتحوّل لشاشة الشراء).
+/// المفاتيح: categories | notifications | cloud_backup | restore |
+/// advanced_search | multi_device | roles | audit.
+final featureUnlockedProvider =
+    FutureProvider.family<bool, String>((ref, key) async {
+  final sub = await ref.watch(subscriptionProvider.future);
+  return sub.featureUnlocked((f) => switch (key) {
+        'categories' => f.canUseCategories,
+        'notifications' => f.canSendNotifications,
+        'cloud_backup' => f.canCloudBackup,
+        'restore' => f.canRestoreData,
+        'advanced_search' => f.canAdvancedSearch,
+        'multi_device' => f.multiDeviceSync,
+        'roles' => f.rolePermissions,
+        'audit' => f.auditLog,
+        _ => true,
+      });
+});
+
+/// (باقة المؤسسات) عدّاد المقاعد: (المتصلة حالياً، الحد الأقصى).
+/// null عندما لا تنطبق (فردي/لا سحابة).
+final seatUsageProvider = FutureProvider<(int, int)?>((ref) async {
+  ref.watch(refreshProvider);
+  try {
+    final sub = await ref.watch(subscriptionProvider.future);
+    if (sub.status == 'none' || sub.planType != 'enterprise') return null;
+    final connected =
+        await CloudJoin.connectedDevicesCount(ref.read(repoProvider));
+    return (connected, sub.maxDevices);
+  } catch (_) {
+    return null;
+  }
 });
