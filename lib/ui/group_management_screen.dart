@@ -517,10 +517,19 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         }
                       },
                       onTransferOwner: () async {
+                        // (صمام أمان) فحص جاهزية المستلم قبل التسليم —
+                        // جهاز قديم/غائب يُنبَّه عنه قبل نقل الملكية.
+                        final warnings = await repo
+                            .transferReadinessCheck(d['id'] as String);
+                        if (!context.mounted) return;
+                        final warnBlock = warnings.isEmpty
+                            ? ''
+                            : '⚠️ تحذيرات الجاهزية:\n'
+                                '${warnings.map((w) => '• $w').join('\n')}\n\n';
                         final ok = await confirmDialog(
                           context,
                           title: 'تسليم الإدارة',
-                          message:
+                          message: '$warnBlock'
                               'سيصبح "${d['name']}" هو المدير وتصبح أنت عضوًا.',
                           confirmText: 'تسليم',
                           danger: true,

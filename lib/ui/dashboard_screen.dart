@@ -39,7 +39,10 @@ class DashboardScreen extends ConsumerWidget {
     final summary = ref.watch(summaryProvider);
     final currencies = ref.watch(currenciesProvider);
     final hidden = ref.watch(hideBalancesProvider);
-    final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
+    // (إصلاح أندرويد 7) تحصين مزدوج: وضع host = مدير حتى لو تأخرت قراءة
+    // is_owner على الأجهزة البطيئة — لا تختفي «إدارة المجموعة» عن المالك.
+    final isOwner = (ref.watch(isOwnerProvider).valueOrNull ?? true) ||
+        ref.watch(workspaceModeProvider).valueOrNull == 'host';
 
     return RefreshIndicator(
       onRefresh: () async => bump(ref),

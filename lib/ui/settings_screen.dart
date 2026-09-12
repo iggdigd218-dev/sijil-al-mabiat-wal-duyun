@@ -100,6 +100,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  /// (صمام أمان) المدير السابق يسترجع الإدارة خلال 24 ساعة من تسليم
+  /// متعثر — تأكيد صريح ثم استعادة محلية + بث سيادي لكل الأجهزة.
+  Future<void> _reclaimOwnership(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.settings_backup_restore_rounded,
+            color: Color(0xFFB45309), size: 40),
+        title: const Text('استرجاع إدارة المجموعة'),
+        content: const Text(
+          'ستستعيد ملكية المجموعة وتصبح المدير من جديد، ويتحول الجهاز '
+          'الذي سلّمته الإدارة إلى عضو.\n\n'
+          'استخدم هذا فقط إذا تعذّر تفعيل الإدارة على الجهاز الجديد.\n\n'
+          'هل تريد المتابعة؟',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB45309)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('استرجاع الإدارة'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(repoProvider).reclaimOwnership();
+      try {
+        await ref.read(syncEngineProvider).forceSyncNow();
+      } catch (_) {}
+      bump(ref);
+      Sfx.success();
+      if (context.mounted) {
+        showSnack(context, '✅ استُرجعت الإدارة — أنت المدير من جديد.');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر الاسترجاع: $e', error: true);
+      }
+    }
+  }
+
   /// (دفعة 58 — متطلب 11) العضو يطلب مغادرة المجموعة: تأكيد ثم إرسال
   /// الطلب للسحابة — المدير يوافق فيُطرد الجهاز نظيفاً (شاهدة إبطال تصل
   /// عبر SSE فيعيد الجهاز نفسه مستقلاً تلقائياً).
@@ -785,6 +833,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                     ],
                   ),
+                  // (صمام أمان) استرجاع الإدارة: يظهر للمدير السابق فقط
+                  // خلال 24 ساعة من التسليم — ينقذ الموقف إذا تعثر تفعيل
+                  // الإدارة على الجهاز المستلم (جهاز قديم/أندرويد 7).
+                  if (ref.watch(reclaimOwnershipProvider).valueOrNull ==
+                      true) ...[
+                    const SizedBox(height: 18),
+                    _Collapsible(
+                      title: 'استرجاع الإدارة (صمام الأمان)',
+                      icon: Icons.settings_backup_restore_rounded,
+                      color: const Color(0xFFB45309),
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(
+                              Icons.admin_panel_settings_outlined,
+                              color: Color(0xFFB45309)),
+                          title: const Text('استرجاع إدارة المجموعة'),
+                          subtitle: const Text(
+                            'سلّمت الإدارة مؤخراً ولم تُفعَّل على الجهاز '
+                            'الجديد؟ يمكنك استعادتها من هنا خلال 24 ساعة '
+                            'من التسليم — تُبثّ الاستعادة لكل الأجهزة.',
+                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                          ),
+                          trailing: const Icon(Icons.chevron_left),
+                          onTap: () => _reclaimOwnership(context),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
                 // تهيئة المجموعة من الصفر: على جهاز المدير (المالك) فقط —
                 // لا تظهر إطلاقاً في إعدادات الأعضاء ولا الوكيل.

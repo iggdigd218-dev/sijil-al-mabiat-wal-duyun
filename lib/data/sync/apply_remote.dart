@@ -249,15 +249,45 @@ extension ApplyRemoteOp on Repo {
       if (decoded is! Map) return;
       final newOwnerDev = '${decoded['owner_device_id'] ?? ''}';
       final newOwnerUid = decoded['owner_user_id'];
+      final isReclaim = decoded['reclaim'] == true;
       if (newOwnerDev.isEmpty) return;
       // تحقق سيادي: مصدر العملية يجب أن يكون المالك المعروف محلياً —
       // جهاز عضو لا يستطيع تزوير نقل ملكية لنفسه.
       final curOwner = await txn.query('devices',
           columns: ['id'], where: 'is_owner = 1', limit: 1);
       if (curOwner.isNotEmpty && '${curOwner.first['id']}' != op.deviceId) {
-        return;
+        // (صمام أمان) استثناء الاسترجاع: المدير السابق المسجل محلياً من
+        // آخر تسليم يحق له استعادة الملكية خلال نافذة الاسترجاع — نتحقق
+        // أن المصدر هو فعلاً المالك السابق المعروف لدينا، لا أي عضو.
+        bool allowReclaim = false;
+        if (isReclaim) {
+          final prev = await txn.query('sync_meta',
+              where: 'key = ?', whereArgs: ['prevOwnerDeviceId'], limit: 1);
+          allowReclaim =
+              prev.isNotEmpty && '${prev.first['value']}' == op.deviceId;
+        }
+        if (!allowReclaim) return;
       }
       final now = DateTime.now().toIso8601String();
+      // ذاكرة المالك السابق: تُمكّن قبول عملية «استرجاع» شرعية لاحقاً،
+      // ويُتحقق منها أعلاه — لا تُقبل إلا من هذا الجهاز تحديداً.
+      final prevOwnerId = curOwner.isNotEmpty
+          ? '${curOwner.first['id']}'
+          : '${decoded['previous_owner_device_id'] ?? ''}';
+      if (prevOwnerId.isNotEmpty && !isReclaim) {
+        await txn.insert(
+            'sync_meta', {'key': 'prevOwnerDeviceId', 'value': prevOwnerId},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      } else if (isReclaim) {
+        // استرجاع مكتمل: تُمحى الذاكرة — تُستخدم مرة واحدة فقط.
+        await txn.delete('sync_meta',
+            where: 'key = ?', whereArgs: ['prevOwnerDeviceId']);
+      }
+      // (إصلاح أندرويد 7) العلم الاحتياطي للملكية على كل الأجهزة —
+      // تقرأه isWorkspaceOwner عند غياب صف الجهاز مؤقتاً.
+      await txn.insert(
+          'sync_meta', {'key': 'ownerDeviceId', 'value': newOwnerDev},
+          conflictAlgorithm: ConflictAlgorithm.replace);
       // 1) نزع الملكية عن الجميع ثم تتويج الجهاز الجديد.
       await txn.update('devices', {'is_owner': 0, 'updated_at': now});
       await txn.update(

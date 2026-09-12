@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/accounting.dart';
+import '../core/app_version.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
 import '../core/secret_store.dart';
@@ -178,16 +179,33 @@ class Repo {
       WorkspaceMode.parse(await workspaceMode());
 
   Future<bool> isWorkspaceOwner() async {
-    if (_deviceId == null) return true; // قبل التهيئة اعتبره مستقلاً.
-    final db = await _db;
-    final r = await db.query(
-      'devices',
-      where: 'id = ?',
-      whereArgs: [_deviceId],
-      limit: 1,
-    );
-    if (r.isEmpty) return true;
-    return ((r.first['is_owner'] ?? 0) as int) == 1;
+    // (إصلاح أندرويد 7) قراءة محصّنة: أي استثناء صامت أو غياب مؤقت لصف
+    // الجهاز (سباق مصالحة roster) كان يترك الواجهة بلا أيقونة الإدارة —
+    // نضيف علماً احتياطياً في sync_meta يُكتب ذرياً مع كل تغيير ملكية.
+    try {
+      if (_deviceId == null) return true; // قبل التهيئة اعتبره مستقلاً.
+      final db = await _db;
+      final r = await db.query(
+        'devices',
+        where: 'id = ?',
+        whereArgs: [_deviceId],
+        limit: 1,
+      );
+      if (r.isNotEmpty) return ((r.first['is_owner'] ?? 0) as int) == 1;
+      // صف الجهاز غائب: العلم الاحتياطي يحسم قبل افتراض الاستقلال.
+      final meta = await db.query('sync_meta',
+          where: 'key = ?', whereArgs: ['ownerDeviceId'], limit: 1);
+      if (meta.isNotEmpty) return '${meta.first['value']}' == _deviceId;
+      return true;
+    } catch (_) {
+      // قاعدة مقفلة/بطيئة على الأجهزة القديمة: لا نخفي الإدارة خطأً —
+      // نعود لآخر وضع معروف عبر workspaceMode (host = مدير).
+      try {
+        return (await workspaceMode()) == 'host';
+      } catch (_) {
+        return true;
+      }
+    }
   }
 
   /// الجهاز الذي نحن عليه الآن (سجلنا في جدول devices).
@@ -1992,6 +2010,26 @@ class Repo {
         {'key': 'workspaceMode', 'value': 'host'}, // دائماً مدار.
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      // (إصلاح أندرويد 7) العلم الاحتياطي للملكية: يُكتب ذرياً داخل نفس
+      // المعاملة — إن غاب صف الجهاز مؤقتاً (سباق مصالحة) تحسم القراءة منه.
+      await txn.insert(
+        'sync_meta',
+        {'key': 'ownerDeviceId', 'value': newOwnerDeviceId},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      // (صمام أمان) بيانات الاسترجاع للمدير السابق: 24 ساعة صلاحية.
+      await txn.insert(
+        'settings',
+        {
+          'key': 'ownershipHandover',
+          'value': jsonEncode({
+            'previous_owner_device_id': _deviceId,
+            'new_owner_device_id': newOwnerDeviceId,
+            'at': now,
+          }),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     });
 
     // مزامنة تغييرات الأدوار (users) مع الأعضاء الآخرين عبر العمليات.
@@ -2052,6 +2090,167 @@ class Repo {
       }
     } catch (_) {
       // الشبكة غائبة الآن: العملية السيادية في الطابور ستوصل التغيير.
+    }
+  }
+
+  /// (صمام أمان — فحص الجاهزية قبل التسليم) يفحص جهاز المستلم ويعيد
+  /// قائمة تحذيرات نصية؛ القائمة الفارغة تعني «جاهز». لا يمنع التسليم —
+  /// القرار للمدير بعد رؤية التحذيرات.
+  Future<List<String>> transferReadinessCheck(String targetDeviceId) async {
+    final warnings = <String>[];
+    try {
+      final db = await _db;
+      final rows = await db.query('devices',
+          where: 'id = ?', whereArgs: [targetDeviceId], limit: 1);
+      if (rows.isEmpty) return ['الجهاز غير موجود في سجل المجموعة.'];
+      final d = rows.first;
+      if ('${d['revoked_at'] ?? ''}'.isNotEmpty ||
+          '${d['expelled_at'] ?? ''}'.isNotEmpty) {
+        warnings.add('الجهاز مطرود أو ملغى الاقتران — لا يصلح للاستلام.');
+      }
+      if ((d['is_paired'] as int? ?? 0) != 1) {
+        warnings.add('الجهاز غير مقترن بعد.');
+      }
+      // آخر ظهور: إن غاب طويلاً فقد يتأخر استلام العملية السيادية.
+      final lastSeen = '${d['last_seen_at'] ?? ''}';
+      final seen = lastSeen.isEmpty ? null : DateTime.tryParse(lastSeen);
+      if (seen == null) {
+        warnings.add('لم يُرصد اتصال حديث لهذا الجهاز — قد يتأخر استلام '
+            'الإدارة حتى يفتح التطبيق ويتزامن.');
+      } else if (DateTime.now().difference(seen) >
+          const Duration(hours: 1)) {
+        warnings.add('آخر اتصال للجهاز منذ أكثر من ساعة — تأكد أنه متصل '
+            'بالإنترنت الآن ليستلم الإدارة فوراً.');
+      }
+      // إصدار أقدم على المستلم = قد لا يدعم آلية النقل السيادية.
+      final peerVer = '${d['app_version'] ?? ''}'.trim();
+      if (peerVer.isNotEmpty && peerVer != kAppVersion) {
+        warnings.add('إصدار التطبيق على الجهاز المستلم ($peerVer) يختلف عن '
+            'إصدارك ($kAppVersion) — يُنصح بتحديثه أولاً لضمان انتقال سلس.');
+      }
+    } catch (e) {
+      warnings.add('تعذّر فحص الجهاز: $e');
+    }
+    return warnings;
+  }
+
+  /// (صمام أمان — استرجاع الإدارة) هل يحق لهذا الجهاز استرجاع الملكية؟
+  /// نعم إذا: كان هو المدير السابق في آخر تسليم ولم تمض 24 ساعة.
+  Future<bool> reclaimOwnershipAvailable() async {
+    try {
+      if (_deviceId == null) return false;
+      if (await isWorkspaceOwner()) return false; // ما زلنا المدير.
+      final raw = (await settings())['ownershipHandover'] ?? '';
+      if (raw.isEmpty) return false;
+      final d = jsonDecode(raw);
+      if (d is! Map) return false;
+      if ('${d['previous_owner_device_id']}' != _deviceId) return false;
+      final at = DateTime.tryParse('${d['at']}');
+      if (at == null) return false;
+      return DateTime.now().difference(at) < const Duration(hours: 24);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (صمام أمان — تنفيذ الاسترجاع) المدير السابق يستعيد الملكية محلياً
+  /// ويبث عملية ownershipTransfer سيادية معاكسة لكل الأجهزة — تُستخدم
+  /// عندما يتعثر تفعيل الإدارة على الجهاز المستلم (جهاز قديم/معطل).
+  Future<void> reclaimOwnership() async {
+    if (!await reclaimOwnershipAvailable()) {
+      throw StateError('استرجاع الإدارة غير متاح: انتهت مهلة الـ 24 ساعة '
+          'أو لم تكن المدير السابق.');
+    }
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    final raw = (await settings())['ownershipHandover'] ?? '{}';
+    final info = jsonDecode(raw) as Map;
+    final failedOwner = '${info['new_owner_device_id'] ?? ''}';
+    await db.transaction((txn) async {
+      await txn.update('devices', {'is_owner': 0, 'updated_at': now});
+      await txn.update(
+          'devices',
+          {
+            'is_owner': 1,
+            'user_id': _currentUserId,
+            'revoked_at': '',
+            'expelled_at': '',
+            'is_paired': 1,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [_deviceId]);
+      // ترقية مستخدمنا لمدير كامل الصلاحيات مجدداً.
+      if (_currentUserId != null) {
+        final permStr = defaultPerms(UserRole.admin)
+            .entries
+            .where((e) => e.value)
+            .map((e) => e.key)
+            .join(',');
+        await txn.update(
+            'users',
+            {
+              'role': 'admin',
+              'permissions': permStr,
+              'active': 1,
+              'is_me': 1,
+              'deleted_at': '',
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [_currentUserId]);
+      }
+      await txn.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert(
+          'sync_meta', {'key': 'ownerDeviceId', 'value': _deviceId},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      // إبطال بيانات الاسترجاع — تُستخدم مرة واحدة فقط.
+      await txn.delete('settings',
+          where: 'key = ?', whereArgs: ['ownershipHandover']);
+    });
+    // بث العملية السيادية المعاكسة + رفع فوري للـ roster السحابي.
+    try {
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipTransfer',
+        opType: OpKind.settings,
+        payload: {
+          'key': 'ownershipTransfer',
+          'value': jsonEncode({
+            'owner_device_id': _deviceId,
+            'owner_user_id': _currentUserId,
+            'previous_owner_device_id': failedOwner,
+            'reclaim': true,
+            'at': now,
+          }),
+        },
+      );
+      await setSetting('ownershipEpoch', now);
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: 'ownershipEpoch',
+        opType: OpKind.settings,
+        payload: {'key': 'ownershipEpoch', 'value': now},
+      );
+    } catch (_) {}
+    try {
+      final st = await settings();
+      final url = (st['cloudBackendUrl'] ?? '').trim();
+      if (url.isNotEmpty && _deviceId != null) {
+        final wsRows = await db.query('workspaces', limit: 1);
+        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        await CloudJoin.pushOwnershipToRoster(
+          this,
+          backendUrl: url,
+          workspaceId: ws,
+          newOwnerDeviceId: _deviceId!,
+          previousOwnerDeviceId: failedOwner,
+        );
+      }
+    } catch (_) {
+      // الشبكة غائبة: العملية السيادية في الطابور ستوصل الاسترجاع.
     }
   }
 

@@ -685,11 +685,32 @@ final workspaceModeProvider = FutureProvider<String>((ref) async {
 });
 
 /// هل هذا الجهاز هو مالك المساحة (المدير).
+/// (إصلاح أندرويد 7) انتهاء المهلة كان يعيد false فتختفي «إدارة المجموعة»
+/// من واجهة المالك على الأجهزة البطيئة — الآن نسقط على آخر وضع معروف
+/// (workspaceMode=host يعني هذا الجهاز مدير) بدل الإخفاء الخاطئ.
 final isOwnerProvider = FutureProvider<bool>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  try {
+    return await repo.isWorkspaceOwner().timeout(const Duration(seconds: 8));
+  } catch (_) {
+    try {
+      return (await repo.workspaceMode()
+              .timeout(const Duration(seconds: 4))) ==
+          'host';
+    } catch (_) {
+      return false;
+    }
+  }
+});
+
+/// (صمام أمان) هل يحق لهذا الجهاز استرجاع الإدارة بعد تسليم متعثر؟
+/// متاح للمدير السابق فقط خلال 24 ساعة من التسليم.
+final reclaimOwnershipProvider = FutureProvider<bool>((ref) async {
   ref.watch(refreshProvider);
   return ref
       .read(repoProvider)
-      .isWorkspaceOwner()
+      .reclaimOwnershipAvailable()
       .timeout(const Duration(seconds: 8), onTimeout: () => false);
 });
 

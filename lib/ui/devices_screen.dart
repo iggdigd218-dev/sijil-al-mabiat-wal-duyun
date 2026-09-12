@@ -273,10 +273,19 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                         },
                         onTransferOwner: () async {
                           final targetName = d['name'] as String? ?? 'الجهاز';
+                          // (صمام أمان) فحص جاهزية الجهاز المستلم قبل
+                          // التسليم — تحذيرات واضحة، والقرار للمدير.
+                          final warnings = await repo
+                              .transferReadinessCheck(d['id'] as String);
+                          if (!context.mounted) return;
+                          final warnBlock = warnings.isEmpty
+                              ? ''
+                              : '⚠️ تحذيرات الجاهزية:\n'
+                                  '${warnings.map((w) => '• $w').join('\n')}\n\n';
                           final ok = await confirmDialog(
                             context,
                             title: 'تسليم الإدارة لهذا الجهاز',
-                            message:
+                            message: '$warnBlock'
                                 'سيتم نقل ملكية المجموعة إلى "$targetName".\n'
                                 'سيصبح هو المدير الوحيد، وستصبح أنت عضوًا عاديًا بدور "عرض فقط" (يمكنك اختيار دور مختلف من القائمة لاحقاً).\n\n'
                                 'لا يمكن التراجع عن هذا إلا إذا قام المالك الجديد بتسليمك الإدارة مرة أخرى.\n\n'
