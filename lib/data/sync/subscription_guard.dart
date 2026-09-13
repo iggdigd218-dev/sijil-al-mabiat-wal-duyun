@@ -281,9 +281,16 @@ class SubscriptionGuard {
   }) async {
     final devId = await ensureDeviceId(repo);
     final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
-    final fp = fingerprintHash(raw);
+    final hwFp = fingerprintHash(raw);
+    // (معمارية حساب Google) الترخيص والفترة التجريبية يتبعان الحساب إن
+    // سجّل المستخدم دخوله — فيبقيان معه عند تغيير الهاتف. بلا حساب:
+    // بصمة العتاد كما كان (لا كسر للمستخدمين القائمين).
+    final acctUid =
+        ((await repo.settings())['account.uid'] ?? '').trim();
+    final fp = acctUid.isEmpty ? hwFp : fingerprintHash('uid:$acctUid');
     final wsSub = '${_wsRoot(backendUrl, workspaceId)}/subscription.json';
     final trialIdx = '${_trialsRoot(backendUrl)}/$fp.json';
+    final hwTrialIdx = '${_trialsRoot(backendUrl)}/$hwFp.json';
     // (الخطط المزدوجة) plan_type يُستنتج تلقائياً: العمل المنفرد = فردي؛
     // مجموعة قائمة (host/member) = مؤسسة بمقاعدها الافتراضية.
     final planType = await _detectPlanType(repo);
@@ -326,8 +333,13 @@ class SubscriptionGuard {
       }
     }
 
-    // (2) فهرس البصمة العالمي: تجربة سابقة لنفس العتاد = استئناف لا تصفير.
-    final prior = await _readJson(trialIdx);
+    // (2) فهرس البصمة العالمي: تجربة سابقة لنفس الهوية = استئناف لا تصفير.
+    //     مع حساب Google: نفحص فهرس الحساب أولاً، ثم فهرس العتاد —
+    //     تسجيل الدخول لا يصفّر تجربة بدأت قبل الربط على نفس الجهاز.
+    var prior = await _readJson(trialIdx);
+    if (prior == null && fp != hwFp) {
+      prior = await _readJson(hwTrialIdx);
+    }
     if (prior != null && (prior['expires_at'] is num) &&
         (prior['expires_at'] as num) > 0) {
       final resumed = {

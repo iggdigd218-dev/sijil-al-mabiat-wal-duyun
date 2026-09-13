@@ -32,9 +32,12 @@ class DeviceRegistryRecord {
 class DeviceRegistry {
   DeviceRegistry._();
 
+  // ملاحظة قواعد الأمان: الجذر /device_index محجوب كتابةً في قواعد
+  // القاعدة الحالية، بينما /workspaces/** مفتوح — لذا يسكن الفهرس تحت
+  // عقدة خدمية داخل workspaces (ليست مساحة عمل حقيقية).
   static String _indexPath(String base, String fp) =>
-      '${base.replaceAll(RegExp(r'/+$'), '')}/device_index/'
-      '${Uri.encodeComponent(fp)}.json';
+      '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/_registry/'
+      'device_index/${Uri.encodeComponent(fp)}.json';
 
   /// بصمة العتاد المجزأة لهذا الجهاز (مفتاح الفهرس الثابت).
   static Future<String> fingerprintKey(Repo repo) async {

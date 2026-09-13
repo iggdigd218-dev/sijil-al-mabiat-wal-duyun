@@ -72,7 +72,7 @@ void main() {
         () => DeviceRegistry.upsertBinding(repo, backendUrl: url),
         () => fakeCloud(store));
     final fp = await DeviceRegistry.fingerprintKey(repo);
-    final rec = store['/device_index/$fp.json'] as Map?;
+    final rec = store['/workspaces/_registry/device_index/$fp.json'] as Map?;
     expect(rec, isNotNull);
     expect(rec!['workspaceId'], repo.requireWorkspaceId);
     expect(rec['role'], 'owner');
@@ -81,7 +81,7 @@ void main() {
   test('REG-02 سجل owner قائم لا يُخفَّض لمساحة أخرى بلا force', () async {
     final fp = await DeviceRegistry.fingerprintKey(repo);
     final store = <String, Object?>{
-      '/device_index/$fp.json': {
+      '/workspaces/_registry/device_index/$fp.json': {
         'workspaceId': 'WS-OLDFIRM1',
         'role': 'owner',
         'device_id': 'OLD-DEV',
@@ -91,21 +91,21 @@ void main() {
     await http.runWithClient(
         () => DeviceRegistry.upsertBinding(repo, backendUrl: url),
         () => fakeCloud(store));
-    var rec = store['/device_index/$fp.json'] as Map;
+    var rec = store['/workspaces/_registry/device_index/$fp.json'] as Map;
     expect(rec['workspaceId'], 'WS-OLDFIRM1');
     // بـ force (تنازل صريح): يُحدَّث.
     await http.runWithClient(
         () => DeviceRegistry.upsertBinding(repo,
             backendUrl: url, force: true),
         () => fakeCloud(store));
-    rec = store['/device_index/$fp.json'] as Map;
+    rec = store['/workspaces/_registry/device_index/$fp.json'] as Map;
     expect(rec['workspaceId'], repo.requireWorkspaceId);
   });
 
   test('REG-03 مدير مؤسسة أخرى لا يُسجَّل عضواً في مجموعة غريبة', () async {
     final fp = await DeviceRegistry.fingerprintKey(repo);
     final store = <String, Object?>{
-      '/device_index/$fp.json': {
+      '/workspaces/_registry/device_index/$fp.json': {
         'workspaceId': 'WS-OLDFIRM1',
         'role': 'owner',
         'device_id': 'OLD-DEV',
@@ -115,7 +115,7 @@ void main() {
         () => DeviceRegistry.bindAsMember(repo,
             backendUrl: url, workspaceId: 'WS-OTHERGRP'),
         () => fakeCloud(store));
-    final rec = store['/device_index/$fp.json'] as Map;
+    final rec = store['/workspaces/_registry/device_index/$fp.json'] as Map;
     expect(rec['role'], 'owner', reason: 'حق المدير في مؤسسته محفوظ');
     expect(rec['workspaceId'], 'WS-OLDFIRM1');
   });
@@ -149,7 +149,7 @@ void main() {
       },
     };
     final store = <String, Object?>{
-      '/device_index/$fp.json': {
+      '/workspaces/_registry/device_index/$fp.json': {
         'workspaceId': oldWs,
         'role': 'owner',
         'device_id': 'OLD-DEV',

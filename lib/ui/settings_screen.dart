@@ -19,6 +19,7 @@ import '../data/sync/cloud_join.dart';
 import 'splash.dart' show SplashScreen;
 import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
+import 'account_section.dart';
 import 'appearance_screen.dart';
 import 'cloud_sync_section.dart';
 import 'join_approval_flow.dart' show startJoinApprovalFlow;
@@ -877,6 +878,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                       ),
                     ],
+                  ),
+                ],
+                // (حساب Google) هوية المؤسسة الدائمة — للمدير/المستقل فقط.
+                if (wsOwner || wsMode == 'standalone') ...[
+                  const SizedBox(height: 18),
+                  const _Collapsible(
+                    title: 'حساب المؤسسة (Google)',
+                    icon: Icons.account_circle_outlined,
+                    color: Color(0xFF059669),
+                    children: [AccountSection()],
                   ),
                 ],
                 // (الاشتراك) تفاصيل الاشتراك: للمدير فقط — حالة الترخيص

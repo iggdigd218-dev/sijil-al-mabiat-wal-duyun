@@ -12,6 +12,9 @@ import '../core/theme.dart';
 import '../core/cloud_config.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
+import '../data/sync/account_workspace.dart';
+import '../data/sync/firebase_auth_service.dart';
+import '../data/sync/google_auth_service.dart';
 import '../data/sync/workspace_recovery.dart';
 import 'group_management_screen.dart';
 import 'home_shell.dart';
@@ -105,6 +108,81 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
+  /// (حساب Google) تسجيل الدخول من شاشة الترحيب: الهوية الدائمة للمؤسسة.
+  ///  - حساب معروف سابقاً؟ تُستعاد مؤسسته WS-{uid} كاملة بالبيانات
+  ///    وصلاحية المالك فوراً (جهاز جديد/بعد مسح البيانات).
+  ///  - حساب جديد؟ تُربط مساحته الحالية بـ WS-{uid} وتُؤمَّن سحابياً.
+  Future<void> _signInWithGoogle() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Sfx.click();
+    try {
+      final repo = ref.read(repoProvider);
+      final db = await repo.database;
+      final auth = GoogleAuthService(db);
+      final r = await auth.signIn();
+      final gu = r.user;
+      if (gu == null) {
+        Sfx.error();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(r.error ?? 'تعذّر تسجيل الدخول')));
+        }
+        return;
+      }
+      // تبادل idToken مع Firebase → uid الرسمي (REST، بلا SDK إضافي).
+      FirebaseAccount? account;
+      final tok = gu.idToken ?? '';
+      if (tok.isNotEmpty) {
+        account = await FirebaseAuthRest.signInWithGoogleIdToken(tok);
+      }
+      // بلا مفاتيح Firebase (بناء غير مهيأ): نستخدم Google sub كهوية —
+      // ثابت لكل حساب أيضاً، فلا يُحرم المستخدم من الميزة.
+      account ??= FirebaseAccount(
+        uid: gu.id,
+        email: gu.email,
+        displayName: gu.displayName ?? '',
+      );
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      final outcome = await AccountWorkspace.adoptOrRecover(repo,
+          backendUrl: url, account: account);
+      if (!mounted) return;
+      switch (outcome) {
+        case AccountLinkOutcome.recovered:
+          Sfx.pair();
+          await repo.setSetting(kOnboardingDoneKey, '1');
+          bump(ref);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content:
+                  Text('✅ تم استرجاع مؤسستك وبياناتك كاملة — أهلاً بعودتك')));
+          Navigator.of(context).pushReplacement(MaterialPageRoute(
+              builder: (_) => const LockGate(child: HomeShell())));
+          return;
+        case AccountLinkOutcome.migrated:
+          Sfx.success();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  '✅ تم ربط مؤسستك بحسابك — بياناتك ستبقى معك على أي جهاز')));
+          // يُكمل المستخدم اختيار النمط عادياً — الربط تم في الخلفية.
+          return;
+        case AccountLinkOutcome.memberUntouched:
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('هذا الجهاز عضو في مجموعة — لا حاجة للربط هنا')));
+          return;
+        case AccountLinkOutcome.failed:
+          Sfx.error();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content:
+                  Text('تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة')));
+          return;
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// (هاتف بديل) استرداد يدوي: المدير يُدخل رمز مساحته القديمة
   /// (WS-XXXXXXXX) فتُسحب نسخة مؤسسته الصامتة وتُستعاد كاملة،
   /// ويُسجَّل هذا الهاتف مالكاً لها في فهرس البصمات.
@@ -147,7 +225,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       ),
     );
     if (ok != true || !mounted) return;
-    final wsId = wsCtrl.text.trim().toUpperCase();
+    final raw = wsCtrl.text.trim();
+    // رموز WS- تُوحَّد كبيرة؛ أي معرف آخر (قديم مثل default) يُترك كما هو.
+    final wsId =
+        raw.toUpperCase().startsWith('WS-') ? raw.toUpperCase() : raw;
     if (wsId.isEmpty) return;
     setState(() => _busy = true);
     try {
@@ -231,13 +312,37 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   const SizedBox(height: 14),
                   _networkCard(),
                 ],
+                // ---------- تسجيل الدخول بحساب Google (الهوية الدائمة) ----------
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _signInWithGoogle,
+                    icon: const Icon(Icons.account_circle_outlined, size: 22),
+                    label: const Text('تسجيل الدخول باستخدام Google'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'استخدمت التطبيق من قبل؟ سجّل الدخول بنفس حسابك '
+                  'وستعود مؤسستك وبياناتك كاملة تلقائياً.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.text2Of(context),
+                    height: 1.5,
+                  ),
+                ),
                 // ---------- استعادة مؤسسة سابقة (هاتف بديل) ----------
-                const SizedBox(height: 14),
+                const SizedBox(height: 8),
                 Center(
                   child: TextButton.icon(
                     onPressed: _busy ? null : _restorePrevious,
                     icon: const Icon(Icons.restore_rounded, size: 20),
-                    label: const Text('استعادة مؤسسة سابقة'),
+                    label: const Text('استعادة مؤسسة سابقة برمز المساحة'),
                   ),
                 ),
                 // ---------- الإعداد المصغّر ----------

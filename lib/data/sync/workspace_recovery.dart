@@ -80,7 +80,7 @@ class WorkspaceRecovery {
     final db = await repo.database;
     final current = repo.requireWorkspaceId;
     if (current != workspaceId) {
-      await _swapWorkspaceId(db, from: current, to: workspaceId);
+      await swapWorkspaceId(db, from: current, to: workspaceId);
       await repo.setSetting('sync.workspaceId', workspaceId);
       repo.debugSetWorkspaceId(workspaceId);
     }
@@ -104,7 +104,7 @@ class WorkspaceRecovery {
     final current = repo.requireWorkspaceId;
     // 1) ترحيل المعرف المحلي إلى المساحة المسجلة.
     if (current != targetWs) {
-      await _swapWorkspaceId(db, from: current, to: targetWs);
+      await swapWorkspaceId(db, from: current, to: targetWs);
       await repo.setSetting('sync.workspaceId', targetWs);
       repo.debugSetWorkspaceId(targetWs);
     }
@@ -135,7 +135,7 @@ class WorkspaceRecovery {
   }
 
   /// تبديل معرف المساحة عبر كل الجداول (نفس منطق ترحيل default الآمن).
-  static Future<void> _swapWorkspaceId(Database db,
+  static Future<void> swapWorkspaceId(Database db,
       {required String from, required String to}) async {
     await db.transaction((txn) async {
       final old = await txn

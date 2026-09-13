@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/auth_config.dart';
 import '../../core/token_cipher.dart';
 
 class GoogleUser {
@@ -46,9 +47,14 @@ class GoogleAuthService {
   GoogleSignIn? _ensureSignIn() {
     if (_googleSignIn != null) return _googleSignIn;
     try {
-      // لا نضع serverClientId هنا — هذا نسجّل دخول OpenID فقط.
-      // serverClientId يُحتاج فقط لتبادل auth code مع backend في المراحل اللاحقة.
-      _googleSignIn = GoogleSignIn(scopes: _scopes);
+      // serverClientId (عميل Web من Firebase) ضروري كي يُصدر أندرويد
+      // idToken صالحاً لتبادله مع Firebase (accounts:signInWithIdp) —
+      // بدونه يعود idToken فارغاً على بعض الأجهزة.
+      _googleSignIn = GoogleSignIn(
+        scopes: _scopes,
+        serverClientId:
+            kGoogleServerClientId.isEmpty ? null : kGoogleServerClientId,
+      );
     } catch (_) {
       _googleSignIn = null;
     }
