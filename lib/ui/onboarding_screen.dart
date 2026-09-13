@@ -146,15 +146,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       );
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      final outcome = await AccountWorkspace.adoptOrRecover(repo,
+      // (استعادة سلوك 3.55) تسجيل الدخول يثبّت الجلسة ويربط الحساب فقط —
+      // لا يعيد تسمية مساحة العمل ولا يلمس البيانات المحلية، فلا ينكسر
+      // الربط أبداً بتعذّر الشبكة أو فشل تبادل الرمز.
+      final outcome = await AccountWorkspace.linkAccountOnly(repo,
           backendUrl: url, account: account);
       if (!mounted) return;
-      // (استرجاع فوري) بعد ربط/استرداد ناجح: سجل الأعضاء + سجل العمليات.
-      if (outcome == AccountLinkOutcome.recovered ||
-          outcome == AccountLinkOutcome.migrated) {
-        await _recoverAfterLink(ref, repo, url, account);
-        if (!mounted) return;
-      }
       switch (outcome) {
         case AccountLinkOutcome.recovered:
           Sfx.pair();
@@ -171,7 +168,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           Sfx.success();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
-                  '✅ تم ربط مؤسستك بحسابك — بياناتك ستبقى معك على أي جهاز')));
+                  '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي')));
           // يُكمل المستخدم اختيار النمط عادياً — الربط تم في الخلفية.
           return;
         case AccountLinkOutcome.memberUntouched:

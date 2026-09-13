@@ -72,23 +72,19 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
       );
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      final outcome = await AccountWorkspace.adoptOrRecover(repo,
+      // (استعادة سلوك 3.55) تسجيل الدخول يثبّت الجلسة ويربط الحساب فقط —
+      // لا يعيد تسمية مساحة العمل ولا يلمس البيانات المحلية، فلا ينكسر
+      // الربط أبداً بتعذّر الشبكة أو فشل تبادل الرمز.
+      final outcome = await AccountWorkspace.linkAccountOnly(repo,
           backendUrl: url, account: account);
       if (!mounted) return;
-      // (استرجاع فوري) بعد ربط/استرداد ناجح: سجل الأعضاء + سجل العمليات.
-      if (outcome == AccountLinkOutcome.recovered ||
-          outcome == AccountLinkOutcome.migrated) {
-        await _recoverAfterLink(ref, repo, url, account);
-        // فجوة async جديدة — لا استخدام للسياق قبل التأكد من البقاء.
-        if (!mounted) return;
-      }
       switch (outcome) {
         case AccountLinkOutcome.recovered:
         case AccountLinkOutcome.migrated:
           Sfx.success();
           bump(ref);
           showSnack(context,
-              '✅ تم ربط مؤسستك بحسابك — بياناتك ستعود معك على أي جهاز');
+              '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي');
           break;
         case AccountLinkOutcome.memberUntouched:
           showSnack(context, 'جهاز العضو يتبع مجموعة مديره — لا حاجة للربط');

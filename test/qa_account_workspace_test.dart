@@ -4,7 +4,8 @@
 //  - أول دخول: المساحة الحالية تُرحَّل إلى WS-{uid} ويُسجَّل الربط سحابياً.
 //  - حساب معروف (فهرس + نسخة): تُستعاد مساحته كاملة بالبيانات (recovered).
 //  - جهاز عضو: لا يُمَس (memberUntouched).
-//  - ensureWorkspace لمستخدم مسجل: مساحة جديدة = WS-{uid} لا عشوائية.
+//  - (استعادة 3.55) ensureWorkspace: معرّف عشوائي WS-XXXXXXXX دائماً —
+//    مساحة العمل لا تُشتق من الحساب، وتسجيل الدخول لا يغيّرها أبداً.
 //  - الترخيص يتبع الحساب: فهرس التجربة يُقرأ ببصمة uid لا بصمة العتاد.
 import 'dart:convert';
 import 'dart:io';
@@ -145,7 +146,8 @@ void main() {
     expect(store, isEmpty, reason: 'لا كتابات سحابية لجهاز العضو');
   });
 
-  test('ACCT-04 ensureWorkspace: مستخدم مسجل يحصل على WS-{uid}', () async {
+  test('ACCT-04 (استعادة 3.55) ensureWorkspace: معرّف عشوائي دائماً — '
+      'لا علاقة له بحساب Google', () async {
     // جلسة محفوظة + قاعدة جديدة بلا صف workspaces.
     final tmp2 = await Directory.systemTemp.createTemp('nexora_account2_');
     final db2 = await databaseFactory.openDatabase('${tmp2.path}/w.db',
@@ -156,7 +158,12 @@ void main() {
         conflictAlgorithm: ConflictAlgorithm.replace);
     await db2.delete('workspaces');
     final ws = await ensureWorkspace(db2);
-    expect(ws, 'WS-${account.uid}');
+    // (استعادة سلوك 3.55) هوية المساحة محلية وعشوائية — تسجيل الدخول لا
+    // يعيد تسميتها أبداً، فلا ينكسر الربط بتعذّر الشبكة أو الرمز.
+    expect(ws, startsWith('WS-'));
+    expect(ws.length, 11); // 'WS-' + 8 خانات
+    expect(ws, isNot('WS-${account.uid}'),
+        reason: 'معرف المساحة مستقل عن الحساب تماماً (سلوك 3.55)');
     await db2.close();
     await tmp2.delete(recursive: true);
   });

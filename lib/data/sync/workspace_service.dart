@@ -54,21 +54,11 @@ Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
     return id;
   }
   final now = DateTime.now().toIso8601String();
-  // (معمارية حساب Google) جلسة محفوظة؟ المساحة القياسية للحساب WS-{uid}
-  // بدل معرف عشوائي — نفس الحساب = نفس المؤسسة على أي جهاز.
-  var accountWs = '';
-  if (!debugForceLegacyWorkspaceId) {
-    try {
-      final st = await db.query('settings',
-          where: 'key = ?', whereArgs: ['account.uid'], limit: 1);
-      final uid =
-          st.isNotEmpty ? '${st.first['value'] ?? ''}'.trim() : '';
-      if (uid.isNotEmpty) accountWs = 'WS-$uid';
-    } catch (_) {}
-  }
-  final id = debugForceLegacyWorkspaceId
-      ? defaultWorkspaceId
-      : (accountWs.isNotEmpty ? accountWs : generateWorkspaceId());
+  // (استعادة سلوك 3.55) معرّف المساحة عشوائي لكل تثبيت (WS-XXXXXXXX) ولا
+  // علاقة له بحساب Google إطلاقاً: الربط يظل يعمل بدقة كاملة بلا إنترنت
+  // ودون أي تبادل رموز — هذا بالضبط ما كان يعمل في 3.55.
+  final id =
+      debugForceLegacyWorkspaceId ? defaultWorkspaceId : generateWorkspaceId();
   await db.insert('workspaces', {
     'id': id,
     'name': 'متجري',

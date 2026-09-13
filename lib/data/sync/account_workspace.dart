@@ -170,6 +170,39 @@ class AccountWorkspace {
     }
   }
 
+  /// (استعادة سلوك 3.55) ربط الحساب **بلا أي مساس بمعرّف المساحة**.
+  ///
+  /// في 3.55 كان تسجيل الدخول يثبّت الجلسة فقط (Google Drive + الترخيص) ولا
+  /// يعيد تسمية مساحة العمل أبداً — ولهذا ظلّ الربط يعمل بدقة حتى بلا إنترنت.
+  /// هذا المسار يستعيد ذلك السلوك حرفياً:
+  ///   • يثبّت جلسة الحساب محلياً (الترخيص والنسخ على Drive).
+  ///   • يسجّل الفهرس السحابي uid → المساحة الحالية (أفضل جهد، للاسترداد
+  ///     اليدوي لاحقاً) — لا يفشل الربط إن تعذّر.
+  ///   • يترك معرّف المساحة المحلي (WS-XXXXXXXX) كما هو تماماً.
+  static Future<AccountLinkOutcome> linkAccountOnly(
+    Repo repo, {
+    required String backendUrl,
+    required FirebaseAccount account,
+  }) async {
+    if (account.uid.isEmpty) return AccountLinkOutcome.failed;
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode == 'member') return AccountLinkOutcome.memberUntouched;
+      // (Offline-First) الجلسة تُحفظ أولاً — نجاح الربط لا يعتمد على الشبكة.
+      await FirebaseAuthRest.saveSession(repo, account);
+      if (backendUrl.isNotEmpty) {
+        try {
+          await _afterLink(repo, backendUrl, account, repo.requireWorkspaceId);
+        } catch (_) {
+          // الفهرس السحابي اختياري: تعذّره لا يُفشل تسجيل الدخول.
+        }
+      }
+      return AccountLinkOutcome.migrated;
+    } catch (_) {
+      return AccountLinkOutcome.failed;
+    }
+  }
+
   /// تبديل معرف المساحة المحلية (كل الجداول) إلى المعرف المستهدف.
   static Future<void> _swapTo(Repo repo, String target) async {
     final db = await repo.database;
