@@ -165,21 +165,26 @@ void main() {
     expect(fired, isTrue);
   });
 
-  test('QA-B53-04 deleted node: evicts ONLY after previously seen in roster',
-      () async {
+  test(
+      'QA-B53-04 deleted node NEVER evicts — re-registers self in roster '
+      '(الطرد الضمني مُلغى نهائياً بقرار المستخدم)', () async {
     final cloud = FakeCloudStore(); // لا عقدة → null.
     final t = makeTransport();
     var fired = false;
     t.onEvicted = () => fired = true;
-    // لم نرَ أنفسنا بعد → لا طرد (حارس الإيجابيات الكاذبة).
+    // لم نرَ أنفسنا بعد → لا طرد.
     await http.runWithClient(
         () => t.maybeCheckSelfEviction(force: true), cloud.client);
     expect(fired, isFalse);
-    // الآن سُجّلنا ثم حُذفنا.
+    // حتى بعد أن سُجّلنا ثم حُذفت عقدتنا: لا طرد ضمني أبداً —
+    // الجهاز يعيد تسجيل نفسه في السجل بدل الانتحار.
     await repo.setSetting('sync.rosterSeenSelf', '1');
     await http.runWithClient(
         () => t.maybeCheckSelfEviction(force: true), cloud.client);
-    expect(fired, isTrue);
+    expect(fired, isFalse,
+        reason: 'عقدة محذوفة ≠ طرد — الطرد بشاهدة صريحة أو وسم يدوي فقط');
+    expect(cloud.store[rosterKey], isNotNull,
+        reason: 'الجهاز أعاد تسجيل نفسه في السجل');
   });
 
   test('QA-B53-05 owner/standalone never self-evict', () async {

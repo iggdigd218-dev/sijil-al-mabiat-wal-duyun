@@ -242,8 +242,12 @@ class CloudFirebaseTransport implements SyncTransport {
       if (res.statusCode != 200) return; // خطأ خادم/صلاحية — لا حكم.
       final body = utf8.decode(res.bodyBytes).trim();
       if (body.isEmpty || body == 'null') {
-        // العقدة محذوفة كلياً — طرد إن كنا مسجلين سابقاً.
-        if ((st['sync.rosterSeenSelf'] ?? '') == '1') _fireEvicted();
+        // ⛔️ (قرار المستخدم النهائي) عقدة محذوفة ≠ طرد. الاستدلال الضمني
+        // «حُذفت عقدتي إذن طُردت» طرد أعضاء شرعيين عند أي تنظيف/استرداد
+        // للسجل السحابي. الطرد يقع حصراً بشاهدة صريحة في /evictions أو
+        // بوسم revoked/expelled يكتبه المدير بيده — لا حكم هنا إطلاقاً؛
+        // نعيد تسجيل أنفسنا في السجل بدل الانتحار.
+        await _reRegisterSelfInRoster(devId);
         return;
       }
       final m = jsonDecode(body);
@@ -267,6 +271,43 @@ class CloudFirebaseTransport implements SyncTransport {
     try {
       onEvicted?.call();
     } catch (_) {}
+  }
+
+  /// (إلغاء الطرد الضمني) عقدة roster الخاصة بنا اختفت دون شاهدة طرد
+  /// صريحة؟ نعيد كتابتها من بيانات جهازنا المحلي — عضوية العضو الشرعي
+  /// لا تسقط بحذف/تنظيف عرضي للسجل السحابي.
+  Future<void> _reRegisterSelfInRoster(String devId) async {
+    try {
+      final db = await _db;
+      final rows = await db.query('devices',
+          where: 'id = ?', whereArgs: [devId], limit: 1);
+      if (rows.isEmpty) return;
+      final d = rows.first;
+      final tok = await _idToken();
+      final uri = Uri.parse(
+              '$_root/roster/${Uri.encodeComponent(devId)}.json')
+          .replace(queryParameters: {if (tok != null) 'auth': tok});
+      await http
+          .put(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'id': devId,
+              'name': '${d['name'] ?? ''}',
+              'platform': '${d['platform'] ?? ''}',
+              'is_owner': d['is_owner'] ?? 0,
+              'is_paired': d['is_paired'] ?? 1,
+              'revoked_at': '',
+              'expelled_at': '',
+              'user_id': d['user_id'],
+              'created_at': '${d['created_at'] ?? ''}',
+              'updated_at': DateTime.now().toIso8601String(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      // أفضل جهد — الدورة القادمة تعيد المحاولة.
+    }
   }
 
   Future<int> pull({ConflictResolver? resolver}) async {

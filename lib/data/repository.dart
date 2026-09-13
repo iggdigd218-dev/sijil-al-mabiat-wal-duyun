@@ -1819,41 +1819,12 @@ class Repo {
   // (دفعة 58) حُذفت createPairingToken (اقتران LAN عبر QR بعنوان IP) —
   // الاقتران أصبح سحابياً حصرياً عبر CloudJoin.createInvite (رمز/QR سحابي).
 
-  /// يُنفَّذ دوريًا على المضيف: أي جهاز لم يظهر لمدة 30 يومًا يُطرَد تلقائيًا.
-  /// يعيد قائمة الأجهزة المطرودة حديثًا (للعرض في الإشعارات).
+  /// ⛔️ (مُلغى نهائياً بقرار المستخدم) كان يطرد تلقائياً أي جهاز لم يظهر
+  /// 30 يوماً — تسبب بطرد أجهزة شرعية «غريبة» عن السجل المحلي.
+  /// القاعدة النهائية: لا طرد إلا يدوياً وبقرار صريح من المدير
+  /// (expelDevice). الدالة تبقى للتوافق وتعيد قائمة فارغة دائماً.
   Future<List<String>> autoExpireStaleDevices() async {
-    final db = await _db;
-    if (!(await isWorkspaceOwner())) return const [];
-    final cutoff =
-        DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
-    final now = DateTime.now().toIso8601String();
-    // طرد الأجهزة التي لم تُرَ منذ 30 يوم ولم تُطرَد/تُلغَ سابقاً.
-    final stale = await db.query(
-      'devices',
-      where: "is_paired = 1 AND COALESCE(expelled_at,'') = '' "
-          "AND COALESCE(revoked_at,'') = '' "
-          "AND COALESCE(last_seen_at,'') <> '' AND last_seen_at < ? "
-          "AND is_owner = 0",
-      whereArgs: [cutoff],
-    );
-    final ids = stale.map((r) => r['id'] as String).toList();
-    for (final id in ids) {
-      await db.update(
-        'devices',
-        {
-          'revoked_at': now,
-          'expelled_at': now,
-          'is_paired': 0,
-          'auth_secret': '',
-          'pair_token': '',
-          'pair_token_exp': '',
-          'updated_at': now,
-        },
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
-    return ids;
+    return const [];
   }
 
   /// المدير يطرد جهازًا من المجموعة يدويًا.
