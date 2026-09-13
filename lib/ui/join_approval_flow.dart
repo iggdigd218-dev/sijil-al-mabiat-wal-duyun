@@ -47,6 +47,17 @@ class JoinApprovalScreen extends ConsumerStatefulWidget {
 
 enum _JoinStep { naming, method, waiting, done, rejected }
 
+/// (منع الاستنزاف) أقصى عدد لمحاولات الترطيب التلقائي قبل إيقاف كل شيء
+/// وتسليم القرار للمستخدم عبر زر «إعادة المحاولة».
+const int _maxHydrateRetries = 3;
+
+/// (منع الاستنزاف) التباعد التصاعدي بين المحاولات: 15s ثم 30s ثم 60s.
+const List<Duration> _backoffSteps = <Duration>[
+  Duration(seconds: 15),
+  Duration(seconds: 30),
+  Duration(seconds: 60),
+];
+
 class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   _JoinStep _step = _JoinStep.naming;
   final _nameCtrl = TextEditingController();
@@ -57,18 +68,32 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   Timer? _pollTimer;
   // (دفعة 57 — تكملة) قناة SSE على عقدة طلبنا: قرار المدير يصل لحظياً.
   JoinRequestWatcher? _decisionWatcher;
+  /// (منع الاستنزاف) قفل يمنع فتح قناة SSE ثانية أثناء إنشاء الأولى.
+  bool _sseStarting = false;
+  /// عدد محاولات الترطيب الفاشلة المتتالية.
+  int _hydrateAttempts = 0;
+  /// استُنفدت المحاولات التلقائية — بانتظار تدخّل المستخدم.
+  bool _gaveUp = false;
   String _joinUrl = '';
   String _joinWs = 'default';
   String _joinToken = '';
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
-    _decisionWatcher?.stop();
+    _stopDrain();
     _nameCtrl.dispose();
     _urlCtrl.dispose();
     _pinCtrl.dispose();
     super.dispose();
+  }
+
+  /// (منع الاستنزاف) يوقف كل مصادر الاستهلاك دفعة واحدة: مؤقت الاستطلاع
+  /// وقناة SSE — يُستدعى عند التوقف والرفض والفشل النهائي والتدمير.
+  void _stopDrain() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _decisionWatcher?.stop();
+    _decisionWatcher = null;
   }
 
   // ---------- خطوة 2أ: مسح QR ----------
@@ -150,6 +175,9 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       setState(() {
         _step = _JoinStep.waiting;
         _busy = false;
+        // (منع الاستنزاف) عدّاد نظيف مع كل طلب انضمام جديد.
+        _hydrateAttempts = 0;
+        _gaveUp = false;
       });
       _startPolling();
     } catch (e) {
@@ -164,22 +192,34 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     _pollTimer?.cancel();
     // (دفعة 57 — تكملة) SSE أولاً: أي كتابة على عقدة طلبنا (موافقة/رفض
     // المدير) تُفحص فوراً بصفر كمون؛ الاستطلاع يبقى شبكة أمان أبطأ
-    // (15 ثانية بدل 4) لحالات انقطاع القناة فقط.
+    // لحالات انقطاع القناة فقط.
     _startDecisionSse();
-    _pollTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _pollOnce(),
-    );
+    _schedulePoll(const Duration(seconds: 15));
     _pollOnce();
   }
 
+  /// (منع الاستنزاف) يجدول الاستطلاع القادم بتباعد تصاعدي بعد إلغاء أي
+  /// مؤقت سابق — فلا تتكدس المؤقتات فوق بعضها بعد كل فشل.
+  void _schedulePoll([Duration? delay]) {
+    _pollTimer?.cancel();
+    _pollTimer = Timer(delay ?? _nextPollDelay(), _pollOnce);
+  }
+
+  /// التباعد الحالي بحسب المحاولات الفاشلة: 15s → 30s → 60s.
+  Duration _nextPollDelay() =>
+      _backoffSteps[_hydrateAttempts.clamp(0, _backoffSteps.length - 1)];
+
   Future<void> _startDecisionSse() async {
-    if (_decisionWatcher != null) return;
+    // (منع الاستنزاف) لا قناة SSE ثانية أبداً: القفل `_sseStarting` يحمي
+    // فجوة الـ await بين الفحص والإسناد، فلا تتكرر القناة ولا تُستنزف
+    // الشبكة عند كل دورة فشل.
+    if (_decisionWatcher != null || _sseStarting) return;
+    _sseStarting = true;
     try {
       final repo = ref.read(repoProvider);
       final ourId = await ensureDeviceId(repo);
       if (!mounted || ourId.isEmpty) return;
-      _decisionWatcher = JoinRequestWatcher(
+      final watcher = JoinRequestWatcher(
         backendUrl: _joinUrl,
         workspaceId: _joinWs,
         nodePath: 'joinRequests/${Uri.encodeComponent(ourId)}',
@@ -187,7 +227,12 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
           if (mounted) _pollOnce();
         },
       )..start();
-    } catch (_) {}
+      _decisionWatcher = watcher;
+    } catch (_) {
+      // انقطاع القناة ليس قاتلاً — الاستطلاع يبقى شبكة الأمان.
+    } finally {
+      _sseStarting = false;
+    }
   }
 
   Future<void> _pollOnce() async {
@@ -203,15 +248,12 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       );
       final status = st['status'];
       if (status == 'approved') {
-        _pollTimer?.cancel();
-        _decisionWatcher?.stop();
-        _decisionWatcher = null;
+        // (منع الاستنزاف) القرار وصل: نوقف المؤقت والقناة قبل الترطيب.
+        _stopDrain();
         _joinToken = st['token'] ?? '';
         await _hydrate();
       } else if (status == 'rejected') {
-        _pollTimer?.cancel();
-        _decisionWatcher?.stop();
-        _decisionWatcher = null;
+        _stopDrain();
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
       }
@@ -247,15 +289,47 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         (_) => false,
       );
     } catch (e) {
-      if (mounted) {
+      if (!mounted) return;
+      _hydrateAttempts++;
+      if (_hydrateAttempts >= _maxHydrateRetries) {
+        // (منع الاستنزاف) استُنفدت المحاولات: إيقاف فوري للمؤقت وقناة SSE،
+        // ورسالة واضحة مع زر يدوي بدل ترك المستخدم معلقاً إلى الأبد.
+        _stopDrain();
+        Sfx.error();
         setState(() {
           _busy = false;
+          _gaveUp = true;
           _step = _JoinStep.waiting;
-          _error = 'تعذّر تنزيل نسخة المجموعة: $e — ستُعاد المحاولة.';
+          _error = 'تعذّر تنزيل نسخة المجموعة بعد $_maxHydrateRetries '
+              'محاولات: $e';
         });
-        _startPolling();
+        return;
       }
+      // تباعد تصاعدي: 15s → 30s → 60s، ثم توقف تام.
+      final delay = _nextPollDelay();
+      setState(() {
+        _busy = false;
+        _step = _JoinStep.waiting;
+        _error = 'تعذّر تنزيل نسخة المجموعة: $e — '
+            'ستُعاد المحاولة خلال ${delay.inSeconds} ثانية '
+            '(المحاولة $_hydrateAttempts من $_maxHydrateRetries).';
+      });
+      _schedulePoll(delay);
     }
+  }
+
+  /// (منع الاستنزاف) إعادة المحاولة يدوياً بعد استنفاد المحاولات
+  /// التلقائية — تُصفّر العدّاد وتستأنف التباعد من 15 ثانية.
+  void _retryNow() {
+    if (_busy) return;
+    Sfx.click();
+    setState(() {
+      _gaveUp = false;
+      _hydrateAttempts = 0;
+      _error = '';
+      _step = _JoinStep.waiting;
+    });
+    _startPolling();
   }
 
   @override
@@ -433,30 +507,65 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   }
 
   // ═══════════ خطوة 3: الانتظار ═══════════
-  Widget _waitingStep() => Column(
+  Widget _waitingStep() {
+    // (منع الاستنزاف) بعد استنفاد المحاولات: لا مؤقت ولا قناة تعمل —
+    // بطاقة خطأ وزر يدوي فقط بدل انتظار لا ينتهي.
+    if (_gaveUp) return _giveUpStep();
+    return Column(
+      children: [
+        const SizedBox(height: 20),
+        SizedBox(
+          width: 64,
+          height: 64,
+          child: CircularProgressIndicator(
+            strokeWidth: 3,
+            color: AppColors.primaryOf(context),
+          ),
+        ),
+        const SizedBox(height: 22),
+        const Text(
+          'بانتظار موافقة المدير…',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'وصل طلبك إلى جهاز المدير. فور القبول سيُهيأ هذا الجهاز '
+          'تلقائياً ببيانات المجموعة — لا تغلق هذه الشاشة.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              fontSize: 12.5, height: 1.7, color: AppColors.text2Of(context)),
+        ),
+      ],
+    );
+  }
+
+  /// (منع الاستنزاف) شاشة التوقف اليدوي بعد استنفاد المحاولات التلقائية:
+  /// كل شيء موقوف (مؤقت + SSE) والقرار للمستخدم.
+  Widget _giveUpStep() => Column(
         children: [
           const SizedBox(height: 20),
-          SizedBox(
-            width: 64,
-            height: 64,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: AppColors.primaryOf(context),
-            ),
-          ),
-          const SizedBox(height: 22),
+          const Icon(Icons.cloud_off_outlined, size: 64, color: Colors.orange),
+          const SizedBox(height: 18),
           const Text(
-            'بانتظار موافقة المدير…',
+            'تعذّر تنزيل نسخة المجموعة',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
           Text(
-            'وصل طلبك إلى جهاز المدير. فور القبول سيُهيأ هذا الجهاز '
-            'تلقائياً ببيانات المجموعة — لا تغلق هذه الشاشة.',
+            'أوقفت المحاولات التلقائية بعد $_maxHydrateRetries محاولات '
+            'حتى لا تُستنزف الشبكة والبطارية. تحقّق من الاتصال ثم أعد '
+            'المحاولة يدوياً — لم يُمسس أي شيء في هذا الجهاز.',
             textAlign: TextAlign.center,
             style: TextStyle(
                 fontSize: 12.5, height: 1.7, color: AppColors.text2Of(context)),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: _busy ? null : _retryNow,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('إعادة المحاولة'),
           ),
         ],
       );

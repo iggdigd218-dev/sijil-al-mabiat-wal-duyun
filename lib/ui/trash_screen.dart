@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/format.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/repository.dart';
 import 'widgets.dart';
 
 /// سلة المهملات — استرجاع أو حذف نهائي لكل ما حُذف (البند ١٦).
@@ -130,12 +131,28 @@ class TrashScreen extends ConsumerWidget {
                               color: AppColors.greenOf(context),
                             ),
                             onPressed: () async {
-                              await ref
-                                  .read(repoProvider)
-                                  .restoreFromTrash(t['id'] as int);
-                              bump(ref);
-                              if (context.mounted) {
-                                showSnack(context, 'تم الاسترجاع ✅');
+                              // (سلامة السلة) لا انهيار للواجهة: أي فشل
+                              // يُترجم إلى رسالة واضحة بدل الشاشة الحمراء.
+                              try {
+                                await ref
+                                    .read(repoProvider)
+                                    .restoreFromTrash(t['id'] as int);
+                                bump(ref);
+                                if (context.mounted) {
+                                  showSnack(context, 'تم الاسترجاع ✅');
+                                }
+                              } on ParentAccountNotFoundException {
+                                bump(ref);
+                                if (context.mounted) {
+                                  showSnack(
+                                    context,
+                                    'تعذر استرجاع العملية لأن الحساب التابع لها محذوف نهائياً',
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  showSnack(context, 'تعذر الاسترجاع: $e');
+                                }
                               }
                             },
                           ),

@@ -34,6 +34,23 @@ class BackupImportException implements Exception {
   String toString() => message;
 }
 
+/// (سلامة السلة) يُرمى عند محاولة استرجاع سجل من سلة المحذوفات بعد أن
+/// حُذف حسابه الأب نهائياً — بدل ترك SQLite يرفض الإدخال باستثناء قيدٍ
+/// أجنبي غير معالَج يظهر كانهيار أحمر في الواجهة.
+class ParentAccountNotFoundException implements Exception {
+  const ParentAccountNotFoundException(this.accountId, this.column);
+
+  /// معرّف الحساب الأب المفقود.
+  final int accountId;
+
+  /// العمود الذي كان يُحيل إليه (`account_id` / `from_id` / `to_id`).
+  final String column;
+
+  @override
+  String toString() =>
+      'الحساب الأب ($column = $accountId) محذوف نهائياً — لا يمكن الاسترجاع.';
+}
+
 /// مستودع البيانات — كل قراءة وكتابة تمرّ من هنا.
 class Repo {
   /// Optional injection keeps multi-device QA databases independent. Production
@@ -2981,6 +2998,44 @@ class Repo {
     return legacy;
   }
 
+  /// الأعمدة التي تُحيل إلى حساب مالي (الأب المرجعي) في الجداول المختلفة.
+  static const _parentAccountColumns = <String>['account_id', 'from_id', 'to_id'];
+
+  /// (سلامة السلة) يتحقق أن كل حساب يُحال إليه في [row] ما زال موجوداً في
+  /// جدول `accounts` قبل إعادة إدخال الصف.
+  ///
+  /// يمنع استرجاع سجل فقد أباه: فالقيود الأجنبية مفعّلة
+  /// (`PRAGMA foreign_keys = ON`)، وأي إدخال بمعرّف حساب معدوم كان يرفعه
+  /// SQLite باستثناء غير معالَج يظهر كانهيار أحمر في الواجهة.
+  Future<void> _ensureParentAccounts(
+    DatabaseExecutor ex,
+    Map<String, Object?> row,
+  ) async {
+    for (final col in _parentAccountColumns) {
+      final v = row[col];
+      if (v == null) continue;
+      final id = v is int ? v : int.tryParse('$v');
+      if (id == null || id <= 0) continue;
+      final found = await ex.query(
+        'accounts',
+        columns: const ['id'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (found.isEmpty) throw ParentAccountNotFoundException(id, col);
+    }
+  }
+
+  /// يفكّ حمولة سلة إلى خريطة صفٍّ واحد (حمولة العمليات مغلّفة بـ transaction).
+  Map<String, Object?>? _trashRowOf(Object? decoded) {
+    if (decoded is! Map) return null;
+    if (decoded['transaction'] is Map) {
+      return Map<String, Object?>.from(decoded['transaction'] as Map);
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
   /// يعيد سجلًا محذوفًا إلى جدوله الأصلي.
   /// يدعم السجلات القديمة (hard delete مع payload محفوظ) والسجلات الجديدة التي تحمل entity_id.
   Future<void> restoreFromTrash(int trashId) async {
@@ -3009,6 +3064,8 @@ class Repo {
         final tx = Map<String, Object?>.from(decoded['transaction'] as Map);
         // وسوم المزامنة الداخلية (مثل __sync_entity) ليست أعمدة حقيقية.
         tx.removeWhere((k, _) => k.startsWith('__'));
+        // (سلامة السلة) لا استرجاع قبل التأكد من وجود الحساب الأب.
+        await _ensureParentAccounts(txn, tx);
         tx['deleted_at'] = '';
         tx['updated_at'] = now;
         await txn.insert(
@@ -3030,6 +3087,11 @@ class Repo {
         final payload = Map<String, Object?>.from(decoded);
         // وسوم المزامنة الداخلية (مثل __sync_entity) ليست أعمدة حقيقية.
         payload.removeWhere((k, _) => k.startsWith('__'));
+        // (سلامة السلة) جدول الحسابات هو الأب نفسه فلا يُتحقق منه؛ أما
+        // العمليات والسندات والأصناف فتُتحقق قبل أي إدخال أو إلغاء حذف.
+        if (store != 'accounts') {
+          await _ensureParentAccounts(txn, payload);
+        }
         // إن كان السجل الأصلي ما زال موجودًا (soft delete)، نُلغِ deleted_at.
         final id = payload['id'];
         final exists = await txn.query(
@@ -3091,10 +3153,65 @@ class Repo {
       };
 
   /// حذف عنصر واحد من السلة نهائيًا.
+  ///
+  /// (تنظيف متتالٍ) إن كان المحذوف **حساباً** تُمسح معه كل حمولات السلة
+  /// التي تُحيل إليه (عمليات/سندات) حتى لا تبقى أزرار «استرجاع» ميتة
+  /// لسجلات فقدت أباها إلى الأبد.
   Future<void> deleteFromTrash(int trashId) async {
     await _ensureCan('delete_tx');
     final db = await _db;
-    await db.delete('trash', where: 'id = ?', whereArgs: [trashId]);
+    final rows =
+        await db.query('trash', where: 'id = ?', whereArgs: [trashId], limit: 1);
+    final store = rows.isEmpty ? '' : '${rows.first['store'] ?? ''}';
+    var accountId = 0;
+    if (store == 'accounts' && rows.isNotEmpty) {
+      Object? decoded;
+      try {
+        decoded = jsonDecode('${rows.first['payload'] ?? ''}');
+      } catch (_) {
+        decoded = null;
+      }
+      final row = _trashRowOf(decoded);
+      final id = row?['id'];
+      accountId = id is int ? id : int.tryParse('$id') ?? 0;
+    }
+    await db.transaction((txn) async {
+      await txn.delete('trash', where: 'id = ?', whereArgs: [trashId]);
+      if (accountId > 0) {
+        await _purgeTrashReferencingAccount(txn, accountId);
+      }
+    });
+  }
+
+  /// (تنظيف متتالٍ) يمسح كل حمولات السلة التي تُحيل إلى [accountId] ويعيد
+  /// عدد الصفوف المُزالة. الحمولات من نوع `accounts` تُترك (ليست أبناءً).
+  Future<int> _purgeTrashReferencingAccount(
+    DatabaseExecutor ex,
+    int accountId,
+  ) async {
+    final rows = await ex.query('trash');
+    var removed = 0;
+    for (final r in rows) {
+      if ('${r['store'] ?? ''}' == 'accounts') continue;
+      Object? decoded;
+      try {
+        decoded = jsonDecode('${r['payload'] ?? ''}');
+      } catch (_) {
+        continue;
+      }
+      final row = _trashRowOf(decoded);
+      if (row == null) continue;
+      for (final col in _parentAccountColumns) {
+        final v = row[col];
+        final id = v is int ? v : int.tryParse('${v ?? ''}') ?? 0;
+        if (id > 0 && id == accountId) {
+          removed +=
+              await ex.delete('trash', where: 'id = ?', whereArgs: [r['id']]);
+          break;
+        }
+      }
+    }
+    return removed;
   }
 
   Future<void> emptyTrash() async {
