@@ -120,6 +120,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
   // يظهر فوق كل شيء لحظة وصول الطلب، لا فقط داخل شاشة إدارة المجموعة.
   JoinRequestWatcher? _globalJoinWatcher;
   bool _joinSheetShowing = false;
+  /// (منع تكرار الحوار) مفاتيح طلبات الانضمام التي عُرض حوارها واكتمل
+  /// اتخاذ قرار فيها خلال هذه الجلسة — فلا يُعاد فتح نفس الحوار لنفس
+  /// الجهاز عند كل نبضة SSE، ويبقى الطلب الجديد (بمفتاح مختلف) ظاهراً.
+  final Set<String> _handledJoinRequests = <String>{};
+
+  /// مفتاح تفرّد الطلب: معرّف الجهاز + وقت تقديمه (يتغيّر مع كل طلب جديد).
+  String _joinRequestKey(Map<String, Object?> r) =>
+      '${r['deviceId'] ?? ''}|${r['requestedAt'] ?? r['created_at'] ?? ''}';
 
   /// (إصلاح تسليم الإدارة) نبضات نشاط المزامنة → تحديث حي لمزودي
   /// الملكية/الدور/الوضع، فتظهر «إدارة المجموعة» وشاشات الأجهزة فوراً
@@ -662,13 +670,22 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final reqs = await CloudJoin.fetchJoinRequests(repo,
           backendUrl: url, workspaceId: ws);
       if (reqs.isEmpty || !mounted || _joinSheetShowing) return;
+      // (منع تكرار الحوار) تجاوز كل طلب سُوّي أمره في هذه الجلسة.
+      final next = reqs.firstWhere(
+        (r) => !_handledJoinRequests.contains(_joinRequestKey(r)),
+        orElse: () => const <String, Object?>{},
+      );
+      if (next.isEmpty) return;
+      final key = _joinRequestKey(next);
       _joinSheetShowing = true;
       try {
         // فوق أي شاشة: نستخدم سياق جذر الملاحة لا سياق الشاشة الحالية.
         final rootCtx =
             Navigator.of(context, rootNavigator: true).context;
-        await showJoinApprovalSheet(rootCtx, ref, reqs.first,
+        await showJoinApprovalSheet(rootCtx, ref, next,
             backendUrl: url);
+        // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب.
+        _handledJoinRequests.add(key);
       } finally {
         _joinSheetShowing = false;
       }

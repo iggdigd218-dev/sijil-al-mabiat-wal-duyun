@@ -254,6 +254,9 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         await _hydrate();
       } else if (status == 'rejected') {
         _stopDrain();
+        // (تنظيف) القرار استُهلك: تُحذف عقدة طلبنا من السحابة بعد رؤية
+        // الرفض فلا تبقى مخلفات في /joinRequests.
+        unawaited(_deleteOwnRequest());
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
       }
@@ -315,6 +318,22 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
             '(المحاولة $_hydrateAttempts من $_maxHydrateRetries).';
       });
       _schedulePoll(delay);
+    }
+  }
+
+  /// (تنظيف) حذف عقدة طلب الانضمام الخاصة بنا بعد استهلاك القرار (رفض).
+  Future<void> _deleteOwnRequest() async {
+    try {
+      final repo = ref.read(repoProvider);
+      final ourId = await ensureDeviceId(repo);
+      if (ourId.isEmpty) return;
+      await CloudJoin.deleteJoinRequest(
+        backendUrl: _joinUrl,
+        workspaceId: _joinWs,
+        deviceId: ourId,
+      );
+    } catch (_) {
+      // غير حرج: العقدة مُرشَّحة من قائمة الانتظار بحالتها أصلاً.
     }
   }
 

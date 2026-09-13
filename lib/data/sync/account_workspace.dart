@@ -110,6 +110,12 @@ class AccountWorkspace {
       final mode = await repo.workspaceMode();
       if (mode == 'member') return AccountLinkOutcome.memberUntouched;
 
+      // (Offline-First) تثبيت الجلسة محلياً **قبل** أي اتصال بالشبكة: إن
+      // انقطع الإنترنت أثناء الربط تبقى هوية الحساب (uid + WS-{uid})
+      // محفوظة في SQLite، ويعمل التطبيق كاملاً بلا إنترنت وتُستكمل
+      // الاستعادة السحابية تلقائياً عند عودة الاتصال.
+      await FirebaseAuthRest.saveSession(repo, account);
+
       final current = repo.requireWorkspaceId;
       final canonical = workspaceIdForUid(account.uid);
 

@@ -90,11 +90,12 @@ class GoogleAuthService {
     final cached = await currentUserFromDb();
     final gs = _ensureSignIn();
     if (gs == null) {
-      // سطح المكتب لا يدعم GoogleSignIn.
+      // لا رسالة «المنصة غير مدعومة» على أندرويد/آيفون: الرسالة تخص
+      // المنصات التي لا تدعم الخدمة فعلاً (ويندوز/لينكس/ويب).
       if (cached != null) return GoogleAuthResult.ok(cached);
-      return const GoogleAuthResult.fail(
-        'تسجيل الدخول بـ Google غير متاح على هذه المنصة حاليًا',
-      );
+      return GoogleAuthResult.fail(isPlatformSupportingGoogleSignIn()
+          ? 'تعذّر تهيئة خدمة Google على هذا الجهاز — حدّث خدمات Google Play ثم أعد المحاولة.'
+          : 'تسجيل الدخول بـ Google غير متاح على هذه المنصة حاليًا');
     }
     try {
       final a = gs.currentUser;
@@ -118,28 +119,51 @@ class GoogleAuthService {
   /// تسجيل الدخول (يفتح نافذة Google للمستخدم).
   Future<GoogleAuthResult> signIn() async {
     final gs = _ensureSignIn();
+    final supported = isPlatformSupportingGoogleSignIn();
     if (gs == null) {
-      return const GoogleAuthResult.fail(
-        'تسجيل الدخول بـ Google غير متاح على هذه المنصة.\n'
-        'يمكنك استخدام التطبيق محليًا بدون حساب Google، وسيُتاح تسجيل الدخول في نسخة الأندرويد.',
-      );
+      // لا استثناء وهمي على أندرويد: إن فشلت التهيئة هناك فالسبب حقيقي
+      // (خدمات Google Play/إعداد المشروع) لا «عدم دعم المنصة».
+      return GoogleAuthResult.fail(supported
+          ? 'تعذّر تهيئة خدمة Google على هذا الجهاز — حدّث «خدمات Google Play» ثم أعد المحاولة.'
+          : 'تسجيل الدخول بـ Google متاح على الأندرويد والآيفون.\n'
+              'يمكنك استخدام التطبيق محليًا بدون حساب Google.');
     }
     try {
       final a = await gs.signIn();
       if (a == null)
         return const GoogleAuthResult.fail('تم إلغاء تسجيل الدخول');
-      final auth = await a.authentication;
+      var auth = await a.authentication;
+      // (إنتاج) ذاكرة التوكن قد تعود فارغة على بعض أجهزة أندرويد —
+      // تنظيف الكاش وإعادة الطلب مرة واحدة قبل التسليم بالفشل.
+      if ((auth.idToken ?? '').isEmpty && supported) {
+        try {
+          await a.clearAuthCache();
+          auth = await a.authentication;
+        } catch (_) {
+          // غير حرج: نكمل بالقيمة المتاحة.
+        }
+      }
       final u = _mapAccount(a, auth.idToken);
       await _persist(u);
       return GoogleAuthResult.ok(u);
     } catch (e) {
       final s = '$e';
-      if (s.contains('sign_in_failed') ||
-          s.contains('DEVELOPER_ERROR') ||
-          s.contains('10:')) {
+      // المنصات غير المدعومة فقط تتلقى رسالة «غير متاح على هذه المنصة».
+      if (!supported) {
         return const GoogleAuthResult.fail(
-          'تعذّر تسجيل الدخول عبر Google على هذه المنصة.\n'
-          'هذا طبيعي على ويندوز/لينكس ويعمل على الأندرويد.',
+          'تسجيل الدخول بـ Google متاح على الأندرويد والآيفون.',
+        );
+      }
+      if (s.contains('DEVELOPER_ERROR') || s.contains('10:')) {
+        return const GoogleAuthResult.fail(
+          'تعذّر إتمام تسجيل الدخول عبر Google (خطأ إعداد 10):\n'
+          'تحقّق من إضافة بصمة SHA-1 للتطبيق في إعدادات Firebase/Google Cloud '
+          'ومن تطابق معرّف العميل.',
+        );
+      }
+      if (s.contains('network_error') || s.contains('7:')) {
+        return const GoogleAuthResult.fail(
+          'تعذّر الاتصال بخوادم Google — تحقّق من الإنترنت ثم أعد المحاولة.',
         );
       }
       return GoogleAuthResult.fail('تعذّر تسجيل الدخول: $e');

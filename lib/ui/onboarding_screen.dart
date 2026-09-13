@@ -13,6 +13,7 @@ import '../core/cloud_config.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
+import '../data/sync/cloud_join.dart';
 import '../data/sync/firebase_auth_service.dart';
 import '../data/sync/google_auth_service.dart';
 import '../data/sync/workspace_recovery.dart';
@@ -148,6 +149,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       final outcome = await AccountWorkspace.adoptOrRecover(repo,
           backendUrl: url, account: account);
       if (!mounted) return;
+      // (استرجاع فوري) بعد ربط/استرداد ناجح: سجل الأعضاء + سجل العمليات.
+      if (outcome == AccountLinkOutcome.recovered ||
+          outcome == AccountLinkOutcome.migrated) {
+        await _recoverAfterLink(ref, repo, url, account);
+        if (!mounted) return;
+      }
       switch (outcome) {
         case AccountLinkOutcome.recovered:
           Sfx.pair();
@@ -180,6 +187,33 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// (استرجاع فوري — المتطلبان 3 و4) بعد أي ربط/استرداد ناجح لمساحة الحساب
+  /// على جهاز جديد أو بعد إعادة التثبيت:
+  ///  1) إعادة تشغيل محرك المزامنة على مساحة WS-{uid}.
+  ///  2) استرجاع كامل سجل الأعضاء والأجهزة المعتمدة من /roster إلى SQLite.
+  ///  3) سحب سجل العمليات السحابي كاملاً (استعادة بعد فورمات/جهاز جديد).
+  Future<void> _recoverAfterLink(
+    WidgetRef ref,
+    Repo repo,
+    String backendUrl,
+    FirebaseAccount account,
+  ) async {
+    try {
+      final engine = ref.read(syncEngineProvider);
+      engine.stop(); // (void) يوقف المؤقتات وقناة SSE قبل إعادة التوجيه.
+      await engine.start();
+      await CloudJoin.syncRoster(
+        repo,
+        await repo.database,
+        backendUrl: backendUrl,
+        workspaceId: AccountWorkspace.workspaceIdForUid(account.uid),
+      );
+      await engine.forceSyncNow();
+    } catch (_) {
+      // غير حرج: الدورة الدورية (45 ثانية) تُكمل ما فات.
     }
   }
 
