@@ -10,6 +10,7 @@ import '../core/accounting.dart';
 import '../core/app_version.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
+import '../core/format.dart';
 import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
@@ -1006,7 +1007,9 @@ class Repo {
     final all = await transactions(accountId: t.accountId);
     return all.where((x) {
       if (x.id == t.id) return false;
-      if (x.type != t.type || x.amount != t.amount) return false;
+      // (سلامة الحساب) مقارنة المبالغ بتسامح لا بالمساواة المطلقة:
+      // 100.1 + 0.2 = 100.30000000000001 ≠ 100.3 حسابيّاً بالفاصلة العائمة.
+      if (x.type != t.type || !Fmt.sameMoney(x.amount, t.amount)) return false;
       if (x.currency != t.currency) return false;
       if (x.date.difference(t.date).inDays.abs() > 0) return false;
       return x.createdAt.difference(t.createdAt).inMilliseconds.abs() < 120000;
@@ -1026,26 +1029,63 @@ class Repo {
       final e = t.effectOn(a.id!);
       if (e != null) bal += e;
     }
-    return bal;
+    // (سلامة الحساب) تقريب نهائي حسب منازل عملة الحساب: يمنع أرصدة مثل
+    // 9.99999999999998 الناتجة عن جمع الفاصلة العائمة.
+    return Fmt.roundMoney(bal, await _decimalsOf(a.currency));
   }
 
-  /// أرصدة كل الحسابات دفعة واحدة — استعلام واحد بدل استعلام لكل حساب.
+  /// أرصدة كل الحسابات دفعة واحدة.
+  ///
+  /// (أداء) كان الاستعلام يقرأ **كل أعمدة** الجدول (المرفقات والصور
+  /// والملاحظات) ثم يحسب الأرصدة بحلقة متداخلة (حسابات × عمليات).
+  /// الآن:
+  ///  ١) إسقاط الأعمدة المطلوبة للحساب فقط (لا مرفقات ولا صور).
+  ///  ٢) مسار واحد: لكل عملية يُفحص مرشحوها الثلاثة (الحساب/من/إلى)
+  ///     بدل المرور على كل الحسابات — نفس دالة `effectOn`، بلا أي
+  ///     تكرار لمنطقها في SQL، فلا خطر انحراف الأرصدة.
+  ///  ٣) تقريب نهائي حسب منازل عملة كل حساب.
   Future<Map<int, double>> allBalances(List<Account> accounts) async {
     final db = await _db;
     final rows = await db.query(
       'transactions',
+      columns: const <String>[
+        'id',
+        'account_id',
+        'account_kind',
+        'type',
+        'amount',
+        'currency',
+        'sign',
+        'from_id',
+        'to_id',
+        'rate',
+        'date',
+        'created_at',
+        'updated_at',
+      ],
       where: "COALESCE(deleted_at, '') = ''",
     );
     final txs = rows.map(Tx.fromMap).toList();
-    final out = <int, double>{};
-    for (final a in accounts) {
-      if (a.id == null) continue;
-      var bal = a.openingBalance;
-      for (final t in txs) {
-        final e = t.effectOn(a.id!);
-        if (e != null) bal += e;
+    final wanted = <int>{
+      for (final a in accounts)
+        if (a.id != null) a.id!,
+    };
+    final out = <int, double>{
+      for (final a in accounts)
+        if (a.id != null) a.id!: a.openingBalance,
+    };
+    for (final t in txs) {
+      // مرشّحو هذه العملية فقط (ثلاثة على الأكثر) لا كل الحسابات.
+      for (final id in <int?>{t.accountId, t.fromId, t.toId}) {
+        if (id == null || !wanted.contains(id)) continue;
+        final e = t.effectOn(id);
+        if (e != null) out[id] = (out[id] ?? 0) + e;
       }
-      out[a.id!] = bal;
+    }
+    for (final a in accounts) {
+      final id = a.id;
+      if (id == null) continue;
+      out[id] = Fmt.roundMoney(out[id] ?? 0, await _decimalsOf(a.currency));
     }
     return out;
   }
@@ -1061,7 +1101,31 @@ class Repo {
     return rows.map(CurrencyDef.fromMap).toList();
   }
 
+  /// منازل العملة العشرية مخزّنة مؤقتاً — تُستخدم لتقريب الأرصدة المجمّعة
+  /// دون استعلام لكل حساب (كان `allBalances` يعيد قراءة الجدول كاملاً).
+  /// تُصفَّر عند أي تغيير على جدول العملات.
+  Map<String, int>? _decimalsCache;
+
+  Future<int> _decimalsOf(String code) async {
+    final cache = _decimalsCache ??= <String, int>{
+      for (final c in await currencies()) c.code: c.decimal,
+    };
+    return cache[code] ?? 2;
+  }
+
   Future<void> saveCurrency(CurrencyDef c, {double rate = 1}) async {
+    // (سلامة الحساب) سعر صرف غير منتهٍ وموجب حصراً: الصفر يُنتج قسمة على
+    // صفر، والسالب يُعكس إشارة التحويل، و NaN/Infinity يفسد كل المبالغ
+    // اللاحقة بصمت.
+    if (!rate.isFinite || rate <= 0) {
+      throw ArgumentError.value(rate, 'rate',
+          'سعر الصرف يجب أن يكون رقماً موجباً ومنتهياً (أكبر من الصفر).');
+    }
+    if (c.decimal < 0 || c.decimal > 6) {
+      throw ArgumentError.value(c.decimal, 'decimal',
+          'منازل العملة العشرية يجب أن تكون بين 0 و 6.');
+    }
+    _decimalsCache = null;
     final db = await _db;
     final payload = {
       ...c.toMap(),
@@ -1083,6 +1147,7 @@ class Repo {
   }
 
   Future<void> deleteCurrency(String code) async {
+    _decimalsCache = null;
     final db = await _db;
     await db.delete('currencies',
         where: 'code = ? AND workspace_id = ?',
@@ -4126,7 +4191,9 @@ class Repo {
             ? m.quantity - it.quantity
             : m.kind.qtySign * m.quantity;
         // منع البيع/الخصم بما يتجاوز الرصيد المتاح (لا مخزون سالب).
-        if (m.kind == StockKind.sale && m.quantity > it.quantity) {
+        // (سلامة الحساب) مقارنة بتسامح: كمية متاحة 0.29999999999999999
+        // كانت ترفض بيع 0.3 المتاح واقعيّاً.
+        if (m.kind == StockKind.sale && Fmt.moneyGt(m.quantity, it.quantity)) {
           throw StateError(
             'الكمية المطلوبة من «${it.name}» غير متوفرة. '
             'المتاح: ${it.quantity.toStringAsFixed(0)} ${it.unit}.',

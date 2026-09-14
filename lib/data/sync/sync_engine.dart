@@ -629,6 +629,10 @@ class SyncEngine {
               await CloudJoin.pruneStaleJoinRequests(
                   backendUrl: url, workspaceId: ws);
             } catch (_) {}
+            // (أ-2) مفاتيح فهرس الدعوات المنتهية على الجذر.
+            try {
+              await CloudJoin.pruneExpiredInviteIndex(backendUrl: url);
+            } catch (_) {}
             try {
               await compactCloudOperations(backendUrl: url, workspaceId: ws);
             } catch (_) {}

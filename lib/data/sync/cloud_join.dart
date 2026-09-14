@@ -37,6 +37,40 @@ const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 ///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
 const Duration _approvedRequestTtl = Duration(minutes: 10);
 
+/// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
+///
+/// كان اكتشاف مساحة المدير يتم بمسح `/workspaces?shallow=true` ثم قراءة
+/// عقدة `invites` لكل مساحة (سقف 500) — أي استطلاعاً جماعياً لبيانات كل
+/// المنشآت واستهلاكاً شبكياً هائلاً من طرف العميل. الفهرس يجعل الاكتشاف
+/// **قراءةً واحدة لعقدة واحدة**، ويتيح لقواعد الأمان منع قراءة الجذر.
+/// مفتاحان في أب واحد: `pin_` للرمز الرقمي و`tok_` لتوكن الدعوة.
+String _inviteIndexPath(String base, String key) =>
+    '${base.replaceAll(RegExp(r'/+$'), '')}/invite_index/'
+    '${Uri.encodeComponent(key)}.json';
+
+String _invitePinKey(String pin) => 'pin_${pin.trim().toUpperCase()}';
+
+String _inviteTokenKey(String token) => 'tok_${token.trim().toUpperCase()}';
+
+/// (توافق مؤقت) المسح القديم إن تعذّر الفهرس — يلزم فقط لأن مديراً على
+/// إصدار ≤ 3.62 ينشئ دعوة بلا فهرس، فيفشل اكتشافها من عضو محدَّث.
+/// يُقلب إلى false (ثم يُحذف المسح) بعد انتشار 3.63 بين المديرين.
+const bool legacyInviteScanFallback = true;
+
+Future<void> _purgeInviteIndex(String base,
+    {String pin = '', String token = ''}) async {
+  if (pin.trim().isNotEmpty) {
+    try {
+      await _delete(_inviteIndexPath(base, _invitePinKey(pin)));
+    } catch (_) {}
+  }
+  if (token.trim().isNotEmpty) {
+    try {
+      await _delete(_inviteIndexPath(base, _inviteTokenKey(token)));
+    } catch (_) {}
+  }
+}
+
 String _newToken([int len = 8]) {
   final rnd = Random.secure();
   return List.generate(len, (_) => _tokenChars[rnd.nextInt(_tokenChars.length)])
@@ -558,6 +592,23 @@ class CloudJoin {
       'pin': pin,
     }, timeout: const Duration(seconds: 20));
 
+    // (أ-2) فهرسان على الجذر (PIN + توكن) — اكتشاف المساحة بقراءة واحدة
+    // بدل مسح كل مساحات العمل. أفضل جهد: تعذّره لا يمنع إنشاء الدعوة.
+    try {
+      await _putJson(_inviteIndexPath(url, _invitePinKey(pin)), {
+        'ws': ws,
+        'token': token,
+        'pin': pin,
+        'expiresAt': expires.toIso8601String(),
+      }, timeout: const Duration(seconds: 20));
+      await _putJson(_inviteIndexPath(url, _inviteTokenKey(token)), {
+        'ws': ws,
+        'token': token,
+        'pin': pin,
+        'expiresAt': expires.toIso8601String(),
+      }, timeout: const Duration(seconds: 20));
+    } catch (_) {}
+
     // رفع سجل الأجهزة أيضاً حتى تكون الحالة السحابية كاملة قبل انضمام العضو.
     try {
       final devices = await db.query('devices');
@@ -622,6 +673,8 @@ class CloudJoin {
     // لإعادة الاستخدام). فشل الانضمام يتطلب دعوة جديدة من المدير —
     // أرخص أمنياً من دعوة مفتوحة.
     await _deleteStrict('$root/invites/$tok.json');
+    // (أ-2) محو فهرسي الدعوة مع أصلها — لا مفاتيح ميتة في /invite_index.
+    await _purgeInviteIndex(url, pin: '${invite['pin'] ?? ''}', token: tok);
 
     final snapRec = await _getJson('$root/joinSnapshot.json');
     final snapData = snapRec?['data'];
@@ -938,6 +991,22 @@ class CloudJoin {
     final input = tokenOrPin.trim().toUpperCase();
     if (input.isEmpty) return null;
     final isPin = RegExp(r'^\d{6}$').hasMatch(input);
+    // (أ-2) الفهرس أولاً: **قراءة واحدة** لعقدة واحدة بدل مسح كل المساحات
+    // وقراءة invites كل واحدة (حتى 500 قراءة). هذا هو المسار الطبيعي الآن.
+    try {
+      final rec = await _getJson(_inviteIndexPath(
+          url, isPin ? _invitePinKey(input) : _inviteTokenKey(input)));
+      if (rec is Map) {
+        final exp = DateTime.tryParse('${rec['expiresAt'] ?? ''}');
+        final ws = '${rec['ws'] ?? ''}'.trim();
+        if (ws.isNotEmpty && exp != null && DateTime.now().isBefore(exp)) {
+          return ws;
+        }
+      }
+    } catch (_) {}
+    // لم توجد في الفهرس (مدير على إصدار ≤ 3.62 أنشأ دعوة بلا فهرس) —
+    // المسح القديم يبقى شبكة أمان مؤقتة إلى حين انتشار 3.63.
+    if (!legacyInviteScanFallback) return null;
     final keys = await _getJson('$url/workspaces.json?shallow=true');
     if (keys == null) return null;
     // الأحدث إنشاءً لا يمكن تمييزه من shallow — نمسح بالترتيب مع سقف
@@ -1021,6 +1090,9 @@ class CloudJoin {
       throw const CloudJoinException(
           'انتهت صلاحية رمز الاقتران — اطلب من المدير رمزاً جديداً.');
     }
+    // (أ-2) الدعوة استُهلكت: يُمحى فهرساها مع أصلها.
+    await _purgeInviteIndex(url,
+        pin: '${invite['pin'] ?? ''}', token: matchedToken);
     // حفظ اسم الجهاز محلياً + دفع الطلب.
     await setDeviceName(repo, deviceName.trim());
     final ourId = await ensureDeviceId(repo);
@@ -1428,9 +1500,11 @@ class CloudJoin {
           liveInvite = true; // دعوة سارية — اللقطة ما تزال مطلوبة.
           continue;
         }
-        // دعوة منتهية → تُحذف.
+        // دعوة منتهية → تُحذف (وفهرساها).
         try {
           await _delete('$root/invites/${Uri.encodeComponent(e.key)}.json');
+          await _purgeInviteIndex(backendUrl,
+              pin: '${v['pin'] ?? ''}', token: e.key);
         } catch (_) {}
       }
     }
@@ -1568,6 +1642,35 @@ class CloudJoin {
       try {
         await _delete(
             '$root/evictions/${Uri.encodeComponent(e.key)}.json');
+        pruned++;
+      } catch (_) {}
+    }
+    return pruned;
+  }
+
+  /// (أ-2) تقليم فهرس الدعوات المنتهية على الجذر — يمنع تراكم مفاتيح
+  /// ميتة في `/invite_index` بعد انتهاء مهلتها (15 دقيقة).
+  /// يعيد عدد المفاتيح المُقلَّمة.
+  static Future<int> pruneExpiredInviteIndex({
+    required String backendUrl,
+  }) async {
+    Map<String, dynamic>? all;
+    final base = backendUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    try {
+      all = await _getJson('$base/invite_index.json');
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    final now = DateTime.now();
+    var pruned = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+      if (exp != null && now.isBefore(exp)) continue;
+      try {
+        await _delete(_inviteIndexPath(backendUrl, e.key));
         pruned++;
       } catch (_) {}
     }

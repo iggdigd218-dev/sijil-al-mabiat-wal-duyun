@@ -19,6 +19,34 @@ class Fmt {
 
   static String moneyFor(double v, CurrencyDef c) => money(v, c.decimal);
 
+  // ══════ (سلامة الحساب المالي) تقريب ومقارنة بتسامح ══════
+
+  /// تسامح المقارنة بين مبلغين: يمنع قبولاً أو رفضاً خاطئاً ناتجاً عن
+  /// أخطاء الفاصلة العائمة (0.1 + 0.2 = 0.30000000000000004).
+  static const double moneyEpsilon = 0.0001;
+
+  /// تقريب مبلغ إلى منازل عملته — يُطبَّق على كل ناتج حسابي **مجموع**
+  /// (أرصدة تراكمية، مجاميع تقارير) قبل عرضه أو مقارنته، فيمنع أرصدة
+  /// مثل 9.99999999999998 بدل 10.00.
+  /// القيم غير المنتهية (NaN/Infinity) تُردّ إلى صفر بدل أن تتفشى في
+  /// كل الحسابات اللاحقة.
+  static double roundMoney(double v, [int decimals = 2]) {
+    if (!v.isFinite) return 0;
+    final d = decimals < 0
+        ? 0
+        : (decimals > 6 ? 6 : decimals);
+    return double.parse(v.toStringAsFixed(d));
+  }
+
+  /// هل المبلغان متساويان حسابيّاً (بتسامح)؟
+  static bool sameMoney(double a, double b) => (a - b).abs() <= moneyEpsilon;
+
+  /// هل `a` أكبر من `b` بفارق يُعتدّ به (بتسامح)؟
+  static bool moneyGt(double a, double b) => (a - b) > moneyEpsilon;
+
+  /// هل `a` أصغر من `b` بفارق يُعتدّ به (بتسامح)؟
+  static bool moneyLt(double a, double b) => (b - a) > moneyEpsilon;
+
   /// مبلغ مع رمز العملة.
   static String withSymbol(double v, CurrencyDef c) =>
       '${money(v, c.decimal)} ${c.symbol}';
