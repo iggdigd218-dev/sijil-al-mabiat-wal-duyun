@@ -57,20 +57,6 @@ String _inviteTokenKey(String token) => 'tok_${token.trim().toUpperCase()}';
 /// يُقلب إلى false (ثم يُحذف المسح) بعد انتشار 3.63 بين المديرين.
 const bool legacyInviteScanFallback = true;
 
-Future<void> _purgeInviteIndex(String base,
-    {String pin = '', String token = ''}) async {
-  if (pin.trim().isNotEmpty) {
-    try {
-      await _delete(_inviteIndexPath(base, _invitePinKey(pin)));
-    } catch (_) {}
-  }
-  if (token.trim().isNotEmpty) {
-    try {
-      await _delete(_inviteIndexPath(base, _inviteTokenKey(token)));
-    } catch (_) {}
-  }
-}
-
 String _newToken([int len = 8]) {
   final rnd = Random.secure();
   return List.generate(len, (_) => _tokenChars[rnd.nextInt(_tokenChars.length)])
@@ -369,6 +355,22 @@ class CloudJoin {
     final rec =
         await _getJson('${_root(backendUrl, workspaceId)}/creator.json');
     return '${rec?['creator_device_id'] ?? ''}';
+  }
+
+  /// (أ-2) محو فهرسي الدعوة (PIN + توكن) بعد استهلاكها أو انتهائها —
+  /// يمنع تراكم مفاتيح ميتة في `/invite_index`.
+  static Future<void> _purgeInviteIndex(String base,
+      {String pin = '', String token = ''}) async {
+    if (pin.trim().isNotEmpty) {
+      try {
+        await _delete(_inviteIndexPath(base, _invitePinKey(pin)));
+      } catch (_) {}
+    }
+    if (token.trim().isNotEmpty) {
+      try {
+        await _delete(_inviteIndexPath(base, _inviteTokenKey(token)));
+      } catch (_) {}
+    }
   }
 
   static Future<Map<String, dynamic>?> _getJson(String url) async {
@@ -994,9 +996,9 @@ class CloudJoin {
     // (أ-2) الفهرس أولاً: **قراءة واحدة** لعقدة واحدة بدل مسح كل المساحات
     // وقراءة invites كل واحدة (حتى 500 قراءة). هذا هو المسار الطبيعي الآن.
     try {
-      final rec = await _getJson(_inviteIndexPath(
+      final Map<String, dynamic>? rec = await _getJson(_inviteIndexPath(
           url, isPin ? _invitePinKey(input) : _inviteTokenKey(input)));
-      if (rec is Map) {
+      if (rec != null) {
         final exp = DateTime.tryParse('${rec['expiresAt'] ?? ''}');
         final ws = '${rec['ws'] ?? ''}'.trim();
         if (ws.isNotEmpty && exp != null && DateTime.now().isBefore(exp)) {
