@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -123,11 +125,53 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// (منع تكرار الحوار) مفاتيح طلبات الانضمام التي عُرض حوارها واكتمل
   /// اتخاذ قرار فيها خلال هذه الجلسة — فلا يُعاد فتح نفس الحوار لنفس
   /// الجهاز عند كل نبضة SSE، ويبقى الطلب الجديد (بمفتاح مختلف) ظاهراً.
-  final Set<String> _handledJoinRequests = <String>{};
+  /// (منع تكرار الحوار) مفاتيح الطلبات التي سُوّي أمرها → وقت التسوية (ms).
+  ///
+  /// كانت مجموعة في الذاكرة فقط: إعادة تشغيل التطبيق تُعيد فتح حوار طلب
+  /// عُولج سابقاً. صارت تُحفظ في `settings` مع مهلة 6 ساعات — تكفي لضمان
+  /// عدم تكرار الحوار، ولا تمنع طلباً جديداً حقيقياً من نفس الجهاز لاحقاً.
+  final Map<String, int> _handledJoinRequests = <String, int>{};
+
+  /// مفتاح التخزين في جدول settings.
+  static const _handledJoinKey = 'joinRequests.handled';
+
+  /// مهلة صلاحية السجل المحفوظ.
+  static const _handledJoinTtl = Duration(hours: 6);
 
   /// مفتاح تفرّد الطلب: معرّف الجهاز + وقت تقديمه (يتغيّر مع كل طلب جديد).
   String _joinRequestKey(Map<String, Object?> r) =>
       '${r['deviceId'] ?? ''}|${r['requestedAt'] ?? r['created_at'] ?? ''}';
+
+  /// تحميل الطلبات المعالجة سابقاً مع إسقاط ما انقضت مهلته.
+  Future<void> _loadHandledJoinRequests() async {
+    try {
+      final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final raw = (st[_handledJoinKey] ?? '').trim();
+      if (raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final cutoff =
+          DateTime.now().millisecondsSinceEpoch - _handledJoinTtl.inMilliseconds;
+      for (final e in decoded.entries) {
+        final at = (e.value as num?)?.toInt() ?? 0;
+        if (at >= cutoff) _handledJoinRequests['${e.key}'] = at;
+      }
+    } catch (_) {
+      // سجل تالف أو غير متاح — الحوار قد يتكرر مرة، وهو أقل ضرراً من تعطّل الشاشة.
+    }
+  }
+
+  /// حفظ السجل بعد تسوية طلب، مع تقليم المنتهي.
+  Future<void> _saveHandledJoinRequests() async {
+    try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final cutoff = nowMs - _handledJoinTtl.inMilliseconds;
+      _handledJoinRequests.removeWhere((_, at) => at < cutoff);
+      final repo = ref.read(repoProvider);
+      await repo.setSetting(_handledJoinKey, jsonEncode(_handledJoinRequests));
+    } catch (_) {}
+  }
 
   /// (إصلاح تسليم الإدارة) نبضات نشاط المزامنة → تحديث حي لمزودي
   /// الملكية/الدور/الوضع، فتظهر «إدارة المجموعة» وشاشات الأجهزة فوراً
@@ -148,6 +192,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // (منع تكرار الحوار) استعادة سجل الطلبات المعالجة قبل أي استطلاع.
+    unawaited(_loadHandledJoinRequests());
     _refreshSync();
     _syncTimer = Timer.periodic(
       const Duration(seconds: 10),
@@ -672,7 +718,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (reqs.isEmpty || !mounted || _joinSheetShowing) return;
       // (منع تكرار الحوار) تجاوز كل طلب سُوّي أمره في هذه الجلسة.
       final next = reqs.firstWhere(
-        (r) => !_handledJoinRequests.contains(_joinRequestKey(r)),
+        (r) => !_handledJoinRequests.containsKey(_joinRequestKey(r)),
         orElse: () => const <String, Object?>{},
       );
       if (next.isEmpty) return;
@@ -684,8 +730,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
             Navigator.of(context, rootNavigator: true).context;
         await showJoinApprovalSheet(rootCtx, ref, next,
             backendUrl: url);
-        // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب.
-        _handledJoinRequests.add(key);
+        // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب،
+        // ولا بعد إعادة تشغيل التطبيق (السجل محفوظ مع مهلة 6 ساعات).
+        _handledJoinRequests[key] = DateTime.now().millisecondsSinceEpoch;
+        unawaited(_saveHandledJoinRequests());
       } finally {
         _joinSheetShowing = false;
       }

@@ -498,7 +498,7 @@ void main() {
 
   test(
       'QA-B56-02 purgeDeviceRecord: expelled device + orphan shadow user '
-      'deleted; active device rejected', () async {
+      'deleted; active device purged; owner device immutable', () async {
     await setMode('owner');
     await db.update('devices', {'is_owner': 1},
         where: 'id = ?', whereArgs: [devId]);
@@ -553,8 +553,17 @@ void main() {
         (await db.query('users', where: 'id = ?', whereArgs: [uid])).length,
         0,
         reason: 'مستخدم الظل اليتيم يُحذف مع الجهاز');
+    // (المدير يمسح ما يشاء) الجهاز النشط صار قابلاً للحذف النهائي —
+    // الشرط القديم (مطرود/محظور فقط) ترك أجهزةً عالقة بلا مسح.
+    await repo.purgeDeviceRecord('active-dev');
+    expect(
+        (await db.query('devices',
+                where: 'id = ?', whereArgs: ['active-dev']))
+            .length,
+        0);
+    // (الثابت الوحيد) جهاز مالك المساحة لا يُحذف أبداً.
     await expectLater(
-        repo.purgeDeviceRecord('active-dev'), throwsA(isA<StateError>()));
+        repo.purgeDeviceRecord(devId), throwsA(isA<StateError>()));
     // expelledDeviceIds لا يعيد النشط.
     expect(await repo.expelledDeviceIds(), isEmpty);
   });

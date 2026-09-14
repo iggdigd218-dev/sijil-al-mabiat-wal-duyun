@@ -1,29 +1,28 @@
-// (معمارية حساب Google) عزل مساحات العمل بمعرف المستخدم (UID).
+// (ربط الحساب — بدون لمس هوية المؤسسة) فهرس سحابي اختياري للحساب.
 //
-// الفكرة: حساب Google هو هوية المؤسسة الدائمة — أثبت من أي بصمة عتاد:
-//  - مساحة عمل المؤسسة القياسية: WS-{uid}.
-//  - فهرس سحابي /workspaces/_registry/accounts_index/{uid} يربط الحساب
-//    بمساحته الفعلية (يستوعب المساحات القديمة غير المطابقة للنمط).
-//  - على جهاز جديد/بعد مسح البيانات: تسجيل الدخول بنفس الحساب يستعيد
-//    المساحة والدور (مالك) والبيانات المالية من النسخة الصامتة فوراً.
-//  - انضمام الموظفين يبقى كما هو عبر QR/PIN — لا يحتاجون حساب Google.
+// المبدأ بعد 3.61 (استعادة سلوك 3.55):
+//   - هوية المؤسسة = معرّف مساحة محلي عشوائي (WS-XXXXXXXX) لكل تثبيت.
+//     لا علاقة له بحساب Google إطلاقاً — الربط يعمل بلا إنترنت.
+//   - حساب Google يُستخدم للترخيص والنسخ على Drive فقط، ويُسجَّل ربطه
+//     بالمساحة الحالية في فهرس اختياري لأجل استرداد يدوي مستقبلي.
+//   - انضمام الموظفين يبقى عبر QR/PIN — لا يحتاجون حساب Google.
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import '../cloud_sync.dart';
 import '../repository.dart';
 import 'device_id.dart';
 import 'device_registry.dart';
 import 'firebase_auth_service.dart';
-import 'workspace_recovery.dart';
 
 /// نتيجة تبنّي/استرداد مساحة الحساب بعد تسجيل الدخول.
 enum AccountLinkOutcome {
-  /// استُعيدت مساحة سابقة كاملة بالبيانات — «عدت كما كنت».
+  /// (محفوظة للتوافق) استُعيدت مساحة سابقة كاملة بالبيانات.
+  /// لا يُنتِجها أي مسار تلقائي بعد 3.61 — الاسترداد صار بقرار صريح.
   recovered,
 
-  /// أول دخول: رُحّلت المساحة الحالية إلى WS-{uid} وسُجّل الربط.
+  /// اكتمل ربط الحساب: جلسة محفوظة + فهرس مسجّل — **بلا أي تغيير
+  /// على معرّف المساحة المحلي** (سلوك 3.55 المستعاد).
   migrated,
 
   /// جهاز عضو في مجموعة — لا تغيير على مساحته (يتبع مديره).
@@ -39,9 +38,6 @@ class AccountWorkspace {
   static String _indexPath(String base, String uid) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/_registry/'
       'accounts_index/${Uri.encodeComponent(uid)}.json';
-
-  /// مساحة العمل القياسية لحساب — WS-{uid}.
-  static String workspaceIdForUid(String uid) => 'WS-$uid';
 
   /// قراءة مساحة الحساب من الفهرس — '' إن لم تُسجَّل بعد.
   static Future<String> lookup({
@@ -90,86 +86,6 @@ class AccountWorkspace {
     } catch (_) {}
   }
 
-  /// بعد تسجيل دخول ناجح: تبنّي مساحة الحساب أو استردادها.
-  ///
-  ///  1) عضو مجموعة؟ لا نلمس مساحته — هويته تتبع مدير مجموعته.
-  ///  2) الفهرس يعرف الحساب؟ استرداد مساحته المسجلة كاملة بالبيانات
-  ///     (جهاز جديد/بعد مسح البيانات) — يستعيد صلاحية المالك فوراً.
-  ///  3) نمط WS-{uid} له نسخة سحابية؟ استردادها كذلك.
-  ///  4) أول دخول: ترحيل المساحة المحلية الحالية إلى WS-{uid} —
-  ///     البيانات المحلية كلها تبقى وتُرفع نسختها الصامتة للمسار الجديد.
-  static Future<AccountLinkOutcome> adoptOrRecover(
-    Repo repo, {
-    required String backendUrl,
-    required FirebaseAccount account,
-  }) async {
-    if (backendUrl.isEmpty || account.uid.isEmpty) {
-      return AccountLinkOutcome.failed;
-    }
-    try {
-      final mode = await repo.workspaceMode();
-      if (mode == 'member') return AccountLinkOutcome.memberUntouched;
-
-      // (Offline-First) تثبيت الجلسة محلياً **قبل** أي اتصال بالشبكة: إن
-      // انقطع الإنترنت أثناء الربط تبقى هوية الحساب (uid + WS-{uid})
-      // محفوظة في SQLite، ويعمل التطبيق كاملاً بلا إنترنت وتُستكمل
-      // الاستعادة السحابية تلقائياً عند عودة الاتصال.
-      await FirebaseAuthRest.saveSession(repo, account);
-
-      final current = repo.requireWorkspaceId;
-      final canonical = workspaceIdForUid(account.uid);
-
-      // (2) ربط مسجل في الفهرس؟
-      final indexed =
-          await lookup(backendUrl: backendUrl, uid: account.uid);
-      if (indexed.isNotEmpty) {
-        if (indexed == current) {
-          // نفس المساحة أصلاً — تثبيت الربط فقط.
-          await _afterLink(repo, backendUrl, account, current);
-          return AccountLinkOutcome.migrated;
-        }
-        final ok = await WorkspaceRecovery.manualRestore(repo,
-            backendUrl: backendUrl, workspaceId: indexed);
-        if (ok) {
-          await _afterLink(repo, backendUrl, account, indexed);
-          return AccountLinkOutcome.recovered;
-        }
-        // نسخة غائبة: نتبنى المساحة المسجلة معرفاً على الأقل —
-        // العمليات السحابية القادمة عبر المزامنة تكمل الباقي.
-        await _swapTo(repo, indexed);
-        await _afterLink(repo, backendUrl, account, indexed);
-        return AccountLinkOutcome.recovered;
-      }
-
-      // (3) نسخة سحابية على النمط القياسي WS-{uid}؟
-      if (canonical != current) {
-        final pulled = await CloudSync.pullWorkspaceBackup(repo,
-            backendUrl: backendUrl, workspaceId: canonical);
-        if (pulled != null) {
-          final ok = await WorkspaceRecovery.manualRestore(repo,
-              backendUrl: backendUrl, workspaceId: canonical);
-          if (ok) {
-            await _afterLink(repo, backendUrl, account, canonical);
-            return AccountLinkOutcome.recovered;
-          }
-        }
-      }
-
-      // (4) أول دخول لهذا الحساب: ترحيل المساحة الحالية إلى WS-{uid}.
-      if (canonical != current) {
-        await _swapTo(repo, canonical);
-      }
-      await _afterLink(repo, backendUrl, account, canonical);
-      // نسخة صامتة فورية للمسار الجديد — البيانات المالية تُؤمَّن حالاً.
-      try {
-        await CloudSync.silentWorkspaceBackup(repo);
-      } catch (_) {}
-      return AccountLinkOutcome.migrated;
-    } catch (_) {
-      return AccountLinkOutcome.failed;
-    }
-  }
-
   /// (استعادة سلوك 3.55) ربط الحساب **بلا أي مساس بمعرّف المساحة**.
   ///
   /// في 3.55 كان تسجيل الدخول يثبّت الجلسة فقط (Google Drive + الترخيص) ولا
@@ -201,16 +117,6 @@ class AccountWorkspace {
     } catch (_) {
       return AccountLinkOutcome.failed;
     }
-  }
-
-  /// تبديل معرف المساحة المحلية (كل الجداول) إلى المعرف المستهدف.
-  static Future<void> _swapTo(Repo repo, String target) async {
-    final db = await repo.database;
-    final current = repo.requireWorkspaceId;
-    if (current == target) return;
-    await WorkspaceRecovery.swapWorkspaceId(db, from: current, to: target);
-    await repo.setSetting('sync.workspaceId', target);
-    repo.debugSetWorkspaceId(target);
   }
 
   /// تثبيت الربط بعد أي مسار ناجح: جلسة + فهرس الحساب + فهرس البصمة +

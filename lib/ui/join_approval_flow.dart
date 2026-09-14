@@ -209,6 +209,30 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   Duration _nextPollDelay() =>
       _backoffSteps[_hydrateAttempts.clamp(0, _backoffSteps.length - 1)];
 
+  /// (لا إعادة محاولة بلا أمل) أخطاء نهائية/أمنية: إعادة المحاولة عليها
+  /// استنزاف محض لأنها لن تنجح بتكرارها — الطرد، الإبطال، تجاوز المقاعد،
+  /// انتهاء الاشتراك أو الفترة التجريبية، أو رفض الصلاحية.
+  /// تُطابق النص بالعربية والإنجليزية لأن استثناءات المحرك عربية الصياغة
+  /// ومُعرّفاتها لاتينية.
+  static bool _isTerminalError(Object e) {
+    final s = e.toString().toLowerCase();
+    const latin = <String>[
+      'expelled', 'revoked', 'evicted', 'seat', 'subscription', 'trial',
+      'forbidden', 'unauthorized', 'not authorized', 'denied',
+    ];
+    const arabic = <String>[
+      'مطرود', 'طُرد', 'الطرد', 'مُلغى', 'أُلغي', 'مقاعد', 'المقاعد',
+      'اشتراك', 'التجربة', 'الفترة التجريبية', 'غير مسموح', 'صلاحية',
+    ];
+    for (final k in latin) {
+      if (s.contains(k)) return true;
+    }
+    for (final k in arabic) {
+      if (s.contains(k)) return true;
+    }
+    return false;
+  }
+
   Future<void> _startDecisionSse() async {
     // (منع الاستنزاف) لا قناة SSE ثانية أبداً: القفل `_sseStarting` يحمي
     // فجوة الـ await بين الفحص والإسناد، فلا تتكرر القناة ولا تُستنزف
@@ -259,6 +283,20 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         unawaited(_deleteOwnRequest());
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
+      } else if (status == 'missing' || status == 'expired') {
+        // (العضو لا يعلّق أبداً) عقدة الطلب لم تعد موجودة — حُذفت من
+        // المدير أو انتهت مهلتها. بلا هذه المعالجة كان الاستطلاع يستمر
+        // إلى ما لا نهاية على طلب لا وجود له.
+        _stopDrain();
+        Sfx.error();
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _gaveUp = true;
+          _step = _JoinStep.waiting;
+          _error = 'انتهى طلب الانضمام أو حُذف من المدير — '
+              'اطلب رمزاً جديداً من مدير المجموعة.';
+        });
       }
     } catch (_) {
       // شبكة متقطعة — المحاولة القادمة بعد 4 ثوانٍ.
@@ -293,6 +331,20 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      // (لا استنزاف) خطأ نهائي (طرد/إبطال/مقاعد/اشتراك/صلاحية) لا يُعاد
+      // أبداً: تكراره لن يغيّر النتيجة، بل يُبقي الشاشة تستنزف الشبكة
+      // وتُخفي السبب الحقيقي خلف «إعادة المحاولة» مفتوحة الأمد.
+      if (_isTerminalError(e)) {
+        _stopDrain();
+        Sfx.error();
+        setState(() {
+          _busy = false;
+          _gaveUp = true;
+          _step = _JoinStep.waiting;
+          _error = 'توقّف الانضمام: $e — راجع مدير المجموعة.';
+        });
+        return;
+      }
       _hydrateAttempts++;
       if (_hydrateAttempts >= _maxHydrateRetries) {
         // (منع الاستنزاف) استُنفدت المحاولات: إيقاف فوري للمؤقت وقناة SSE،

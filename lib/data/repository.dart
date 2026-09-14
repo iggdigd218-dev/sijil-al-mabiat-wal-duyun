@@ -1550,14 +1550,19 @@ class Repo {
         where: 'id = ?', whereArgs: [deviceId], limit: 1);
     if (rows.isEmpty) return;
     final row = rows.first;
+    // (الثابت الوحيد) جهاز مالك المساحة: هويته هي هوية المؤسسة نفسها —
+    // لا يُمسّ بأي حال، حتى من المالك نفسه.
     if (((row['is_owner'] ?? 0) as int) == 1) {
-      throw StateError('لا يمكن حذف سجل جهاز المدير.');
+      throw StateError('لا يمكن حذف سجل جهاز مالك المساحة.');
     }
-    final expelled = '${row['expelled_at'] ?? ''}'.isNotEmpty;
-    final revoked = '${row['revoked_at'] ?? ''}'.isNotEmpty;
-    if (!expelled && !revoked) {
-      throw StateError('الحذف النهائي متاح للأجهزة المطرودة/المحظورة فقط.');
+    // (صمام أمان) لا حذف للجهاز الذي يعمل عليه المستخدم الآن.
+    final own = await ownDeviceRow();
+    if (own != null && '${own['id']}' == deviceId) {
+      throw StateError('لا يمكن حذف جهازك الحالي.');
     }
+    // (المدير يمسح ما يشاء) بلا شرط «مطرود/محظور»: الأجهزة النشطة
+    // والقديمة والوهمية (DEV-*) كلها قابلة للمسح النهائي بضغطة واحدة —
+    // الشرط القديم ترك أجهزةً غير قابلة للحذف نهائياً في السجل.
     final uid = row['user_id'] as int?;
     await db.transaction((txn) async {
       await txn.delete('devices', where: 'id = ?', whereArgs: [deviceId]);

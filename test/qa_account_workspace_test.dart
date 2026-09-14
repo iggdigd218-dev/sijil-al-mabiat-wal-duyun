@@ -1,8 +1,9 @@
 // QA — معمارية حساب Google وعزل المساحات بمعرف المستخدم (UID).
 //
 // العقود:
-//  - أول دخول: المساحة الحالية تُرحَّل إلى WS-{uid} ويُسجَّل الربط سحابياً.
-//  - حساب معروف (فهرس + نسخة): تُستعاد مساحته كاملة بالبيانات (recovered).
+//  - (3.61) أول دخول: الجلسة تُحفظ والفهرس السحابي يُسجَّل — بلا أي تغيير
+//    على معرّف المساحة المحلي (لا WS-{uid} بعد اليوم).
+//  - (3.61) حساب معروف بنسخة سحابية: لا استرداد تلقائي — القرار صريح فقط.
 //  - جهاز عضو: لا يُمَس (memberUntouched).
 //  - (استعادة 3.55) ensureWorkspace: معرّف عشوائي WS-XXXXXXXX دائماً —
 //    مساحة العمل لا تُشتق من الحساب، وتسجيل الدخول لا يغيّرها أبداً.
@@ -65,30 +66,32 @@ void main() {
             headers: {'content-type': 'application/json; charset=utf-8'});
       });
 
-  test('ACCT-01 أول دخول: ترحيل المساحة إلى WS-{uid} + تسجيل الربط',
+  test('ACCT-01 (3.61) أول دخول: جلسة + فهرس — والمساحة لا تتغير',
       () async {
     final store = <String, Object?>{};
     final before = repo.requireWorkspaceId;
     final outcome = await http.runWithClient(
-        () => AccountWorkspace.adoptOrRecover(repo,
+        () => AccountWorkspace.linkAccountOnly(repo,
             backendUrl: url, account: account),
         () => fakeCloud(store));
     expect(outcome, AccountLinkOutcome.migrated);
-    expect(repo.requireWorkspaceId, 'WS-${account.uid}');
-    expect(repo.requireWorkspaceId, isNot(before));
-    // الفهرس سُجِّل.
+    // (استعادة 3.55) معرّف المساحة لم يتغيّر — لا WS-{uid} بعد اليوم.
+    expect(repo.requireWorkspaceId, before);
+    expect(repo.requireWorkspaceId, isNot('WS-${account.uid}'));
+    // الفهرس سُجِّل بمساحة الجهاز الحالية لا بمساحة مشتقة من الحساب.
     final idx = store[
         '/workspaces/_registry/accounts_index/${account.uid}.json'] as Map?;
     expect(idx, isNotNull);
-    expect(idx!['workspaceId'], 'WS-${account.uid}');
+    expect(idx!['workspaceId'], before);
     // الجلسة حُفظت محلياً (Offline-First).
     expect(await FirebaseAuthRest.savedUid(repo), account.uid);
     expect(await FirebaseAuthRest.savedEmail(repo), account.email);
   });
 
-  test('ACCT-02 حساب معروف: استرداد المساحة المسجلة كاملة بالبيانات',
+  test('ACCT-02 (3.61) حساب معروف بنسخة سحابية: لا استرداد تلقائي',
       () async {
     const orgWs = 'WS-${'Uabc123XYZ'}';
+    final before = repo.requireWorkspaceId;
     final store = <String, Object?>{
       '/workspaces/_registry/accounts_index/${account.uid}.json': {
         'workspaceId': orgWs,
@@ -122,13 +125,16 @@ void main() {
       },
     };
     final outcome = await http.runWithClient(
-        () => AccountWorkspace.adoptOrRecover(repo,
+        () => AccountWorkspace.linkAccountOnly(repo,
             backendUrl: url, account: account),
         () => fakeCloud(store));
-    expect(outcome, AccountLinkOutcome.recovered);
-    expect(repo.requireWorkspaceId, orgWs);
+    expect(outcome, AccountLinkOutcome.migrated);
+    expect(repo.requireWorkspaceId, before,
+        reason: 'المساحة المحلية لا تُستبدل تلقائياً (سلوك 3.55 المستعاد)');
     final accounts = await repo.accounts();
-    expect(accounts.any((a) => a.name == 'عميل مؤسسة الحساب'), isTrue);
+    expect(accounts.any((a) => a.name == 'عميل مؤسسة الحساب'), isFalse,
+        reason: 'الاسترداد التلقائي أُلغي في 3.61 — لا سحب لنسخة سحابية '
+            'ولا مساس بالبيانات المحلية إلا بقرار صريح من المستخدم');
   });
 
   test('ACCT-03 جهاز عضو مجموعة لا يُمَس', () async {
@@ -138,7 +144,7 @@ void main() {
     final before = repo.requireWorkspaceId;
     final store = <String, Object?>{};
     final outcome = await http.runWithClient(
-        () => AccountWorkspace.adoptOrRecover(repo,
+        () => AccountWorkspace.linkAccountOnly(repo,
             backendUrl: url, account: account),
         () => fakeCloud(store));
     expect(outcome, AccountLinkOutcome.memberUntouched);

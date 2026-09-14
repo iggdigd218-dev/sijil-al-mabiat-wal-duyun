@@ -720,9 +720,10 @@ class DeviceCard extends StatelessWidget {
     if (!expelled && !isSelf && !isOwnerDevice) {
       add('expel', Icons.person_remove, Colors.red, 'طرد من المجموعة');
     }
-    // (دفعة 56) «حذف نهائي من السجل» — للبطاقات المطرودة/المحظورة فقط،
-    // يمحو الجهاز محلياً وسحابياً فتختفي البطاقة نهائياً.
-    if (inactive && !isSelf && amITheOwner && onPurge != null) {
+    // (المدير يمسح ما يشاء) «حذف نهائي من السجل» متاح لكل جهاز عدا
+    // جهازك أنت (لا تنتحر) وجهاز مالك المساحة (الهوية الثابتة) — بلا شرط
+    // «مطرود»: الأجهزة الوهمية (DEV-*) والقديمة لم تكن قابلة للمسح قبلاً.
+    if (!isSelf && !isOwnerDevice && amITheOwner && onPurge != null) {
       if (items.isNotEmpty) items.add(const PopupMenuDivider());
       add('purge', Icons.delete_forever, Colors.red.shade700,
           'حذف نهائي من السجل');

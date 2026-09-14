@@ -623,6 +623,12 @@ class SyncEngine {
               await CloudJoin.pruneExpiredEvictions(
                   backendUrl: url, workspaceId: ws);
             } catch (_) {}
+            // (تنظيف مؤجل) طلبات الانضمام التي سُوّي أمرها وانقضت مهلتها
+            // (10 دقائق) تُقلَّم هنا — بلا حذف فوري يُعلّق العضو.
+            try {
+              await CloudJoin.pruneStaleJoinRequests(
+                  backendUrl: url, workspaceId: ws);
+            } catch (_) {}
             try {
               await compactCloudOperations(backendUrl: url, workspaceId: ws);
             } catch (_) {}

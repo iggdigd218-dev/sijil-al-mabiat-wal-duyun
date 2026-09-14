@@ -30,6 +30,13 @@ import '../../core/cloud_config.dart';
 
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+/// مهلة بقاء طلب الانضمام بعد أن يُسوّى أمره (قبولاً أو رفضاً).
+///
+/// تُترك العقدة هذه المدة قبل تقليمها لسببين:
+///  ١) الجهاز المنتظر قد يكون offline لحظة القرار، فيحتاج نافذة لالتقاطه.
+///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
+const Duration _approvedRequestTtl = Duration(minutes: 10);
+
 String _newToken([int len = 8]) {
   final rnd = Random.secure();
   return List.generate(len, (_) => _tokenChars[rnd.nextInt(_tokenChars.length)])
@@ -1270,7 +1277,16 @@ class CloudJoin {
       ...?req,
       'status': 'approved',
       'role': role.code,
-      'approvedAt': now,
+      // (ساعة الخادم) توقيت الموافقة من Firebase لا من ساعة جهاز المدير —
+      // فروق التوقيت المحلي كانت تُفسد ترتيب الطلبات وحساب المهل.
+      'approvedAt': {'.sv': 'timestamp'},
+      // (تنظيف مؤجل بدل الحذف الفوري) الطلب يبقى 10 دقائق بعد الموافقة
+      // ليتلقّاه الجهاز المنتظر، ثم يُقلَّم تلقائياً. الحذف الفوري كان
+      // يجعل العضو يقرأ missing فيعلّق إلى الأبد.
+      'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
+          _approvedRequestTtl.inMilliseconds,
+      'expiresAt':
+          DateTime.now().add(_approvedRequestTtl).toIso8601String(),
     }, timeout: const Duration(seconds: 20));
   }
 
@@ -1552,6 +1568,47 @@ class CloudJoin {
       try {
         await _delete(
             '$root/evictions/${Uri.encodeComponent(e.key)}.json');
+        pruned++;
+      } catch (_) {}
+    }
+    return pruned;
+  }
+
+  /// تقليم طلبات الانضمام التي سُوّي أمرها وانقضت مهلتها (قبولاً أو رفضاً).
+  ///
+  /// يُستدعى من دورة صيانة المدير بجانب `pruneExpiredEvictions` فيمنع
+  /// تراكم `/joinRequests` بلا حذف فوري يُعلّق العضو المنتظر.
+  /// يعيد عدد الطلبات المُقلَّمة.
+  static Future<int> pruneStaleJoinRequests({
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      all = await _getJson('$root/joinRequests.json');
+    } catch (_) {
+      return 0;
+    }
+    if (all == null || all.isEmpty) return 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    var pruned = 0;
+    for (final e in all.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final status = '${v['status'] ?? 'pending'}';
+      // طلب لا يزال قيد الانتظار؟ لا يُلمس — قرار المدير بانتظاره.
+      if (status == 'pending') continue;
+      var dueMs = (v['deleteAfterMs'] as num?)?.toInt() ?? 0;
+      if (dueMs == 0) {
+        final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+        if (exp == null) continue; // لا مهلة معروفة — لا نخاطر بالحذف.
+        dueMs = exp.millisecondsSinceEpoch;
+      }
+      if (nowMs < dueMs) continue;
+      try {
+        await _delete(
+            '$root/joinRequests/${Uri.encodeComponent(e.key)}.json');
         pruned++;
       } catch (_) {}
     }
