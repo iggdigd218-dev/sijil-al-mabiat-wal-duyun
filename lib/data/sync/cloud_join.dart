@@ -24,6 +24,7 @@ import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
 import 'device_registry.dart';
+import 'firebase_auth_service.dart';
 import 'snapshot_apply.dart';
 import 'subscription_guard.dart';
 import '../../core/cloud_config.dart';
@@ -37,7 +38,37 @@ const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 ///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
 const Duration _approvedRequestTtl = Duration(minutes: 10);
 
-/// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
+  /// (المرحلة 2) تثبيت عضوية **مالك المساحة** في `/members/{uid}`.
+  ///
+  /// أول عضو في المنشأة ودوره `owner` — هذه العقدة هي ما تقرأه قواعد
+  /// الأمان (`auth.uid`) للسماح بالكتابة في مساحة العمل. تُكتب مرة واحدة
+  /// ثم لا تُلمس: `existing != null` يوقف إعادة الكتابة.
+  static Future<void> ensureOwnerMembership(
+    Repo repo, {
+    required String backendUrl,
+    String? workspaceId,
+  }) async {
+    // يضمن وجود هوية (مجهولة) قبل قراءة uid — إن كانت التهيئة الصامتة لم
+    // تنجح عند الإقلاع لغياب الشبكة، تُحاول هنا عند أول اتصال سحابي.
+    await FirebaseAuthRest.cloudIdToken();
+    final uid = FirebaseAuthRest.currentUid;
+    if (uid.isEmpty || backendUrl.trim().isEmpty) return;
+    final ws = workspaceId ?? repo.requireWorkspaceId;
+    final path =
+        '${_root(backendUrl, ws)}/members/${Uri.encodeComponent(uid)}.json';
+    try {
+      final existing = await _getJson(path);
+      if (existing != null) return; // المالك الأول يثبت للأبد.
+      await _putJson(path, {
+        'role': 'owner',
+        'uid': uid,
+        'deviceId': repo.requireDeviceId,
+        'joined_at': {'.sv': 'timestamp'},
+      }, timeout: const Duration(seconds: 20));
+    } catch (_) {}
+  }
+
+  /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
 ///
 /// كان اكتشاف مساحة المدير يتم بمسح `/workspaces?shallow=true` ثم قراءة
 /// عقدة `invites` لكل مساحة (سقف 500) — أي استطلاعاً جماعياً لبيانات كل
@@ -581,6 +612,11 @@ class CloudJoin {
       await registerCreatorIfAbsent(repo,
           backendUrl: url, workspaceId: ws, deviceId: ourId);
     } catch (_) {}
+    // (المرحلة 2) عضوية المالك: /members/{uid} بدور owner — أول عضو في
+    // المنشأة، وهو مرجع قواعد الأمان (auth.uid) لكتابة هذه المساحة.
+    try {
+      await ensureOwnerMembership(repo, backendUrl: url, workspaceId: ws);
+    } catch (_) {}
 
     final token = _newToken();
     final pin = newPairPin();
@@ -1099,12 +1135,17 @@ class CloudJoin {
     await setDeviceName(repo, deviceName.trim());
     final ourId = await ensureDeviceId(repo);
     final fp = await hardwareFingerprintRaw();
+    // (المرحلة 2) هوية الجهاز المنضم (auth.uid) تُسجَّل داخل الطلب ليضيفها
+    // المدير إلى /members بالدور الذي يختاره لحظة الموافقة.
+    await FirebaseAuthRest.cloudIdToken();
+    final joinerUid = FirebaseAuthRest.currentUid;
     await _putJson(requestPath(url, workspaceId, ourId), {
       'deviceId': ourId,
       'deviceName': deviceName.trim(),
       'fingerprint': fp == null ? '' : fp.hashCode.toRadixString(16),
       'platform': Platform.operatingSystem,
       'token': matchedToken,
+      'uid': joinerUid,
       'status': 'pending',
       'requestedAt': DateTime.now().toIso8601String(),
     }, timeout: const Duration(seconds: 20));
@@ -1347,6 +1388,23 @@ class CloudJoin {
     }
     final req =
         await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+    // (المرحلة 2) تسجيل العضو في /members/{uid} بالدور المعيّن — هذه
+    // العقدة هي مرجع قواعد الأمان للسماح لهذا الجهاز بالكتابة في المساحة.
+    try {
+      final memberUid = '${req?['uid'] ?? ''}'.trim();
+      if (memberUid.isNotEmpty) {
+        await _putJson(
+          '$root/members/${Uri.encodeComponent(memberUid)}.json',
+          {
+            'role': role.code,
+            'uid': memberUid,
+            'deviceId': deviceId,
+            'joined_at': {'.sv': 'timestamp'},
+          },
+          timeout: const Duration(seconds: 20),
+        );
+      }
+    } catch (_) {}
     await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
       ...?req,
       'status': 'approved',

@@ -627,6 +627,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
       try {
         await DeviceRegistry.upsertBinding(repo, backendUrl: url);
       } catch (_) {}
+      // (المرحلة 2) عضوية المالك في /members/{auth.uid} — تُثبَّت عند كل
+      // إقلاع (لا تُعاد كتابتها إن وُجدت) فتعمل قواعد الأمان بـ auth.uid
+      // للمساحات المنفردة والمجموعات على حد سواء.
+      try {
+        if (await repo.isWorkspaceOwner()) {
+          await CloudJoin.ensureOwnerMembership(repo,
+              backendUrl: url, workspaceId: ws);
+        }
+      } catch (_) {}
       // (الاسترداد السيادي) تسجيل منشئ المساحة بأثر رجعي عند الإقلاع:
       // للمجموعات القائمة قبل الميزة — المالك الحالي يُسجَّل منشئاً إن
       // كانت العقدة السحابية الدائمة غائبة (تُكتب مرة واحدة ولا تتغير).

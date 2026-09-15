@@ -17,6 +17,7 @@ import 'core/sfx.dart';
 import 'core/theme.dart';
 import 'data/providers.dart';
 import 'data/repository.dart';
+import 'data/sync/firebase_auth_service.dart';
 import 'data/sync/sync_engine.dart';
 import 'ui/splash.dart';
 
@@ -55,6 +56,16 @@ Future<void> main() async {
     await repo.initSyncInfra().timeout(const Duration(seconds: 8));
   } catch (e) {
     debugPrint('initSyncInfra timeout/error: $e');
+  }
+  // (المرحلة 2) هوية الجهاز المجهولة — **قبل** أي اتصال بـ RTDB.
+  // بلا نافذة ولا إذن: يُنشئ حساباً مجهولاً (أو يستعيده من التخزين) فيصبح
+  // لكل طلب ?auth=<idToken> صالح، فتعمل قواعد الأمان بـ auth.uid.
+  // الفشل هنا لا يُسقط الإقلاع — يُستأنف عند أول طلب سحابي.
+  try {
+    await FirebaseAuthRest.initSilentAuth(repo)
+        .timeout(const Duration(seconds: 8));
+  } catch (e) {
+    debugPrint('initSilentAuth timeout/error: $e');
   }
   SyncEngine engine;
   try {

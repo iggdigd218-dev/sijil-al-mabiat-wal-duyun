@@ -2,7 +2,8 @@
 //
 // التطويرات عن النسخة السابقة:
 //  - سحب تزايدي (incremental pull) باستخدام sync_meta.lastCloudOpId بدل آخر 500 عملية فقط.
-//  - إرسال auth=<idToken> إذا كان المستخدم مسجلاً دخوله (يربط بجوجل).
+//  - إرسال auth=<idToken> مع كل طلب: حساب Google إن وُجد، وإلا هوية
+//    الجهاز المجهولة (المرحلة 2) — فلا طلب بلا مصادقة بعد اليوم.
 //  - تحقق HTTPS فقط (رفض http).
 //  - validation لـ URL.
 //  - استخدام startAfter لـ pagination عند تجاوز الدفعات.
@@ -22,6 +23,7 @@ import 'apply_remote.dart';
 import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
+import 'firebase_auth_service.dart';
 import 'chat_hooks.dart';
 import 'operation.dart';
 import 'sync_engine.dart';
@@ -121,18 +123,19 @@ class CloudFirebaseTransport implements SyncTransport {
 
   Future<String?> _idToken() async {
     final tok = await _idTokenProvider();
-    if (tok == null || tok.isEmpty) return null;
-    if (!identical(tok, _expCachedToken) && tok != _expCachedToken) {
-      _expCachedToken = tok;
-      _expCachedMs = jwtExpiryMs(tok);
+    if (tok != null && tok.isNotEmpty) {
+      if (!identical(tok, _expCachedToken) && tok != _expCachedToken) {
+        _expCachedToken = tok;
+        _expCachedMs = jwtExpiryMs(tok);
+      }
+      final expired = _expCachedMs > 0 &&
+          DateTime.now().millisecondsSinceEpoch > _expCachedMs - 60000;
+      if (!expired) return tok;
+      // توكن Google منتهٍ/يوشك → نُكمل للهوية المجهولة أدناه.
     }
-    if (_expCachedMs > 0 &&
-        DateTime.now().millisecondsSinceEpoch > _expCachedMs - 60000) {
-      // توكن منتهٍ/يوشك: لا نرفقه — القواعد العامة تمرّر الطلب بلا auth،
-      // وإرسال توكن ميت يفشل الطلب بلا داعٍ (كان يكلف جولة 401 كاملة).
-      return null;
-    }
-    return tok;
+    // (المرحلة 2) لا حساب Google (أو توكنه منتهٍ) → توكن هوية الجهاز
+    // المجهولة: يضمن أن كل طلب يحمل auth.uid، فتعمل قواعد الأمان.
+    return FirebaseAuthRest.cloudIdToken();
   }
 
   @override
@@ -147,17 +150,27 @@ class CloudFirebaseTransport implements SyncTransport {
         jsonDecode(op.toJson()) as Map)
       ..['server_ts'] = {'.sv': 'timestamp'};
     final body = jsonEncode(bodyMap);
-    final auth = await _authQuery();
+    final token = await _idToken();
+    final auth =
+        token == null ? null : 'auth=${Uri.encodeQueryComponent(token)}';
     final targetUri = auth == null ? uri : uri.replace(query: auth);
     var res = await http
         .put(targetUri, body: body, headers: _authHeaders)
         .timeout(const Duration(seconds: 10));
-    if ((res.statusCode == 401 || res.statusCode == 403) && auth != null) {
-      // idToken من Google تنتهي صلاحيته بعد ~ساعة؛ إن كانت قواعد القاعدة
-      // عامة فإرسال توكن منتهٍ يفشل الطلب بلا داعٍ — نعيد المحاولة بدونه.
-      res = await http
-          .put(uri, body: body, headers: _authHeaders)
-          .timeout(const Duration(seconds: 10));
+    if ((res.statusCode == 401 || res.statusCode == 403) && token != null) {
+      // (المرحلة 2) إعادة المحاولة **بلا مصادقة** أُلغيت نهائياً: القواعد
+      // تشترط `auth != null`، والطلب العاري كان يخفي غياب الهوية فقط
+      // (ثغرة أ-1). الآن: نجدّد توكن الجهاز ونعيد المحاولة مرة واحدة.
+      final fresh = await FirebaseAuthRest.forceRefreshToken();
+      if (fresh != null && fresh != token) {
+        res = await http
+            .put(
+              uri.replace(query: 'auth=${Uri.encodeComponent(fresh)}'),
+              body: body,
+              headers: _authHeaders,
+            )
+            .timeout(const Duration(seconds: 10));
+      }
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw StateError('cloud-auth-failed: ${res.statusCode}');
@@ -363,10 +376,14 @@ class CloudFirebaseTransport implements SyncTransport {
       final uri = Uri.parse(_opsPath).replace(queryParameters: params);
       var res = await http.get(uri).timeout(const Duration(seconds: 15));
       if ((res.statusCode == 401 || res.statusCode == 403) && tok != null) {
-        // التوكن منتهي الصلاحية وقاعدة عامة؟ جرّب بدون auth قبل الفشل.
-        params.remove('auth');
-        final bare = Uri.parse(_opsPath).replace(queryParameters: params);
-        res = await http.get(bare).timeout(const Duration(seconds: 15));
+        // (المرحلة 2) لا محاولة بلا مصادقة — نجدّد التوكن ونعيد مرة واحدة.
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null && fresh != tok) {
+          params['auth'] = fresh;
+          final retried =
+              Uri.parse(_opsPath).replace(queryParameters: params);
+          res = await http.get(retried).timeout(const Duration(seconds: 15));
+        }
       }
       // قواعد RTDB بلا فهرس ".indexOn": "timestamp" → فيربيس يرفض orderBy
       // بخطأ 400 فيفشل السحب للأبد رغم نجاح الدفع (البيانات تصعد ولا تنزل
