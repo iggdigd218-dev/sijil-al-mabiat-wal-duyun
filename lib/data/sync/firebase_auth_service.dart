@@ -155,7 +155,7 @@ class FirebaseAuthRest {
         _anonUid = savedUid;
         _anonRefreshToken = savedRefresh.isEmpty ? null : savedRefresh;
         _anonIdToken = savedToken.isEmpty ? null : savedToken;
-        _anonExpiryMs = int.tryParse('${st[_anonExpiryKey] ?? ''}') ?? 0;
+        _anonExpiryMs = int.tryParse(st[_anonExpiryKey] ?? '') ?? 0;
       }
       if (hasValidToken) return;
       await _ensureFreshToken();

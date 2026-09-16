@@ -92,12 +92,6 @@ class CloudFirebaseTransport implements SyncTransport {
     return {'Content-Type': 'application/json'};
   }
 
-  Future<String?> _authQuery() async {
-    final tok = await _idToken();
-    if (tok == null) return null;
-    return 'auth=${Uri.encodeQueryComponent(tok)}';
-  }
-
   // (دفعة 57) تتبع انتهاء صلاحية JWT استباقياً: نفك حقل exp من التوكن
   // ونرفض إرفاق توكن منتهٍ (أو على وشك الانتهاء خلال 60 ثانية) بدل
   // إهدار طلب كامل ينتظر 401/403 ثم يُعاد. نتيجة الفك مُخبأة لكل توكن.

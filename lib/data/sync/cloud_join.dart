@@ -38,36 +38,6 @@ const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 ///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
 const Duration _approvedRequestTtl = Duration(minutes: 10);
 
-  /// (المرحلة 2) تثبيت عضوية **مالك المساحة** في `/members/{uid}`.
-  ///
-  /// أول عضو في المنشأة ودوره `owner` — هذه العقدة هي ما تقرأه قواعد
-  /// الأمان (`auth.uid`) للسماح بالكتابة في مساحة العمل. تُكتب مرة واحدة
-  /// ثم لا تُلمس: `existing != null` يوقف إعادة الكتابة.
-  static Future<void> ensureOwnerMembership(
-    Repo repo, {
-    required String backendUrl,
-    String? workspaceId,
-  }) async {
-    // يضمن وجود هوية (مجهولة) قبل قراءة uid — إن كانت التهيئة الصامتة لم
-    // تنجح عند الإقلاع لغياب الشبكة، تُحاول هنا عند أول اتصال سحابي.
-    await FirebaseAuthRest.cloudIdToken();
-    final uid = FirebaseAuthRest.currentUid;
-    if (uid.isEmpty || backendUrl.trim().isEmpty) return;
-    final ws = workspaceId ?? repo.requireWorkspaceId;
-    final path =
-        '${_root(backendUrl, ws)}/members/${Uri.encodeComponent(uid)}.json';
-    try {
-      final existing = await _getJson(path);
-      if (existing != null) return; // المالك الأول يثبت للأبد.
-      await _putJson(path, {
-        'role': 'owner',
-        'uid': uid,
-        'deviceId': repo.requireDeviceId,
-        'joined_at': {'.sv': 'timestamp'},
-      }, timeout: const Duration(seconds: 20));
-    } catch (_) {}
-  }
-
   /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
 ///
 /// كان اكتشاف مساحة المدير يتم بمسح `/workspaces?shallow=true` ثم قراءة
@@ -249,6 +219,36 @@ class CloudJoinException implements Exception {
 }
 
 class CloudJoin {
+  /// (المرحلة 2) تثبيت عضوية **مالك المساحة** في `/members/{uid}`.
+  ///
+  /// أول عضو في المنشأة ودوره `owner` — هذه العقدة هي ما تقرأه قواعد
+  /// الأمان (`auth.uid`) للسماح بالكتابة في مساحة العمل. تُكتب مرة واحدة
+  /// ثم لا تُلمس: `existing != null` يوقف إعادة الكتابة.
+  static Future<void> ensureOwnerMembership(
+    Repo repo, {
+    required String backendUrl,
+    String? workspaceId,
+  }) async {
+    // يضمن وجود هوية (مجهولة) قبل قراءة uid — إن كانت التهيئة الصامتة لم
+    // تنجح عند الإقلاع لغياب الشبكة، تُحاول هنا عند أول اتصال سحابي.
+    await FirebaseAuthRest.cloudIdToken();
+    final uid = FirebaseAuthRest.currentUid;
+    if (uid.isEmpty || backendUrl.trim().isEmpty) return;
+    final ws = workspaceId ?? repo.requireWorkspaceId;
+    final path =
+        '${_root(backendUrl, ws)}/members/${Uri.encodeComponent(uid)}.json';
+    try {
+      final existing = await _getJson(path);
+      if (existing != null) return; // المالك الأول يثبت للأبد.
+      await _putJson(path, {
+        'role': 'owner',
+        'uid': uid,
+        'deviceId': repo.requireDeviceId,
+        'joined_at': {'.sv': 'timestamp'},
+      }, timeout: const Duration(seconds: 20));
+    } catch (_) {}
+  }
+
   /// (دفعة 53) خطاف الطرد الذاتي: يضبطه SyncEngine عند الإقلاع ليتولى
   /// المعالجة المركزية (إيقاف SSE/الدفع + تنظيف الجلسة + بث للواجهة)
   /// بدل الاكتفاء بإعادة الضبط الصامتة.
