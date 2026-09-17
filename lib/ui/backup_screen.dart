@@ -11,7 +11,9 @@ import '../core/format.dart';
 import 'trial_ui.dart' show ensureFeatureUnlocked;
 import '../core/theme.dart';
 import '../data/google_drive_service.dart';
+import '../data/sync/google_auth_service.dart';
 import '../data/providers.dart';
+import 'settings_screen.dart';
 import 'widgets.dart';
 
 /// النسخ الاحتياطي والاستعادة وسلة المهملات — نقل شاشة `backup.js`.
@@ -30,6 +32,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   String? _cloudError;
   GoogleAccountInfo? _googleAccount;
   GoogleDriveBackupInfo? _cloudBackup;
+
+  /// بريد الحساب من الجلسة **الموحّدة** (قسم «حساب المؤسسة»).
+  /// تسجيل الدخول بـ Google له مدخل واحد في التطبيق؛ شاشة النسخ لا
+  /// تملك زر تسجيل، وDrive صلاحية تُمنح بعده لا مدخل تسجيل مستقل.
+  String? _accountEmail;
 
   /// تضمين صور العمليات داخل ملف النسخة (البند ١٣).
   bool _withImages = true;
@@ -62,11 +69,21 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     } catch (e) {
       cloudError = '$e';
     }
+    // (توحيد مدخل التسجيل) الجلسة الموحّدة من قسم «حساب المؤسسة» — هي
+    // الحكم في إظهار أدوات Drive هنا، لا جلسة Drive نفسها.
+    String? accountEmail;
+    try {
+      final db = await ref.read(repoProvider).database;
+      accountEmail = (await GoogleAuthService(db).currentUserFromDb())?.email;
+    } catch (_) {
+      accountEmail = null;
+    }
     if (!mounted) return;
     setState(() {
       _googleAccount = account;
       _cloudBackup = backup;
       _cloudError = cloudError;
+      _accountEmail = accountEmail;
       _cloudLoading = false;
     });
   }
@@ -218,25 +235,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     return account;
   }
 
-  Future<void> _connectGoogle() async {
-    setState(() => _busy = true);
-    try {
-      final account = await _ensureGoogleAccount();
-      if (mounted) {
-        showSnack(
-          context,
-          account == null
-              ? 'أُلغي ربط حساب Google.'
-              : 'تم ربط ${account.email} ✅',
-        );
-      }
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر ربط Google: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   Future<void> _uploadToGoogle() async {
     setState(() => _busy = true);
     try {
@@ -292,60 +290,44 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
   }
 
-  Future<void> _signOutGoogle() async {
+  /// (توحيد مدخل التسجيل) هذا **ليس** تسجيل دخول: حساب Google مُسجَّل
+  /// مسبقاً من قسم «حساب المؤسسة»، ونطلب هنا صلاحية Drive وحدها لرفع النسخ.
+  Future<void> _grantDriveAccess() async {
     setState(() => _busy = true);
     try {
-      await _drive.signOut();
-      if (mounted) {
-        setState(() {
-          _googleAccount = null;
-          _cloudBackup = null;
-          _cloudError = null;
-        });
-        showSnack(context, 'تم تسجيل الخروج من Google.');
+      final account = await _drive.signIn();
+      if (account == null) return;
+      GoogleDriveBackupInfo? backup;
+      String? cloudError;
+      try {
+        backup = await _drive.latestBackup();
+      } catch (e) {
+        cloudError = '$e';
       }
+      if (!mounted) return;
+      setState(() {
+        _googleAccount = account;
+        _cloudBackup = backup;
+        _cloudError = cloudError;
+      });
+      showSnack(context, 'تم منح صلاحية Google Drive ✅');
     } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر تسجيل الخروج: $e', error: true);
+      if (mounted) {
+        showSnack(context, 'تعذّر منح صلاحية Drive: $e', error: true);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _relinkGoogle() async {
-    final ok = await confirmDialog(
-      context,
-      title: 'إعادة ربط حساب Google',
-      message: 'سيُفصل الحساب الحالي وتختار حساب Google آخر.',
-      confirmText: 'إعادة الربط',
-      danger: true,
+  /// ينتقل إلى الإعدادات حيث قسم «حساب المؤسسة (Google)» — المدخل الوحيد
+  /// لتسجيل الدخول بـ Google في التطبيق كله.
+  Future<void> _openAccountSection() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
     );
-    if (!ok) return;
-
-    setState(() => _busy = true);
-    try {
-      await _drive.disconnect();
-      if (mounted) {
-        setState(() {
-          _googleAccount = null;
-          _cloudBackup = null;
-          _cloudError = null;
-        });
-      }
-      final account = await _drive.signIn();
-      if (account != null && mounted) {
-        final backup = await _drive.latestBackup();
-        setState(() {
-          _googleAccount = account;
-          _cloudBackup = backup;
-        });
-        if (!mounted) return;
-        showSnack(context, 'تمت إعادة ربط ${account.email} ✅');
-      }
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّرت إعادة الربط: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    // قد يكون سجّل الدخول للتو — أعد قراءة حالة الجلسة الموحّدة.
+    if (mounted) await _loadCloudState();
   }
 
   Future<void> _shareToDriveDirectly() async {
@@ -522,21 +504,38 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     ),
                     title: Text('جارٍ التحقق من حساب Google…'),
                   )
-                else if (_googleAccount == null) ...[
+                else if (_accountEmail == null) ...[
                   const ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.account_circle_outlined),
-                    title: Text('لا يوجد حساب Google مرتبط'),
+                    leading: Icon(Icons.manage_accounts_outlined),
+                    title: Text('تسجيل الدخول بـ Google من مكانه الموحّد'),
                     subtitle: Text(
-                      'اربط حسابًا لاستخدام الرفع والاستعادة على جهاز آخر.',
+                      'مدخل التسجيل بـ Google واحد فقط في التطبيق: '
+                      'الإعدادات ← «حساب المؤسسة (Google)». سجّل الدخول هناك '
+                      'ليُربط حسابك بمساحة عملك، ثم عد لتفعيل النسخ على Drive.',
                     ),
                   ),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: _busy ? null : _connectGoogle,
-                      icon: const Icon(Icons.login),
-                      label: const Text('ربط حساب Google'),
+                      onPressed: _busy ? null : _openAccountSection,
+                      icon: const Icon(Icons.manage_accounts_outlined),
+                      label: const Text('الانتقال إلى قسم الحساب'),
+                    ),
+                  ),
+                ] else if (_googleAccount == null) ...[
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.cloud_off_outlined),
+                    title: const Text('حسابك مسجّل — بقيت صلاحية Drive'),
+                    subtitle: Text(_accountEmail!),
+                  ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _grantDriveAccess,
+                      icon: const Icon(Icons.cloud_queue_outlined),
+                      label: const Text('منح صلاحية Google Drive'),
                     ),
                   ),
                 ] else ...[
@@ -557,11 +556,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     subtitle: Text(_googleAccount!.email),
-                    trailing: IconButton(
-                      tooltip: 'تسجيل الخروج',
-                      onPressed: _busy ? null : _signOutGoogle,
-                      icon: const Icon(Icons.logout),
-                    ),
                   ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
@@ -598,15 +592,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 4),
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: TextButton.icon(
-                      onPressed: _busy ? null : _relinkGoogle,
-                      icon: const Icon(Icons.switch_account_outlined),
-                      label: const Text('إعادة ربط حساب آخر'),
-                    ),
                   ),
                 ],
                 if (_cloudError != null) ...[
