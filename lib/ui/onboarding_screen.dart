@@ -15,7 +15,6 @@ import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
 import '../data/sync/firebase_auth_service.dart';
 import '../data/sync/google_auth_service.dart';
-import '../data/sync/workspace_recovery.dart';
 import 'group_management_screen.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
@@ -79,24 +78,33 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     super.dispose();
   }
 
-  Future<void> _start() async {
-    if (_busy || _choice == null) return;
-    setState(() => _busy = true);
+  /// إكمال الإعداد المحلي: اسم المتجر والعملة ونمط الاستخدام.
+  ///
+  /// (دفعة 65) يثبّت أيضاً `account.type`: الاختيار الشبكي = مؤسسة
+  /// (`enterprise`) والشخصي = فردي (`individual`). ويُرقّى تلقائياً إلى
+  /// `enterprise` عند الانضمام الفعلي لمجموعة.
+  Future<void> _completeSetup() async {
     Sfx.click();
     final repo = ref.read(repoProvider);
-    final goNetwork = _choice == 'network';
     try {
       await completeOnboarding(
         repo,
         storeName: _nameCtrl.text,
         currencyCode: _currency,
       );
+      await repo.setSetting(
+          'account.type', _choice == 'network' ? 'enterprise' : 'individual');
       bump(ref);
     } catch (_) {
       // حتى لو فشل الحفظ لأي سبب لا نحبس المستخدم في شاشة الإعداد.
     }
+  }
+
+  /// الانتقال إلى الشاشة الرئيسية (وإلى معالج المجموعة عند الاختيار الشبكي).
+  Future<void> _finishAndNavigate() async {
     if (!mounted) return;
     final nav = Navigator.of(context);
+    final goNetwork = _choice == 'network';
     nav.pushReplacement(
       MaterialPageRoute(builder: (_) => const LockGate(child: HomeShell())),
     );
@@ -105,6 +113,31 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       nav.push(
         MaterialPageRoute(builder: (_) => const GroupManagementScreen()),
       );
+    }
+  }
+
+  /// المتابعة بدون حساب Google — عمل محلي كامل (المحلية أولاً).
+  Future<void> _startLocal() async {
+    if (_busy || _choice == null) return;
+    setState(() => _busy = true);
+    try {
+      await _completeSetup();
+      await _finishAndNavigate();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// إكمال الإعداد ثم ربط حساب Google (تدفق تدريجي — Progressive Auth).
+  Future<void> _startWithGoogle() async {
+    if (_busy || _choice == null) return;
+    setState(() => _busy = true);
+    try {
+      await _completeSetup();
+      if (!mounted) return;
+      await _signInWithGoogle();
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -168,7 +201,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
                   '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي')));
-          // يُكمل المستخدم اختيار النمط عادياً — الربط تم في الخلفية.
+          // النمط مختار مسبقاً في التدفق التدريجي — نكمل الانتقال.
+          await _finishAndNavigate();
           return;
         case AccountLinkOutcome.memberUntouched:
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -180,87 +214,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               content:
                   Text('تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة')));
           return;
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// (هاتف بديل) استرداد يدوي: المدير يُدخل رمز مساحته القديمة
-  /// (WS-XXXXXXXX) فتُسحب نسخة مؤسسته الصامتة وتُستعاد كاملة،
-  /// ويُسجَّل هذا الهاتف مالكاً لها في فهرس البصمات.
-  Future<void> _restorePrevious() async {
-    final wsCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('استعادة مؤسسة سابقة'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'أدخل رمز مساحة العمل الخاص بمؤسستك (يبدأ بـ WS-، تجده في '
-              'إعدادات جهازك القديم أو لدى الدعم الفني). ستُستعاد بيانات '
-              'المؤسسة من آخر نسخة سحابية.',
-              style: TextStyle(fontSize: 12.5, height: 1.6),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: wsCtrl,
-              textDirection: TextDirection.ltr,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'رمز المساحة (WS-XXXXXXXX)',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('استعادة')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final raw = wsCtrl.text.trim();
-    // رموز WS- تُوحَّد كبيرة؛ أي معرف آخر (قديم مثل default) يُترك كما هو.
-    final wsId =
-        raw.toUpperCase().startsWith('WS-') ? raw.toUpperCase() : raw;
-    if (wsId.isEmpty) return;
-    setState(() => _busy = true);
-    try {
-      final repo = ref.read(repoProvider);
-      final st = await repo.settings();
-      final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      final recovered = await WorkspaceRecovery.manualRestore(repo,
-          backendUrl: url, workspaceId: wsId);
-      if (!mounted) return;
-      if (recovered) {
-        Sfx.pair();
-        await repo.setSetting(kOnboardingDoneKey, '1');
-        bump(ref);
-        if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-              builder: (_) => const LockGate(child: HomeShell())),
-        );
-        return;
-      }
-      Sfx.error();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'لم يُعثر على نسخة لهذه المساحة — تحقق من الرمز أو من اتصالك.')));
-    } catch (e) {
-      if (mounted) {
-        Sfx.error();
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('تعذّرت الاستعادة: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -283,7 +236,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     size: 58, color: AppColors.primaryOf(context)),
                 const SizedBox(height: 14),
                 Text(
-                  'مرحباً بك في نكسورا',
+                  'مرحباً بك في سجل الحسابات',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w800,
@@ -315,39 +268,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   const SizedBox(height: 14),
                   _networkCard(),
                 ],
-                // ---------- تسجيل الدخول بحساب Google (الهوية الدائمة) ----------
                 const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _busy ? null : _signInWithGoogle,
-                    icon: const Icon(Icons.account_circle_outlined, size: 22),
-                    label: const Text('تسجيل الدخول باستخدام Google'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'استخدمت التطبيق من قبل؟ سجّل الدخول بنفس حسابك '
-                  'وستعود مؤسستك وبياناتك كاملة تلقائياً.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: AppColors.text2Of(context),
-                    height: 1.5,
-                  ),
-                ),
-                // ---------- استعادة مؤسسة سابقة (هاتف بديل) ----------
-                const SizedBox(height: 8),
-                Center(
-                  child: TextButton.icon(
-                    onPressed: _busy ? null : _restorePrevious,
-                    icon: const Icon(Icons.restore_rounded, size: 20),
-                    label: const Text('استعادة مؤسسة سابقة برمز المساحة'),
-                  ),
-                ),
                 // ---------- الإعداد المصغّر ----------
                 AnimatedSize(
                   duration: const Duration(milliseconds: 220),
@@ -438,22 +359,51 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 onChanged: (v) => setState(() => _currency = v ?? 'YER'),
               ),
               const SizedBox(height: 20),
+              const Divider(height: 1),
+              const SizedBox(height: 14),
+              const Text(
+                'هل تود ربط حسابك بـ Google للمزامنة وحفظ النسخ الاحتياطي؟',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'يمكنك تخطي هذه الخطوة والعمل محلياً، وربط حسابك لاحقاً من '
+                'الإعدادات في أي وقت.',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.5,
+                    color: AppColors.text3Of(context)),
+              ),
+              const SizedBox(height: 14),
               SizedBox(
                 width: double.infinity,
-                height: 52,
+                height: 50,
                 child: FilledButton.icon(
-                  onPressed: _busy ? null : _start,
+                  onPressed: _busy ? null : _startWithGoogle,
                   icon: _busy
                       ? const SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.rocket_launch_outlined),
+                      : const Icon(Icons.account_circle_outlined),
                   label: const Text(
-                    'ابدأ استخدام التطبيق الآن',
+                    'ربط بحساب Google والمتابعة',
                     style: TextStyle(
-                        fontSize: 15.5, fontWeight: FontWeight.w800),
+                        fontSize: 15, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _startLocal,
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                  label: const Text(
+                    'المتابعة بدون حساب (محلياً)',
+                    style: TextStyle(fontSize: 14),
                   ),
                 ),
               ),

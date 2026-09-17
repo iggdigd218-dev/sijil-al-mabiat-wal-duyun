@@ -159,7 +159,7 @@ Future<String> buildReceiptImage(ReceiptData d) async {
     );
   }
   final orgX = logo != null ? w - pad - 116 : w - pad;
-  _text(canvas, d.orgName.isEmpty ? 'نكسورا' : d.orgName, orgX, 26, 36,
+  _text(canvas, d.orgName.isEmpty ? 'سجل الحسابات' : d.orgName, orgX, 26, 36,
       Colors.white, bold: true, alignEnd: true, maxWidth: w * .7);
   if (d.orgPhone.isNotEmpty) {
     _text(canvas, d.orgPhone, orgX, 78, 24, Colors.white70,
