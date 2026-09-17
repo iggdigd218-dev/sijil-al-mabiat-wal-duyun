@@ -1,5 +1,12 @@
 name: Build Flutter Android APK
 
+concurrency:
+  # كلا البناءين (APK و Windows) يرفعان إلى إصدار `latest` نفسه: كانا يعملان
+  # معاً فيتعارضان في حذف الأصول وإعادة رفعها، فَيُفرغ الإصدار أحياناً
+  # (0 أصول) ويبقى المستخدمون بلا تحميل. هذه المجموعة تُرتِّبهما تسلسلياً.
+  group: publish-latest-release
+  cancel-in-progress: false
+
 on:
   push:
     branches: [ main ]
@@ -95,9 +102,18 @@ jobs:
         run: |
           # لا نحذف ملفات ويندوز الموجودة مسبقًا: ننزّلها لتُعاد رفعها مع ملفات الأندرويد.
           for f in nexora-windows.zip NexoraSetup.exe README-install.txt; do
-            code=$(curl -sL -o "$f" -w "%{http_code}" \
-              "https://github.com/${{ github.repository }}/releases/download/latest/$f" || true)
-            if [ "$code" != "200" ]; then echo "لا يوجد $f بعد — سيتخطاه الرفع"; rm -f "$f"; fi
+            code=0
+            for attempt in 1 2 3 4; do
+              # ?raw=true يتجاوز تخزين CDN المُخبّأ (يُعيد 404 بعد حذف أصل
+              # وإعادة رفعه بنفس الاسم) — والمحاولات تحمي من 404 عابر.
+              code=$(curl -sL -o "$f" -w "%{http_code}" \
+                "https://github.com/${{ github.repository }}/releases/download/latest/$f?raw=true" || true)
+              [ "$code" = "200" ] && break
+              sleep 5
+            done
+            if [ "$code" != "200" ]; then
+              echo "تعذّر تنزيل $f بعد 4 محاولات — سيتخطاه الرفع"; rm -f "$f"
+            fi
           done
             ls -lh nexora-windows.zip NexoraSetup.exe README-install.txt 2>/dev/null || true
 
