@@ -9,8 +9,10 @@ android/.gradle/
 android/app/src/main/java/io/flutter/plugins/
 *.jks
 *.keystore
-*.apk
-
+  *.apk
+  *.aab
+  windows/flutter/
+  
 # Generated QA preview libraries (recreated by qa/prepare_preview.sh)
 qa/preview/core
 qa/preview/vendor
