@@ -456,6 +456,15 @@ Future<void> showWhatsNewDialog(
                     ],
                   ),
                 ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () => showReleaseNotesArchiveDialog(ctx),
+                  icon: const Icon(Icons.history_outlined, size: 18),
+                  label: const Text('عرض سجل الإصدارات السابقة'),
+                ),
+              ),
             ],
           ),
         ),
@@ -464,6 +473,63 @@ Future<void> showWhatsNewDialog(
         FilledButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('رائع!'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// (دفعة 65) أرشيف الإصدارات السابقة — بصياغة محاسبية موجّهة للمستخدم،
+/// دون أي مصطلح برمجي داخلي (لا أسماء دوال ولا رموز خطأ). يُعرض في نافذة
+/// مستقلة من بطاقة «الجديد في هذا التحديث»، فلا يزحم الشاشة بسرد تراكمي.
+const String kReleaseNotesArchive = '''
+3.64.3 — تحسينات على شاشة النسخ الاحتياطي، وتوحيد مكان تسجيل الدخول بحساب Google داخل الإعدادات.
+3.64.2 — إصلاح خطأ كان يمنع إنشاء دعوة الانضمام لأجهزة الموظفين بعد تسجيل الدخول بحساب Google.
+3.64.1 — تعزيز استقرار ربط مساحة العمل بحسابك، وضمان عدم فقدان البيانات عند إعادة الربط.
+3.64.0 — تحسينات في أمان المزامنة السحابية، وتحديث الهوية البصرية للتطبيق.
+3.63.0 — تحسينات أمنية عامة على المزامنة السحابية وحماية البيانات بين الأجهزة.
+3.62.0 — تحسين سرعة معالجة الأرصدة وفتح التقارير المالية.
+3.61.0 — دقة أعلى في احتساب المبالغ المالية وتقريب الأرقام في الفواتير والسندات.
+3.60.0 — تعزيز استقرار ربط الأجهزة والمزامنة السحابية بين المدير والموظفين.
+3.59.0 — تحسينات على استيراد وتصدير النسخ الاحتياطية.
+3.58.1 — إصلاحات في إدارة أعضاء المجموعة وصلاحياتهم.
+''';
+
+/// نافذة «سجل الإصدارات السابقة».
+Future<void> showReleaseNotesArchiveDialog(BuildContext context) {
+  final entries = kReleaseNotesArchive
+      .split('\n')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(Icons.history_outlined, color: AppColors.primaryOf(ctx)),
+      title: const Text('سجل الإصدارات السابقة'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 420, maxWidth: 460),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final e in entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    e,
+                    style: const TextStyle(fontSize: 12.5, height: 1.6),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('إغلاق'),
         ),
       ],
     ),
