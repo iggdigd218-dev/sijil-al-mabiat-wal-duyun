@@ -107,6 +107,47 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
     }
   }
 
+  /// تسجيل الخروج من حساب Google (دفعة 65).
+  ///
+  ///  • يقطع الجلسة عبر `GoogleSignIn.disconnect/signOut` — وبما أن المثال
+  ///    موحّد (SSO) تُسحب صلاحية Drive معها في الخطوة نفسها.
+  ///  • يحذف مفاتيح `account.*` من جدول settings عبر
+  ///    `FirebaseAuthRest.clearSession`.
+  ///  • **لا يمسّ الحركات ولا العملاء ولا الأرصدة في SQLite** — تبقى كما هي.
+  ///  • يعود إلى جلسة مجهولة صامتة (`initSilentAuth`) فتبقى المزامنة
+  ///    المحلية تعمل دون انقطاع.
+  Future<void> _signOut() async {
+    final ok = await confirmDialog(
+      context,
+      title: 'تسجيل الخروج من حساب Google',
+      message: 'سيُفصل حساب Google عن هذا الجهاز وتتوقف المزامنة السحابية '
+          'حتى تسجّل الدخول من جديد.\n\n'
+          'بياناتك (الحركات، العملاء، الأرصدة) تبقى كما هي ولا تُحذف.',
+      confirmText: 'تسجيل الخروج',
+      danger: true,
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(repoProvider);
+      final db = await repo.database;
+      await GoogleAuthService(db).signOut();
+      await FirebaseAuthRest.clearSession(repo);
+      // جلسة مجهولة صامتة بديلة — بلا مفاتيح حساب، وبلا مساس بالبيانات.
+      await FirebaseAuthRest.initSilentAuth(repo);
+      bump(ref);
+      if (!mounted) return;
+      showSnack(context, 'تم تسجيل الخروج — بياناتك محفوظة على الجهاز');
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر تسجيل الخروج: $e', error: true);
+    } finally {
+      if (mounted) {
+        await _load();
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+  }
+
   /// تهيئة سحابية تلقائية بعد نجاح تسجيل الدخول بحساب Google (دفعة 65):
   ///   1) تهيئة مساحة العمل `workspaces/{ws}` وتثبيت عضوية المالك.
   ///   2) `SubscriptionGuard.ensureTrialStarted` — تسجيل بداية الثلاثين
@@ -151,14 +192,18 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
           style: const TextStyle(fontSize: 11.5, height: 1.5),
         ),
         isThreeLine: true,
-        trailing: linked
-            ? null
-            : (_busy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.chevron_left)),
+        trailing: _busy
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : linked
+                ? IconButton(
+                    tooltip: 'تسجيل الخروج من حساب Google',
+                    onPressed: _signOut,
+                    icon: const Icon(Icons.logout),
+                  )
+                : const Icon(Icons.chevron_left),
         onTap: linked || _busy ? null : _signIn,
       ),
     );
