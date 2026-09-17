@@ -138,9 +138,37 @@ jobs:
             - أو النسخة المحمولة `nexora-windows.zip`: فك الضغط ثم شغّل `Run.bat`.
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
-          files: ${{ steps.filelist.outputs.files }}
-          fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: رفع أصول الإصدار (مع إعادة المحاولة)
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ❗ السبب الجذري لتكرار "Error saving asset": softprops/action-gh-release
+          # يحذف الأصل القديم أولاً ثم يرفع البديل، ورفع ملف 24MB ينتهي
+          # بالفشل بعد ~39 ثانية في كل مرة — فيُفقد الأصل بلا تعويض.
+          # actions/upload-artifact يرفع نفس الحجم في ثانيتين، فالمشكلة في
+          # مسار رفع أصول الإصدار لدى softprops تحديداً. gh الرسمي أنجح،
+          # ومع حلقة إعادة محاولة لا يبقى مجال لضياع أصل.
+          files=()
+          for f in nexora-arm64.apk version.json; do
+            [ -s "$f" ] && files+=("$f")
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::لا ملفات صالحة للرفع"; exit 1
+          fi
+          for attempt in 1 2 3; do
+            echo "محاولة رفع ${attempt}/3: ${files[*]}"
+            if gh release upload latest "${files[@]}" --clobber --repo "${{ github.repository }}"; then
+              echo "✔ تم رفع الأصول في المحاولة ${attempt}"; exit 0
+            fi
+            echo "⚠️ فشلت المحاولة ${attempt} — إعادة المحاولة بعد 20 ثانية"
+            sleep 20
+          done
+          echo "::error::تعذّر رفع أصول الإصدار بعد 3 محاولات"; exit 1
