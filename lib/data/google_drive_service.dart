@@ -4,6 +4,8 @@ import 'dart:io' as io;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
+import 'sync/google_auth_service.dart' show createUnifiedGoogleSignIn;
+
 /// معلومات تعريفية للحساب المرتبط فقط.
 class GoogleAccountInfo {
   final String id;
@@ -88,27 +90,16 @@ class GoogleDriveService {
   static const String _fileFields =
       'id,name,mimeType,modifiedTime,size,appProperties';
 
-  static const String _driveScope =
-      'https://www.googleapis.com/auth/drive.file';
-  static const String _driveAppDataScope =
-      'https://www.googleapis.com/auth/drive.appdata';
-
-  static const String _serverClientId =
-      '872578554938-tf394quhikb2j0s6tsh767qbmlsj27of.apps.googleusercontent.com';
-
-  // Google Sign-In غير مدعوم على سطح المكتب؛ ننشئه بأمان ونعيد null على ويندوز.
+  // (SSO) لا مثال GoogleSignIn خاص بهذه الخدمة ولا معرّف عميل منفصل:
+  // تستخدم المثال الموحّد الوحيد في التطبيق، فتُمنح صلاحية النسخ
+  // (drive.appdata) ضمن تسجيل الدخول الأساسي نفسه — تسجيل واحد
+  // يفعّل المزامنة والنسخ الاحتياطي معاً.
   GoogleSignIn? _signInCached;
+  bool _signInResolved = false;
   GoogleSignIn? get _signIn {
-    if (_signInCached != null) return _signInCached;
-    try {
-      _signInCached = GoogleSignIn(
-        serverClientId: _serverClientId,
-        scopes: [_driveScope, _driveAppDataScope, 'email', 'profile'],
-      );
-    } catch (_) {
-      _signInCached = null;
-    }
-    return _signInCached;
+    if (_signInResolved) return _signInCached;
+    _signInResolved = true;
+    return _signInCached = createUnifiedGoogleSignIn();
   }
 
   /// يستعيد جلسة Google السابقة بصمت إن كانت موجودة.

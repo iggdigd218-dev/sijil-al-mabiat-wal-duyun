@@ -35,29 +35,56 @@ class GoogleAuthResult {
   bool get ok => user != null;
 }
 
+/// نطاق النسخ الاحتياطي — مجلد التطبيق الخاص (`appDataFolder`) داخل Drive.
+///
+/// الخدمة تستخدمه وحده ولا تلمس ملفات Drive العادية، فلا حاجة لنطاق
+/// `drive.file` الأوسع على شاشة الموافقة.
+const String kDriveAppDataScope =
+    'https://www.googleapis.com/auth/drive.appdata';
+
+/// النطاقات الموحّدة للتطبيق كله (SSO): الهوية + صلاحية النسخ.
+const List<String> kUnifiedGoogleScopes = <String>[
+  'email',
+  'openid',
+  'profile',
+  kDriveAppDataScope,
+];
+
+/// مثال `GoogleSignIn` **الوحيد** في التطبيق — Single Sign-On.
+///
+/// كان هناك مثالان بمعرّف عميل ونطاقات مختلفين (الحساب مقابل Drive)،
+/// فيلزم المستخدم تسجيلان منفصلان؛ والتسجيل من شاشة النسخ لا يربط مساحة
+/// العمل فيفشل إنشاء الدعوة بـ HTTP 401. الآن مثال واحد بنطاقات موحّدة:
+/// تسجيل واحد يمنح الهوية وصلاحية النسخ معاً، وتتعرّفه
+/// `account_section` و`backup_screen` و`GoogleDriveService` من جلسة واحدة.
+///
+/// يُعيد null على المنصّات التي لا تدعم Google Sign-In (ويندوز/لينكس).
+GoogleSignIn? createUnifiedGoogleSignIn() {
+  try {
+    // serverClientId (عميل Web من Firebase) ضروري كي يُصدر أندرويد
+    // idToken صالحاً لتبادله مع Firebase (accounts:signInWithIdp) —
+    // بدونه يعود idToken فارغاً على بعض الأجهزة.
+    return GoogleSignIn(
+      scopes: kUnifiedGoogleScopes,
+      serverClientId:
+          kGoogleServerClientId.isEmpty ? null : kGoogleServerClientId,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 class GoogleAuthService {
   final Database db;
   GoogleSignIn? _googleSignIn;
 
-  static const _scopes = <String>['email', 'openid', 'profile'];
-
   GoogleAuthService(this.db);
 
-  /// يُنشئ GoogleSignIn بأمان (يعيد null على منصات لا تدعمه كويندوز/لينكس).
+  /// المثال الموحّد (يعيد null على منصات لا تدعمه كويندوز/لينكس).
+  ///
+  /// (SSO) نفس المثال الذي تستخدمه خدمة Drive — جلسة واحدة للتطبيق كله.
   GoogleSignIn? _ensureSignIn() {
-    if (_googleSignIn != null) return _googleSignIn;
-    try {
-      // serverClientId (عميل Web من Firebase) ضروري كي يُصدر أندرويد
-      // idToken صالحاً لتبادله مع Firebase (accounts:signInWithIdp) —
-      // بدونه يعود idToken فارغاً على بعض الأجهزة.
-      _googleSignIn = GoogleSignIn(
-        scopes: _scopes,
-        serverClientId:
-            kGoogleServerClientId.isEmpty ? null : kGoogleServerClientId,
-      );
-    } catch (_) {
-      _googleSignIn = null;
-    }
+    _googleSignIn ??= createUnifiedGoogleSignIn();
     return _googleSignIn;
   }
 

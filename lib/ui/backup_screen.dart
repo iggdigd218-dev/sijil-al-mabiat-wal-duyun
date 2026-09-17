@@ -213,8 +213,9 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<GoogleAccountInfo?> _ensureGoogleAccount() async {
+    // (SSO) لا تسجيل تفاعلي من شاشة النسخ إطلاقاً: صلاحية Drive مُنحت
+    // ضمن التسجيل الموحّد في قسم «حساب المؤسسة»، فالجلسة تُستعاد بصمت.
     var account = _googleAccount ?? await _drive.restoreSession();
-    account ??= await _drive.signIn();
     if (account != null) {
       GoogleDriveBackupInfo? backup;
       String? cloudError;
@@ -239,7 +240,14 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     setState(() => _busy = true);
     try {
       final account = await _ensureGoogleAccount();
-      if (account == null) return;
+      if (account == null) {
+        if (mounted) {
+          showSnack(context,
+              'سجّل الدخول من «الإعدادات ← حساب المؤسسة (Google)» أولاً',
+              error: true);
+        }
+        return;
+      }
       final file = await _createBackupFile();
       final backup = await _drive.uploadLatest(file);
       if (mounted) {
@@ -271,7 +279,14 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     setState(() => _busy = true);
     try {
       final account = await _ensureGoogleAccount();
-      if (account == null) return;
+      if (account == null) {
+        if (mounted) {
+          showSnack(context,
+              'سجّل الدخول من «الإعدادات ← حساب المؤسسة (Google)» أولاً',
+              error: true);
+        }
+        return;
+      }
       final dir = await getTemporaryDirectory();
       final file = File(
         '${dir.path}/nexora-drive-${DateTime.now().millisecondsSinceEpoch}.nexora',
