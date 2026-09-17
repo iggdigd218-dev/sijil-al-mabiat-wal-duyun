@@ -103,19 +103,39 @@ jobs:
           # لا نحذف ملفات ويندوز الموجودة مسبقًا: ننزّلها لتُعاد رفعها مع ملفات الأندرويد.
           for f in nexora-windows.zip NexoraSetup.exe README-install.txt; do
             code=0
-            for attempt in 1 2 3 4; do
+            for attempt in 1 2 3 4 5 6; do
               # ?raw=true يتجاوز تخزين CDN المُخبّأ (يُعيد 404 بعد حذف أصل
               # وإعادة رفعه بنفس الاسم) — والمحاولات تحمي من 404 عابر.
               code=$(curl -sL -o "$f" -w "%{http_code}" \
                 "https://github.com/${{ github.repository }}/releases/download/latest/$f?raw=true" || true)
               [ "$code" = "200" ] && break
-              sleep 5
+              sleep 10
             done
             if [ "$code" != "200" ]; then
-              echo "تعذّر تنزيل $f بعد 4 محاولات — سيتخطاه الرفع"; rm -f "$f"
+              echo "تعذّر تنزيل $f بعد 6 محاولات — سيتخطاه الرفع"; rm -f "$f"
             fi
           done
             ls -lh nexora-windows.zip NexoraSetup.exe README-install.txt 2>/dev/null || true
+
+      - name: Build upload list (existing files only)
+        id: filelist
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          # ⚠️ الأهم: لا نُدرج ملفاً تعذّر تنزيله من منصّة أخرى. خطوة الرفع
+          # تحذف الأصل القديم بنفس الاسم **أولاً** ثم ترفع البديل؛ فإن كان
+          # البديل غائباً محلياً يُحذف الأصل بلا تعويض — هكذا فُقدت
+          # nexora-windows.zip ثم أُفرغ الإصدار كاملاً (0 أصول).
+          files=""
+          for f in nexora-arm64.apk version.json nexora-windows.zip NexoraSetup.exe README-install.txt; do
+            if [ -s "$f" ]; then files="${files}${f}"$(printf '\n'); fi
+          done
+          {
+            echo 'files<<LISTEOF'
+            printf '%s' "$files"
+            echo 'LISTEOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "قائمة الرفع:"; printf '%s\n' "$files"
 
       - name: Update unified latest release (APK + version.json)
         uses: softprops/action-gh-release@v2
@@ -137,12 +157,7 @@ jobs:
             - أو النسخة المحمولة `nexora-windows.zip`: فك الضغط ثم شغّل `Run.bat`.
 
             > يتم تحديث هذه الصفحة تلقائيًا بعد كل بناء ناجح.
-          files: |
-            nexora-arm64.apk
-            version.json
-            nexora-windows.zip
-            NexoraSetup.exe
-            README-install.txt
+          files: ${{ steps.filelist.outputs.files }}
           fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
