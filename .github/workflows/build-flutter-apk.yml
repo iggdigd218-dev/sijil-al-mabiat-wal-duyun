@@ -128,7 +128,7 @@ jobs:
           # nexora-windows.zip ثم أُفرغ الإصدار كاملاً (0 أصول).
           files=""
           for f in nexora-arm64.apk version.json nexora-windows.zip NexoraSetup.exe README-install.txt; do
-            if [ -s "$f" ]; then files="${files}${f}"$(printf '\n'); fi
+            if [ -s "$f" ]; then files="${files}${f}"$'\n'; fi
           done
           {
             echo 'files<<LISTEOF'
