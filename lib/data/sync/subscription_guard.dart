@@ -174,6 +174,50 @@ class SubscriptionState {
   );
 }
 
+/// المزايا المتقدمة الخاضعة للتقييد في الحساب المقيد (دفعة 65).
+enum Feature {
+  /// إشعارات ومطالبات الديون عبر واتساب.
+  whatsappClaims,
+
+  /// قوالب رسائل مخصصة.
+  customTemplates,
+
+  /// تصدير التقارير وكشوف الحساب (PDF / Excel).
+  reportsExport,
+
+  /// شعار المتجر على الفواتير والإيصالات الحرارية.
+  storeLogo,
+}
+
+/// الحارس المركزي للصلاحيات والمزايا (دفعة 65).
+///
+/// الحساب **مقيد** في حالتين:
+///  ١. مستخدم فردي لم يربط حسابه بالسحابة (`status == 'none'`).
+///  ٢. مسجّل بحساب Google لكن فترته التجريبية انتهت دون تجديد
+///     (`expired && !isSubscribed`).
+///
+/// اختلاف معماري مقصود عن [SubscriptionState.featureUnlocked]: ذاك يعتبر
+/// `status == 'none'` بلا قيود (لا خطة سحابية أصلاً)، وتبقى البوابات
+/// القائمة عليه (`restore`، `cloud_backup`، …) كما هي كي لا يُحرم المستخدم
+/// المحلي من بياناته — بينما هذا الحارس يحكم **المزايا المتقدمة** فقط.
+class FeatureAccessGuard {
+  FeatureAccessGuard._();
+
+  /// هل الحساب مقيد؟
+  static bool isRestricted(SubscriptionState sub) =>
+      sub.status == 'none' || (sub.expired && !sub.isSubscribed);
+
+  /// هل يُسمح بالوصول إلى [feature]؟
+  static bool canAccess(SubscriptionState sub, Feature feature) {
+    if (isRestricted(sub)) return false;
+    return sub.featureUnlocked((p) => switch (feature) {
+          Feature.whatsappClaims => p.canSendNotifications,
+          Feature.customTemplates => p.canSendNotifications,
+          _ => true,
+        });
+  }
+}
+
 /// حارس الاشتراك: التفعيل، الفحص الدوري بوقت الخادم، والبوابة المركزية.
 class SubscriptionGuard {
   SubscriptionGuard._();

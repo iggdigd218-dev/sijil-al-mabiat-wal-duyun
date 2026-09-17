@@ -359,6 +359,89 @@ class SubscriptionDetailsSection extends ConsumerWidget {
   }
 }
 
+/// نافذة «الترقية» السفلية لميزة مقيدة (دفعة 65): تشرح الميزة وتوجّه
+/// المستخدم لتسجيل الدخول (لفتح فترة تجريبية) أو تجديد اشتراكه.
+Future<void> showFeatureUpgradeSheet(
+  BuildContext context, {
+  required String featureName,
+  required String description,
+  required bool expired,
+}) {
+  Sfx.warning();
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, 20 + MediaQuery.viewInsetsOf(ctx).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(Icons.lock_open_outlined,
+              size: 48, color: AppColors.primaryOf(ctx)),
+          const SizedBox(height: 12),
+          Text(featureName,
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          Text(description,
+              style: const TextStyle(fontSize: 12.5, height: 1.6),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          Text(
+            expired
+                ? 'انتهت فترتك التجريبية — جدّد اشتراكك لاستعادة هذه الميزة. '
+                    'بياناتك المحلية محفوظة كما هي.'
+                : 'هذه الميزة للمشتركين. سجّل الدخول بحساب Google لفتحها '
+                    'مع فترة تجريبية مجانية — بياناتك تبقى على جهازك.',
+            style: TextStyle(
+                fontSize: 12.5, height: 1.6, color: AppColors.text2Of(ctx)),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.pop(ctx);
+              showTrialExpiredSheet(context, expired: expired);
+            },
+            icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+            label: Text(
+                expired ? 'تجديد الاشتراك' : 'تفعيل الفترة التجريبية'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('لاحقاً'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// بوابة المزايا المتقدمة (دفعة 65) — تعتمد [FeatureAccessGuard] بدل
+/// `featureUnlockedProvider`، فالحساب غير المربوط بالسحابة أو المنتهية
+/// تجربته يُعدّ مقيداً. عند الرفض تظهر نافذة سفلية أنيقة.
+Future<bool> ensureFeatureAllowed(
+  BuildContext context,
+  WidgetRef ref,
+  Feature feature, {
+  required String featureName,
+  required String description,
+}) async {
+  final sub = await ref.read(subscriptionProvider.future);
+  if (FeatureAccessGuard.canAccess(sub, feature)) return true;
+  if (!context.mounted) return false;
+  final expired = sub.status != 'none' && sub.expired;
+  await showFeatureUpgradeSheet(context,
+      featureName: featureName, description: description, expired: expired);
+  return false;
+}
+
 /// بطاقة التفعيل/التجديد: تُستخدم بعد الانتهاء (تجديد) وأثناء السريان
 /// (ترقية مبكرة) — العنوان والنبرة يتكيفان مع الحالة.
 Future<void> showTrialExpiredSheet(BuildContext context,

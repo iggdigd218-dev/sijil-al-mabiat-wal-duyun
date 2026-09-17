@@ -11,6 +11,8 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import 'trial_ui.dart' show FeatureGate;
 import 'widgets.dart';
+import 'trial_ui.dart' show ensureFeatureAllowed;
+import '../data/sync/subscription_guard.dart' show Feature;
 
 /// أنواع التقارير — نقل حرفي لـ `REPORT_TABS` في نسخة الويب.
 enum ReportTab {
@@ -679,7 +681,19 @@ class _ReportView extends ConsumerWidget {
                     child: FilledButton.icon(
                       onPressed: table.rows.isEmpty
                           ? null
-                          : () => _exportPdf(context, tab, table),
+                          : () async {
+                              final ok = await ensureFeatureAllowed(
+                                context, ref, Feature.reportsExport,
+                                featureName: 'تصدير التقارير PDF / Excel',
+                                description:
+                                    'صدّر كشف الحساب والتقارير المالية '
+                                    'بصيغة PDF أو Excel نظيفة وجاهزة '
+                                    'للطباعة أو الإرسال.',
+                              );
+                              if (ok && context.mounted) {
+                                await _exportPdf(context, tab, table);
+                              }
+                            },
                       icon: const Icon(Icons.picture_as_pdf_outlined),
                       label: const Text('تصدير PDF'),
                     ),
