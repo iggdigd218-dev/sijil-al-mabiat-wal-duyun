@@ -1,9 +1,14 @@
 {
   "rules": {
     "workspaces": {
+      ".read": true,
+      ".write": true,
       "$ws": {
         "operations": {
-          ".indexOn": ["server_ts"],
+          ".indexOn": [
+            "server_ts",
+            "timestamp"
+          ],
           ".read": true,
           ".write": true
         },
@@ -26,8 +31,36 @@
         "joinSnapshot": {
           ".read": true,
           ".write": true
+        },
+        "members": {
+          ".read": true,
+          ".write": true
+        },
+        "subscription": {
+          ".read": true,
+          ".write": true
+        },
+        "creator": {
+          ".read": true,
+          ".write": true
+        },
+        "codes": {
+          ".read": true,
+          ".write": true
         }
       }
+    },
+    "server_clock": {
+      ".read": true,
+      ".write": true
+    },
+    "trials": {
+      ".read": true,
+      ".write": true
+    },
+    "invite_index": {
+      ".read": true,
+      ".write": true
     }
   }
 }
