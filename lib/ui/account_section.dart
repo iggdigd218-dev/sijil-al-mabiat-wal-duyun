@@ -3,15 +3,20 @@
 // للمدير/المستقل فقط: يعرض الحساب المربوط (البريد الإلكتروني) أو زر
 // تسجيل الدخول. الربط يجعل مساحة العمل والترخيص يتبعان الحساب —
 // فيستعيد المستخدم كل شيء على أي هاتف بمجرد تسجيل الدخول.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/cloud_config.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
+import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
 import '../data/sync/firebase_auth_service.dart';
+import '../data/sync/cloud_join.dart';
 import '../data/sync/google_auth_service.dart';
+import '../data/sync/subscription_guard.dart';
 import 'widgets.dart';
 
 class AccountSection extends ConsumerStatefulWidget {
@@ -83,6 +88,9 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
           bump(ref);
           showSnack(context,
               '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي');
+          // (دفعة 65) تهيئة سحابية تلقائية: مساحة العمل + بدء التجربة
+          // بختم خادم Firebase + تحديث «تفاصيل الاشتراك» فوراً.
+          unawaited(_provisionCloudAfterSignIn(repo, ref, url));
           break;
         case AccountLinkOutcome.memberUntouched:
           showSnack(context, 'جهاز العضو يتبع مجموعة مديره — لا حاجة للربط');
@@ -96,6 +104,31 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
       await _load();
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// تهيئة سحابية تلقائية بعد نجاح تسجيل الدخول بحساب Google (دفعة 65):
+  ///   1) تهيئة مساحة العمل `workspaces/{ws}` وتثبيت عضوية المالك.
+  ///   2) `SubscriptionGuard.ensureTrialStarted` — تسجيل بداية الثلاثين
+  ///      يوماً بختم **خادم Firebase** (لا ساعة الجهاز).
+  ///   3) إبطال `subscriptionProvider` فتحدّث «تفاصيل الاشتراك» فوراً
+  ///      لتعرض «الخطة: تجريبية مجانية — متبقي X» بدل «فعّل المزامنة أولاً».
+  ///
+  /// لا ترفع استثناءً أبداً: تعذّر الشبكة يجب ألّا يُفسد تسجيل الدخول نفسه.
+  Future<void> _provisionCloudAfterSignIn(
+      Repo repo, WidgetRef ref, String url) async {
+    if (url.isEmpty) return;
+    try {
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      await CloudJoin.ensureOwnerMembership(repo,
+          backendUrl: url, workspaceId: ws);
+      await SubscriptionGuard.ensureTrialStarted(repo,
+          backendUrl: url, workspaceId: ws);
+      ref.invalidate(subscriptionProvider);
+    } catch (_) {
+      // خلفية صامتة.
     }
   }
 

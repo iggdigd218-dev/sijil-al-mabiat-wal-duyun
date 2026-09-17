@@ -262,7 +262,7 @@ class SubscriptionDetailsSection extends ConsumerWidget {
           Icons.verified,
         ),
       ('trial', false) => (
-          'فترة تجريبية سارية',
+          'الخطة: تجريبية مجانية — متبقي ${formatTrialRemaining(sub.remaining)}',
           const Color(0xFF7C3AED),
           Icons.workspace_premium,
         ),
