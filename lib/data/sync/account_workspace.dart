@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../repository.dart';
+import 'cloud_join.dart';
 import 'device_id.dart';
 import 'device_registry.dart';
 import 'firebase_auth_service.dart';
@@ -123,6 +124,9 @@ class AccountWorkspace {
   /// ربط الـ workspace بحساب Google في الجدول المحلي.
   static Future<void> _afterLink(Repo repo, String backendUrl,
       FirebaseAccount account, String workspaceId) async {
+    // (401) الهوية السابقة (المجهولة) قبل ترقية الجلسة: إثر ربط الحساب
+    // يتغيّر auth.uid، وتُنقل عضوية المالك من القديمة إلى UID الحساب.
+    final previousUid = FirebaseAuthRest.anonymousUid;
     await FirebaseAuthRest.saveSession(repo, account);
     await bind(
       backendUrl: backendUrl,
@@ -131,6 +135,14 @@ class AccountWorkspace {
       email: account.email,
       force: true,
     );
+    // (401) ترحيل فوري لعضوية المالك: بدونها يبقى المالك بلا صلاحية كتابة
+    // على مساحته، وأول عرض للخلل هو رفض إنشاء الدعوة بـ HTTP 401.
+    try {
+      await CloudJoin.migrateOwnerMembership(repo,
+          backendUrl: backendUrl,
+          workspaceId: workspaceId,
+          previousUid: previousUid);
+    } catch (_) {}
     try {
       await DeviceRegistry.upsertBinding(repo,
           backendUrl: backendUrl, force: true);

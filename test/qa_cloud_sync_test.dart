@@ -21,6 +21,7 @@ import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
 import 'package:nexora_app/core/auth_config.dart';
+import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/firebase_auth_service.dart';
 
 /// سحابة Firebase وهمية في الذاكرة: تخزّن العمليات تحت مسار workspaces
@@ -517,5 +518,151 @@ void main() {
     final st = await repoA.settings();
     expect(st['cloudBackendUrl'],
         'https://ok-project-default-rtdb.firebaseio.com');
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // (401 بعد تسجيل الدخول بـ Google) كان الاستبدال يستخرج `localId` فقط
+  // ويُهمل `idToken`، فتبقى كل طلبات cloud_join عارية أو بهوية مجهولة لا
+  // تملك صلاحية المالك → HTTP 401 عند إنشاء الدعوة.
+  // ══════════════════════════════════════════════════════════════════════
+
+  test('QA-CLOUD-03d استبدال توكن Google: ?auth= يحمل توكن Firebase لا الخام',
+      () async {
+    debugFirebaseApiKeyOverride = 'TEST_KEY';
+    addTearDown(() async {
+      debugFirebaseApiKeyOverride = '';
+      await FirebaseAuthRest.clearSession(repoA);
+    });
+
+    final idpBodies = <String>[];
+    final appAuth = <String>[]; // توكنات ?auth= في طلبات كود الإنتاج فقط
+
+    http.Client client() => MockClient((req) async {
+          if (req.url.host.contains('identitytoolkit')) {
+            idpBodies.add(req.body);
+            return FakeFirebase._utf8Json(
+                '{"localId":"UID-GOOGLE-1","email":"owner@nexora.test",'
+                '"idToken":"FB-TOKEN","refreshToken":"FB-REF",'
+                '"expiresIn":"3600"}',
+                200);
+          }
+          if (req.url.host.contains('securetoken')) {
+            return FakeFirebase._utf8Json('{"error":"invalid_grant"}', 400);
+          }
+          // أي طلب RTDB: القواعد لا تقبل إلا توكن Firebase الصحيح.
+          final auth = req.url.queryParameters['auth'] ?? '';
+          // مسار __probe__ استقصاء اختباري مباشر (يُرسَل عمداً بالتوكن الخام
+          // لبيان أن RTDB ترفضه) — فلا يُحسب ضمن طلبات كود الإنتاج.
+          if (!req.url.path.contains('__probe__')) appAuth.add(auth);
+          if (auth != 'FB-TOKEN') {
+            return FakeFirebase._utf8Json('{"error":"Permission denied"}', 401);
+          }
+          return FakeFirebase._utf8Json('{"ok":true}', 200);
+        });
+
+    await http.runWithClient(() async {
+      // ١) الاستبدال يُرسل توكن Google الخام داخل postBody فقط.
+      final account =
+          await FirebaseAuthRest.signInWithGoogleIdToken('RAW-GOOGLE-TOKEN');
+      expect(account, isNotNull);
+      expect(account!.uid, 'UID-GOOGLE-1');
+      expect(idpBodies.single, contains('id_token=RAW-GOOGLE-TOKEN'));
+
+      // ٢) الحفظ يثبّت توكن Firebase وجلسة الحساب.
+      await FirebaseAuthRest.saveSession(repoA, account);
+      expect(FirebaseAuthRest.currentUid, 'UID-GOOGLE-1',
+          reason: 'auth.uid يصبح UID الحساب لا الهوية المجهولة للجهاز');
+      expect(await FirebaseAuthRest.cloudIdToken(), 'FB-TOKEN',
+          reason: '?auth= يحمل توكن Firebase الناتج عن الاستبدال');
+
+      // ٣) طلب حقيقي من كود الإنتاج إلى RTDB: يجب أن يُوقَّع بتوكن Firebase.
+      await CloudJoin.ensureOwnerMembership(repoA,
+          backendUrl: 'https://qa-cloud.firebaseio.com', workspaceId: 'default');
+
+      // ٤) الجوهرة: التوكن الخام مرفوض من RTDB والمُستبدل مقبول (مسار استقصاء).
+      final raw = await http.get(Uri.parse('https://qa-cloud.firebaseio.com/'
+          '__probe__.json?auth=RAW-GOOGLE-TOKEN'));
+      expect(raw.statusCode, 401,
+          reason: 'توكن Google الخام لا تعترف به قواعد RTDB');
+      final good = await http.get(Uri.parse('https://qa-cloud.firebaseio.com/'
+          '__probe__.json?auth=FB-TOKEN'));
+      expect(good.statusCode, 200);
+    }, client);
+
+    expect(appAuth, isNotEmpty, reason: 'كود الإنتاج أجرى طلباً إلى RTDB');
+    expect(appAuth, everyElement('FB-TOKEN'),
+        reason: 'كل طلب من كود الإنتاج حمل توكن Firebase لا توكن Google الخام');
+
+    // ٤) الثبات عبر إعادة التشغيل.
+    final st = await repoA.settings();
+    expect(st['account.uid'], 'UID-GOOGLE-1');
+    expect(st['account.idToken'], 'FB-TOKEN');
+    expect(st['account.refreshToken'], 'FB-REF');
+  });
+
+  test('QA-CLOUD-03e عضوية المالك تُكتب تحت members/{googleUid} بدور owner',
+      () async {
+    addTearDown(() async {
+      await FirebaseAuthRest.clearSession(repoA);
+    });
+
+    // جلسة حساب جاهزة (بلا شبكة): توكن Firebase بعد الاستبدال.
+    await FirebaseAuthRest.saveSession(
+      repoA,
+      const FirebaseAccount(
+        uid: 'UID-GOOGLE-1',
+        email: 'owner@nexora.test',
+        idToken: 'FB-TOKEN',
+        refreshToken: 'FB-REF',
+        expiresInSeconds: 3600,
+      ),
+    );
+
+    final puts = <String, Map<String, Object?>>{};
+    final deletes = <String>[];
+    final authed = <bool>[];
+
+    http.Client client() => MockClient((req) async {
+          final auth = req.url.queryParameters['auth'];
+          authed.add(auth == 'FB-TOKEN');
+          if (auth != 'FB-TOKEN') {
+            return FakeFirebase._utf8Json('{"error":"Permission denied"}', 401);
+          }
+          final path = req.url.path;
+          if (req.method == 'PUT') {
+            puts[path] = Map<String, Object?>.from(jsonDecode(req.body) as Map);
+            return FakeFirebase._utf8Json(req.body, 200);
+          }
+          if (req.method == 'DELETE') {
+            deletes.add(path);
+            return FakeFirebase._utf8Json('null', 200);
+          }
+          return FakeFirebase._utf8Json('null', 200); // GET → عقدة غائبة
+        });
+
+    await http.runWithClient(() async {
+      await CloudJoin.ensureOwnerMembership(repoA,
+          backendUrl: 'https://qa-cloud.firebaseio.com', workspaceId: 'default');
+    }, client);
+
+    final memberPath =
+        puts.keys.singleWhere((k) => k.contains('/members/'), orElse: () => '');
+    expect(memberPath, contains('/members/UID-GOOGLE-1.json'),
+        reason: 'العقدة مفتاحها UID الحساب (كانت تُكتب بالهوية المجهولة)');
+    expect(puts[memberPath]!['role'], 'owner');
+    expect(puts[memberPath]!['uid'], 'UID-GOOGLE-1');
+    expect(puts[memberPath]!['deviceId'], isNotEmpty);
+    expect(authed, everyElement(isTrue),
+        reason: 'كل طلب إلى RTDB حمل ?auth= بتوكن Firebase');
+
+    // الترحيل: نقل العضوية من الهوية المجهولة القديمة إلى UID الحساب.
+    await http.runWithClient(() async {
+      await CloudJoin.migrateOwnerMembership(repoA,
+          backendUrl: 'https://qa-cloud.firebaseio.com',
+          workspaceId: 'default',
+          previousUid: 'UID-ANON-OLD');
+    }, client);
+    expect(deletes.any((p) => p.contains('/members/UID-ANON-OLD.json')), isTrue,
+        reason: 'يُمحى سجل الهوية المجهولة القديم بعد نقلها');
   });
 }

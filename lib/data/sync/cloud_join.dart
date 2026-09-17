@@ -240,12 +240,38 @@ class CloudJoin {
     try {
       final existing = await _getJson(path);
       if (existing != null) return; // المالك الأول يثبت للأبد.
+      final st = await repo.settings();
       await _putJson(path, {
         'role': 'owner',
         'uid': uid,
         'deviceId': repo.requireDeviceId,
+        'email': (st[FirebaseAuthRest.emailKey] ?? '').trim(),
         'joined_at': {'.sv': 'timestamp'},
       }, timeout: const Duration(seconds: 20));
+    } catch (_) {}
+  }
+
+  /// (401) ترحيل هوية المالك بعد ربط حساب Google: يتغيّر `auth.uid` من الهوية
+  /// المجهولة للجهاز إلى الـ UID الحقيقي الناتج عن الاستبدال، فتُكتب عقدة
+  /// العضوية الجديدة `workspaces/{ws}/members/{googleUid}` بدور `owner`
+  /// وبيانات الجهاز، ويُمحى السجل القديم المفتاح بالهوية المجهولة — وإلا بقي
+  /// المالك ممسوك الصلاحية عن مساحته فتُرفض كتاباته (دعوة، invite_index) بـ 401.
+  static Future<void> migrateOwnerMembership(
+    Repo repo, {
+    required String backendUrl,
+    required String previousUid,
+    String? workspaceId,
+  }) async {
+    if (backendUrl.trim().isEmpty) return;
+    // كتابة الهوية الجديدة أولاً: إن فشلت لا نفقد العضوية القديمة.
+    await ensureOwnerMembership(
+        repo, backendUrl: backendUrl, workspaceId: workspaceId);
+    final uid = FirebaseAuthRest.currentUid;
+    if (uid.isEmpty || previousUid.isEmpty || uid == previousUid) return;
+    final ws = workspaceId ?? repo.requireWorkspaceId;
+    try {
+      await _delete('${_root(backendUrl, ws)}/members/'
+          '${Uri.encodeComponent(previousUid)}.json');
     } catch (_) {}
   }
 
@@ -404,9 +430,34 @@ class CloudJoin {
     }
   }
 
+  /// (401) توقيع أي طلب إلى RTDB بـ `?auth=` — القواعد تشترط `auth != null`.
+  ///
+  /// التوكن هو **توكن Firebase** لا غير: جلسة الحساب بعد استبدال توكن Google
+  /// (`accounts:signInWithIdp`) أو هوية الجهاز المجهولة. توكن Google الخام
+  /// مرفوض أصلاً من RTDB — لذلك لا يُرسَل أبداً.
+  /// إن لم يتوفر توكن في الذاكرة يُترك الطلب كما كان (أفضل جهد بلا كسر).
+  static Uri _authedUrl(String url, [String? overrideToken]) {
+    final token = overrideToken ?? FirebaseAuthRest.cachedIdToken;
+    final uri = Uri.parse(url);
+    if (token == null || token.isEmpty) return uri;
+    final q = Map<String, String>.from(uri.queryParameters)..['auth'] = token;
+    return uri.replace(queryParameters: q);
+  }
+
   static Future<Map<String, dynamic>?> _getJson(String url) async {
-    final res =
-        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+    final uri = _authedUrl(url);
+    var res = await http.get(uri).timeout(const Duration(seconds: 30));
+    if ((res.statusCode == 401 || res.statusCode == 403) &&
+        uri.queryParameters.containsKey('auth')) {
+      // توكن منتهٍ أو مرفوض: تحديث قسري ومحاولة واحدة **موقّعة**. التراجع إلى
+      // طلب عارٍ أُلغي نهائياً (ثغرة أ-1) — الطلب العاري يُخفي غياب الهوية.
+      final fresh = await FirebaseAuthRest.forceRefreshToken();
+      if (fresh != null) {
+        res = await http
+            .get(_authedUrl(url, fresh))
+            .timeout(const Duration(seconds: 30));
+      }
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
     }
@@ -418,11 +469,25 @@ class CloudJoin {
 
   static Future<void> _putJson(String url, Object body,
       {Duration timeout = const Duration(seconds: 60)}) async {
-    final res = await http
-        .put(Uri.parse(url),
+    final uri = _authedUrl(url);
+    var res = await http
+        .put(uri,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body))
         .timeout(timeout);
+    if ((res.statusCode == 401 || res.statusCode == 403) &&
+        uri.queryParameters.containsKey('auth')) {
+      // (401 بعد تسجيل الدخول) التجديد ثم إعادة محاولة واحدة موقّعة — هذه هي
+      // النقطة التي كانت تُسقط إنشاء الدعوة قبل الإصلاح.
+      final fresh = await FirebaseAuthRest.forceRefreshToken();
+      if (fresh != null) {
+        res = await http
+            .put(_authedUrl(url, fresh),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(body))
+            .timeout(timeout);
+      }
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
     }
@@ -430,7 +495,9 @@ class CloudJoin {
 
   static Future<void> _delete(String url) async {
     try {
-      await http.delete(Uri.parse(url)).timeout(const Duration(seconds: 20));
+      await http
+          .delete(_authedUrl(url))
+          .timeout(const Duration(seconds: 20));
     } catch (_) {}
   }
 
@@ -440,7 +507,7 @@ class CloudJoin {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final res = await http
-            .delete(Uri.parse(url))
+            .delete(_authedUrl(url))
             .timeout(const Duration(seconds: 20));
         // فيربيس يرد 200 على حذف مسار (حتى غير الموجود) — أي 2xx يكفي.
         if (res.statusCode >= 200 && res.statusCode < 300) return;
