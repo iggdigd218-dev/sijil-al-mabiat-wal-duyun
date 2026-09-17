@@ -178,6 +178,9 @@ jobs:
       - name: "Generate version.json من pubspec.yaml و release_notes.txt"
         if: github.ref == 'refs/heads/main'
         shell: bash
+        env:
+          # على ويندوز ترميز مخرجات python افتراضاً cp1252 فيرفض العربية.
+          PYTHONIOENCODING: utf-8
         run: |
           # ⚠️ كان هذا الملف يُعاد رفعه من الإصدار القديم كما هو، فيبقى رقم
           # الإصدار ثابتاً إلى الأبد ولا يظهر تحديث داخل التطبيق. الآن يُولَّد
