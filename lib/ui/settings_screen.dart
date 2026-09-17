@@ -18,7 +18,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import 'splash.dart' show SplashScreen;
 import 'trial_ui.dart'
-    show SubscriptionDetailsSection, ensureFeatureAllowed;
+    show SubscriptionDetailsSection, ensureFeatureAllowed, showTrialExpiredSheet;
 import 'update_section.dart';
 import 'account_section.dart';
 import 'appearance_screen.dart';
@@ -495,6 +495,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         final userRole =
             ref.watch(deviceRoleProvider).valueOrNull?.role;
         final canSensitive = canEditOrg || userRole == UserRole.admin;
+        // (دفعة 65) نوع الحساب: فردي أم مؤسسة. توافق خلفي — من لا يملك
+        // المفتاح (مستخدم سابق) يُستنتج نوعه من نمط مساحة العمل بدل أن
+        // يُخفى عنه قسم المجموعة الذي يستخدمه فعلاً.
+        final storedType = (st['account.type'] ?? '').toString().trim();
+        final accountType = storedType.isNotEmpty
+            ? storedType
+            : (wsMode == 'standalone' ? 'individual' : 'enterprise');
+        final isIndividual = accountType != 'enterprise';
         return Stack(
           children: [
             ListView(
@@ -918,7 +926,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 // التقنية أُزيلت نهائياً: الرابط الرسمي مضمّن برمجياً
                 // والمزامنة التلقائية مثبتة دائماً في الخلفية — بقي فقط
                 // مدخل «إدارة المجموعة / ربط الأجهزة» البسيط.
-                if (canSensitive) ...[
+                if (canSensitive && !isIndividual) ...[
                   const SizedBox(height: 18),
                   _Collapsible(
                     title: 'المجموعة وربط الأجهزة',
@@ -959,6 +967,97 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             onTap: () => startJoinApprovalFlow(context, ref),
                           ),
                         ),
+                    ],
+                  ),
+                ],
+                // (دفعة 65) الحساب الفردي: شريط دعائي أنيق للترقية إلى مؤسسة.
+                if (isIndividual) ...[
+                  const SizedBox(height: 18),
+                  Card(
+                    color: const Color(0xFF7C3AED).withValues(alpha: .07),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF7C3AED)
+                                      .withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.business_center,
+                                    color: Color(0xFF7C3AED), size: 22),
+                              ),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text('الترقية إلى حساب مؤسسة',
+                                        style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w800)),
+                                    Text('أضف كاشير وموظفين بصلاحيات',
+                                        style: TextStyle(fontSize: 11.5)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          const Text(
+                            '• أضف أجهزة كاشير غير محدودة واربطها بحسابك\n'
+                            '• صلاحيات دقيقة لكل موظف (إدخال، تقارير، إدارة)\n'
+                            '• مزامنة لحظية بين كل الأجهزة والفروع\n'
+                            '• نسخ احتياطي سحابي تلقائي لمؤسستك',
+                            style:
+                                TextStyle(fontSize: 12, height: 1.7),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: () => showTrialExpiredSheet(
+                                  context, expired: false),
+                              icon: const Icon(Icons.rocket_launch_outlined,
+                                  size: 18),
+                              label: const Text('ترقية إلى مؤسسة'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                // (دفعة 65) الحساب الفردي: خيار «الانضمام إلى مؤسسة قائمة»
+                // يبقى متاحاً ومستقلاً لمن يرغب بالعمل تحت إدارة متجر آخر.
+                if (isIndividual) ...[
+                  const SizedBox(height: 18),
+                  _Collapsible(
+                    title: 'الانضمام إلى مؤسسة قائمة',
+                    icon: Icons.group_add_outlined,
+                    color: const Color(0xFF7C3AED),
+                    children: [
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.group_add_outlined,
+                              color: Color(0xFF7C3AED)),
+                          title:
+                              const Text('الانضمام إلى مجموعة عبر السحابة'),
+                          subtitle: const Text(
+                            'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
+                            'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
+                            style: TextStyle(fontSize: 11.5, height: 1.5),
+                          ),
+                          trailing: const Icon(Icons.chevron_left),
+                          onTap: () => startJoinApprovalFlow(context, ref),
+                        ),
+                      ),
                     ],
                   ),
                 ],
