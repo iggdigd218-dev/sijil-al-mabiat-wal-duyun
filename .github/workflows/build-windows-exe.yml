@@ -175,6 +175,37 @@ jobs:
               && echo "تم حذف nexora-windows.msix القديم"
           fi
 
+      - name: Generate version.json (المصدر الوحيد: pubspec.yaml)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          # رسالة الالتزام هي سجل التغييرات الذي يراه المستخدم في التطبيق.
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          # ⚠️ كان هذا الملف يُعاد رفعه من الإصدار القديم كما هو، فلا يتغيّر
+          # رقم الإصدار أبداً ولا يظهر تحديث داخل التطبيق مهما دُفع من كود.
+          # الآن يُولَّد دائماً من pubspec.yaml — المصدر الوحيد للإصدار.
+          $m = Select-String -Path "pubspec.yaml" -Pattern '^version:\s*([0-9.]+)\+(\d+)'
+          if (-not $m) { Write-Host "تعذّر قراءة الإصدار من pubspec.yaml"; exit 1 }
+          $ver   = $m.Matches[0].Groups[1].Value
+          $build = $m.Matches[0].Groups[2].Value
+          $repo  = "${{ github.repository }}"
+          $base  = "https://github.com/$repo/releases/download/latest"
+          $obj = [ordered]@{
+            version      = "$ver+$build"
+            minSupported = "3.13.0"
+            releaseUrl   = "https://github.com/$repo/releases/tag/latest"
+            downloads    = [ordered]@{
+              android = "$base/nexora-arm64.apk"
+              windows = "$base/NexoraSetup.exe"
+            }
+            publishedAt  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            notes        = $env:COMMIT_MSG
+          }
+          ($obj | ConvertTo-Json -Depth 5) | Set-Content -Path "version.json" -Encoding UTF8
+          Write-Host "تم توليد version.json بالإصدار $($obj.version)"
+          Get-Content version.json -Raw
+
       - name: Update unified latest release (Windows)
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
