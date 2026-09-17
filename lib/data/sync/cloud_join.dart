@@ -17,12 +17,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/factory_reset.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'device_id.dart';
+import 'google_auth_service.dart';
 import 'device_registry.dart';
 import 'firebase_auth_service.dart';
 import 'snapshot_apply.dart';
@@ -780,6 +783,38 @@ class CloudJoin {
     await _deleteStrict('$root/invites/$tok.json');
     // (أ-2) محو فهرسي الدعوة مع أصلها — لا مفاتيح ميتة في /invite_index.
     await _purgeInviteIndex(url, pin: '${invite['pin'] ?? ''}', token: tok);
+
+    // ══════════ (دفعة 65) الانضمام الآمن — أربع خطوات قبل أي دمج ══════════
+    // يُنفَّذ هنا فقط: بعد التحقق من صلاحية الدعوة وإبطالها، وقبل تطبيق
+    // لقطة المالك. هكذا لا يُفرَّغ الجهاز عند إدخال رمز خاطئ.
+
+    // 1) نسخة احتياطية صامتة — أفضل جهد (فشلها لا يُلغي الانضمام).
+    try {
+      final data = await repo.exportAll(withImages: false);
+      await FactoryReset.silentBackup(data,
+          fileName: FactoryReset.kBackupBeforeJoining);
+    } catch (e) {
+      debugPrint('CloudJoin: silent backup: $e');
+    }
+
+    // 2) تفريغ الجداول المحاسبية — تمنع تداخل حركات الموظف السابقة مع
+    //    حسابات المتجر. هوية الجهاز وإعداداته لا تُمسّ.
+    await FactoryReset.wipeAccountingTables(await repo.database);
+
+    // 3) هوية مجهولة مقترنة بمساحة المالك: تسجيل خروج أي حساب Google
+    //    شخصي أولاً، ثم جلسة مجهولة مستقلة لا ترث بصمة الموظف.
+    try {
+      await GoogleAuthService(await repo.database).signOut();
+    } catch (e) {
+      debugPrint('CloudJoin: google signOut: $e');
+    }
+    await FirebaseAuthRest.clearSession(repo);
+    await FirebaseAuthRest.resetAnonymousSession(repo);
+    await FirebaseAuthRest.ensureScopedAnonymous(repo, workspaceId);
+    await FirebaseAuthRest.initSilentAuth(repo);
+
+    // 4) نوع الحساب يصير «مؤسسة» فوراً بعد انضمام ناجح.
+    await repo.setSetting('account.type', 'enterprise');
 
     final snapRec = await _getJson('$root/joinSnapshot.json');
     final snapData = snapRec?['data'];

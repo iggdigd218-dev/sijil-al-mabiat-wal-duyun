@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 
 import '../../core/auth_config.dart';
 import '../repository.dart';
+import 'device_id.dart';
 
 class FirebaseAccount {
   final String uid; // localId — معرف المستخدم الرسمي في Firebase
@@ -160,6 +161,8 @@ class FirebaseAuthRest {
   static const _anonIdTokenKey = 'cloud.anon.idToken';
   static const _anonRefreshKey = 'cloud.anon.refresh';
   static const _anonExpiryKey = 'cloud.anon.expiryMs';
+  /// (دفعة 65) نطاق الهوية المجهولة: مساحة العمل + بصمة الجهاز.
+  static const _anonScopeKey = 'cloud.anon.scope';
 
   static String? _anonUid;
   static String? _anonIdToken;
@@ -167,6 +170,47 @@ class FirebaseAuthRest {
   static int _anonExpiryMs = 0;
   static bool _anonStarted = false;
   static Repo? _repo;
+
+  /// (دفعة 65) مسح الهوية المجهولة بالكامل (من الذاكرة والتخزين) مع
+  /// إعادة تعيين حالة الإقلاع — فتُصدر الجلسة التالية uid جديداً كلياً.
+  ///
+  /// تُستخدم عند الانضمام إلى مؤسسة أو تبديل الحساب: الموظف يبدأ بهوية
+  /// سحابية مستقلة لا ترث بصمته القديمة، فإذا حُظر لا يعود بهوية سابقة،
+  /// ولا تتداخل عضويته في `/members` مع حسابه الشخصي.
+  static Future<void> resetAnonymousSession(Repo repo) async {
+    await repo.setSetting(anonUidKey, '');
+    await repo.setSetting(_anonIdTokenKey, '');
+    await repo.setSetting(_anonRefreshKey, '');
+    await repo.setSetting(_anonExpiryKey, '0');
+    await repo.setSetting(_anonScopeKey, '');
+    _anonUid = null;
+    _anonIdToken = null;
+    _anonRefreshToken = null;
+    _anonExpiryMs = 0;
+    _anonStarted = false;
+    _repo = repo;
+  }
+
+  /// (دفعة 65) يضمن أن الهوية المجهولة **مقترنة بمساحة العمل الحالية
+  /// وبصمة الجهاز**: إن تغيّرت المساحة (أو الجهاز) عن النطاق المحفوظ
+  /// تُهمَل الهوية القديمة ويُصدر Firebase uid جديداً مستقلاً.
+  ///
+  /// قبل الانضمام: (مساحة شخصية، بصمة الموظف).
+  /// بعد الانضمام: (مساحة المتجر، بصمة الموظف) ← نطاق مختلف ← هوية جديدة.
+  static Future<void> ensureScopedAnonymous(
+      Repo repo, String workspaceId) async {
+    try {
+      final deviceId = await ensureDeviceId(repo);
+      final scope = '${workspaceId.trim()}|$deviceId';
+      final saved = ((await repo.settings())[_anonScopeKey] ?? '').trim();
+      if (saved != scope) {
+        await resetAnonymousSession(repo);
+        await repo.setSetting(_anonScopeKey, scope);
+      }
+    } catch (_) {
+      // بصمة الجهاز غير متاحة (بيئة اختبار/ويب) — يُتجاوز بلا أثر.
+    }
+  }
 
   /// uid الفعّال لهذا الجهاز: **حساب Google إن سُجّل**، وإلا الهوية المجهولة.
   /// (401) هذا هو مفتاح عقدة `/members/{uid}` التي تستند إليها قواعد الأمان.
