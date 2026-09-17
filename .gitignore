@@ -9,10 +9,9 @@ android/.gradle/
 android/app/src/main/java/io/flutter/plugins/
 *.jks
 *.keystore
-  *.apk
-  *.aab
-  windows/flutter/
-  
+*.apk
+*.aab
+windows/flutter/
 # Generated QA preview libraries (recreated by qa/prepare_preview.sh)
 qa/preview/core
 qa/preview/vendor
@@ -29,3 +28,6 @@ windows_installer/output/
 NexoraSetup.exe
 linux/
 build/linux/
+
+# أرشيف كامل قديم (لقطة 2026-09-12 تضمّ admin_app) — المستودع هو المصدر، لا يُلتزم بنسخة مكرّرة
+nexora_full_project.zip
