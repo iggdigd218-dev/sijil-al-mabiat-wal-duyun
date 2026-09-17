@@ -175,36 +175,31 @@ jobs:
               && echo "تم حذف nexora-windows.msix القديم"
           fi
 
-      - name: "Generate version.json من pubspec.yaml (مصدر الإصدار الوحيد)"
+      - name: "Generate version.json من pubspec.yaml و release_notes.txt"
         if: github.ref == 'refs/heads/main'
-        shell: pwsh
-        env:
-          # رسالة الالتزام هي سجل التغييرات الذي يراه المستخدم في التطبيق.
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        shell: bash
         run: |
-          # ⚠️ كان هذا الملف يُعاد رفعه من الإصدار القديم كما هو، فلا يتغيّر
-          # رقم الإصدار أبداً ولا يظهر تحديث داخل التطبيق مهما دُفع من كود.
-          # الآن يُولَّد دائماً من pubspec.yaml — المصدر الوحيد للإصدار.
-          $m = Select-String -Path "pubspec.yaml" -Pattern '^version:\s*([0-9.]+)\+(\d+)'
-          if (-not $m) { Write-Host "تعذّر قراءة الإصدار من pubspec.yaml"; exit 1 }
-          $ver   = $m.Matches[0].Groups[1].Value
-          $build = $m.Matches[0].Groups[2].Value
-          $repo  = "${{ github.repository }}"
-          $base  = "https://github.com/$repo/releases/download/latest"
-          $obj = [ordered]@{
-            version      = "$ver+$build"
-            minSupported = "3.13.0"
-            releaseUrl   = "https://github.com/$repo/releases/tag/latest"
-            downloads    = [ordered]@{
-              android = "$base/nexora-arm64.apk"
-              windows = "$base/NexoraSetup.exe"
-            }
-            publishedAt  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            notes        = $env:COMMIT_MSG
+          # ⚠️ كان هذا الملف يُعاد رفعه من الإصدار القديم كما هو، فيبقى رقم
+          # الإصدار ثابتاً إلى الأبد ولا يظهر تحديث داخل التطبيق. الآن يُولَّد
+          # في كل بناء — بنفس منطق workflow الـ APK تماماً (مصدر واحد).
+          VER=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
+          NAME="${VER%%+*}"; BUILD="${VER##*+}"
+          NOTES=$(python3 -c "import json; t=open('release_notes.txt',encoding='utf-8').read().strip(); t=(t[:2500].rstrip()+'…') if len(t)>2500 else t; print(json.dumps(t,ensure_ascii=False)[1:-1])")
+          echo "إصدار البناء: $NAME (build $BUILD)"
+          cat > version.json <<EOF
+          {
+            "version": "$NAME+$BUILD",
+            "minSupported": "3.13.0",
+            "releaseUrl": "https://github.com/${{ github.repository }}/releases/tag/latest",
+            "downloads": {
+              "android": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-arm64.apk",
+              "windows": "https://github.com/${{ github.repository }}/releases/download/latest/NexoraSetup.exe"
+            },
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "notes": "$NOTES"
           }
-          ($obj | ConvertTo-Json -Depth 5) | Set-Content -Path "version.json" -Encoding UTF8
-          Write-Host "تم توليد version.json بالإصدار $($obj.version)"
-          Get-Content version.json -Raw
+          EOF
+          cat version.json
 
       - name: Update unified latest release (Windows)
         uses: softprops/action-gh-release@v2
