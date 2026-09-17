@@ -10,8 +10,11 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../core/factory_reset.dart';
+import '../cloud_sync.dart';
 import '../repository.dart';
 import 'cloud_join.dart';
+import 'workspace_recovery.dart';
 import 'device_id.dart';
 import 'device_registry.dart';
 import 'firebase_auth_service.dart';
@@ -28,6 +31,14 @@ enum AccountLinkOutcome {
 
   /// جهاز عضو في مجموعة — لا تغيير على مساحته (يتبع مديره).
   memberUntouched,
+
+  /// (دفعة 65) الحساب مرتبط بمساحة **أخرى**: حُظر الدمج، وأُخذت نسخة
+  /// احتياطية، وفُرّغت الجداول، ونُزّلت بيانات المساحة الجديدة.
+  switched,
+
+  /// (دفعة 65) الحساب مرتبط بمساحة أخرى لكن **لا نسخة سحابية** لتلك
+  /// المساحة — لم يُفرَّغ شيء، وتعذّر إتمام التبديل.
+  switchUnavailable,
 
   /// تعذر الإكمال (شبكة/إعدادات).
   failed,
@@ -105,6 +116,25 @@ class AccountWorkspace {
     try {
       final mode = await repo.workspaceMode();
       if (mode == 'member') return AccountLinkOutcome.memberUntouched;
+
+      // ══ (دفعة 65) حارس التبديل ══
+      // الحساب المراد ربطه مرتبط بمساحة (ب) تختلف عن المساحة المحلية (أ).
+      // الدمج هنا كارثي: حسابات متجرين تتداخل في جهاز واحد. الفهرس
+      // السحابي (accounts_index) هو مصدر الحقيقة لارتباط الحساب بمساحته.
+      if (backendUrl.isNotEmpty) {
+        final localWs = repo.requireWorkspaceId;
+        final remoteWs = await lookup(backendUrl: backendUrl, uid: account.uid);
+        if (remoteWs.isNotEmpty && remoteWs != localWs) {
+          return _switchWorkspace(
+            repo,
+            backendUrl: backendUrl,
+            account: account,
+            fromWorkspaceId: localWs,
+            toWorkspaceId: remoteWs,
+          );
+        }
+      }
+
       // (Offline-First) الجلسة تُحفظ أولاً — نجاح الربط لا يعتمد على الشبكة.
       await FirebaseAuthRest.saveSession(repo, account);
       if (backendUrl.isNotEmpty) {
@@ -118,6 +148,62 @@ class AccountWorkspace {
     } catch (_) {
       return AccountLinkOutcome.failed;
     }
+  }
+
+  /// (دفعة 65) تنفيذ التبديل الآمن إلى مساحة أخرى: **الدمج ممنوع**.
+  ///
+  /// الترتيب حاسم — لا نفرّغ شيئاً قبل التأكد من وجود بيانات للمساحة
+  /// الجديدة في السحابة، فلا يُترك المستخدم بجهاز فارغ عند أي فشل:
+  ///   1) سحب استباقي لنسخة المساحة (ب) — الفشل هنا يُلغي التبديل بلا أثر.
+  ///   2) نسخة احتياطية صامتة pre_switch_backup.nexora (أفضل جهد).
+  ///   3) تفريغ الجداول المحاسبية (تمنع تداخل حسابات (أ) مع (ب)).
+  ///   4) ترحيل معرّف المساحة واستيراد بيانات (ب).
+  ///   5) هوية سحابية جديدة مقترنة بالمساحة الجديدة + account.type=enterprise.
+  static Future<AccountLinkOutcome> _switchWorkspace(
+    Repo repo, {
+    required String backendUrl,
+    required FirebaseAccount account,
+    required String fromWorkspaceId,
+    required String toWorkspaceId,
+  }) async {
+    // 1) تحقّق مسبق — لا تفريغ قبل ضمان وجود ما يُنزَّل.
+    Map<String, Object?>? pulled;
+    try {
+      pulled = await CloudSync.pullWorkspaceBackup(repo,
+          backendUrl: backendUrl, workspaceId: toWorkspaceId);
+    } catch (_) {
+      pulled = null;
+    }
+    if (pulled == null) return AccountLinkOutcome.switchUnavailable;
+
+    // 2) نسخة احتياطية صامتة.
+    try {
+      final data = await repo.exportAll(withImages: false);
+      await FactoryReset.silentBackup(data,
+          fileName: FactoryReset.kBackupBeforeSwitch);
+    } catch (_) {}
+
+    // 3) تفريغ الجداول المحاسبية.
+    final db = await repo.database;
+    await FactoryReset.wipeAccountingTables(db);
+
+    // 4) ترحيل المساحة ثم استيراد بياناتها.
+    if (fromWorkspaceId != toWorkspaceId) {
+      await WorkspaceRecovery.swapWorkspaceId(db,
+          from: fromWorkspaceId, to: toWorkspaceId);
+      await repo.setSetting('sync.workspaceId', toWorkspaceId);
+      repo.debugSetWorkspaceId(toWorkspaceId);
+    }
+    await repo.importAll(pulled);
+
+    // 5) هوية سحابية مستقلة مقترنة بالمساحة الجديدة.
+    await FirebaseAuthRest.resetAnonymousSession(repo);
+    await FirebaseAuthRest.saveSession(repo, account);
+    await FirebaseAuthRest.ensureScopedAnonymous(repo, toWorkspaceId);
+    // بعد تدوير الهوية: ابدأ جلسة مجهولة جديدة تُصدر uid المستقل.
+    await FirebaseAuthRest.initSilentAuth(repo);
+    await repo.setSetting('account.type', 'enterprise');
+    return AccountLinkOutcome.switched;
   }
 
   /// تثبيت الربط بعد أي مسار ناجح: جلسة + فهرس الحساب + فهرس البصمة +

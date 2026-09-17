@@ -208,6 +208,19 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('هذا الجهاز عضو في مجموعة — لا حاجة للربط هنا')));
           return;
+        case AccountLinkOutcome.switched:
+          Sfx.success();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('✅ تم تبديل مساحة العمل — حُفظت نسخة احتياطية '
+                  'ونُزّلت بيانات المساحة الجديدة')));
+          await _finishAndNavigate();
+          return;
+        case AccountLinkOutcome.switchUnavailable:
+          Sfx.error();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('هذا الحساب مرتبط بمساحة أخرى ولا توجد لها نسخة '
+                  'سحابية — لم نغيّر بياناتك')));
+          return;
         case AccountLinkOutcome.failed:
           Sfx.error();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

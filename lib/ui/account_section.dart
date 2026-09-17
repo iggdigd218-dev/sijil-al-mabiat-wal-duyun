@@ -95,6 +95,24 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
         case AccountLinkOutcome.memberUntouched:
           showSnack(context, 'جهاز العضو يتبع مجموعة مديره — لا حاجة للربط');
           break;
+        case AccountLinkOutcome.switched:
+          // (دفعة 65) الحساب كان مرتبطاً بمساحة أخرى: حُظر الدمج، وأُخذت
+          // نسخة pre_switch_backup.nexora، وفُرّغت الجداول، ونُزّلت بيانات
+          // المساحة الجديدة — نُبلغ المستخدم بما حدث بشفافية.
+          Sfx.success();
+          bump(ref);
+          showSnack(context,
+              '✅ تم تبديل مساحة العمل — حُفظت نسخة pre_switch_backup.nexora '
+              'ونُزّلت بيانات المساحة الجديدة');
+          unawaited(_provisionCloudAfterSignIn(repo, ref, url));
+          break;
+        case AccountLinkOutcome.switchUnavailable:
+          Sfx.error();
+          showSnack(context,
+              'هذا الحساب مرتبط بمساحة أخرى ولا توجد لها نسخة سحابية — '
+              'لم نغيّر بياناتك',
+              error: true);
+          break;
         case AccountLinkOutcome.failed:
           Sfx.error();
           showSnack(context, 'تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة',

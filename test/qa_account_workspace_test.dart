@@ -88,53 +88,102 @@ void main() {
     expect(await FirebaseAuthRest.savedEmail(repo), account.email);
   });
 
-  test('ACCT-02 (3.61) حساب معروف بنسخة سحابية: لا استرداد تلقائي',
+  Future<void> seedLocalAccount(String name) async {
+    await db.insert('accounts', {
+      'id': DateTime.now().microsecondsSinceEpoch % 1000000,
+      'workspace_id': repo.requireWorkspaceId,
+      'name': name,
+      'kind': 'customer',
+      'phone': '',
+      'notify_channel': 'none',
+      'archived': 0,
+      'deleted_at': '',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  const orgWs = 'WS-${'Uabc123XYZ'}';
+
+  Map<String, Object?> cloudBackupFor(String ws, String customerName) => {
+        '/workspaces/$ws/backup.json': {
+          'payload': {
+            'app': 'nexora',
+            'format': 'nexora-backup',
+            'db_version': 1,
+            'created_at': DateTime.now().toIso8601String(),
+            'group_fingerprint': '',
+            'workspace_mode': 'standalone',
+            'data': {
+              'accounts': [
+                {
+                  'id': 9,
+                  'workspace_id': ws,
+                  'name': customerName,
+                  'kind': 'customer',
+                  'phone': '',
+                  'notify_channel': 'none',
+                  'archived': 0,
+                  'deleted_at': '',
+                  'created_at': DateTime.now().toIso8601String(),
+                  'updated_at': DateTime.now().toIso8601String(),
+                }
+              ],
+            },
+          },
+        },
+      };
+
+  test('ACCT-02 (دفعة 65) حساب مرتبط بمساحة أخرى: تبديل آمن بلا دمج',
       () async {
-    const orgWs = 'WS-${'Uabc123XYZ'}';
     final before = repo.requireWorkspaceId;
+    // بيانات محلية تخص المساحة (أ) — يجب أن تزول بالتفريغ فلا تتداخل مع (ب).
+    await seedLocalAccount('عميل المساحة القديمة');
     final store = <String, Object?>{
       '/workspaces/_registry/accounts_index/${account.uid}.json': {
         'workspaceId': orgWs,
         'email': account.email,
       },
-      '/workspaces/$orgWs/backup.json': {
-        'payload': {
-          'app': 'nexora',
-          'format': 'nexora-backup',
-          'db_version': 1,
-          'created_at': DateTime.now().toIso8601String(),
-          'group_fingerprint': '',
-          'workspace_mode': 'standalone',
-          'data': {
-            'accounts': [
-              {
-                'id': 9,
-                'workspace_id': orgWs,
-                'name': 'عميل مؤسسة الحساب',
-                'kind': 'customer',
-                'phone': '',
-                'notify_channel': 'none',
-                'archived': 0,
-                'deleted_at': '',
-                'created_at': DateTime.now().toIso8601String(),
-                'updated_at': DateTime.now().toIso8601String(),
-              }
-            ],
-          },
-        },
-      },
+      ...cloudBackupFor(orgWs, 'عميل مؤسسة الحساب'),
     };
     final outcome = await http.runWithClient(
         () => AccountWorkspace.linkAccountOnly(repo,
             backendUrl: url, account: account),
         () => fakeCloud(store));
-    expect(outcome, AccountLinkOutcome.migrated);
-    expect(repo.requireWorkspaceId, before,
-        reason: 'المساحة المحلية لا تُستبدل تلقائياً (سلوك 3.55 المستعاد)');
+    expect(outcome, AccountLinkOutcome.switched);
+    expect(repo.requireWorkspaceId, orgWs,
+        reason: 'التبديل ينقل المساحة المحلية إلى مساحة الحساب (ب)');
+    expect(repo.requireWorkspaceId, isNot(before));
     final accounts = await repo.accounts();
-    expect(accounts.any((a) => a.name == 'عميل مؤسسة الحساب'), isFalse,
-        reason: 'الاسترداد التلقائي أُلغي في 3.61 — لا سحب لنسخة سحابية '
-            'ولا مساس بالبيانات المحلية إلا بقرار صريح من المستخدم');
+    expect(accounts.any((a) => a.name == 'عميل مؤسسة الحساب'), isTrue,
+        reason: 'بيانات المساحة الجديدة تُنزَّل فور التبديل');
+    expect(accounts.any((a) => a.name == 'عميل المساحة القديمة'), isFalse,
+        reason: 'التفريغ يمنع تداخل حسابات (أ) مع (ب) — الدمج محظور');
+    expect((await repo.settings())['account.type'], 'enterprise',
+        reason: 'التبديل يرقّي نوع الحساب إلى مؤسسة');
+  });
+
+  test('ACCT-02b (دفعة 65) مساحة أخرى بلا نسخة سحابية: لا تفريغ ولا تغيير',
+      () async {
+    final before = repo.requireWorkspaceId;
+    await seedLocalAccount('عميل المساحة القديمة');
+    final store = <String, Object?>{
+      '/workspaces/_registry/accounts_index/${account.uid}.json': {
+        'workspaceId': orgWs,
+        'email': account.email,
+      },
+      // عمداً: لا /workspaces/$orgWs/backup.json
+    };
+    final outcome = await http.runWithClient(
+        () => AccountWorkspace.linkAccountOnly(repo,
+            backendUrl: url, account: account),
+        () => fakeCloud(store));
+    expect(outcome, AccountLinkOutcome.switchUnavailable);
+    expect(repo.requireWorkspaceId, before,
+        reason: 'لا تفريغ قبل ضمان وجود ما يُنزَّل — لا جهاز فارغ أبداً');
+    final accounts = await repo.accounts();
+    expect(accounts.any((a) => a.name == 'عميل المساحة القديمة'), isTrue,
+        reason: 'البيانات المحلية سليمة لم تُمسّ');
   });
 
   test('ACCT-03 جهاز عضو مجموعة لا يُمَس', () async {
