@@ -97,37 +97,18 @@ jobs:
           path: nexora-arm64.apk
           retention-days: 30
 
-      - name: Preserve other-platform assets (windows)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          # لا نحذف ملفات ويندوز الموجودة مسبقًا: ننزّلها لتُعاد رفعها مع ملفات الأندرويد.
-          for f in nexora-windows.zip NexoraSetup.exe README-install.txt; do
-            code=0
-            for attempt in 1 2 3 4 5 6; do
-              # ?raw=true يتجاوز تخزين CDN المُخبّأ (يُعيد 404 بعد حذف أصل
-              # وإعادة رفعه بنفس الاسم) — والمحاولات تحمي من 404 عابر.
-              code=$(curl -sL -o "$f" -w "%{http_code}" \
-                "https://github.com/${{ github.repository }}/releases/download/latest/$f?raw=true" || true)
-              [ "$code" = "200" ] && break
-              sleep 10
-            done
-            if [ "$code" != "200" ]; then
-              echo "تعذّر تنزيل $f بعد 6 محاولات — سيتخطاه الرفع"; rm -f "$f"
-            fi
-          done
-            ls -lh nexora-windows.zip NexoraSetup.exe README-install.txt 2>/dev/null || true
-
       - name: Build upload list (existing files only)
         id: filelist
         if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
-          # ⚠️ الأهم: لا نُدرج ملفاً تعذّر تنزيله من منصّة أخرى. خطوة الرفع
-          # تحذف الأصل القديم بنفس الاسم **أولاً** ثم ترفع البديل؛ فإن كان
-          # البديل غائباً محلياً يُحذف الأصل بلا تعويض — هكذا فُقدت
-          # nexora-windows.zip ثم أُفرغ الإصدار كاملاً (0 أصول).
+          # ⚠️ كل منصّة ترفع أصولها **فقط**. خطوة الرفع تحذف الأصل القديم بنفس
+          # الاسم **أولاً** ثم ترفع البديل؛ فإدراج أصل منصّة أخرى يعني تعريضه
+          # للحذف بلا تعويض إن فشل تنزيله — وبهذا فُقدت nexora-windows.zip ثم
+          # أُفرغ الإصدار كاملاً (0 أصول). لا تنزيل، لا مساس بغير أصولنا.
+          # القائمة تظلّ تتجاهل أي ملف مفقود/فارغ كشبكة أمان أخيرة.
           files=""
-          for f in nexora-arm64.apk version.json nexora-windows.zip NexoraSetup.exe README-install.txt; do
+          for f in nexora-arm64.apk version.json; do
             if [ -s "$f" ]; then files="${files}${f}"$'\n'; fi
           done
           {

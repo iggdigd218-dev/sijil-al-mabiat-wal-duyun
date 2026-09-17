@@ -156,27 +156,6 @@ jobs:
           path: build/windows/x64/runner/Release/*
           retention-days: 30
 
-      - name: Preserve other-platform assets (android)
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          # لا نحذف ملفات الأندرويد: ننزّلها لتُعاد رفعها مع ملف ويندوز.
-          for f in nexora-arm64.apk version.json; do
-            code=0
-            for attempt in 1 2 3 4 5 6; do
-              # ?raw=true يتجاوز تخزين CDN المُخبّأ (يُعيد 404 بعد حذف أصل
-              # وإعادة رفعه بنفس الاسم) — والمحاولات تحمي من 404 عابر.
-              code=$(curl -sL -o "$f" -w "%{http_code}" \
-                "https://github.com/${{ github.repository }}/releases/download/latest/$f?raw=true" || true)
-              [ "$code" = "200" ] && break
-              sleep 10
-            done
-            if [ "$code" != "200" ]; then
-              echo "تعذّر تنزيل $f بعد 6 محاولات — سيتخطاه الرفع"; rm -f "$f"
-            fi
-          done
-          ls -lh nexora-arm64.apk version.json 2>/dev/null || true
-
       - name: Remove stale/broken MSIX asset
         if: github.ref == 'refs/heads/main'
         shell: bash
@@ -191,46 +170,18 @@ jobs:
               && echo "تم حذف nexora-windows.msix القديم"
           fi
 
-      - name: "Generate version.json من pubspec.yaml و release_notes.txt"
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        env:
-          # على ويندوز ترميز مخرجات python افتراضاً cp1252 فيرفض العربية.
-          PYTHONIOENCODING: utf-8
-        run: |
-          # ⚠️ كان هذا الملف يُعاد رفعه من الإصدار القديم كما هو، فيبقى رقم
-          # الإصدار ثابتاً إلى الأبد ولا يظهر تحديث داخل التطبيق. الآن يُولَّد
-          # في كل بناء — بنفس منطق workflow الـ APK تماماً (مصدر واحد).
-          VER=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
-          NAME="${VER%%+*}"; BUILD="${VER##*+}"
-          NOTES=$(python3 -c "import json; t=open('release_notes.txt',encoding='utf-8').read().strip(); t=(t[:2500].rstrip()+'…') if len(t)>2500 else t; print(json.dumps(t,ensure_ascii=False)[1:-1])")
-          echo "إصدار البناء: $NAME (build $BUILD)"
-          cat > version.json <<EOF
-          {
-            "version": "$NAME+$BUILD",
-            "minSupported": "3.13.0",
-            "releaseUrl": "https://github.com/${{ github.repository }}/releases/tag/latest",
-            "downloads": {
-              "android": "https://github.com/${{ github.repository }}/releases/download/latest/nexora-arm64.apk",
-              "windows": "https://github.com/${{ github.repository }}/releases/download/latest/NexoraSetup.exe"
-            },
-            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "notes": "$NOTES"
-          }
-          EOF
-          cat version.json
-
       - name: Build upload list (existing files only)
         id: filelist
         if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
-          # ⚠️ الأهم: لا نُدرج ملفاً تعذّر تنزيله من منصّة أخرى. خطوة الرفع
-          # تحذف الأصل القديم بنفس الاسم **أولاً** ثم ترفع البديل؛ فإن كان
-          # البديل غائباً محلياً يُحذف الأصل بلا تعويض — هكذا فُقدت
-          # nexora-windows.zip ثم أُفرغ الإصدار كاملاً (0 أصول).
+          # ⚠️ كل منصّة ترفع أصولها **فقط**. خطوة الرفع تحذف الأصل القديم بنفس
+          # الاسم **أولاً** ثم ترفع البديل؛ فإدراج أصل منصّة أخرى يعني تعريضه
+          # للحذف بلا تعويض إن فشل تنزيله — وبهذا فُقدت nexora-windows.zip ثم
+          # أُفرغ الإصدار كاملاً (0 أصول). لا تنزيل، لا مساس بغير أصولنا.
+          # القائمة تظلّ تتجاهل أي ملف مفقود/فارغ كشبكة أمان أخيرة.
           files=""
-          for f in NexoraSetup.exe nexora-windows.zip README-install.txt nexora-arm64.apk version.json; do
+          for f in NexoraSetup.exe nexora-windows.zip README-install.txt; do
             if [ -s "$f" ]; then files="${files}${f}"$'\n'; fi
           done
           {
