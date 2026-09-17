@@ -175,7 +175,7 @@ jobs:
               && echo "تم حذف nexora-windows.msix القديم"
           fi
 
-      - name: Generate version.json (المصدر الوحيد: pubspec.yaml)
+      - name: "Generate version.json من pubspec.yaml (مصدر الإصدار الوحيد)"
         if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
