@@ -292,34 +292,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   /// (توحيد مدخل التسجيل) هذا **ليس** تسجيل دخول: حساب Google مُسجَّل
   /// مسبقاً من قسم «حساب المؤسسة»، ونطلب هنا صلاحية Drive وحدها لرفع النسخ.
-  Future<void> _grantDriveAccess() async {
-    setState(() => _busy = true);
-    try {
-      final account = await _drive.signIn();
-      if (account == null) return;
-      GoogleDriveBackupInfo? backup;
-      String? cloudError;
-      try {
-        backup = await _drive.latestBackup();
-      } catch (e) {
-        cloudError = '$e';
-      }
-      if (!mounted) return;
-      setState(() {
-        _googleAccount = account;
-        _cloudBackup = backup;
-        _cloudError = cloudError;
-      });
-      showSnack(context, 'تم منح صلاحية Google Drive ✅');
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'تعذّر منح صلاحية Drive: $e', error: true);
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   /// ينتقل إلى الإعدادات حيث قسم «حساب المؤسسة (Google)» — المدخل الوحيد
   /// لتسجيل الدخول بـ Google في التطبيق كله.
   Future<void> _openAccountSection() async {
@@ -512,7 +484,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     subtitle: Text(
                       'مدخل التسجيل بـ Google واحد فقط في التطبيق: '
                       'الإعدادات ← «حساب المؤسسة (Google)». سجّل الدخول هناك '
-                      'ليُربط حسابك بمساحة عملك، ثم عد لتفعيل النسخ على Drive.',
+                      'ليُربط حسابك بمساحة عملك، ثم عد لرفع النسخ واستعادتها.',
                     ),
                   ),
                   SizedBox(
@@ -523,39 +495,20 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                       label: const Text('الانتقال إلى قسم الحساب'),
                     ),
                   ),
-                ] else if (_googleAccount == null) ...[
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.cloud_off_outlined),
-                    title: const Text('حسابك مسجّل — بقيت صلاحية Drive'),
-                    subtitle: Text(_accountEmail!),
-                  ),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _grantDriveAccess,
-                      icon: const Icon(Icons.cloud_queue_outlined),
-                      label: const Text('منح صلاحية Google Drive'),
-                    ),
-                  ),
                 ] else ...[
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: CircleAvatar(
                       child: Text(
-                        (_googleAccount!.email.isEmpty
-                                ? 'G'
-                                : _googleAccount!.email[0])
+                        (_accountEmail!.isEmpty ? 'G' : _accountEmail![0])
                             .toUpperCase(),
                       ),
                     ),
-                    title: Text(
-                      _googleAccount!.displayName?.trim().isNotEmpty == true
-                          ? _googleAccount!.displayName!
-                          : 'حساب Google مرتبط',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    title: const Text(
+                      'حساب المؤسسة',
+                      style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    subtitle: Text(_googleAccount!.email),
+                    subtitle: Text(_accountEmail!),
                   ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
@@ -572,7 +525,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     ),
                     subtitle: _cloudBackup?.sizeLabel.isNotEmpty == true
                         ? Text(_cloudBackup!.sizeLabel)
-                        : const Text('ستُنشأ النسخة عند أول رفع.'),
+                        : Text(
+                            _googleAccount == null
+                                ? 'سيُطلب منح صلاحية Drive عند أول رفع.'
+                                : 'ستُنشأ النسخة عند أول رفع.',
+                          ),
                   ),
                   Row(
                     children: [
