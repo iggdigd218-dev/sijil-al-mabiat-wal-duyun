@@ -55,15 +55,18 @@ flutter:
           weight: 500
         - asset: assets/fonts/Tajawal-Bold.ttf
           weight: 700
-    # (الهوية البصرية) خط الواجهة الحديث — مضمّن محلياً للعملOffline.
+    # (الهوية البصرية) خط الواجهة الحديث — **Cairo** مضمّن محلياً بالكامل
+    # في assets/fonts/ (لا `google_fonts` ولا أي سحب عبر الشبكة) فيعمل
+    # بنسبة 100% أوفلاين على كل المنصات.
     # يُترك Tajawal أعلاه لأن شبكة PDF (voucher/reports) تحمّله بالمسار.
-    - family: NotoSansArabic
+    # رخصة Cairo: OFL-1.1 — assets/fonts/OFL-Cairo.txt
+    - family: Cairo
       fonts:
-        - asset: assets/fonts/NotoSansArabic-Regular.ttf
+        - asset: assets/fonts/Cairo-Regular.ttf
           weight: 400
-        - asset: assets/fonts/NotoSansArabic-Medium.ttf
+        - asset: assets/fonts/Cairo-Medium.ttf
           weight: 500
-        - asset: assets/fonts/NotoSansArabic-SemiBold.ttf
+        - asset: assets/fonts/Cairo-SemiBold.ttf
           weight: 600
-        - asset: assets/fonts/NotoSansArabic-Bold.ttf
+        - asset: assets/fonts/Cairo-Bold.ttf
           weight: 700
