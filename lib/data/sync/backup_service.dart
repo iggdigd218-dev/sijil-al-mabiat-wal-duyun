@@ -90,7 +90,7 @@ class BackupService {
     final text = await f.readAsString();
     final obj = jsonDecode(text);
     if (obj is! Map || obj['data'] is! Map) {
-      throw BackupImportException('ملف النسخة الاحتياطية غير صالح');
+      throw const BackupImportException('ملف النسخة الاحتياطية غير صالح');
     }
     final data = obj['data'] as Map;
     final counts = <String, int>{};

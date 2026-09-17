@@ -246,7 +246,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                       reason: 'expelled_by_manager');
                             } catch (_) {}
                             bump(ref);
-                            if (mounted) {
+                            if (context.mounted) {
                               showSnack(
                                 context,
                                 '✅ تم طرد الجهاز وبثّ الإبطال — سيُقصى لحظياً.',
@@ -308,7 +308,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                 newUserRoleForMe: 'viewer',
                               );
                               if (mounted) bump(ref);
-                              if (mounted) {
+                              if (context.mounted) {
                                 showSnack(
                                   context,
                                   '✅ تم تسليم الإدارة. أنت الآن عضو بدور "عرض فقط".',
@@ -317,7 +317,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                     .popUntil((r) => r.isFirst);
                               }
                             } catch (e) {
-                              if (mounted) {
+                              if (context.mounted) {
                                 showSnack(
                                   context,
                                   'تعذّر تسليم الإدارة: $e',
@@ -344,7 +344,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                   .read(repoProvider)
                                   .resetDeviceSecret(d['id'] as String);
                               bump(ref);
-                              if (mounted) {
+                              if (context.mounted) {
                                 showDialog(
                                   context: context,
                                   builder: (ctx) => AlertDialog(
@@ -367,7 +367,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                 );
                               }
                             } catch (e) {
-                              if (mounted) {
+                              if (context.mounted) {
                                 showSnack(context, 'تعذّر: $e', error: true);
                               }
                             }
@@ -409,7 +409,7 @@ class DeviceCard extends StatelessWidget {
   final bool isSelf;
   final bool isOwnerDevice;
   final bool amITheOwner;
-  const DeviceCard({
+  const DeviceCard({super.key, 
     required this.data,
     required this.users,
     required this.onAssign,
@@ -486,86 +486,102 @@ class DeviceCard extends StatelessWidget {
                   // (دفعة 56) شارة الدور الديناميكية — تعكس الدور الممنوح
                   // فعلياً بلون مميز عالي التباين لكل دور.
                   if (role != null) ...[
-                    _RoleBadge(role: role),
+                    Flexible(child: _RoleBadge(role: role)),
                     const SizedBox(width: 6),
                   ],
                   if (expelled)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade900.withValues(alpha: .15),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'مطرود',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.red,
-                          fontWeight: FontWeight.w700,
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade900.withValues(alpha: .15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'مطرود',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.red,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     )
                   else if (revoked)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withValues(alpha: .12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'محظور',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.deepOrange,
-                          fontWeight: FontWeight.w700,
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: .12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'محظور',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.deepOrange,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     )
                   else if (staleForMonth)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: .08),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'خامل ⚠️',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.redAccent,
-                          fontWeight: FontWeight.w700,
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: .08),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'خامل ⚠️',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.redAccent,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     )
                   else
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: (cloudOnline || isSelf ? Colors.green : Colors.blueGrey)
-                            .withValues(alpha: .12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        // (دفعة 56) مؤشر الحالة السحابية بدل «نشط» العامة.
-                        cloudOnline || isSelf ? 'متصل سحابياً ☁️' : 'غير متصل',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: cloudOnline || isSelf
-                              ? Colors.green
-                              : Colors.blueGrey,
-                          fontWeight: FontWeight.w700,
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: (cloudOnline || isSelf ? Colors.green : Colors.blueGrey)
+                              .withValues(alpha: .12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          // (دفعة 56) مؤشر الحالة السحابية بدل «نشط» العامة.
+                          cloudOnline || isSelf ? 'متصل سحابياً ☁️' : 'غير متصل',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: cloudOnline || isSelf
+                                ? Colors.green
+                                : Colors.blueGrey,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -614,6 +630,7 @@ class DeviceCard extends StatelessWidget {
                   // صلاحيات الجهاز» عبر قائمة النقاط الثلاث.
                     Expanded(
                       child: DropdownButtonFormField<int?>(
+                        isExpanded: true,
                         initialValue: currentUserId,
                         decoration: const InputDecoration(
                           labelText: 'الصلاحيات (المستخدم المرتبط)',
@@ -627,12 +644,20 @@ class DeviceCard extends StatelessWidget {
                         items: [
                           const DropdownMenuItem<int?>(
                             value: null,
-                            child: Text('— بدون صلاحيات —'),
+                            child: Text(
+                              '— بدون صلاحيات —',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                           ...users.map(
                             (u) => DropdownMenuItem<int?>(
                               value: u.id,
-                              child: Text('${u.name} (${u.role.label})'),
+                              child: Text(
+                                '${u.name} (${u.role.label})',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ),
                         ],
@@ -824,6 +849,8 @@ class _RoleBadge extends StatelessWidget {
       ),
       child: Text(
         '${role.icon} ${role.label}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 10,
           color: fg,

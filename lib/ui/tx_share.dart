@@ -191,8 +191,9 @@ class TxShare {
     final channel = (acc?.notifyChannel ?? 'whatsapp').trim();
     final phone = _phoneOf(acc, channel);
 
-    if (channel == 'none')
+    if (channel == 'none') {
       return TxShareOutcome.skipped; // المستخدم فضّل عدم الإرسال.
+    }
 
     if (phone.isEmpty) {
       if (!silentIfNoPhone && context.mounted) {

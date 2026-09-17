@@ -95,11 +95,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           .first;
       final f = File('${dir.path}/nexora-local-backup-$ts.nexora');
       await f.writeAsString(jsonEncode(payload));
-      if (mounted) {
+      if (context.mounted) {
         showSnack(context, '✅ حُفظت نسخة محلية: ${f.path.split('/').last}');
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر إنشاء النسخة: $e', error: true);
+      if (context.mounted) {
+        showSnack(context, 'تعذّر إنشاء النسخة: $e', error: true);
+      }
     }
   }
 
@@ -284,7 +286,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) {
-        if (mounted) {
+        if (context.mounted) {
           showSnack(context, 'لا يوجد اتصال سحابي مهيأ على هذا الجهاز.',
               error: true);
         }
@@ -295,23 +297,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
       await CloudJoin.requestLeave(repo, backendUrl: url, workspaceId: ws);
       Sfx.success();
-      if (mounted) {
+      if (context.mounted) {
         showSnack(context,
             '📨 أُرسل طلب المغادرة إلى المدير — سيُفصل جهازك فور موافقته.');
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر إرسال الطلب: $e', error: true);
+      if (context.mounted) {
+        showSnack(context, 'تعذّر إرسال الطلب: $e', error: true);
+      }
     }
   }
 
   Future<void> _checkBiometrics() async {
     final ok = await Security.biometricsAvailable();
     final label = await Security.availableLabel();
-    if (mounted)
+    if (mounted) {
       setState(() {
         _bioSupported = ok;
         _bioLabel = label;
       });
+    }
   }
 
   /// نملأ الحقول مرة واحدة فقط حتى لا يُمحى ما يكتبه المستخدم عند التحديث.
@@ -457,7 +462,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 icon: Icons.error_outline,
                 title: 'تعذّر تحميل الإعدادات',
                 message:
-                    '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
+                    '${e.toString().length > 200 ? '${e.toString().substring(0, 200)}…' : e}',
               ),
               const SizedBox(height: 12),
               FilledButton.icon(

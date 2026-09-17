@@ -81,7 +81,7 @@ String _group(int n) {
       final th = _thousands[g];
       if (th != null) {
         // «ألف» للمفرد، «ألفا» للمثنى، وإلا العدد متبوعًا بالوحدة.
-        w = chunk == 1 ? th : (chunk == 2 ? '${th}ا' : '$w $th');
+        w = chunk == 1 ? th : (chunk == 2 ? '$thا' : '$w $th');
       }
       parts.insert(0, w);
     }

@@ -98,11 +98,11 @@ Future<Uint8List> buildVoucherPdf({
   final isRed = v.kind == VoucherKind.debit || v.kind == VoucherKind.payment;
   final isGreen = v.kind == VoucherKind.receipt || v.kind == VoucherKind.credit;
   final amtColor = isRed
-      ? PdfColor.fromInt(0xFFC0392B)
-      : (isGreen ? PdfColor.fromInt(0xFF16A34A) : teal);
+      ? const PdfColor.fromInt(0xFFC0392B)
+      : (isGreen ? const PdfColor.fromInt(0xFF16A34A) : teal);
   final amtBg = isRed
-      ? PdfColor.fromInt(0xFFFDECEA)
-      : (isGreen ? PdfColor.fromInt(0xFFEAF7EF) : soft);
+      ? const PdfColor.fromInt(0xFFFDECEA)
+      : (isGreen ? const PdfColor.fromInt(0xFFEAF7EF) : soft);
 
   final words = '${numberToWords(v.amount)} ${currency.name}';
 
@@ -286,7 +286,7 @@ Future<Uint8List> buildVoucherPdf({
               },
               children: [
                 pw.TableRow(
-                  decoration: pw.BoxDecoration(color: soft),
+                  decoration: const pw.BoxDecoration(color: soft),
                   children: [
                     _tableCell('الصنف', bold),
                     _tableCell('الكمية', bold),

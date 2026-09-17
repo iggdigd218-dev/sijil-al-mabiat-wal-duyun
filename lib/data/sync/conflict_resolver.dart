@@ -60,8 +60,9 @@ class ConflictResolver {
             DateTime.tryParse(localLatest.timestamp)?.millisecondsSinceEpoch ??
                 0;
         if (tIn > tLocal) return ConflictDecision.apply();
-        if (tIn < tLocal)
+        if (tIn < tLocal) {
           return ConflictDecision.ignore(reason: 'older-timestamp-tie');
+        }
         // نفس اللحظة: deviceId الأصغر يفوز.
         if (incoming.deviceId.compareTo(localLatest.deviceId) < 0) {
           return ConflictDecision.apply();

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'theme.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'accounting.dart';
@@ -143,10 +144,10 @@ Future<String> buildReceiptImage(ReceiptData d) async {
 
   // ===== 1) الترويسة الخضراء: اسم المنشأة + الهاتف + الشعار يميناً =====
   canvas.drawRect(
-      Rect.fromLTWH(0, 0, w, headerH), Paint()..color = green);
+      const Rect.fromLTWH(0, 0, w, headerH), Paint()..color = green);
   if (logo != null) {
     final logoBox = RRect.fromRectAndRadius(
-      Rect.fromLTWH(w - pad - 96, (headerH - 96) / 2, 96, 96),
+      const Rect.fromLTWH(w - pad - 96, (headerH - 96) / 2, 96, 96),
       const Radius.circular(14),
     );
     canvas.drawRRect(logoBox, Paint()..color = Colors.white);
@@ -232,12 +233,12 @@ Future<String> buildReceiptImage(ReceiptData d) async {
   // ===== 5) جدول الأصناف (صنف/كمية/سعر/إجمالي) مثل سند نكسورا =====
   if (d.items.isNotEmpty) {
     const tPad = pad;
-    final tw = w - tPad * 2;
+    const tw = w - tPad * 2;
     // أعمدة من اليمين: الصنف 40٪، الكمية 15٪، السعر 22.5٪، الإجمالي 22.5٪.
-    final cName = w - tPad; // حافة يمنى
-    final cQty = w - tPad - tw * 0.40 - tw * 0.075;
-    final cPrice = tPad + tw * 0.225 + tw * 0.1125;
-    final cTotal = tPad + tw * 0.1125;
+    const cName = w - tPad; // حافة يمنى
+    const cQty = w - tPad - tw * 0.40 - tw * 0.075;
+    const cPrice = tPad + tw * 0.225 + tw * 0.1125;
+    const cTotal = tPad + tw * 0.1125;
     // رأس الجدول.
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -366,7 +367,7 @@ void _text(
         color: color,
         fontSize: size,
         fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
-        fontFamily: 'Tajawal',
+        fontFamily: uiFontFamily,
         height: 1.35,
       ),
     ),

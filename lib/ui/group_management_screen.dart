@@ -197,7 +197,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _PairHubSheet(),
+      builder: (_) => const _PairHubSheet(),
     );
   }
 }
@@ -543,12 +543,12 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           try {
                             await repo.transferOwnership(d['id'] as String);
                             safeBump();
-                            if (mounted) {
+                            if (context.mounted) {
                               showSnack(context, '✅ تم تسليم الإدارة.');
                               Navigator.of(context).popUntil((r) => r.isFirst);
                             }
                           } catch (e) {
-                            if (mounted) {
+                            if (context.mounted) {
                               showSnack(context, 'تعذّر: $e', error: true);
                             }
                           }
@@ -566,7 +566,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           final s =
                               await repo.resetDeviceSecret(d['id'] as String);
                           safeBump();
-                          if (mounted) {
+                          if (context.mounted) {
                             showDialog(
                               context: context,
                               builder: (c) => AlertDialog(
@@ -604,7 +604,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
 
 // ═══════════════════════════ نافذة الربط الموحدة ════════════════════════════
 class _PairHubSheet extends ConsumerStatefulWidget {
-  _PairHubSheet();
+  const _PairHubSheet();
   @override
   ConsumerState<_PairHubSheet> createState() => _PairHubSheetState();
 }

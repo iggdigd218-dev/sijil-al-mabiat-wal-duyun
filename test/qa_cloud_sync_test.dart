@@ -20,6 +20,8 @@ import 'package:nexora_app/data/sync/conflict_resolver.dart';
 import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
+import 'package:nexora_app/core/auth_config.dart';
+import 'package:nexora_app/data/sync/firebase_auth_service.dart';
 
 /// سحابة Firebase وهمية في الذاكرة: تخزّن العمليات تحت مسار workspaces
 /// وسجل النسخ الكاملة تحت codes، وتدعم orderBy/limitToFirst بشكل مبسّط.
@@ -199,7 +201,10 @@ void main() {
     expect(again, 0);
   });
 
-  test('QA-CLOUD-03 expired idToken retries without auth on public rules',
+  // (المرحلة 2 — الملاحظة أ-1) التراجع إلى «طلب بلا مصادقة» أُلغي نهائياً:
+  // القواعد تشترط `auth != null`، والطلب العاري كان يُخفي غياب الهوية بدل
+  // إصلاحه. البديل: تجديد توكن هوية الجهاز ثم إعادة محاولة واحدة بهوية.
+  test('QA-CLOUD-03 expired idToken: refresh + retry with auth (no bare retry)',
       () async {
     await repoA.saveAccount(Account(
       name: 'ح',
@@ -210,20 +215,131 @@ void main() {
     ));
     final ops = await a.query('operations', limit: 1);
     final op = SyncOperation.fromMap(ops.first);
-    // قاعدة تتطلب توكن صالحاً فقط عندما يُرسل auth — نحاكي: أي auth مرسل
-    // غير صالح يعيد 401، وبدون auth تنجح (قواعد عامة).
-    var sawExpired = false;
+
+    final rtdbAuth = <String?>[];
+    var tokenRefreshes = 0;
     final client = MockClient((req) async {
+      final host = req.url.host;
+      // نقاط هوية Firebase (خارج RTDB): إنشاء الحساب المجهول/تجديده.
+      if (host.contains('identitytoolkit') || host.contains('securetoken')) {
+        tokenRefreshes++;
+        return host.contains('securetoken')
+            ? FakeFirebase._utf8Json(
+                '{"id_token":"FRESH","refresh_token":"RT2",'
+                '"expires_in":"3600","user_id":"UID1"}',
+                200)
+            : FakeFirebase._utf8Json(
+                '{"idToken":"FRESH","refreshToken":"RT2",'
+                '"expiresIn":"3600","localId":"UID1"}',
+                200);
+      }
+      rtdbAuth.add(req.url.queryParameters['auth']);
       final auth = req.url.queryParameters['auth'];
-      if (auth != null) {
-        sawExpired = true;
+      if (auth == 'EXPIRED') {
         return FakeFirebase._utf8Json('{"error":"Auth token is expired"}', 401);
       }
-      return FakeFirebase._utf8Json(req.body.isEmpty ? 'null' : req.body, 200);
+      if (auth == 'FRESH') {
+        return FakeFirebase._utf8Json(
+            req.body.isEmpty ? 'null' : req.body, 200);
+      }
+      // أي طلب RTDB بلا auth = تراجع أمني مرفوض.
+      return FakeFirebase._utf8Json('{"error":"Unauthorized"}', 401);
     });
+
     final t = transport(repoA, a, idToken: () async => 'EXPIRED');
     await http.runWithClient(() => t.push(op), () => client);
-    expect(sawExpired, isTrue, reason: 'يجب أن يجرب التوكن أولاً ثم يسقط عنه');
+
+    expect(tokenRefreshes, greaterThan(0),
+        reason: 'عند 401 يجب طلب تجديد توكن الهوية');
+    expect(rtdbAuth, contains('FRESH'),
+        reason: 'إعادة المحاولة بالتوكن المجدَّد لا بطلب عارٍ');
+    expect(rtdbAuth.any((v) => v == null || v.isEmpty), isFalse,
+        reason: 'لا يجوز إرسال أي طلب RTDB بلا ?auth=');
+    final after =
+        await a.query('operations', where: 'id = ?', whereArgs: [op.id]);
+    expect(after.first['synced'], 1, reason: 'الدفع اكتمل بعد التجديد');
+  });
+
+  test('QA-CLOUD-03b بدون حساب Google: يُرفق توكن الهوية المجهولة لا طلب عارٍ',
+      () async {
+    await repoA.saveAccount(Account(
+      name: 'ط',
+      kind: AccountKind.customer,
+      notifyChannel: 'none',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final ops = await a.query('operations', limit: 1);
+    final op = SyncOperation.fromMap(ops.first);
+
+    final rtdbAuth = <String?>[];
+    final client = MockClient((req) async {
+      if (req.url.host.contains('googleapis')) {
+        return FakeFirebase._utf8Json(
+            '{"idToken":"ANON","refreshToken":"RT","expiresIn":"3600",'
+            '"localId":"UID-ANON"}',
+            200);
+      }
+      rtdbAuth.add(req.url.queryParameters['auth']);
+      return FakeFirebase._utf8Json(req.body.isEmpty ? 'null' : req.body, 200);
+    });
+
+    final t = transport(repoA, a, idToken: () async => null);
+    await http.runWithClient(() => t.push(op), () => client);
+
+    expect(rtdbAuth, isNotEmpty);
+    expect(rtdbAuth.any((v) => v == null || v.isEmpty), isFalse,
+        reason: 'كل طلب RTDB يحمل auth حتى بلا حساب Google');
+  });
+
+  test('QA-CLOUD-03c الهوية المجهولة: accounts:signUp ينشئ localId/idToken '
+      'وsecuretoken يجدّده', () async {
+    debugFirebaseApiKeyOverride = 'TEST_KEY';
+    addTearDown(() => debugFirebaseApiKeyOverride = '');
+
+    // الخدمة ثابتة (Singleton) وقد تحمل هوية من اختبار سابق — لذا يُفرض
+    // المسار المطلوب بجعل نقطة التجديد تفشل تارةً وتنجح تارةً أخرى.
+    final hosts = <String>[];
+    http.Client client({required bool refreshWorks}) => MockClient((req) async {
+          hosts.add(req.url.host);
+          if (req.url.host.contains('securetoken')) {
+            return refreshWorks
+                ? FakeFirebase._utf8Json(
+                    '{"id_token":"TOK2","refresh_token":"REF2",'
+                    '"expires_in":"3600","user_id":"UID-ANON-1"}',
+                    200)
+                : FakeFirebase._utf8Json('{"error":"invalid_grant"}', 400);
+          }
+          return FakeFirebase._utf8Json(
+              '{"idToken":"TOK1","refreshToken":"REF1","expiresIn":"3600",'
+              '"localId":"UID-ANON-1"}',
+              200);
+        });
+
+    // ١) التجديد يتعذّر → يُنشأ الحساب المجهول عبر accounts:signUp.
+    await http.runWithClient(() async {
+      await FirebaseAuthRest.initSilentAuth(repoA); // يربط المستودع للحفظ
+      final tok = await FirebaseAuthRest.forceRefreshToken();
+      expect(tok, 'TOK1', reason: 'signUp يُصدر idToken');
+      expect(FirebaseAuthRest.currentUid, 'UID-ANON-1',
+          reason: 'localId من accounts:signUp يصير auth.uid');
+      expect(FirebaseAuthRest.hasValidToken, isTrue);
+      expect(hosts, contains('identitytoolkit.googleapis.com'));
+    }, () => client(refreshWorks: false));
+
+    // ٢) التجديد ينجح → securetoken بـ refresh token، والهوية لا تتغيّر.
+    await http.runWithClient(() async {
+      final fresh = await FirebaseAuthRest.forceRefreshToken();
+      expect(fresh, 'TOK2');
+      expect(FirebaseAuthRest.currentUid, 'UID-ANON-1',
+          reason: 'ثبات auth.uid بالتجديد يحفظ عضوية /members');
+      expect(hosts, contains('securetoken.googleapis.com'));
+    }, () => client(refreshWorks: true));
+
+    // ٣) الثبات عبر إعادة التشغيل: نفس auth.uid يُستعاد من الإعدادات.
+    final st = await repoA.settings();
+    expect(st[FirebaseAuthRest.anonUidKey], 'UID-ANON-1');
+    expect(st['cloud.anon.refresh'] ?? '', 'REF2');
   });
 
   test('QA-CLOUD-04 CloudSync full backup: push/pull with newer-remote guard',

@@ -1,6 +1,20 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+
+/// خط واجهة التطبيق.
+///
+/// **Noto Sans Arabic** على كل المنصات (موبايل/ويب/ماك/لينكس) لقاء خطه
+/// المسطّح الحديث، و**يُترك ويندوز على خطه الافتراضي** بلا تبديل — بطلب
+/// صريح: نسخة الويندوز لا تُمس.
+///
+/// الخط مضمّن محلياً في `assets/fonts/NotoSansArabic-*.ttf` (لا `google_fonts`
+/// ولا أي سحب عبر الشبكة) فيعمل التطبيق بالكامل دون اتصال.
+///
+/// إرجاع `null` يعني «خط المنصة الافتراضي» وهو السلوك المطلوب لويندوز.
+String? get uiFontFamily =>
+    (!kIsWeb && Platform.isWindows) ? null : 'NotoSansArabic';
 
 /// ألوان نكسورا — منقولة حرفيًا من متغيّرات CSS في `css/style.css`
 /// الخاصة بهذا التطبيق وحده. لا علاقة لها بأي تطبيق آخر.
@@ -150,7 +164,7 @@ class AppTheme {
       colorScheme: scheme,
       scaffoldBackgroundColor: bg,
       canvasColor: bg,
-      fontFamily: 'Tajawal',
+      fontFamily: uiFontFamily,
       appBarTheme: AppBarTheme(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
@@ -159,7 +173,7 @@ class AppTheme {
         scrolledUnderElevation: .5,
         centerTitle: false,
         titleTextStyle: TextStyle(
-          fontFamily: 'Tajawal',
+          fontFamily: uiFontFamily,
           fontSize: 19,
           fontWeight: FontWeight.w700,
           color: text,
@@ -239,8 +253,8 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          textStyle: const TextStyle(
-            fontFamily: 'Tajawal',
+          textStyle: TextStyle(
+            fontFamily: uiFontFamily,
             fontWeight: FontWeight.w700,
             fontSize: 15,
           ),
@@ -254,8 +268,8 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          textStyle: const TextStyle(
-            fontFamily: 'Tajawal',
+          textStyle: TextStyle(
+            fontFamily: uiFontFamily,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -263,8 +277,8 @@ class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: primary,
-          textStyle: const TextStyle(
-            fontFamily: 'Tajawal',
+          textStyle: TextStyle(
+            fontFamily: uiFontFamily,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -279,7 +293,7 @@ class AppTheme {
         selectedColor: dark ? AppColors.dPrimarySoft : AppColors.primarySoft,
         side: BorderSide(color: border),
         labelStyle: TextStyle(
-          fontFamily: 'Tajawal',
+          fontFamily: uiFontFamily,
           fontSize: 13,
           fontWeight: FontWeight.w600,
           color: text,
@@ -296,7 +310,7 @@ class AppTheme {
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         labelTextStyle: WidgetStatePropertyAll(
           TextStyle(
-            fontFamily: 'Tajawal',
+            fontFamily: uiFontFamily,
             fontSize: 11.5,
             fontWeight: FontWeight.w700,
             color: text2,

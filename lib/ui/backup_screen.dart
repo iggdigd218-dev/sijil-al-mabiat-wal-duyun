@@ -94,6 +94,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         final raw = await file.readAsString();
         final map = jsonDecode(raw) as Map;
         final n = (map['images'] as Map?)?.length ?? 0;
+        if (!mounted) return;
         showSnack(
           context,
           n > 0
@@ -279,11 +280,13 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       );
       await _drive.downloadLatestTo(file);
       final n = await _importJson(await file.readAsString());
-      if (mounted)
+      if (mounted) {
         showSnack(context, 'تم تنزيل النسخة واستعادتها ✅ ($n سجلًا)');
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         showSnack(context, 'تعذّرت الاستعادة من Google: $e', error: true);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -335,6 +338,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           _googleAccount = account;
           _cloudBackup = backup;
         });
+        if (!mounted) return;
         showSnack(context, 'تمت إعادة ربط ${account.email} ✅');
       }
     } catch (e) {

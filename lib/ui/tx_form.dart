@@ -318,12 +318,15 @@ class _TxFormState extends ConsumerState<TxForm> {
       final message = StringBuffer(keepId != null
           ? 'تم تعديل العملية وتحديث الرصيد ✅'
           : 'تم حفظ العملية وتحديث الرصيد ✅');
-      if (share == TxShareOutcome.opened)
+      if (share == TxShareOutcome.opened) {
         message.write(' — تم فتح تطبيق المشاركة');
-      if (share == TxShareOutcome.failed)
+      }
+      if (share == TxShareOutcome.failed) {
         message.write(' — تعذّر فتح المشاركة؛ الحفظ المحلي ناجح');
-      if (stockFailed)
+      }
+      if (stockFailed) {
         message.write(' — تعذّر تحديث بعض المخزون، راجعه قبل المتابعة');
+      }
       showSnack(context, message.toString(),
           error: stockFailed || share == TxShareOutcome.failed, silent: true);
       Navigator.pop(context, true);
@@ -348,11 +351,12 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
     } finally {
       slowWarning?.cancel();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _saving = false;
           _saveSlow = false;
         });
+      }
     }
   }
 
@@ -1030,12 +1034,12 @@ class _TxFormState extends ConsumerState<TxForm> {
       onChanged: (v) {
         if (v != null) setState(() => _sign = v);
       },
-      child: Row(
+      child: const Row(
         children: [
           Expanded(
             child: RadioListTile<String>(
               value: '+',
-              title: const Text(
+              title: Text(
                 'بالزيادة (+)',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
@@ -1046,7 +1050,7 @@ class _TxFormState extends ConsumerState<TxForm> {
           Expanded(
             child: RadioListTile<String>(
               value: '-',
-              title: const Text(
+              title: Text(
                 'بالنقصان (−)',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),

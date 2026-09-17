@@ -47,7 +47,7 @@ class TransactionsScreen extends ConsumerWidget {
                       icon: Icons.error_outline,
                       title: 'تعذّر تحميل العمليات',
                       message:
-                          '${'$e'.length > 200 ? '$e'.substring(0, 200) + '…' : '$e'}',
+                          '$e'.length > 200 ? '${'$e'.substring(0, 200)}…' : '$e',
                     ),
                     const SizedBox(height: 12),
                     FilledButton.icon(

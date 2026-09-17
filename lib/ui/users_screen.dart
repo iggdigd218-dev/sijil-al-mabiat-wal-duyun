@@ -87,7 +87,7 @@ class UsersScreen extends ConsumerWidget {
 
 class UserCard extends ConsumerWidget {
   final AppUser user;
-  const UserCard({required this.user});
+  const UserCard({super.key, required this.user});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

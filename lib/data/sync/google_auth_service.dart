@@ -130,8 +130,9 @@ class GoogleAuthService {
     }
     try {
       final a = await gs.signIn();
-      if (a == null)
+      if (a == null) {
         return const GoogleAuthResult.fail('تم إلغاء تسجيل الدخول');
+      }
       var auth = await a.authentication;
       // (إنتاج) ذاكرة التوكن قد تعود فارغة على بعض أجهزة أندرويد —
       // تنظيف الكاش وإعادة الطلب مرة واحدة قبل التسليم بالفشل.

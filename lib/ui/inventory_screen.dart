@@ -810,10 +810,10 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
         child: LinearProgressIndicator(),
       ),
       error: (e, _) => InputDecorator(
-        decoration: InputDecoration(
+        decoration: const InputDecoration(
           labelText: 'الفئة *',
           errorText: 'تعذّر تحميل الفئات',
-          prefixIcon: const Icon(Icons.category_outlined),
+          prefixIcon: Icon(Icons.category_outlined),
         ),
         child: Text('$e', maxLines: 2, overflow: TextOverflow.ellipsis),
       ),

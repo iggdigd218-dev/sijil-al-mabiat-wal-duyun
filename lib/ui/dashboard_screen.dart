@@ -62,7 +62,7 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.error_outline,
                     title: 'تعذّر تحميل الملخّص',
                     message:
-                        '${e.toString().length > 200 ? e.toString().substring(0, 200) + '…' : e}',
+                        '${e.toString().length > 200 ? '${e.toString().substring(0, 200)}…' : e}',
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
@@ -402,7 +402,7 @@ class _CurrencyCardState extends State<_CurrencyCard> {
           ],
         ),
         const SizedBox(height: 4),
-        Text(
+        const Text(
           'اسحب البطاقة يميناً أو يساراً للتنقل بين العملات',
           style: TextStyle(fontSize: 11, color: AppColors.text3),
         ),
@@ -457,23 +457,35 @@ class _AmountPill extends StatelessWidget {
             child: Icon(arrow, size: 15, color: color),
           ),
           const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label,
-                  style: TextStyle(fontSize: 11, color: AppColors.text3, fontWeight: FontWeight.w700)),
-              Text(
-                hidden
-                    ? '••••'
-                    : '${Fmt.money(value, currency.decimal)} ${currency.symbol}',
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.text,
+          // (الهوية البصرية) العمود يتمدد داخل الحبّة فيُقيَّد عرض النص
+          // ويُقصّ بـ ellipsis بدل تجاوز الحدّ — الخط الأعرض كشف تجاوزاً
+          // قدره 12px على شاشة 360 في اختبار التخطيط.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.text3,
+                        fontWeight: FontWeight.w700)),
+                Text(
+                  hidden
+                      ? '••••'
+                      : '${Fmt.money(value, currency.decimal)} ${currency.symbol}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -691,9 +703,9 @@ class _Recent extends ConsumerWidget {
           onAction: () => onOpen?.call(AppScreen.transactions),
         ),
         if (txs.isEmpty)
-          Card(
+          const Card(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 26),
+              padding: EdgeInsets.symmetric(vertical: 26),
               child: EmptyState(
                 icon: Icons.receipt_long_outlined,
                 title: 'لا توجد عمليات بعد',

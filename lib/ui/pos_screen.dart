@@ -1747,8 +1747,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
               onPressed: () async {
                 final repo = ref.read(repoProvider);
                 final txs = await repo.transactions();
+                if (!mounted) return;
                 final tx = txs.firstWhere((t) => t.id == txId);
                 final accs = await repo.accounts(includeArchived: true);
+                if (!mounted) return;
                 final acc = accs.where((a) => a.id == tx.accountId).firstOrNull;
                 if (acc == null || acc.phone.isEmpty) {
                   showSnack(

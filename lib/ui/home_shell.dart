@@ -737,6 +737,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // فوق أي شاشة: نستخدم سياق جذر الملاحة لا سياق الشاشة الحالية.
         final rootCtx =
             Navigator.of(context, rootNavigator: true).context;
+        // (الجلسة قد تُغلق أثناء الفجوة غير المتزامنة) حراسة السياق نفسه.
+        if (!rootCtx.mounted) return;
         await showJoinApprovalSheet(rootCtx, ref, next,
             backendUrl: url);
         // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب،
@@ -1399,9 +1401,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
             }
           },
           destinations: [
-            NavigationDestination(
-              icon: const Icon(Icons.home_outlined),
-              selectedIcon: const Icon(Icons.home_rounded),
+            const NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
               label: 'الرئيسية',
             ),
             NavigationDestination(
@@ -1578,13 +1580,13 @@ class _Drawer extends ConsumerWidget {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [Color(0xFF1E3A5F), Color(0xFF0F766E)],
                 ),
-                borderRadius: const BorderRadius.only(
+                borderRadius: BorderRadius.only(
                   bottomLeft: Radius.circular(22),
                   bottomRight: Radius.circular(22),
                 ),

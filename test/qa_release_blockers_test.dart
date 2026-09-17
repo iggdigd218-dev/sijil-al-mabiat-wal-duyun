@@ -90,7 +90,7 @@ void main() {
             createdAt: now,
             updatedAt: now),
         items: [
-          InvoiceLine(name: 'صنف اختباري', quantity: 2, unitPrice: 5),
+          const InvoiceLine(name: 'صنف اختباري', quantity: 2, unitPrice: 5),
         ]);
     final ops = await a.query('operations', orderBy: 'timestamp, rowid');
     for (final row in ops) {

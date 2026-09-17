@@ -153,8 +153,9 @@ void main() {
           expect(Directionality.of(tester.element(find.byWidget(entry.value))),
               TextDirection.rtl);
           final error = tester.takeException();
-          if (error != null)
+          if (error != null) {
             debugPrint('SCREEN_LAYOUT ${entry.key} $width: $error');
+          }
           expect(error, isNull);
           expect(find.byType(ErrorWidget), findsNothing);
         } finally {
