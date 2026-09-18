@@ -38,7 +38,9 @@ const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 /// مهلة بقاء طلب الانضمام بعد أن يُسوّى أمره (قبولاً أو رفضاً).
 /// تُحذف العقدة بعد هذه المدة إن لم يحذفها العضو بنفسه بعد إكمال الربط.
 /// لا تُستخدم كـ «وقت انتظار» — العضو يرى «تم الارتباط» فور الموافقة.
-const Duration _approvedRequestTtl = Duration(minutes: 2);
+/// (إصلاح 2026-09-18) كانت دقيقتين فقط — إن وافق المدير والعضو كان
+/// offline لحظياً (شبكة ضعيفة) ضاع القرار. الآن 10 دقائق آمنة.
+const Duration _approvedRequestTtl = Duration(minutes: 10);
 
   /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
 ///
@@ -166,13 +168,35 @@ class JoinRequestWatcher {
         '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(workspaceId)}';
     while (_running) {
       try {
+        // (إصلاح 2026-09-18) SSE بلا توكن كان يفشل بصمت عند تشديد القواعد
+        // أو عند انتهاء جلسة مجهولة — نرفق auth idToken مع كل اتصال، مع
+        // تجديد قسري عند auth_revoked/401.
+        String? token = FirebaseAuthRest.cachedIdToken;
+        if (token == null || token.isEmpty) {
+          token = await FirebaseAuthRest.cloudIdToken();
+        }
+        final sseUrl = token == null || token.isEmpty
+            ? '$root/$nodePath.json'
+            : '$root/$nodePath.json?auth=${Uri.encodeComponent(token)}';
         final client = HttpClient()
           ..connectionTimeout = const Duration(seconds: 15);
         _client = client;
-        final req = await client.getUrl(Uri.parse('$root/$nodePath.json'));
+        final req = await client.getUrl(Uri.parse(sseUrl));
         req.headers.set('Accept', 'text/event-stream');
         req.headers.set('Cache-Control', 'no-cache');
         final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode == 401 || resp.statusCode == 403) {
+          // توكن منتهٍ — جدّد وحاول مرة واحدة فوراً
+          final fresh = await FirebaseAuthRest.forceRefreshToken();
+          if (fresh != null && fresh != token) {
+            try {
+              _client?.close(force: true);
+            } catch (_) {}
+            _client = null;
+            continue; // حلقة جديدة بتوكن جديد
+          }
+          throw StateError('join-sse-http-${resp.statusCode}');
+        }
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
           throw StateError('join-sse-http-${resp.statusCode}');
         }
@@ -194,7 +218,9 @@ class JoinRequestWatcher {
                 }
               } catch (_) {}
             } else if (eventName == 'auth_revoked') {
-              break; // أعد الاتصال.
+              // أعد الاتصال بتوكن جديد فوراً
+              await FirebaseAuthRest.forceRefreshToken();
+              break;
             }
           }
         }
@@ -1341,12 +1367,16 @@ class CloudJoin {
     final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
     if (exp == null || DateTime.now().isAfter(exp)) {
       await _delete('$root/invites/$matchedToken.json');
+      await _purgeInviteIndex(url,
+          pin: '${invite['pin'] ?? ''}', token: matchedToken);
       throw const CloudJoinException(
           'انتهت صلاحية رمز الاقتران — اطلب من المدير رمزاً جديداً.');
     }
-    // (أ-2) الدعوة استُهلكت: يُمحى فهرساها مع أصلها.
-    await _purgeInviteIndex(url,
-        pin: '${invite['pin'] ?? ''}', token: matchedToken);
+    // (إصلاح 2026-09-18) لا نمحي فهرس الدعوة عند الطلب — فقط عند
+    // الانضمام الناجح (join). محو الفهرس عند الطلب كان يمنع إعادة
+    // المحاولة بنفس الرمز إذا فشل دفع الطلب شبكياً، ويجبر المسار البطيء
+    // (مسح كل المساحات). الآن الفهرس يبقى حتى completeApprovedJoin
+    // يحذفه مع الدعوة، فيستطيع العضو إعادة المحاولة بنفس PIN بسهولة.
     // حفظ اسم الجهاز محلياً + دفع الطلب.
     await setDeviceName(repo, deviceName.trim());
     final ourId = await ensureDeviceId(repo);
@@ -1817,6 +1847,10 @@ class CloudJoin {
   /// وإن لم تبق أي دعوة حيّة يحذف joinSnapshot.json نهائياً — لقطة
   /// الأعمال الكاملة لا تبقى معلقة بمسار قابل للتخمين بعد انتهاء
   /// نافذة الانضمام (15 دقيقة). يعيد true إن حُذفت اللقطة.
+  /// (إصلاح 2026-09-18) كان يحذف اللقطة بمجرد انتهاء الدعوات حتى لو
+  /// كان هناك طلبات انضمام معلقة (pending) أو موافق عليها للتو (approved
+  /// خلال 10 دقائق) — فيفشل الترطيب عند العضو بـ «لا توجد نسخة بيانات».
+  /// الآن يتحقق أيضاً من وجود طلبات معلقة/موافق عليها قبل الحذف.
   static Future<bool> purgeStaleInviteArtifacts({
     required String backendUrl,
     String workspaceId = 'default',
@@ -1848,7 +1882,31 @@ class CloudJoin {
       }
     }
     if (liveInvite) return false;
-    // لا دعوات حية: هل توجد لقطة أصلاً؟ احذفها.
+    // (إصلاح) لا تحذف اللقطة إن كانت هناك طلبات انضمام معلقة أو موافق
+    // عليها حديثاً — العضو قد يكون في مرحلة الترطيب الآن.
+    try {
+      final reqs = await _getJson('$root/joinRequests.json');
+      if (reqs != null && reqs.isNotEmpty) {
+        for (final v in reqs.values) {
+          if (v is! Map) continue;
+          final status = '${v['status'] ?? 'pending'}';
+          if (status == 'pending') return false; // طلب معلق — اللقطة مطلوبة
+          if (status == 'approved') {
+            // موافق عليه خلال آخر 10 دقائق — قد يكون العضو ينزل اللقطة الآن
+            final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+            if (exp != null && now.isBefore(exp)) return false;
+            final approvedAt = v['approvedAt'];
+            if (approvedAt is Map && approvedAt['.sv'] == 'timestamp') {
+              return false; // ختم خادم حديث — لا نحذف
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // تعذر قراءة الطلبات — لا نحذف احتياطاً
+      return false;
+    }
+    // لا دعوات حية ولا طلبات معلقة: هل توجد لقطة أصلاً؟ احذفها.
     try {
       final snap = await _getJson('$root/joinSnapshot.json');
       if (snap == null) return false;
