@@ -3,7 +3,10 @@ name: Build License Admin APK
 on:
   push:
     branches: [ main ]
-    paths: [ 'admin_app/**' ]
+    # assets/fonts/** مُضمَّن: pubspec لوحة المدير يشير إلى خط Cairo
+    # المشترك بمسار نسبي (../assets/fonts/)، فتغيير الخطوط يجب أن يعيد
+    # بناء APK المدير وإلا شحن بناءٌ بأصول قديمة.
+    paths: [ 'admin_app/**', 'assets/fonts/**' ]
   workflow_dispatch:
 
 permissions:

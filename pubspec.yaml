@@ -1,7 +1,7 @@
 name: nexora_app
 description: مدير الحسابات — سجل المبيعات والديون
 publish_to: 'none'
-version: 3.65.0+116
+version: 3.66.1+118
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -60,6 +60,16 @@ flutter:
     # بنسبة 100% أوفلاين على كل المنصات.
     # يُترك Tajawal أعلاه لأن شبكة PDF (voucher/reports) تحمّله بالمسار.
     # رخصة Cairo: OFL-1.1 — assets/fonts/OFL-Cairo.txt
+    #
+    # ⚠️ كل وزن مستخدم في lib/ يجب أن يكون له ملف مضمّن هنا. الوزن غير
+    # المُعلن لا يُستبدل بأقرب وزن من العائلة نفسها فحسب، بل يُحاكى
+    # اصطناعياً (synthetic bold) فيظهر أسمك/أرقّ من تصميم Cairo الحقيقي،
+    # والأسوأ على سطح المكتب: قد يرتد المحرك إلى خط النظام العربي
+    # (Noto Sans Arabic) فتسقط الهوية البصرية بالكامل.
+    # كانت الشيفرة تستخدم w800 في 94 موضعاً وw900 في 6 مواضع بلا ملفين
+    # لهما — أُضيف ExtraBold/Black أدناه (مشتقّان من الخط المتغيّر الرسمي
+    # google/fonts — Cairo 3.130، نفس إصدار الملفات المضمّنة مسبقاً).
+    # اختبار test/qa_ui_font_test.dart يفشل إن استُخدم وزن بلا ملف.
     - family: Cairo
       fonts:
         - asset: assets/fonts/Cairo-Regular.ttf
@@ -70,3 +80,7 @@ flutter:
           weight: 600
         - asset: assets/fonts/Cairo-Bold.ttf
           weight: 700
+        - asset: assets/fonts/Cairo-ExtraBold.ttf
+          weight: 800
+        - asset: assets/fonts/Cairo-Black.ttf
+          weight: 900

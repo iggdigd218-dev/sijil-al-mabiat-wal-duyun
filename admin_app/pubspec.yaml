@@ -1,7 +1,7 @@
 name: license_admin
 description: "تطبيق المدير المستقل لتفعيل تراخيص Nexora — يثبت على هاتف مالك النظام فقط."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.9.2
@@ -20,3 +20,29 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # (الهوية البصرية) خط Cairo مشترك مع التطبيق الرئيسي — يُشار إلى أصول
+  # المستودع الجذر بمسار نسبي (../assets/fonts/) بدل نسخ ~1 MB من الملفات
+  # نفسها داخل admin_app. مسار الوالد مدعوم في pubspec، وCI يعمل بـ
+  # actions/checkout على جذر المستودع (working-directory: admin_app فقط)
+  # فالمسار قائم وقت البناء. لهذا السبب أُضيف assets/fonts/** إلى
+  # محفّزات workflow بناء APK المدير.
+  #
+  # كل الأوزان 400–900 مُعلنة لأن الشيفرة تستخدم w700/w800/w900، وكان
+  # الثيم يطلب 'Roboto' — وهو بلا أي محرف عربي، فترتد العربية إلى خط
+  # النظام (Noto Sans Arabic) وتضيع الهوية البصرية للوحة.
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: ../assets/fonts/Cairo-Regular.ttf
+          weight: 400
+        - asset: ../assets/fonts/Cairo-Medium.ttf
+          weight: 500
+        - asset: ../assets/fonts/Cairo-SemiBold.ttf
+          weight: 600
+        - asset: ../assets/fonts/Cairo-Bold.ttf
+          weight: 700
+        - asset: ../assets/fonts/Cairo-ExtraBold.ttf
+          weight: 800
+        - asset: ../assets/fonts/Cairo-Black.ttf
+          weight: 900

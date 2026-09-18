@@ -26,7 +26,11 @@ class AdminApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF7C3AED),
-        fontFamily: 'Roboto',
+        // Cairo لا Roboto: اللوحة عربية بالكامل (locale: ar + RTL)، وRoboto
+        // لا يحمل أي محرف عربي — فكانت كل النصوص ترتد إلى خط النظام العربي
+        // (Noto Sans Arabic) وتنفصل بصرياً عن التطبيق الرئيسي. Cairo مضمّن
+        // محلياً (بلا شبكة) ومشارك مع التطبيق الرئيسي من ../assets/fonts/.
+        fontFamily: 'Cairo',
         inputDecorationTheme: InputDecorationTheme(
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           isDense: true,
