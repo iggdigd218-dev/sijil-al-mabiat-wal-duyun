@@ -895,17 +895,13 @@ class CloudJoin {
     final invite = await _getJson('$root/invites/$tok.json');
     if (invite == null) {
       throw const CloudJoinException(
-          '❌ فشل الربط: رمز الدعوة غير صحيح أو منتهي أو استُخدم من قبل. '
-          'السبب: الدعوة غير موجودة في السحابة. '
-          'الحل: تأكد من الرمز أو اطلب دعوة جديدة من المدير.');
+          'رمز الدعوة غير صحيح أو انتهت صلاحيته أو استُخدم من قبل.');
     }
     final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
     if (exp == null || DateTime.now().isAfter(exp)) {
       await _delete('$root/invites/$tok.json');
       throw const CloudJoinException(
-          '❌ فشل الربط: انتهت صلاحية رمز الدعوة (15 دقيقة). '
-          'السبب: انتهاء المهلة الزمنية للدعوة. '
-          'الحل: اطلب من المدير إنشاء دعوة جديدة.');
+          'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
     }
 
     // ══ (إصلاح جذري — منع فقدان البيانات) ══
@@ -919,9 +915,7 @@ class CloudJoin {
     final snapData = snapRec?['data'];
     if (snapData is! Map) {
       throw const CloudJoinException(
-          '❌ فشل الربط: لا توجد نسخة بيانات للمجموعة في السحابة. '
-          'السبب: المدير لم يرفع اللقطة أو انتهت صلاحية الدعوة. '
-          'الحل: اطلب من المدير إنشاء دعوة جديدة وإعادة المحاولة.');
+          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
     }
     final snap = Map<String, Object?>.from(snapData);
 
