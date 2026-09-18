@@ -214,6 +214,12 @@ class JoinRequestWatcher {
   }
 }
 
+/// (دفعة 65 — كسر حلقة التعليق) المهلة القصوى لأي عملية سحابية مركّبة
+/// (رفع لقطة، إنشاء دعوة، موافقة). بلا هذا الثابت كان رفع اللقطة يرث
+/// المهلة الافتراضية (60 ثانية) ويتضاعف مع مسار إعادة محاولة 401 إلى
+/// ~120 ثانية — داخل حوار غير قابل للإلغاء فيبدو التطبيق معلّقاً تماماً.
+const Duration kCloudOpTimeout = Duration(seconds: 15);
+
 class CloudJoinException implements Exception {
   final String message;
   const CloudJoinException(this.message);
@@ -653,15 +659,21 @@ class CloudJoin {
 
     final now = DateTime.now();
     final root = _root(url, ws);
-    await _putJson('$root/joinSnapshot.json', {
-      'createdAt': now.toIso8601String(),
-      'hostDeviceId': ourId,
-      // (دفعة 57) علامة الضغط: كل عمليات السحابة الأقدم من هذه اللحظة
-      // أصبحت مادةً مجسّدة داخل هذه اللقطة — روتين الضغط الدوري يحذفها
-      // بأمان (المنضمون الجدد يرتوون من اللقطة لا من إعادة تشغيل السجل).
-      'compacted_through_ts': now.millisecondsSinceEpoch,
-      'data': snapshot,
-    });
+    // (دفعة 65) مهلة صريحة: أثقل عملية في المسار (رفع لقطة المجموعة
+    // كاملة) كانت بلا مهلة فتصل إلى دقيقتين مع إعادة محاولة 401.
+    await _putJson(
+      '$root/joinSnapshot.json',
+      {
+        'createdAt': now.toIso8601String(),
+        'hostDeviceId': ourId,
+        // (دفعة 57) علامة الضغط: كل عمليات السحابة الأقدم من هذه اللحظة
+        // أصبحت مادةً مجسّدة داخل هذه اللقطة — روتين الضغط الدوري يحذفها
+        // بأمان (المنضمون الجدد يرتوون من اللقطة لا من إعادة تشغيل السجل).
+        'compacted_through_ts': now.millisecondsSinceEpoch,
+        'data': snapshot,
+      },
+      timeout: kCloudOpTimeout * 2,
+    );
     // نسجّل العلامة محلياً أيضاً ليعتمدها روتين الضغط.
     try {
       final db2 = await repo.database;

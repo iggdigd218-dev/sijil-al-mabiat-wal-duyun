@@ -19,12 +19,18 @@ import 'widgets.dart';
 /// حوار «دعوة سحابية» — للمدير: يرفع لقطة المجموعة ويعرض QR + رمز الدعوة.
 Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
   final repo = ref.read(repoProvider);
-  // مؤشر تقدم أثناء رفع اللقطة (قد تكون كبيرة).
+  // (دفعة 65 — كسر حلقة التعليق) ثلاث ضمانات كانت مفقودة فكانت الشاشة
+  // تتجمّد إلى الأبد:
+  //   ١) مهلة قصوى على العملية نفسها (كان رفع اللقطة بلا مهلة فيصل إلى
+  //      دقيقتين مع مسار إعادة محاولة 401).
+  //   ٢) الحوار **قابل للإلغاء** بيد المستخدم.
+  //   ٣) إغلاق حتمي في `finally`: نجاح، فشل، مهلة، أو مغادرة الشاشة.
+  var cancelled = false;
   showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (_) => const AlertDialog(
-      content: Row(
+    builder: (dialogCtx) => AlertDialog(
+      content: const Row(
         children: [
           CircularProgressIndicator(),
           SizedBox(width: 16),
@@ -34,17 +40,33 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
           ),
         ],
       ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            cancelled = true;
+            Navigator.of(dialogCtx).pop();
+          },
+          child: const Text('إلغاء'),
+        ),
+      ],
     ),
   );
   CloudInviteInfo? invite;
   String? error;
   try {
-    invite = await CloudJoin.createInvite(repo);
+    invite = await CloudJoin.createInvite(repo).timeout(kCloudOpTimeout);
+  } on TimeoutException {
+    error = 'انتهت مهلة الاتصال (${kCloudOpTimeout.inSeconds} ثانية) — '
+        'تحقّق من شبكتك ثم أعد المحاولة.';
   } catch (e) {
     error = e is CloudJoinException ? e.message : '$e';
+  } finally {
+    // إغلاق حتمي — لا يُترك الحوار مفتوحاً تحت أي ظرف.
+    if (!cancelled && context.mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
   }
-  if (!context.mounted) return;
-  Navigator.of(context, rootNavigator: true).pop();
+  if (!context.mounted || cancelled) return;
   if (invite == null) {
     Sfx.error();
     showSnack(context, '❌ تعذّر إنشاء الدعوة: ${error ?? 'خطأ غير معروف'}',

@@ -14,7 +14,8 @@ import '../core/cloud_config.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
-import '../data/sync/cloud_join.dart';
+import '../data/sync/cloud_join.dart'
+    show CloudJoin, CloudJoinException, JoinRequestWatcher, kCloudOpTimeout;
 import '../data/sync/device_id.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
@@ -58,6 +59,16 @@ const List<Duration> _backoffSteps = <Duration>[
   Duration(seconds: 60),
 ];
 
+/// (دفعة 65) فاصل الاستطلاع **الثابت** لحالة الموافقة. كان التباعد
+/// التصاعدي (15→30→60) يترك المدير ينتظر قراره دقيقة كاملة في أسوأ حال،
+/// والاستجابة هنا أهم من توفير الشبكة.
+const Duration _pollInterval = Duration(seconds: 4);
+
+/// (دفعة 65) سقف الانتظار الكلي لقرار المدير. بعده يتوقف الاستطلاع
+/// تماماً ويُسلَّم القرار للمستخدم — بدل حلقة مفتوحة تستنزف الشبكة
+/// والبطارية وتُبقي الشاشة معلّقة بلا أمل.
+const Duration _pollTimeout = Duration(minutes: 2);
+
 class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   _JoinStep _step = _JoinStep.naming;
   final _nameCtrl = TextEditingController();
@@ -72,6 +83,11 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   bool _sseStarting = false;
   /// عدد محاولات الترطيب الفاشلة المتتالية.
   int _hydrateAttempts = 0;
+  /// (دفعة 65) لحظة بدء الاستطلاع — يُحسب منها سقف الدقيقتين.
+  DateTime? _pollStartedAt;
+  /// (دفعة 65) قفل إرسال الطلب: يُضبط بعد أول إرسال ناجح ويُحفظ محلياً،
+  /// فلا يتكدّس أكثر من طلب حتى لو ضُغط الزر مراراً أو أُعيد فتح الشاشة.
+  bool _sentOnce = false;
   /// استُنفدت المحاولات التلقائية — بانتظار تدخّل المستخدم.
   bool _gaveUp = false;
   String _joinUrl = '';
@@ -155,7 +171,13 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     required String ws,
     required String tokenOrPin,
   }) async {
-    if (_busy) return;
+    // (دفعة 65) أرسل **مرة واحدة فقط**. القفل محلي ويُحفظ في الإعدادات،
+    // فلا يتكدّس طلب ثانٍ بتكرار الضغط أو بإعادة فتح الشاشة. العقدة
+    // السحابية مفتاحها معرّف الجهاز أصلاً (joinRequests/{ws}/{deviceId})
+    // فإعادة الإرسال كانت تستبدل الطلب نفسه لا تُنشئ آخر — لكن منع
+    // التكرار من الأساس أوفر للشبكة وأوضح للمدير في قائمة الانتظار.
+    if (_busy || _sentOnce) return;
+    _sentOnce = true;
     setState(() {
       _busy = true;
       _error = '';
@@ -168,7 +190,10 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         tokenOrPin: tokenOrPin,
         deviceName: _nameCtrl.text,
         workspaceId: ws,
-      );
+      ).timeout(kCloudOpTimeout);
+      // حالة الطلب تُحفظ محلياً ليعرف الجهاز أنه أرسل بالفعل.
+      await repo.setSetting(
+          'pendingJoin.sentAt', DateTime.now().toIso8601String());
       _joinUrl = url;
       _joinWs = ws;
       Sfx.click();
@@ -180,7 +205,16 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         _gaveUp = false;
       });
       _startPolling();
+    } on TimeoutException catch (_) {
+      // فشل الإرسال نفسه — نسمح بمحاولة جديدة (لم يصل الطلب أصلاً).
+      _sentOnce = false;
+      setState(() {
+        _busy = false;
+        _error = 'انتهت مهلة إرسال الطلب '
+            '(${kCloudOpTimeout.inSeconds} ثانية) — تحقّق من الشبكة.';
+      });
     } catch (e) {
+      _sentOnce = false;
       setState(() {
         _busy = false;
         _error = e is CloudJoinException ? e.message : '$e';
@@ -193,16 +227,41 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     // (دفعة 57 — تكملة) SSE أولاً: أي كتابة على عقدة طلبنا (موافقة/رفض
     // المدير) تُفحص فوراً بصفر كمون؛ الاستطلاع يبقى شبكة أمان أبطأ
     // لحالات انقطاع القناة فقط.
+    _pollStartedAt = DateTime.now();
     _startDecisionSse();
-    _schedulePoll(const Duration(seconds: 15));
+    _schedulePoll(_pollInterval);
     _pollOnce();
+  }
+
+  /// (دفعة 65) يجدول الاستطلاع القادم بعد [delay] — القناة المفقودة التي
+  /// كانت تُبقي العضو معلّقاً: `_pollOnce` لم يكن يعيد الجدولة لا عند
+  /// بقاء الطلب «قيد الانتظار» ولا عند خطأ شبكي عابر، فيتوقف بعد محاولتين
+  /// ويعتمد على SSE وحدها — فإن انقطعت علّق العضو إلى الأبد.
+  void _scheduleNextPoll() {
+    final started = _pollStartedAt;
+    if (!mounted || started == null) return;
+    if (DateTime.now().difference(started) >= _pollTimeout) {
+      // بلغنا السقف: أوقف كل شيء واعرض سبباً واضحاً وزراً يدوياً —
+      // لا انتظار مفتوح الأمد بلا أمل.
+      _stopDrain();
+      setState(() {
+        _busy = false;
+        _gaveUp = true;
+        _step = _JoinStep.waiting;
+        _error = 'انتهت مدة انتظار موافقة المدير '
+            '(${_pollTimeout.inMinutes} دقائق) بلا رد. '
+            'تحقّق أن المدير فاتح التطبيق، ثم أعد المحاولة.';
+      });
+      return;
+    }
+    _schedulePoll(_pollInterval);
   }
 
   /// (منع الاستنزاف) يجدول الاستطلاع القادم بتباعد تصاعدي بعد إلغاء أي
   /// مؤقت سابق — فلا تتكدس المؤقتات فوق بعضها بعد كل فشل.
   void _schedulePoll([Duration? delay]) {
     _pollTimer?.cancel();
-    _pollTimer = Timer(delay ?? _nextPollDelay(), _pollOnce);
+    _pollTimer = Timer(delay ?? _pollInterval, _pollOnce);
   }
 
   /// التباعد الحالي بحسب المحاولات الفاشلة: 15s → 30s → 60s.
@@ -283,6 +342,12 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         unawaited(_deleteOwnRequest());
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
+      } else if (status == 'pending' || status == '') {
+        // (دفعة 65) الطلب ما زال قيد الانتظار — أعد الجدولة بعد 4 ثوانٍ.
+        // هذا الفرع هو صمام الحلقة المفقود: بلا إعادة الجدولة كان
+        // الاستطلاع ينفّذ محاولتين ثم يتوقف، فيبقى العضو معلّقاً على
+        // «بانتظار موافقة المدير…» إلى الأبد إن انقطعت قناة SSE.
+        _scheduleNextPoll();
       } else if (status == 'missing' || status == 'expired') {
         // (العضو لا يعلّق أبداً) عقدة الطلب لم تعد موجودة — حُذفت من
         // المدير أو انتهت مهلتها. بلا هذه المعالجة كان الاستطلاع يستمر
@@ -299,7 +364,9 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         });
       }
     } catch (_) {
-      // شبكة متقطعة — المحاولة القادمة بعد 4 ثوانٍ.
+      // (دفعة 65) خطأ شبكي عابر: أعد الجدولة بعد 4 ثوانٍ بدل التوقف
+      // الصامت — أي انقطاع مؤقت كان يُعلّق العضو نهائياً.
+      _scheduleNextPoll();
     }
   }
 

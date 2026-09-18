@@ -130,10 +130,30 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       engine.stop();
       await tester.runAsync(() async {
-        await db.close();
-        db = await databaseFactory.openDatabase('${tmp.path}/e2e.db');
         expect(await repo.transactions(), hasLength(1));
         expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
+        // (استقرار CI) إثبات الاستمرارية على القرص يتم عبر **نسخة** من
+        // ملف القاعدة ومقبض منفصل تماماً — بلا إغلاق مقبض `repo` أثناء
+        // حياته. النمط القديم (إغلاق ثم إعادة فتح المسار نفسه) كان يترك
+        // نافذة زمنية ترى فيها أي عملية معلّقة مقبضاً مغلقاً
+        // (DatabaseException: database_closed) — فشل متقلّب ظهر مع
+        // تقسيم الاختبارات في CI (تجميع مختلف للمهام).
+        // ملاحظة: sqflite يعيد النسخة نفسها للمسار الواحد، لذا فتح مسار
+        // ثانٍ قبل إغلاق الأول لا يعطي مقبضاً مستقلاً — النسخ تحلّها.
+        final src = '${tmp.path}/e2e.db';
+        final copy = '${tmp.path}/e2e_verify.db';
+        await File(src).copy(copy);
+        for (final suf in const ['-wal', '-shm']) {
+          final f = File('$src$suf');
+          if (await f.exists()) await f.copy('$copy$suf');
+        }
+        final verify = await databaseFactory.openDatabase(copy);
+        try {
+          expect(await verify.query('transactions'), hasLength(1));
+          expect(await verify.query('accounts'), hasLength(1));
+        } finally {
+          await verify.close();
+        }
         await db.close();
         await tmp.delete(recursive: true);
       });

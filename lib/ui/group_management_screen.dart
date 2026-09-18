@@ -5,6 +5,8 @@
 //  3) قائمة المستخدمين والصلاحيات + إعادة تعيين PIN/كلمة المرور.
 //  4) النسخ الاحتياطي.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -770,6 +772,8 @@ Future<void> showJoinApprovalSheet(
   final fp = '${request['fingerprint'] ?? ''}';
   final platform = '${request['platform'] ?? ''}';
   var role = UserRole.accountant;
+  // (دفعة 65) قفل الموافقة: يمنع النقر المتكرر ويُظهر تقدماً واضحاً.
+  var approving = false;
   Sfx.notify();
   await showModalBottomSheet<void>(
     context: context,
@@ -867,24 +871,50 @@ Future<void> showJoinApprovalSheet(
                   Expanded(
                     flex: 2,
                     child: FilledButton.icon(
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: const Text('قبول وتفعيل'),
-                      onPressed: () async {
-                        try {
-                          await CloudJoin.approveJoinRequest(repo,
-                              backendUrl: backendUrl,
-                              deviceId: deviceId,
-                              deviceName: deviceName,
-                              roleCode: role.code);
-                          await engine.broadcastRosterChange();
-                          Sfx.pair();
-                        } catch (e) {
-                          if (ctx.mounted) {
-                            showSnack(ctx, 'تعذّر القبول: $e', error: true);
-                          }
-                        }
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      },
+                      icon: approving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.check_circle_outline),
+                      label: Text(approving ? 'جارٍ التفعيل…' : 'قبول وتفعيل'),
+                      // (دفعة 65) الزر كان بلا قفل وبلا مؤشر: الموافقة
+                      // سلسلة كتابات سحابية متتابعة، فبدا ميتاً فينقره
+                      // المدير مراراً فتتضاعف الموافقات. الآن: قفل +
+                      // مؤشر تقدم + مهلة قصوى + رسالة خطأ واضحة.
+                      onPressed: approving
+                          ? null
+                          : () async {
+                              setSheet(() => approving = true);
+                              try {
+                                await CloudJoin.approveJoinRequest(repo,
+                                        backendUrl: backendUrl,
+                                        deviceId: deviceId,
+                                        deviceName: deviceName,
+                                        roleCode: role.code)
+                                    .timeout(kCloudOpTimeout);
+                                await engine.broadcastRosterChange();
+                                Sfx.pair();
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                return;
+                              } on TimeoutException catch (_) {
+                                if (ctx.mounted) {
+                                  showSnack(
+                                      ctx,
+                                      'انتهت مهلة الاتصال '
+                                      '(${kCloudOpTimeout.inSeconds} ثانية) — '
+                                      'تحقّق من الشبكة ثم أعد المحاولة.',
+                                      error: true);
+                                }
+                              } catch (e) {
+                                if (ctx.mounted) {
+                                  showSnack(ctx, 'تعذّر القبول: $e',
+                                      error: true);
+                                }
+                              }
+                              if (ctx.mounted) setSheet(() => approving = false);
+                            },
                     ),
                   ),
                 ],
