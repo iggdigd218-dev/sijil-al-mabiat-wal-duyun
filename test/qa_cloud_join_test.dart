@@ -14,6 +14,7 @@ import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
+import 'package:nexora_app/data/sync/device_id.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية: تخزّن أي PUT حسب المسار وتعيد GET من نفس المخزن.
@@ -252,5 +253,63 @@ void main() {
         .where((k) => k.contains('/invites/'))
         .toList();
     expect(inviteKey, isEmpty, reason: 'التوكن حُذف حتمياً بعد الانضمام');
+  });
+
+  test('QA-JOIN-04 (دفعة 65) شاهدة طرد قديمة لا تُفشل إعادة الانضمام',
+      () async {
+    final cloud = FakeCloudStore();
+    await repoA.saveAccount(Account(
+      name: 'عميل المجموعة',
+      kind: AccountKind.customer,
+      notifyChannel: 'none',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final invite = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+
+    // معرّف الجهاز المنضم معروف مسبقاً — نكتب له شاهدة طرد كما يفعل
+    // المدير عند «طرد نهائي» (TTL 7 أيام في /evictions).
+    final devB = await ensureDeviceId(repoB);
+    final root = '/workspaces/${invite.workspaceId}';
+    cloud.store['$root/evictions/$devB.json'] = {
+      'deviceId': devB,
+      'reason': 'revoked_by_manager',
+      'expelled_at': now.millisecondsSinceEpoch,
+      'expires_at': now
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch,
+    };
+    // الشاهدة موجودة فعلاً قبل الانضمام.
+    expect(
+        await http.runWithClient(
+            () => CloudJoin.hasEvictionTombstone(
+                backendUrl: url,
+                deviceId: devB,
+                workspaceId: invite.workspaceId),
+            cloud.client),
+        isTrue);
+
+    await http.runWithClient(
+        () => CloudJoin.join(repoB,
+            backendUrl: invite.backendUrl,
+            token: invite.token,
+            workspaceId: invite.workspaceId,
+            cloudCode: invite.cloudCode),
+        cloud.client);
+
+    expect(await repoB.workspaceMode(), 'member');
+    // ★ جوهر الاختبار: الانضمام المباشر يمحو الشاهدة، وإلا طرد الجهاز
+    // نفسه في أول مصافحة (maybeCheckSelfEviction) بعد ثوانٍ من نجاحه —
+    // فيبدو «الربط معطلاً»: ينضم ثم يُلغى فوراً.
+    expect(
+        await http.runWithClient(
+            () => CloudJoin.hasEvictionTombstone(
+                backendUrl: url,
+                deviceId: devB,
+                workspaceId: invite.workspaceId),
+            cloud.client),
+        isFalse,
+        reason: 'join() يمحو شاهدة الطرد كمسار الموافقة تماماً');
   });
 }

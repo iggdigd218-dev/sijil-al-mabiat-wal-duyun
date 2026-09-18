@@ -863,6 +863,17 @@ class CloudJoin {
     // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
     await SnapshotApply.applySnapshot(() async => db, ourId, snap);
 
+    // ══ (دفعة 65) كسر حلقة إعادة الطرد في مسار الانضمام المباشر ══
+    // إن كان هذا الجهاز مطروداً سابقاً فلديه شاهدة في
+    // /evictions/{deviceId} (TTL 7 أيام). مسار «طلب + موافقة» كان
+    // يحذفها (داخل approveJoinRequest) أما هذا المسار المباشر
+    // (join بالرمز) فلا — فيبقى الجهاز منضماً لحظةً ثم تطرده
+    // maybeCheckSelfEviction في أول مصافحة، فيبدو الربط معطلاً:
+    // ينضم ثم يُلغى فوراً. الحذف هنا يكمّل نظيره في الموافقة.
+    try {
+      await _delete(evictionPath(url, workspaceId, ourId));
+    } catch (_) {}
+
     // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
     final ourRowAfter = await db.query('devices',
         where: 'id = ?', whereArgs: [ourId], limit: 1);
