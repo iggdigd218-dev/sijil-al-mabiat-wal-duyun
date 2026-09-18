@@ -399,6 +399,31 @@ class CloudJoin {
     }
   }
 
+  /// هل سجل هذا الجهاز في مساحة العمل المعطاة ما زال عضواً **فعّالاً**؟
+  ///
+  /// `/roster/{deviceId}` هو المصدر المشترك: غياب العقدة أو وجود
+  /// `revoked_at`/`expelled_at` يعني انتهاء العضوية (طرد أو حلّ مجموعة)
+  /// ولو ظلّ الجهاز محلياً موسوماً `member`.
+  /// تعذّر القراءة (شبكة) ⇒ نعدّه غير فعّال: الأوفر ألا نحبس المستخدم
+  /// خلف رفض كاذب بدل أن نتركه ينضم.
+  static Future<bool> _isActiveCloudMember(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final devId = (await repo.settings())['sync.deviceId'] ?? '';
+    if (devId.isEmpty) return false;
+    try {
+      final rec = await _getJson('${_root(backendUrl, workspaceId)}/roster/'
+          '${Uri.encodeComponent(devId)}.json');
+      if (rec == null || rec.isEmpty) return false;
+      return '${rec['revoked_at'] ?? ''}'.trim().isEmpty &&
+          '${rec['expelled_at'] ?? ''}'.trim().isEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String _root(String base, String ws) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(ws)}';
 
@@ -787,8 +812,25 @@ class CloudJoin {
     }
     final mode = await repo.workspaceMode();
     if (mode == 'member') {
-      throw const CloudJoinException(
-          'هذا الجهاز عضو في مجموعة قائمة بالفعل — لا يمكن الانضمام لمجموعة أخرى.');
+      // ══ (دفعة 65) لا تحبس الجهاز في عضوية منتهية ══
+      // الرفض الأعمى كان يترك أي جهاز طُرد سابقاً بلا مخرج: الطرد
+      // (purgePeerFromCloud) يحذف سجله من /roster ويكتب شاهدة، فإن كان
+      // الجهاز مغلقاً أو بلا شبكة وقتها لم يعالج طرده، فيبقى محلياً
+      // `member` للأبد. وحين يحاول الانضمام مجدداً يُرفض بهذه الرسالة
+      // فلا ينضم ولا يزامن — «الربط لا يعمل» نهائياً.
+      // الفحص الصحيح: هل عضويته في **هذه** المساحة ما زالت فعّالة؟
+      // فإن كانت منتهية فالانضمام ترميم مشروع للعضوية.
+      final stillActive = await _isActiveCloudMember(
+        repo,
+        backendUrl: url,
+        workspaceId: workspaceId,
+      );
+      if (stillActive) {
+        throw const CloudJoinException(
+            'هذا الجهاز عضو فعّال في مجموعة قائمة بالفعل — لا يمكن '
+            'الانضمام لمجموعة أخرى.');
+      }
+      // عضو صوري (مطرود/سجله محذوف) — نكمل الانضمام.
     }
 
     final root = _root(url, workspaceId);

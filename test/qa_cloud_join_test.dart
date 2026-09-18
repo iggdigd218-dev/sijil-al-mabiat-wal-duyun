@@ -312,4 +312,97 @@ void main() {
         isFalse,
         reason: 'join() يمحو شاهدة الطرد كمسار الموافقة تماماً');
   });
+
+  test('QA-JOIN-05 (دفعة 65) المطرود سابقاً يعود: لا يُحبس في «عضو»',
+      () async {
+    final cloud = FakeCloudStore();
+    await repoA.saveAccount(Account(
+      name: 'عميل المجموعة',
+      kind: AccountKind.customer,
+      notifyChannel: 'none',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final devB = await ensureDeviceId(repoB);
+
+    // 1) انضمام أول ناجح.
+    var inv = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+    final wsId = inv.workspaceId;
+    await http.runWithClient(
+        () => CloudJoin.join(repoB,
+            backendUrl: inv.backendUrl,
+            token: inv.token,
+            workspaceId: wsId,
+            cloudCode: inv.cloudCode),
+        cloud.client);
+    expect(await repoB.workspaceMode(), 'member');
+
+    // 2) المدير يطرده: شاهدة + حذف سجله من roster.
+    await http.runWithClient(
+        () => CloudJoin.purgePeerFromCloud(repoA,
+            backendUrl: url, deviceId: devB, workspaceId: wsId),
+        cloud.client);
+    expect(cloud.store['/workspaces/$wsId/roster/$devB.json'], isNull);
+
+    // 3) الجهاز لم يعالج طرده (كان مغلقاً) فما زال محلياً member —
+    //    وإعادة الانضمام يجب أن تنجح كترميم للعضوية لا أن تُرفض.
+    expect(await repoB.workspaceMode(), 'member',
+        reason: 'الجهاز المحلي لم يعالج الطرد — هذه هي الحالة المفخخة');
+
+    inv = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+    await http.runWithClient(
+        () => CloudJoin.join(repoB,
+            backendUrl: inv.backendUrl,
+            token: inv.token,
+            workspaceId: wsId,
+            cloudCode: inv.cloudCode),
+        cloud.client);
+
+    expect(await repoB.workspaceMode(), 'member');
+    // والشاهدة تزول مع الانضمام (QA-JOIN-04).
+    expect(
+        await http.runWithClient(
+            () => CloudJoin.hasEvictionTombstone(
+                backendUrl: url, deviceId: devB, workspaceId: wsId),
+            cloud.client),
+        isFalse);
+  });
+
+  test('QA-JOIN-06 (دفعة 65) العضو الفعّال يُرفض حقاً',
+      () async {
+    final cloud = FakeCloudStore();
+    await repoA.saveAccount(Account(
+      name: 'عميل المجموعة',
+      kind: AccountKind.customer,
+      notifyChannel: 'none',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final inv = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+    final wsId = inv.workspaceId;
+    await http.runWithClient(
+        () => CloudJoin.join(repoB,
+            backendUrl: inv.backendUrl,
+            token: inv.token,
+            workspaceId: wsId,
+            cloudCode: inv.cloudCode),
+        cloud.client);
+
+    // عضو فعّال: سجله قائم في roster بلا طرد — يحاول الانضمام مجدداً.
+    final inv2 = await http.runWithClient(
+        () => CloudJoin.createInvite(repoA), cloud.client);
+    await expectLater(
+        http.runWithClient(
+            () => CloudJoin.join(repoB,
+                backendUrl: inv2.backendUrl,
+                token: inv2.token,
+                workspaceId: wsId,
+                cloudCode: inv2.cloudCode),
+            cloud.client),
+        throwsA(isA<CloudJoinException>()),
+        reason: 'العضو الفعّال يُمنع من الانضمام لمجموعة أخرى');
+  });
 }
