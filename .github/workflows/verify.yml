@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Flutter Analyze & Test
+  analyze:
+    name: Static analysis
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -25,19 +25,21 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Format check
-        run: |
-          # تفشل المهمة إن وجدت ملفات غير منسّقة (لا تعدّل تلقائيًا).
-          dart format --output=none --set-exit-if-changed lib/ test/ 2>/dev/null \
-            || echo "⚠️ تحذير تنسيق (يُسمح به في CI لكن يُنصح بإصلاحه)"
-
       - name: Static analysis
         run: |
-          # تشغيل التحليل؛ يفشل فقط إن وُجد خطأ حقيقي (error).
-          # التحذيرات القديمة والـ deprecated لا توقف البناء حتى نصلّحها تدريجيًا.
+          # يفشل فقط إن وُجد خطأ حقيقي (error)؛ التحذيرات القديمة لا توقف البناء.
           set +e
           flutter analyze 2>&1 | tee /tmp/analyze.txt
           CODE=${PIPESTATUS[0]}
@@ -46,12 +48,48 @@ jobs:
             exit 1
           fi
           if [ "$CODE" != "0" ]; then
-            echo "⚠️ التحليل أعاد كود $CODE لكن بدون أخطاء حقيقية (تحذيرات قديمة) — يُستكمل."
+            echo "⚠️ التحليل أعاد كود $CODE بدون أخطاء حقيقية (تحذيرات قديمة) — يُستكمل."
           fi
           exit 0
 
-      - name: Run unit tests (لا يُفشل البناء مؤقتًا — صلاحيات المجموعة تحتاج مواءمة)
+  # (دفعة 65) الاختبارات تُشغَّل في مسارات متوازية مستقلة: أربع وظائف
+  # تعمل معاً، كل واحدة تنفّذ شريحة واحدة فقط من الحزمة (--shard-index).
+  # بدل أن تحجز الحزمةُ كلها مسارَ بناء واحداً لدقائق، ينتهي أطول مسار
+  # في وقت أقصر بكثير — ولا تعتمد وظائف البناء (APK/Windows) عليها إطلاقاً.
+  test:
+    name: Unit tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    needs: analyze
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.x'
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run test shard
         run: |
-          set +e
-          flutter test --coverage
-          echo "✅ الاختبارات اكتملت (أي فشل حاليًا لا يوقف البناء حتى إصلاح مواءمة الصلاحيات)."
+          set -o pipefail
+          flutter test --reporter expanded \
+            --total-shards ${{ strategy.job-total }} \
+            --shard-index ${{ matrix.shard }}

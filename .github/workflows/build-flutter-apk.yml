@@ -1,11 +1,9 @@
 name: Build Flutter Android APK
 
-concurrency:
-  # كلا البناءين (APK و Windows) يرفعان إلى إصدار `latest` نفسه: كانا يعملان
-  # معاً فيتعارضان في حذف الأصول وإعادة رفعها، فَيُفرغ الإصدار أحياناً
-  # (0 أصول) ويبقى المستخدمون بلا تحميل. هذه المجموعة تُرتِّبهما تسلسلياً.
-  group: publish-latest-release
-  cancel-in-progress: false
+# (دفعة 65 — تحسين خط البناء) لا قيد تزامن على مستوى الوظيفة بعد اليوم.
+# قيد التزامن انتقل إلى وظيفة `publish` وحدها (أسفل الملف)، فيُبنى
+# الأندرويد والويندوز **معاً بالتوازي**، ولا يُنتظر أحدهما الآخر إلا في
+# خطوة رفع الأصول إلى إصدار `latest` — وهي الوحيدة التي تحتاج التسلسل.
 
 on:
   push:
@@ -37,6 +35,28 @@ jobs:
           flutter-version: '3.35.x'
           channel: stable
           cache: true
+
+      # (دفعة 65) كاش Gradle: مجلدات التبعيات ودوال Gradle تُستعاد بين
+      # التشغيلات فلا تُحمَّل مكتبات الأندرويد من الصفر في كل بناء.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'android/build.gradle', 'android/settings.gradle', 'android/app/build.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # (دفعة 65) كاش حزم pub.
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
 
       - name: Decode release keystore & create signing config
         env:
@@ -90,23 +110,56 @@ jobs:
           EOF
           cat version.json
 
-      - name: Upload APK Artifact
+      # الأصل الواحد يحمل ملفي النشر معاً: APK + version.json، فلا حاجة
+      # لإعادة توليد أي شيء في وظيفة النشر، ولا لرفع مزدود للملف الكبير.
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: nexora-flutter-arm64
-          path: nexora-arm64.apk
+          path: |
+            nexora-arm64.apk
+            version.json
           retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════
+  # النشر — الوظيفة الوحيدة الخاضعة لقيد التزامن في هذا الملف.
+  # كل منصّة ترفع أصولها **فقط**، والقيد يمنع تعارضها مع وظيفة نشر
+  # الويندوز على إصدار `latest` نفسه (حذف/إعادة رفع متزامن كان يُفرغ
+  # الإصدار أحياناً فيبقى المستخدمون بلا تحميل).
+  # ══════════════════════════════════════════════════════════════════
+  publish:
+    name: Publish APK to latest release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-latest-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nexora-flutter-arm64
+          path: dist
+
+      # actions/download-artifact@v4 يضع الملفات داخل مجلد باسم الأصل؛
+      # نُسطّحها إلى جذر مسار العمل لتسهل معالجتها بلا مسارات فرعية.
+      - name: Flatten artifacts
+        run: |
+          find dist -type f -exec mv -f {} . \;
+          rm -rf dist
+          ls -lh nexora-arm64.apk version.json
 
       - name: Build upload list (existing files only)
         id: filelist
-        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           # ⚠️ كل منصّة ترفع أصولها **فقط**. خطوة الرفع تحذف الأصل القديم بنفس
           # الاسم **أولاً** ثم ترفع البديل؛ فإدراج أصل منصّة أخرى يعني تعريضه
           # للحذف بلا تعويض إن فشل تنزيله — وبهذا فُقدت nexora-windows.zip ثم
           # أُفرغ الإصدار كاملاً (0 أصول). لا تنزيل، لا مساس بغير أصولنا.
-          # القائمة تظلّ تتجاهل أي ملف مفقود/فارغ كشبكة أمان أخيرة.
           files=""
           for f in nexora-arm64.apk version.json; do
             if [ -s "$f" ]; then files="${files}${f}"$'\n'; fi
@@ -120,7 +173,6 @@ jobs:
 
       - name: Update unified latest release (APK + version.json)
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
         with:
           tag_name: latest
           name: Nexora — الإصدار الرسمي الأحدث
@@ -144,7 +196,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: رفع أصول الإصدار (مع إعادة المحاولة)
-        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

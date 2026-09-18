@@ -1,11 +1,9 @@
 name: Build Windows EXE
 
-concurrency:
-  # كلا البناءين (APK و Windows) يرفعان إلى إصدار `latest` نفسه: كانا يعملان
-  # معاً فيتعارضان في حذف الأصول وإعادة رفعها، فَيُفرغ الإصدار أحياناً
-  # (0 أصول) ويبقى المستخدمون بلا تحميل. هذه المجموعة تُرتِّبهما تسلسلياً.
-  group: publish-latest-release
-  cancel-in-progress: false
+# (دفعة 65 — تحسين خط البناء) لا قيد تزامن على مستوى الوظيفة بعد اليوم.
+# قيد التزامن انتقل إلى وظيفة `publish` وحدها (أسفل الملف)، فيُبنى
+# الويندوز والأندرويد **معاً بالتوازي**، ولا يُنتظر أحدهما الآخر إلا في
+# خطوة رفع الأصول إلى إصدار `latest` — وهي الوحيدة التي تحتاج التسلسل.
 
 on:
   push:
@@ -29,6 +27,18 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      # (دفعة 65) كاش حزم pub. مجلد ~/.gradle/caches لا معنى له هنا —
+      # بناء ويندوز لا يمرّ بـ Gradle؛ كاشه مضاف في مسار الأندرويد حيث
+      # يُستعمل فعلاً، فلا نضيف حملاً بلا فائدة إلى هذا الخط.
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
@@ -156,8 +166,50 @@ jobs:
           path: build/windows/x64/runner/Release/*
           retention-days: 30
 
+      # الأصل الواحد يحمل ملفات النشر الثلاثة معاً ليستلمها job النشر.
+      - name: Upload publish artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexora-windows-publish
+          path: |
+            NexoraSetup.exe
+            nexora-windows.zip
+            README-install.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════
+  # النشر — الوظيفة الوحيدة الخاضعة لقيد التزامن في هذا الملف.
+  # كل منصّة ترفع أصولها **فقط**، والقيد يمنع تعارضها مع وظيفة نشر
+  # الأندرويد على إصدار `latest` نفسه (حذف/إعادة رفع متزامن كان يُفرغ
+  # الإصدار أحياناً فيبقى المستخدمون بلا تحميل).
+  # ══════════════════════════════════════════════════════════════════
+  publish:
+    name: Publish Windows assets to latest release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-latest-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Download publish artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nexora-windows-publish
+          path: dist
+
+      # actions/download-artifact@v4 يضع الملفات داخل مجلد باسم الأصل؛
+      # نُسطّحها إلى جذر مسار العمل لتسهل معالجتها بلا مسارات فرعية.
+      - name: Flatten artifacts
+        run: |
+          find dist -type f -exec mv -f {} . \;
+          rm -rf dist
+          ls -lh
+
       - name: Remove stale/broken MSIX asset
-        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           # احذف ملف MSIX غير الموقّع القديم (لا يمكن تثبيته) إن وجد.
@@ -172,14 +224,12 @@ jobs:
 
       - name: Build upload list (existing files only)
         id: filelist
-        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           # ⚠️ كل منصّة ترفع أصولها **فقط**. خطوة الرفع تحذف الأصل القديم بنفس
           # الاسم **أولاً** ثم ترفع البديل؛ فإدراج أصل منصّة أخرى يعني تعريضه
           # للحذف بلا تعويض إن فشل تنزيله — وبهذا فُقدت nexora-windows.zip ثم
           # أُفرغ الإصدار كاملاً (0 أصول). لا تنزيل، لا مساس بغير أصولنا.
-          # القائمة تظلّ تتجاهل أي ملف مفقود/فارغ كشبكة أمان أخيرة.
           files=""
           for f in NexoraSetup.exe nexora-windows.zip README-install.txt; do
             if [ -s "$f" ]; then files="${files}${f}"$'\n'; fi
@@ -193,7 +243,6 @@ jobs:
 
       - name: Update unified latest release (Windows)
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
         with:
           tag_name: latest
           name: Nexora — الإصدار الرسمي الأحدث
@@ -218,7 +267,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: رفع أصول الإصدار (مع إعادة المحاولة)
-        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
