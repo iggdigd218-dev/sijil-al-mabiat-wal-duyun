@@ -67,14 +67,6 @@ class SyncEngine {
   /// الوسيط رسالة عربية توضح المشكلة. null = زالت الحالة (أمان).
   static void Function(String? message)? onSyncDanger;
 
-  /// (دفعة 53) الطرد التلقائي: تُستدعى مرة واحدة عندما يكتشف الجهاز أن
-  /// المدير حذفه/حظره/طرده من سجل المجموعة السحابي. الواجهة تعيد التوجيه
-  /// لشاشة الترحيب مع رسالة «تم إلغاء ارتباط هذا الجهاز من قبل مدير المؤسسة».
-  static void Function()? onDeviceEvicted;
-
-  /// حارس ضد ازدواج معالجة الطرد (SSE + pull قد يكتشفانه معاً).
-  bool _evictionHandled = false;
-
   /// آخر رسالة خطر مبثوثة (لتجنب التكرار) — '' تعني لا خطر.
   String _lastDangerMsg = '';
   DateTime? _oldestStuckSince;
@@ -315,11 +307,6 @@ class SyncEngine {
     );
     registerTransport(_cloudTransport!);
     _cloudUrl = url;
-    // (دفعة 53) مصافحة العضوية النشطة: الناقل يفحص /roster/$deviceId
-    // قبل كل سحب وعند تمهيد SSE — اكتشاف الطرد يمر بالمعالج المركزي.
-    _cloudTransport!.onEvicted = () {
-      unawaited(handleSelfEviction());
-    };
     // استماع فوري SSE: أي عملية يكتبها جهاز آخر في السحابة تصلنا لحظياً
     // (السحب الدوري كل 45 ثانية يبقى شبكة أمان لو انقطعت القناة).
     _cloudTransport!.onCloudChanged = () {
@@ -341,10 +328,6 @@ class SyncEngine {
   Future<void> start() async {
     if (_started) return;
     _started = true;
-    _evictionHandled = false;
-    // (دفعة 53) ربط خطاف الطرد المركزي: أي مسار يكتشف الطرد
-    // (syncRoster/مصافحة roster في الناقل) يمر من handleSelfEviction.
-    CloudJoin.onSelfEvicted = handleSelfEviction;
     final generation = ++_generation;
     _queue ??= SyncQueueOps(await _db);
     await _queue!.recoverInterrupted();
@@ -619,10 +602,6 @@ class SyncEngine {
           final url = effectiveBackendUrl(st['cloudBackendUrl']);
           if (url.isNotEmpty) {
             final ws = _cloudTransport?.workspaceId ?? 'default';
-            try {
-              await CloudJoin.pruneExpiredEvictions(
-                  backendUrl: url, workspaceId: ws);
-            } catch (_) {}
             // (تنظيف مؤجل) طلبات الانضمام التي سُوّي أمرها وانقضت مهلتها
             // (10 دقائق) تُقلَّم هنا — بلا حذف فوري يُعلّق العضو.
             try {
@@ -650,75 +629,10 @@ class SyncEngine {
         } catch (_) {}
         return;
       }
-      if (await repo.amIExpelled()) {
-        await handleSelfEviction();
-        return;
-      }
-      // (دفعة 54) فحص شاهدة الطرد الصريحة عند الإقلاع وكل دورة صيانة —
-      // يغطي حالة إقلاع الجهاز بعد أن طُرد وهو مطفأ (قبل فتح قنوات SSE).
-      if (await repo.workspaceMode() == 'member') {
-        final st = await repo.settings();
-        final url = effectiveBackendUrl(st['cloudBackendUrl']);
-        final devId = (st['sync.deviceId'] ?? '').trim();
-        if (url.isNotEmpty && devId.isNotEmpty) {
-          try {
-            final tomb = await CloudJoin.hasEvictionTombstone(
-              backendUrl: url,
-              deviceId: devId,
-              workspaceId: _cloudTransport?.workspaceId ?? 'default',
-            );
-            if (tomb) await handleSelfEviction();
-          } catch (_) {
-            // شبكة — المصافحة داخل الناقل تغطي لاحقاً.
-          }
-        }
-      }
     } catch (_) {}
   }
 
   /// (دفعة 53) المعالجة المركزية للطرد الذاتي — تُنفَّذ مرة واحدة فقط:
-  ///  1) إيقاف فوري لقناة SSE وكل الدفع الصادر (المحرك بأكمله).
-  ///  2) وسم صف جهازنا المحلي revoked_at (قبل المسح — أثر تدقيقي فوري).
-  ///  3) تفريغ طابور المزامنة ومفاتيح جلسة المجموعة
-  ///     (cloudBackendUrl/cloudCode/pendingJoin.*).
-  ///  4) العودة لوضع standalone بقاعدة نظيفة (resetToStandalone).
-  ///  5) بث onDeviceEvicted للواجهة → شاشة الترحيب + الرسالة الصريحة.
-  Future<void> handleSelfEviction() async {
-    if (_evictionHandled) return;
-    _evictionHandled = true;
-    // 1) أوقف المحرك كاملاً: SSE + مؤقتات الدفع والسحب.
-    try {
-      stop();
-    } catch (_) {}
-    // 2) وسم الصف المحلي revoked_at الآن (توثيق لحظة الاكتشاف).
-    try {
-      final db = await _db;
-      final st = await repo.settings();
-      final devId = (st['sync.deviceId'] ?? '').trim();
-      if (devId.isNotEmpty) {
-        await db.update(
-          'devices',
-          {'revoked_at': DateTime.now().toIso8601String()},
-          where: 'id = ?',
-          whereArgs: [devId],
-        );
-      }
-      // 3) تفريغ الطابور + مفاتيح الجلسة فوراً (قبل إعادة الضبط الشاملة).
-      await db.delete('sync_queue');
-      await db.delete('settings',
-          where: "key IN (?, ?) OR key LIKE 'pendingJoin.%'",
-          whereArgs: ['cloudBackendUrl', 'cloudCode']);
-    } catch (_) {}
-    // 4) إعادة الضبط الكاملة لوضع standalone (قاعدة نظيفة + هوية جديدة).
-    try {
-      await repo.resetToStandaloneAfterExpulsion();
-    } catch (_) {}
-    // 5) بث الحدث للواجهة.
-    try {
-      onDeviceEvicted?.call();
-    } catch (_) {}
-  }
-
   void stop() {
     _started = false;
     _generation++;
@@ -802,7 +716,6 @@ class SyncEngine {
     } catch (_) {}
     return {
       'sse': t?.isListening ?? false,
-      'evicted': t?.isEvicted ?? false,
       'workspace': wsName,
       'pending': pending,
       'latency_ms': latencyMs,
@@ -872,12 +785,11 @@ class SyncEngine {
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       final t = _cloudTransport;
-      await CloudJoin.purgePeerFromCloud(
+      await CloudJoin.removePeerFromCloud(
         repo,
         backendUrl: url,
         deviceId: targetDeviceId,
         workspaceId: t?.workspaceId ?? 'default',
-        reason: reason,
       );
     } catch (_) {
       // الشبكة غائبة — المصافحة الدورية لدى المستهدف تلتقط الطرد لاحقاً
@@ -885,18 +797,23 @@ class SyncEngine {
     }
   }
 
-  /// (دفعة 54 — جهة المدير) إعادة السماح لجهاز محظور: حذف شاهدة طرده
-  /// من السحابة حتى لا يُقصي الجهازُ المستعاد نفسَه عند فحصه القادم.
+  /// (دفعة 66 — جهة المدير) إعادة السماح لجهاز محظور: يُزيل أثر الحظر
+  /// **المحلي** (revoked_at/expelled_at) ويعيده مقترناً، فيعود للمزامنة
+  /// متى قبل دعوة جديدة. لا يوجد بعد اليوم أي «شاهدة طرد» سحابية ولا
+  /// مسح قسري لبيانات الجهاز (سلوك ما قبل 3.55).
   Future<void> clearEvictionBroadcast(String targetDeviceId) async {
     try {
-      if (!await repo.isWorkspaceOwner()) return;
-      final st = await repo.settings();
-      final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      if (url.isEmpty) return;
-      await CloudJoin.clearEvictionTombstone(
-        backendUrl: url,
-        deviceId: targetDeviceId,
-        workspaceId: _cloudTransport?.workspaceId ?? 'default',
+      final db = await _db;
+      await db.update(
+        'devices',
+        {
+          'revoked_at': '',
+          'expelled_at': '',
+          'is_paired': 1,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [targetDeviceId],
       );
     } catch (_) {}
   }

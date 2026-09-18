@@ -9,7 +9,6 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/cloud_config.dart';
 import '../cloud_sync.dart';
 import '../repository.dart';
-import 'cloud_join.dart';
 import 'device_registry.dart';
 
 class WorkspaceRecovery {
@@ -119,17 +118,8 @@ class WorkspaceRecovery {
       final devId = repo.requireDeviceId;
       await db.update('devices', {'is_owner': 0},
           where: 'id = ?', whereArgs: [devId]);
-      // (دفعة 65) كسر حلقة إعادة الطرد في مسار الاسترداد: إن كانت لهذا
-      // الجهاز شاهدة طرد سابقة في /evictions فبقاؤها يعني أن أول
-      // مصافحة عضوية ستطرده بعد لحظات من استرداد عضويته — نفس الثغرة
-      // التي أُصلحت في CloudJoin.join ونظيرتها في الموافقة.
-      try {
-        await CloudJoin.clearEvictionTombstone(
-          backendUrl: backendUrl,
-          deviceId: devId,
-          workspaceId: targetWs,
-        );
-      } catch (_) {}
+      // (دفعة 66) لا شواهد طرد بعد اليوم — الاسترداد يعيد العضوية دون
+      // أي أثر تدميري على الجهاز (سلوك ما قبل 3.55).
       return true;
     }
     // 3) مالك: استرجاع بيانات المؤسسة من النسخة الصامتة إن وُجدت.

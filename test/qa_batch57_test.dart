@@ -66,43 +66,6 @@ void main() {
   const url = 'https://qa-b57.firebaseio.com';
   const wsPath = '/workspaces/default';
 
-  group('تقليم شواهد الطرد (TTL)', () {
-    test('B57-EVICT-01 المنتهية تُحذف والحيّة تبقى والقديمة تُمهل شهراً',
-        () async {
-      final cloud = FakeCloudStore();
-      final nowMs = DateTime.now().millisecondsSinceEpoch;
-      cloud.store['$wsPath/evictions/DEV-EXPIRED.json'] = {
-        'expelled_at': nowMs - 10 * 86400000,
-        'expires_at': nowMs - 3 * 86400000, // انتهت قبل 3 أيام.
-      };
-      cloud.store['$wsPath/evictions/DEV-LIVE.json'] = {
-        'expelled_at': nowMs - 86400000,
-        'expires_at': nowMs + 6 * 86400000, // ما تزال سارية.
-      };
-      // شاهدة قديمة (قبل الدفعة 57) بلا expires_at وعمرها 40 يوماً → تُقلَّم.
-      cloud.store['$wsPath/evictions/DEV-LEGACY-OLD.json'] = {
-        'expelled_at': nowMs - 40 * 86400000,
-      };
-      // شاهدة قديمة عمرها 5 أيام → مهلة السماح (30 يوماً) تحميها.
-      cloud.store['$wsPath/evictions/DEV-LEGACY-NEW.json'] = {
-        'expelled_at': nowMs - 5 * 86400000,
-      };
-      final pruned = await http.runWithClient(
-        () => CloudJoin.pruneExpiredEvictions(backendUrl: url),
-        cloud.client,
-      );
-      expect(pruned, 2);
-      expect(cloud.store.containsKey('$wsPath/evictions/DEV-EXPIRED.json'),
-          isFalse);
-      expect(cloud.store.containsKey('$wsPath/evictions/DEV-LEGACY-OLD.json'),
-          isFalse);
-      expect(cloud.store.containsKey('$wsPath/evictions/DEV-LIVE.json'),
-          isTrue);
-      expect(cloud.store.containsKey('$wsPath/evictions/DEV-LEGACY-NEW.json'),
-          isTrue);
-    });
-  });
-
   group('ضغط سجل العمليات السحابي', () {
     test('B57-COMPACT-01 يحذف المغطى باللقطة فقط ويبقي الأحدث', () async {
       final cloud = FakeCloudStore();

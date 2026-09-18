@@ -303,7 +303,6 @@ class CloudJoin {
   /// (دفعة 53) خطاف الطرد الذاتي: يضبطه SyncEngine عند الإقلاع ليتولى
   /// المعالجة المركزية (إيقاف SSE/الدفع + تنظيف الجلسة + بث للواجهة)
   /// بدل الاكتفاء بإعادة الضبط الصامتة.
-  static Future<void> Function()? onSelfEvicted;
 
   /// 🔒 (التجربة) يرمي CloudJoinException إذا انتهت الفترة التجريبية —
   /// حارس ربط الأجهزة الجديدة (دعوة/موافقة).
@@ -813,9 +812,9 @@ class CloudJoin {
     final mode = await repo.workspaceMode();
     if (mode == 'member') {
       // ══ (دفعة 65) لا تحبس الجهاز في عضوية منتهية ══
-      // الرفض الأعمى كان يترك أي جهاز طُرد سابقاً بلا مخرج: الطرد
-      // (purgePeerFromCloud) يحذف سجله من /roster ويكتب شاهدة، فإن كان
-      // الجهاز مغلقاً أو بلا شبكة وقتها لم يعالج طرده، فيبقى محلياً
+      // الرفض الأعمى كان يترك أي جهاز أُزيل سابقاً بلا مخرج: إزالة
+      // الجهاز (removePeerFromCloud) تحذف سجله من /roster، فإن كان
+      // الجهاز مغلقاً أو بلا شبكة وقتها لم يعالج الإزالة، فيبقى محلياً
       // `member` للأبد. وحين يحاول الانضمام مجدداً يُرفض بهذه الرسالة
       // فلا ينضم ولا يزامن — «الربط لا يعمل» نهائياً.
       // الفحص الصحيح: هل عضويته في **هذه** المساحة ما زالت فعّالة؟
@@ -904,17 +903,6 @@ class CloudJoin {
     // حذف كامل البيانات المحلية واستبدالها بنسخة المجموعة (معاملة واحدة):
     // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
     await SnapshotApply.applySnapshot(() async => db, ourId, snap);
-
-    // ══ (دفعة 65) كسر حلقة إعادة الطرد في مسار الانضمام المباشر ══
-    // إن كان هذا الجهاز مطروداً سابقاً فلديه شاهدة في
-    // /evictions/{deviceId} (TTL 7 أيام). مسار «طلب + موافقة» كان
-    // يحذفها (داخل approveJoinRequest) أما هذا المسار المباشر
-    // (join بالرمز) فلا — فيبقى الجهاز منضماً لحظةً ثم تطرده
-    // maybeCheckSelfEviction في أول مصافحة، فيبدو الربط معطلاً:
-    // ينضم ثم يُلغى فوراً. الحذف هنا يكمّل نظيره في الموافقة.
-    try {
-      await _delete(evictionPath(url, workspaceId, ourId));
-    } catch (_) {}
 
     // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
     final ourRowAfter = await db.query('devices',
@@ -1075,23 +1063,9 @@ class CloudJoin {
             whereArgs: [id],
           );
           changed = true;
-          // إبطال فوري من جهة العميل: المدير طردنا عبر السحابة →
-          // مسح بيانات المجموعة والعودة مستقلين + شاشة الإعداد الأول.
-          final expelledNow = '${r['expelled_at'] ?? ''}'.isNotEmpty ||
-              '${r['revoked_at'] ?? ''}'.isNotEmpty;
-          if (expelledNow && !isOwner) {
-            try {
-              // (دفعة 53) الخطاف المركزي أولاً: المحرك يوقف SSE/الدفع،
-              // ينظف الجلسة، يعيد الضبط، ويبث onDeviceEvicted للواجهة.
-              final hook = onSelfEvicted;
-              if (hook != null) {
-                await hook();
-              } else {
-                await repo.resetToStandaloneAfterExpulsion();
-              }
-            } catch (_) {}
-            return true;
-          }
+          // (دفعة 66) لا طرد ذاتي: إزالة المدير لجهاز من السجل تعني
+          // توقف مزامنته فحسب — لا مسح لبياناته ولا إعادة ضبط قسرية
+          // (سلوك ما قبل 3.55).
           continue;
         }
         if (local == null) {
@@ -1557,12 +1531,6 @@ class CloudJoin {
         conflictAlgorithm: ConflictAlgorithm.replace);
     // رفع للسحابة: roster + حالة الطلب approved.
     final root = _root(backendUrl, workspaceId);
-    // (دفعة 56) كسر حلقة إعادة الطرد: إن كان الجهاز مطروداً سابقاً فلديه
-    // شاهدة في /evictions — يجب حذفها قبل تسجيله في roster وإلا طرد
-    // نفسه فور أول مصافحة بعد إعادة الربط.
-    try {
-      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
-    } catch (_) {}
     final own = await db.query('devices',
         where: 'id = ?', whereArgs: [deviceId], limit: 1);
     if (own.isNotEmpty) {
@@ -1606,42 +1574,25 @@ class CloudJoin {
     }, timeout: const Duration(seconds: 20));
   }
 
-  /// (دفعة 54) مسار شاهدة الطرد الصريحة لجهاز معيّن.
-  static String evictionPath(String base, String ws, String deviceId) =>
-      '${_root(base, ws)}/evictions/${Uri.encodeComponent(deviceId)}.json';
-
-  /// (المدير — بروتوكول الطرد النشط، دفعة 54) عند «طرد نهائي» أو حظر:
-  ///  1) كتابة شاهدة طرد صريحة في /evictions/$deviceId بختم وقت الخادم —
-  ///     الجهاز المستهدف يستمع عليها عبر SSE فيبطل جلسته لحظياً.
-  ///  2) حذف عقدته نهائياً من /roster/$deviceId — غياب العقدة محفّز طرد
-  ///     ثانٍ لدى مصافحة العضوية (دفاع مزدوج).
-  ///  3) حذف أي طلب انضمام قديم له (نظافة).
-  static Future<void> purgePeerFromCloud(
+  /// (المدير — دفعة 66) إزالة جهاز من المجموعة: حذف عضويته من السجل
+  /// السحابي وأي طلب انضمام معلّق له — **بلا أي أثر على جهازه**.
+  ///
+  /// حلّت محلّ `purgePeerFromCloud` (دفعة 54) التي كانت تكتب «شاهدة
+  /// طرد» في /evictions تجبر الجهاز المستهدف على مسح بياناته وإعادة
+  /// ضبط نفسه تلقائياً. القرار: لا طرد قسري — إزالة الجهاز تعني توقف
+  /// مزامنته مع المجموعة فحسب، وبياناته تبقى بين يديه (ما قبل 3.55).
+  static Future<void> removePeerFromCloud(
     Repo repo, {
     required String backendUrl,
     required String deviceId,
     String workspaceId = 'default',
-    String reason = 'revoked_by_manager',
   }) async {
     final root = _root(backendUrl, workspaceId);
-    // 1) الشاهدة الصريحة أولاً — أهم خطوة: تصل المستهدف عبر SSE فوراً،
-    //    وختم {".sv":"timestamp"} يمنع تلاعب ساعات الأجهزة.
-    await _putJson(evictionPath(backendUrl, workspaceId, deviceId), {
-      'deviceId': deviceId,
-      'expelled_at': {'.sv': 'timestamp'},
-      'reason': reason,
-      // (دفعة 57) TTL: بعد 7 أيام تُقلَّم الشاهدة تلقائياً في دورة صيانة
-      // المدير — لا ركام أبدياً في /evictions، والمستهدف المطفأ لديه
-      // أسبوع كامل ليلتقطها عند أول إقلاع.
-      'expires_at': DateTime.now()
-          .add(const Duration(days: 7))
-          .millisecondsSinceEpoch,
-    }, timeout: const Duration(seconds: 20));
-    // 2) إزالة العقدة من السجل نهائياً (لا مجرد وسمها).
+    // 1) إزالة عقدة الجهاز من السجل.
     try {
       await _delete('$root/roster/${Uri.encodeComponent(deviceId)}.json');
     } catch (_) {}
-    // 3) حذف أي طلب انضمام قديم له.
+    // 2) حذف أي طلب انضمام قديم له (نظافة).
     try {
       await _delete(requestPath(backendUrl, workspaceId, deviceId));
     } catch (_) {}
@@ -1683,39 +1634,32 @@ class CloudJoin {
     ids.remove(ourId);
     ids.removeWhere((e) => e.isEmpty);
 
-    // 2) شاهدة طرد لكل عضو — كل شاهدة مستقلة حتى لا يوقف فشلُ واحدة البقية.
-    var broadcast = 0;
+    // 2) (دفعة 66) لا شواهد طرد عند الحلّ: تُحذف عضوية كل جهاز، وبيانات
+    //    كل جهاز تبقى له — الحلّ يُفرغ المجموعة السحابية لا أجهزة
+    //    أعضائها (سلوك ما قبل 3.55).
+    var removed = 0;
     for (final id in ids) {
       try {
-        await _putJson(evictionPath(backendUrl, workspaceId, id), {
-          'deviceId': id,
-          'expelled_at': {'.sv': 'timestamp'},
-          'reason': 'group_dissolved',
-          'expires_at': DateTime.now()
-              .add(const Duration(days: 7))
-              .millisecondsSinceEpoch,
-        }, timeout: const Duration(seconds: 15));
-        broadcast++;
+        await _delete('$root/roster/${Uri.encodeComponent(id)}.json');
+        removed++;
       } catch (_) {}
     }
 
-    // 3) مهلة سماح: الأعضاء المتصلون يلتقطون الشواهد عبر SSE فوراً.
-    await Future<void>.delayed(const Duration(seconds: 3));
-
-    // 4) تفكيك عقدة المجموعة السحابية (كل قسم على حدة — أفضل جهد،
-    //    ونُبقي /evictions للأعضاء المطفأين).
+    // 3) تفكيك عقدة المجموعة السحابية (كل قسم على حدة — أفضل جهد).
     for (final node in const [
       'roster',
       'operations',
       'invites',
       'joinRequests',
       'joinSnapshot',
+      'members',
+      'evictions', // تنظيف ما علّق من إصدارات سابقة
     ]) {
       try {
         await _delete('$root/$node.json');
       } catch (_) {}
     }
-    return broadcast;
+    return removed;
   }
 
   /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،
@@ -1854,44 +1798,6 @@ class CloudJoin {
     return removed;
   }
 
-  /// (المدير — دفعة 57) تقليم شواهد الطرد المنتهية (TTL 7 أيام):
-  /// يقرأ /evictions كاملة ويحذف كل شاهدة تجاوزت expires_at.
-  /// الشواهد القديمة (قبل الدفعة، بلا expires_at) تُمنح مهلة سماح شهراً
-  /// من expelled_at ثم تُقلَّم. يعيد عدد الشواهد المحذوفة.
-  static Future<int> pruneExpiredEvictions({
-    required String backendUrl,
-    String workspaceId = 'default',
-  }) async {
-    final root = _root(backendUrl, workspaceId);
-    Map<String, dynamic>? all;
-    try {
-      all = await _getJson('$root/evictions.json');
-    } catch (_) {
-      return 0;
-    }
-    if (all == null || all.isEmpty) return 0;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    var pruned = 0;
-    for (final e in all.entries) {
-      final v = e.value;
-      if (v is! Map) continue;
-      var expMs = (v['expires_at'] as num?)?.toInt() ?? 0;
-      if (expMs == 0) {
-        // شاهدة قديمة بلا TTL: مهلة شهر من وقت الطرد ثم تقليم.
-        final at = (v['expelled_at'] as num?)?.toInt() ?? 0;
-        if (at == 0) continue; // شكل مجهول — لا نلمسها.
-        expMs = at + const Duration(days: 30).inMilliseconds;
-      }
-      if (nowMs < expMs) continue;
-      try {
-        await _delete(
-            '$root/evictions/${Uri.encodeComponent(e.key)}.json');
-        pruned++;
-      } catch (_) {}
-    }
-    return pruned;
-  }
-
   /// (أ-2) تقليم فهرس الدعوات المنتهية على الجذر — يمنع تراكم مفاتيح
   /// ميتة في `/invite_index` بعد انتهاء مهلتها (15 دقيقة).
   /// يعيد عدد المفاتيح المُقلَّمة.
@@ -1982,29 +1888,6 @@ class CloudJoin {
         await _delete(url);
       } catch (_) {}
     }
-  }
-
-  /// (المدير — دفعة 54) إزالة شاهدة الطرد عند «إعادة السماح» — وإلا
-  /// سيطرد الجهاز المستعاد نفسه فور فحصه القادم.
-  static Future<void> clearEvictionTombstone({
-    required String backendUrl,
-    required String deviceId,
-    String workspaceId = 'default',
-  }) async {
-    try {
-      await _delete(evictionPath(backendUrl, workspaceId, deviceId));
-    } catch (_) {}
-  }
-
-  /// (العضو — المصافحة، دفعة 54) هل توجد شاهدة طرد لهذا الجهاز؟
-  static Future<bool> hasEvictionTombstone({
-    required String backendUrl,
-    required String deviceId,
-    String workspaceId = 'default',
-  }) async {
-    final rec =
-        await _getJson(evictionPath(backendUrl, workspaceId, deviceId));
-    return rec != null;
   }
 
   /// (المدير) الرفض: تحديث الحالة rejected — الجهاز المنتظر يتلقاها

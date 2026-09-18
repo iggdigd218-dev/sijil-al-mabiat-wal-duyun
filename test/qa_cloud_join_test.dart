@@ -255,64 +255,6 @@ void main() {
     expect(inviteKey, isEmpty, reason: 'التوكن حُذف حتمياً بعد الانضمام');
   });
 
-  test('QA-JOIN-04 (دفعة 65) شاهدة طرد قديمة لا تُفشل إعادة الانضمام',
-      () async {
-    final cloud = FakeCloudStore();
-    await repoA.saveAccount(Account(
-      name: 'عميل المجموعة',
-      kind: AccountKind.customer,
-      notifyChannel: 'none',
-      createdAt: now,
-      updatedAt: now,
-    ));
-    final invite = await http.runWithClient(
-        () => CloudJoin.createInvite(repoA), cloud.client);
-
-    // معرّف الجهاز المنضم معروف مسبقاً — نكتب له شاهدة طرد كما يفعل
-    // المدير عند «طرد نهائي» (TTL 7 أيام في /evictions).
-    final devB = await ensureDeviceId(repoB);
-    final root = '/workspaces/${invite.workspaceId}';
-    cloud.store['$root/evictions/$devB.json'] = {
-      'deviceId': devB,
-      'reason': 'revoked_by_manager',
-      'expelled_at': now.millisecondsSinceEpoch,
-      'expires_at': now
-          .add(const Duration(days: 7))
-          .millisecondsSinceEpoch,
-    };
-    // الشاهدة موجودة فعلاً قبل الانضمام.
-    expect(
-        await http.runWithClient(
-            () => CloudJoin.hasEvictionTombstone(
-                backendUrl: url,
-                deviceId: devB,
-                workspaceId: invite.workspaceId),
-            cloud.client),
-        isTrue);
-
-    await http.runWithClient(
-        () => CloudJoin.join(repoB,
-            backendUrl: invite.backendUrl,
-            token: invite.token,
-            workspaceId: invite.workspaceId,
-            cloudCode: invite.cloudCode),
-        cloud.client);
-
-    expect(await repoB.workspaceMode(), 'member');
-    // ★ جوهر الاختبار: الانضمام المباشر يمحو الشاهدة، وإلا طرد الجهاز
-    // نفسه في أول مصافحة (maybeCheckSelfEviction) بعد ثوانٍ من نجاحه —
-    // فيبدو «الربط معطلاً»: ينضم ثم يُلغى فوراً.
-    expect(
-        await http.runWithClient(
-            () => CloudJoin.hasEvictionTombstone(
-                backendUrl: url,
-                deviceId: devB,
-                workspaceId: invite.workspaceId),
-            cloud.client),
-        isFalse,
-        reason: 'join() يمحو شاهدة الطرد كمسار الموافقة تماماً');
-  });
-
   test('QA-JOIN-05 (دفعة 65) المطرود سابقاً يعود: لا يُحبس في «عضو»',
       () async {
     final cloud = FakeCloudStore();
@@ -338,14 +280,17 @@ void main() {
         cloud.client);
     expect(await repoB.workspaceMode(), 'member');
 
-    // 2) المدير يطرده: شاهدة + حذف سجله من roster.
+    // 2) المدير يزيله من المجموعة (إزالة غير تدميرية — بلا شواهد طرد).
     await http.runWithClient(
-        () => CloudJoin.purgePeerFromCloud(repoA,
+        () => CloudJoin.removePeerFromCloud(repoA,
             backendUrl: url, deviceId: devB, workspaceId: wsId),
         cloud.client);
-    expect(cloud.store['/workspaces/$wsId/roster/$devB.json'], isNull);
+    expect(cloud.store['/workspaces/$wsId/roster/$devB.json'], isNull,
+        reason: 'الإزالة تحذف عضويته السحابية بلا أي شاهدة طرد');
+    expect(cloud.store.keys.where((k) => k.contains('/evictions/')), isEmpty,
+        reason: 'لا تُكتب أي شاهدة طرد بعد اليوم');
 
-    // 3) الجهاز لم يعالج طرده (كان مغلقاً) فما زال محلياً member —
+    // 3) الجهاز لم يعالج الإزالة (كان مغلقاً) فما زال محلياً member —
     //    وإعادة الانضمام يجب أن تنجح كترميم للعضوية لا أن تُرفض.
     expect(await repoB.workspaceMode(), 'member',
         reason: 'الجهاز المحلي لم يعالج الطرد — هذه هي الحالة المفخخة');
@@ -361,13 +306,6 @@ void main() {
         cloud.client);
 
     expect(await repoB.workspaceMode(), 'member');
-    // والشاهدة تزول مع الانضمام (QA-JOIN-04).
-    expect(
-        await http.runWithClient(
-            () => CloudJoin.hasEvictionTombstone(
-                backendUrl: url, deviceId: devB, workspaceId: wsId),
-            cloud.client),
-        isFalse);
   });
 
   test('QA-JOIN-06 (دفعة 65) العضو الفعّال يُرفض حقاً',

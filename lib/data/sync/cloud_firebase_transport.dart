@@ -20,7 +20,6 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/desktop_net.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
-import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
 import 'firebase_auth_service.dart';
@@ -134,8 +133,6 @@ class CloudFirebaseTransport implements SyncTransport {
 
   @override
   Future<void> push(SyncOperation op) async {
-    // (دفعة 53) جهاز مطرود لا يدفع شيئاً للسحابة — إيقاف صامت فوري.
-    if (_evicted) throw StateError('device-evicted');
     final uri = Uri.parse(_opPath(op.id));
     // ختم وقت الخادم: فيربيس يستبدل {".sv":"timestamp"} بوقت خادمه (ملي
     // ثانية) لحظة الكتابة — يقضي على ثغرة انحراف ساعات الأجهزة التي كانت
@@ -192,135 +189,7 @@ class CloudFirebaseTransport implements SyncTransport {
   // لو حُذفت عقدته نهائياً (وليس فقط عند وسمها revoked/expelled).
 
   /// يُستدعى عند اكتشاف أن هذا الجهاز طُرد/حُذف من سجل المجموعة.
-  void Function()? onEvicted;
-
-  bool _evicted = false;
-  DateTime? _lastEvictionCheck;
-
-  bool get isEvicted => _evicted;
-
-  /// فحص العضوية الذاتي (مخنوق: مرة كل 20 ثانية كحد أقصى):
-  /// - وضع member فقط (المالك والمستقل لا يُطردان ذاتياً).
-  /// - عقدة موجودة بحقول نظيفة → سليم + وسم rosterSeenSelf.
-  /// - revoked=true أو revoked_at/expelled_at غير فارغة → طرد.
-  /// - عقدة null (حُذفت): طرد فقط إن سبق أن رأينا أنفسنا في السجل —
-  ///   حارس ضد الإيجابيات الكاذبة (سجل لم يُملأ بعد/انضمام قديم).
-  /// - أخطاء الشبكة/رموز غير 200 لا تُحسب طرداً أبداً.
-  Future<void> maybeCheckSelfEviction({bool force = false}) async {
-    if (_evicted) return;
-    final now = DateTime.now();
-    if (!force &&
-        _lastEvictionCheck != null &&
-        now.difference(_lastEvictionCheck!) < const Duration(seconds: 20)) {
-      return;
-    }
-    _lastEvictionCheck = now;
-    try {
-      final mode = await repo.workspaceMode();
-      if (mode != 'member') return;
-      final st = await repo.settings();
-      // (دفعة 56) حارس إعادة الربط: أثناء انتظار موافقة المدير أو قبل
-      // إتمام التهيئة لا نفحص الطرد إطلاقاً — شاهدة قديمة من طردٍ سابق
-      // قد تكون ما تزال موجودة لحظة إعادة الربط، وفحصها قبل اكتمال
-      // الموافقة (التي تحذفها) يُدخل الجهاز حلقة طرد ذاتي أبدية.
-      if ((st['pendingJoin.token'] ?? '').trim().isNotEmpty) return;
-      final devId = (st['sync.deviceId'] ?? '').trim();
-      if (devId.isEmpty) return;
-      // (دفعة 54) الشاهدة الصريحة أولاً: وجود /evictions/$devId = طرد
-      // قاطع فوري — لا يحتاج أي حارس (المدير كتبها قصداً).
-      try {
-        final tomb = await CloudJoin.hasEvictionTombstone(
-          backendUrl: backendUrl,
-          deviceId: devId,
-          workspaceId: workspaceId,
-        );
-        if (tomb) {
-          _fireEvicted();
-          return;
-        }
-      } catch (_) {
-        // شبكة — نسقط لفحص الـroster المعتاد.
-      }
-      final tok = await _idToken();
-      final uri = Uri.parse(
-              '$_root/roster/${Uri.encodeComponent(devId)}.json')
-          .replace(queryParameters: {if (tok != null) 'auth': tok});
-      final res = await http.get(uri).timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return; // خطأ خادم/صلاحية — لا حكم.
-      final body = utf8.decode(res.bodyBytes).trim();
-      if (body.isEmpty || body == 'null') {
-        // ⛔️ (قرار المستخدم النهائي) عقدة محذوفة ≠ طرد. الاستدلال الضمني
-        // «حُذفت عقدتي إذن طُردت» طرد أعضاء شرعيين عند أي تنظيف/استرداد
-        // للسجل السحابي. الطرد يقع حصراً بشاهدة صريحة في /evictions أو
-        // بوسم revoked/expelled يكتبه المدير بيده — لا حكم هنا إطلاقاً؛
-        // نعيد تسجيل أنفسنا في السجل بدل الانتحار.
-        await _reRegisterSelfInRoster(devId);
-        return;
-      }
-      final m = jsonDecode(body);
-      if (m is! Map) return;
-      // رأينا سجلنا — فعّل حارس الحذف للمستقبل.
-      if ((st['sync.rosterSeenSelf'] ?? '') != '1') {
-        await repo.setSetting('sync.rosterSeenSelf', '1');
-      }
-      final revoked = m['revoked'] == true ||
-          '${m['revoked_at'] ?? ''}'.trim().isNotEmpty;
-      final expelled = '${m['expelled_at'] ?? ''}'.trim().isNotEmpty;
-      if (revoked || expelled) _fireEvicted();
-    } catch (_) {
-      // شبكة متقطعة — الفحص القادم يغطي.
-    }
-  }
-
-  void _fireEvicted() {
-    if (_evicted) return;
-    _evicted = true;
-    try {
-      onEvicted?.call();
-    } catch (_) {}
-  }
-
-  /// (إلغاء الطرد الضمني) عقدة roster الخاصة بنا اختفت دون شاهدة طرد
-  /// صريحة؟ نعيد كتابتها من بيانات جهازنا المحلي — عضوية العضو الشرعي
-  /// لا تسقط بحذف/تنظيف عرضي للسجل السحابي.
-  Future<void> _reRegisterSelfInRoster(String devId) async {
-    try {
-      final db = await _db;
-      final rows = await db.query('devices',
-          where: 'id = ?', whereArgs: [devId], limit: 1);
-      if (rows.isEmpty) return;
-      final d = rows.first;
-      final tok = await _idToken();
-      final uri = Uri.parse(
-              '$_root/roster/${Uri.encodeComponent(devId)}.json')
-          .replace(queryParameters: {if (tok != null) 'auth': tok});
-      await http
-          .put(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'id': devId,
-              'name': '${d['name'] ?? ''}',
-              'platform': '${d['platform'] ?? ''}',
-              'is_owner': d['is_owner'] ?? 0,
-              'is_paired': d['is_paired'] ?? 1,
-              'revoked_at': '',
-              'expelled_at': '',
-              'user_id': d['user_id'],
-              'created_at': '${d['created_at'] ?? ''}',
-              'updated_at': DateTime.now().toIso8601String(),
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-    } catch (_) {
-      // أفضل جهد — الدورة القادمة تعيد المحاولة.
-    }
-  }
-
   Future<int> pull({ConflictResolver? resolver}) async {
-    // (دفعة 53) مصافحة العضوية قبل أي سحب: جهاز مطرود يوقف كل شيء فوراً.
-    await maybeCheckSelfEviction();
-    if (_evicted) return 0;
     final db = await _db;
     // نستخدم timestamp-based cursor مع overlap للسماح بالوصول المتأخر.
     final lastTsRow = await db.query(
@@ -625,8 +494,6 @@ class CloudFirebaseTransport implements SyncTransport {
     } catch (_) {}
     unawaited(_sseLoop());
     // (دفعة 54) قناة ثانية خفيفة على شاهدة الطرد الخاصة بنا —
-    // المدير يكتبها فيصلنا الطرد لحظياً حتى لو لم تصل أي عملية.
-    unawaited(_evictionSseLoop());
   }
 
   Future<void> stopListening() async {
@@ -635,98 +502,11 @@ class CloudFirebaseTransport implements SyncTransport {
       _sseClient?.close(force: true);
     } catch (_) {}
     _sseClient = null;
-    try {
-      _evictionSseClient?.close(force: true);
-    } catch (_) {}
-    _evictionSseClient = null;
-  }
-
-  // ==================== مستمع شاهدة الطرد (دفعة 54) ====================
-
-  HttpClient? _evictionSseClient;
-  int _evictionRetrySeconds = 4;
-
-  /// قناة SSE مخصصة على /evictions/$myDeviceId: أول حدث put قد يحمل
-  /// شاهدة موجودة أصلاً (اللقطة الأولية)، وأي put لاحق ببيانات غير null
-  /// يعني أن المدير طردنا الآن — الإبطال يُطلق في الحالتين.
-  /// وضع غير member يُنهي القناة فوراً (المالك/المستقل لا يُطردان).
-  Future<void> _evictionSseLoop() async {
-    while (_listening && !_evicted) {
-      try {
-        final mode = await repo.workspaceMode();
-        if (mode != 'member') return;
-        final st = await repo.settings();
-        // (دفعة 56) لا استماع للطرد أثناء انتظار موافقة إعادة الربط —
-        // شاهدة قديمة قد تبقى حتى تحذفها موافقة المدير.
-        if ((st['pendingJoin.token'] ?? '').trim().isNotEmpty) {
-          await Future<void>.delayed(const Duration(seconds: 10));
-          continue;
-        }
-        final devId = (st['sync.deviceId'] ?? '').trim();
-        if (devId.isEmpty) return;
-        final client = HttpClient()
-          ..connectionTimeout = const Duration(seconds: 15);
-        _evictionSseClient = client;
-        final tok = await _idToken();
-        final uri = Uri.parse(
-                '$_root/evictions/${Uri.encodeComponent(devId)}.json')
-            .replace(queryParameters: {if (tok != null) 'auth': tok});
-        final req = await client.getUrl(uri);
-        req.headers.set('Accept', 'text/event-stream');
-        req.headers.set('Cache-Control', 'no-cache');
-        final resp = await req.close().timeout(const Duration(seconds: 20));
-        if (resp.statusCode < 200 || resp.statusCode >= 300) {
-          throw StateError('eviction-sse-http-${resp.statusCode}');
-        }
-        _evictionRetrySeconds = 4;
-        String? eventName;
-        await for (final line in resp
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())) {
-          if (!_listening || _evicted) break;
-          if (line.startsWith('event:')) {
-            eventName = line.substring(6).trim();
-          } else if (line.startsWith('data:')) {
-            if (eventName == 'put' || eventName == 'patch') {
-              // صيغة فيربيس: data: {"path":"/","data":<payload>}
-              final raw = line.substring(5).trim();
-              try {
-                final m = jsonDecode(raw);
-                if (m is Map && m['data'] != null) {
-                  // شاهدة طرد موجودة/كُتبت الآن — إبطال فوري.
-                  _fireEvicted();
-                  return;
-                }
-              } catch (_) {}
-            } else if (eventName == 'auth_revoked') {
-              break; // أعد الاتصال بتوكن جديد.
-            }
-          }
-        }
-      } catch (_) {
-        // شبكة — إعادة المحاولة بتراجع.
-      } finally {
-        try {
-          _evictionSseClient?.close(force: true);
-        } catch (_) {}
-        _evictionSseClient = null;
-      }
-      if (!_listening || _evicted) break;
-      await Future<void>.delayed(Duration(seconds: _evictionRetrySeconds));
-      _evictionRetrySeconds = (_evictionRetrySeconds * 2).clamp(4, 180);
-    }
   }
 
   Future<void> _sseLoop() async {
     while (_listening) {
       try {
-        // (دفعة 53) مصافحة العضوية عند كل تمهيد للقناة: جهاز مطرود
-        // يُجهض البث فوراً ولا يفتح القناة إطلاقاً.
-        await maybeCheckSelfEviction(force: true);
-        if (_evicted) {
-          _listening = false;
-          break;
-        }
         // (دفعة 52) فحص وصول سريع قبل فتح القناة: استعلام DNS للمضيف —
         // يكشف انقطاع الإنترنت/حجب جدار الحماية فوراً برسالة دقيقة
         // بدل تعليق ثم فشل صامت.
