@@ -65,6 +65,21 @@ Future<void> _drain(WidgetTester tester) async {
   }
 }
 
+/// (إصلاح CI 2026-09-19 #2 — تذبذب QA-E2E) انتظار مقيّد لظهور عنصر:
+/// على آلات CI المحمّلة يتأخر تحميل الشاشة الأولى (قراءة القاعدة الحقيقية
+/// تتم خارج الزمن الافتراضي) عن الضخ الثابت، فيرمي ensureVisible/tap
+/// «No element» ويسقط الاختبار بلا عطل حقيقي — ويفشل بعده انتظار القرص
+/// كتابعة. نضخ إطارات مع فسحات حقيقية حتى يظهر العنصر (سقف ~6 ثوانٍ
+/// حقيقية) ثم تكمل التدفقات الحازمة كما هي.
+Future<void> _waitFor(WidgetTester tester, Finder finder,
+    {int maxTries = 60}) async {
+  for (var i = 0; i < maxTries && finder.evaluate().isEmpty; i++) {
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 void main() {
   // هذه الحزمة تحاكي سيناريوهات «لا سحابة» — نلغي الرابط الافتراضي
   // المضمن (Zero-Config) حتى تبقى فرضياتها صالحة.
@@ -123,21 +138,26 @@ void main() {
       // في الواجهة الجديدة شاشة العمليات تُفتح من أيقونة «المعاملات» على لوحة
       // التحكم (ولم يعد «العمليات» عنصراً في الشريط السفلي).
       final txTile = find.text('المعاملات');
+      await _waitFor(tester, txTile);
       await tester.ensureVisible(txTile);
       await tester.pumpAndSettle();
       await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
       final fab = find.text('تسجيل عملية');
+      await _waitFor(tester, fab);
       await tester.ensureVisible(fab);
       await tester.pumpAndSettle();
       await tester.tap(fab, warnIfMissed: false);
       await _drain(tester);
-      await tester.tap(find.text('عليه'));
+      final debitTab = find.text('عليه');
+      await _waitFor(tester, debitTab);
+      await tester.tap(debitTab);
       await tester.enterText(
           find.widgetWithText(TextFormField, 'المبلغ *'), '٥٠٠');
       await tester.enterText(
           find.widgetWithText(TextFormField, 'البيان / الوصف'), 'QA UI SAVE');
       final save = find.text('حفظ العملية');
+      await _waitFor(tester, save);
       await tester.ensureVisible(save);
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(save);
