@@ -24,6 +24,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/factory_reset.dart';
 import '../../core/models.dart';
 import '../repository.dart';
+import 'operation.dart';
 import 'device_id.dart';
 import 'google_auth_service.dart';
 import 'device_registry.dart';
