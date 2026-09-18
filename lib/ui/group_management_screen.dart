@@ -110,11 +110,13 @@ class _State extends ConsumerState<GroupManagementScreen> {
             limit: 1);
         if (dev.isNotEmpty) {
           _recentlyApproved.add(firstId);
-          // تنظيف إضافي: احذف أي طلب معلق بنفس المعرف من السحابة
-          try {
-            await CloudJoin.deleteJoinRequest(
-                backendUrl: url, workspaceId: ws, deviceId: firstId);
-          } catch (_) {}
+          // (إصلاح حرج 2026-09-18 — سباق الموافقة/الاختفاء) الحذف الفوري
+          // للطلب هنا كان سباقاً قاتلاً: العضو قد يكون بين رؤية approved
+          // وسحب اللقطة بضع ثوانٍ، فيصادف استطلاعه عقدة محذوفة ويرمي
+          // «انتهى طلب الانضمام أو حُذف من المدير» رغم الموافقة.
+          // مسؤولية الحذف الآن: (1) جهاز العضو كآخر خطوة في
+          // completeApprovedJoin بعد نجاح الحفظ في SQLite، (2) التقليم
+          // الدوري pruneStaleJoinRequests بعد مهلة 10 دقائق.
         }
       }
       _joinSheetOpen = false;
@@ -798,12 +800,24 @@ class _HubTile extends StatelessWidget {
 
 /// نافذة «طلب انضمام جهاز جديد»: اسم الجهاز + بصمته + اختيار الدور،
 /// وزرا «قبول وتفعيل» / «رفض». تُستدعى تلقائياً عند رصد طلب معلّق.
+/// (إصلاح حرج 2026-09-18 — النوافذ المتعددة) قفل عام واحد لنوافذ
+/// الموافقة: مراقبان مستقلان (قناة HomeShell العامة + قناة هذه الشاشة)
+/// كان كل منهما يفتح نافذته الخاصة لنفس الطلب، فتتكدس نوافذ موافقة
+/// مكررة فوق بعضها ويتضاعف القبول. القفل فحص-وإسناد متزامن عند مدخل
+/// الدالة نفسها — بلا فجوة سباق، وأي مراقب ثانٍ يعود فوراً بصمت.
+final Set<String> _activeJoinDialogKeys = <String>{};
+
 Future<void> showJoinApprovalSheet(
   BuildContext context,
   WidgetRef ref,
   Map<String, Object?> request, {
   required String backendUrl,
 }) async {
+  final dialogKey = '${request['kind'] ?? 'join'}:${request['deviceId'] ?? ''}';
+  if (!_activeJoinDialogKeys.add(dialogKey)) {
+    return; // نافذة مفتوحة بالفعل لنفس الطلب — لا تكرار
+  }
+  try {
   // (دفعة 58 — متطلب 11) طلب مغادرة عضو يمر من نفس القناة بوسم kind=leave
   // — له حوار خاص (موافقة = طرد نظيف، رفض = بقاء العضو).
   if ('${request['kind'] ?? ''}' == 'leave') {
@@ -970,6 +984,9 @@ Future<void> showJoinApprovalSheet(
       ),
     ),
   );
+  } finally {
+    _activeJoinDialogKeys.remove(dialogKey);
+  }
 }
 
 

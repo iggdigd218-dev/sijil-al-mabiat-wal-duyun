@@ -328,6 +328,14 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         // (منع الاستنزاف) القرار وصل: نوقف المؤقت والقناة قبل الترطيب.
         _stopDrain();
         _joinToken = st['token'] ?? '';
+        // (إصلاح حرج 2026-09-18) تثبيت مشاهدة الموافقة قبل الترطيب:
+        // صمام أمان إن اختفت عقدة الطلب أثناء التنزيل (نسخ مدير قديمة
+        // تحذفها فور إغلاق النافذة، أو تقليم TTL) — يكمل الاستطلاع
+        // الانضمام بدل الحكم الخاطئ «حُذف من المدير».
+        try {
+          await repo.setSetting(
+              'pendingJoin.approved', DateTime.now().toIso8601String());
+        } catch (_) {}
         await _hydrate();
       } else if (status == 'rejected') {
         _stopDrain();
@@ -343,6 +351,18 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         // «بانتظار موافقة المدير…» إلى الأبد إن انقطعت قناة SSE.
         _scheduleNextPoll();
       } else if (status == 'missing' || status == 'expired') {
+        // (إصلاح حرج 2026-09-18 — سباق الموافقة/الاختفاء) إن شوهدت
+        // الموافقة سابقاً (علم مثبت) فاختفاء العقدة سباق حميد لا فشل:
+        // نُكمل الترطيب بالتوكن المحفوظ — اللقطة والدعوة عقدتان مستقلتان
+        // لا يمسهما حذف الطلب.
+        final saved = await repo.settings();
+        if ((saved['pendingJoin.approved'] ?? '').toString().isNotEmpty) {
+          final savedToken = (saved['pendingJoin.token'] ?? '').toString();
+          if (savedToken.isNotEmpty) _joinToken = savedToken;
+          _stopDrain();
+          await _hydrate();
+          return;
+        }
         // (العضو لا يعلّق أبداً) عقدة الطلب لم تعد موجودة — حُذفت من
         // المدير أو انتهت مهلتها. بلا هذه المعالجة كان الاستطلاع يستمر
         // إلى ما لا نهاية على طلب لا وجود له.
