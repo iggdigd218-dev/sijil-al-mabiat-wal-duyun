@@ -61,13 +61,13 @@ const List<Duration> _backoffSteps = <Duration>[
 /// والاستجابة هنا أهم من توفير الشبكة.
 const Duration _pollInterval = Duration(seconds: 4);
 
-/// (إصلاح 2026-09-18) سقف الانتظار الكلي لقرار المدير.
-/// كان دقيقتين فقط — يظهر عند المدير الطلب لكن العضو ينتهي انتظاره
-/// ويتوقف الاستطلاع، فيبدو «الربط لا يعمل» رغم أن الطلب ما زال معلقاً.
-/// الآن 10 دقائق (نفس TTL الدعوة تقريباً) مع SSE حيّة تنبه لحظياً.
-/// بعد 10 دقائق يتوقف الاستطلاع لكن الطلب يبقى في Firebase حتى 15 دقيقة،
-/// والمدير يستطيع الموافقة والعضو يعيد المحاولة يدوياً فيلتقط الموافقة.
-const Duration _pollTimeout = Duration(minutes: 10);
+/// (إصلاح 2026-09-18 — ممنوع مؤقت انتظار)
+/// لا يوجد سقف انتظار لقرار المدير — الاستطلاع مستمر إلى الأبد مع SSE حيّة
+/// حتى يوافق المدير أو يرفض أو يلغي العضو يدوياً. هذا يمنع حالة «انتهت
+/// مدة انتظار موافقة المدير 2 دقائق بلا رد بينما الطلب ما زال عند المدير».
+/// السبب الحقيقي للطلبات المتكررة كان: انتهاء المؤقت يوقف polling عند العضو،
+/// فيبقى الطلب pending في Firebase، فيظهر مرة أخرى عند المدير كطلب جديد.
+const Duration _pollTimeout = Duration(minutes: 30); // احتياطي فقط للتنظيف، لا يُستخدم لإيقاف الانتظار
 
 class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   _JoinStep _step = _JoinStep.naming;
@@ -236,32 +236,18 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     _pollOnce();
   }
 
-  /// (دفعة 65) يجدول الاستطلاع القادم بعد [delay] — القناة المفقودة التي
-  /// كانت تُبقي العضو معلّقاً: `_pollOnce` لم يكن يعيد الجدولة لا عند
-  /// بقاء الطلب «قيد الانتظار» ولا عند خطأ شبكي عابر، فيتوقف بعد محاولتين
-  /// ويعتمد على SSE وحدها — فإن انقطعت علّق العضو إلى الأبد.
+  /// (إصلاح 2026-09-18 — ممنوع مؤقت انتظار)
+  /// يجدول الاستطلاع القادم بلا سقف — يبقى ينتظر موافقة المدير إلى الأبد
+  /// حتى يوافق أو يرفض أو يلغي المستخدم يدوياً. هذا يحل سببين:
+  /// 1) العضو لا يستلم الموافقة: كان المؤقت 2 دقائق يوقف polling بينما
+  ///    الطلب ما زال pending عند المدير، فيفشل الربط.
+  /// 2) الطلبات المتكررة عند المدير: العضو بعد انتهاء المؤقت كان يعيد
+  ///    إرسال نفس الطلب بنفس deviceId فيكتب pending فوق approved، فيظهر
+  ///    مرة أخرى كطلب جديد.
+  /// الآن لا يوجد إيقاف تلقائي — فقط إلغاء يدوي من المستخدم.
   void _scheduleNextPoll() {
-    final started = _pollStartedAt;
-    if (!mounted || started == null) return;
-    if (DateTime.now().difference(started) >= _pollTimeout) {
-      // بلغنا السقف: أوقف كل شيء واعرض سبباً واضحاً وزراً يدوياً —
-      // لا انتظار مفتوح الأمد بلا أمل.
-      _stopDrain();
-      setState(() {
-        _busy = false;
-        _gaveUp = true;
-        _approvalTimeout = true;
-        _step = _JoinStep.waiting;
-        _error = '⏳ انتهت مدة انتظار موافقة المدير '
-            '(${_pollTimeout.inMinutes} دقائق) بلا رد.\n'
-            'السبب: المدير لم يضغط «قبول وتفعيل» خلال المهلة.\n'
-            'الحل: تأكد أن المدير فاتح شاشة «الأجهزة والمستخدمين» '
-            'ويرى طلب «${_nameCtrl.text.trim()}»، ثم اضغط إعادة المحاولة.\n'
-            'ملاحظة: طلبك ما زال محفوظاً في السحابة لمدة 15 دقيقة — '
-            'إن وافق المدير الآن، اضغط «إعادة المحاولة» وسيتم الربط فوراً.';
-      });
-      return;
-    }
+    if (!mounted || _pollStartedAt == null) return;
+    // لا يوجد timeout — استمرار إلى الأبد
     _schedulePoll(_pollInterval);
   }
 
@@ -664,9 +650,17 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     );
   }
 
-  // ═══════════ خطوة 3: الانتظار ═══════════
+  // ═══════════ خطوة 3: الانتظار — بلا مؤقت انتظار (إصلاح 2026-09-18)
+  // السبب الحقيقي لفشل استلام الموافقة: كان هناك مؤقت 2 دقائق يوقف
+  // polling عند العضو بينما الطلب ما زال pending عند المدير.
+  // الآن انتظار مفتوح مع SSE لحظي + polling كل 4 ثوانٍ كاحتياط.
   Widget _waitingStep() {
     if (_gaveUp) return _giveUpStep();
+    final elapsed = _pollStartedAt == null
+        ? 0
+        : DateTime.now().difference(_pollStartedAt!).inSeconds;
+    final minutes = elapsed ~/ 60;
+    final seconds = elapsed % 60;
     return Column(
       children: [
         const SizedBox(height: 20),
@@ -684,50 +678,78 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
         ),
+        const SizedBox(height: 6),
+        Text(
+          minutes > 0
+              ? 'مضى $minutes دقيقة و $seconds ثانية'
+              : 'مضى $seconds ثانية',
+          style: TextStyle(
+              fontSize: 11, color: AppColors.text3Of(context)),
+        ),
         const SizedBox(height: 10),
         Text(
-          'وصل طلبك إلى جهاز المدير. فور القبول سيظهر «تم الارتباط والمزامنة فيما بعد» '
-          'وتنتقل للرئيسية فوراً — المزامنة تتم في الخلفية.',
+          'وصل طلبك «${_nameCtrl.text.trim()}» إلى جهاز المدير.\n'
+          'فور ضغط المدير «قبول وتفعيل» سيظهر «تم الارتباط والمزامنة فيما بعد» '
+          'وتنتقل للرئيسية فوراً — المزامنة تتم في الخلفية.\n'
+          'لا تغلق التطبيق، وابقَ على هذه الشاشة.',
           textAlign: TextAlign.center,
           style: TextStyle(
               fontSize: 12.5, height: 1.7, color: AppColors.text2Of(context)),
+        ),
+        const SizedBox(height: 18),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () {
+                _stopDrain();
+                setState(() {
+                  _step = _JoinStep.method;
+                  _sentOnce = false;
+                  _error = '';
+                });
+              },
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('إلغاء الطلب'),
+            ),
+            const SizedBox(width: 12),
+            FilledButton.icon(
+              onPressed: _busy ? null : _pollOnce,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('تحديث الآن'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'تلميح: تأكد أن المدير فاتح «الأجهزة والمستخدمين» ويرى طلبك',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              fontSize: 11, height: 1.5, color: AppColors.text3Of(context)),
         ),
       ],
     );
   }
 
-  /// (منع الاستنزاف) شاشة التوقف اليدوي بعد استنفاد المحاولات التلقائية:
-  /// كل شيء موقوف (مؤقت + SSE) والقرار للمستخدم.
-  /// (إصلاح 2026-09-18) تفرّق بين حالتين:
-  ///  - انتهاء مهلة انتظار موافقة المدير (10 دقائق)
-  ///  - فشل تنزيل نسخة المجموعة بعد الموافقة
+  /// (إصلاح 2026-09-18 — بلا مؤقت انتظار)
+  /// شاشة فشل الترطيب فقط (بعد الموافقة) — تظهر رسالة صريحة قاطعة
+  /// توضح السبب والحل. لا تظهر أبداً لانتهاء مهلة موافقة المدير لأن
+  /// الانتظار الآن مفتوح بلا سقف.
   Widget _giveUpStep() {
-    final isTimeout = _approvalTimeout ||
-        _error.contains('انتظار موافقة المدير') ||
-        _error.contains('بلا رد');
     return Column(
       children: [
         const SizedBox(height: 20),
-        Icon(
-          isTimeout ? Icons.hourglass_empty : Icons.cloud_off_outlined,
-          size: 64,
-          color: isTimeout ? Colors.orange : Colors.redAccent,
-        ),
+        const Icon(Icons.cloud_off_outlined, size: 64, color: Colors.redAccent),
         const SizedBox(height: 18),
-        Text(
-          isTimeout ? 'بانتظار موافقة المدير' : 'تعذّر تنزيل نسخة المجموعة',
+        const Text(
+          'تعذّر تنزيل نسخة المجموعة',
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
         Text(
-          isTimeout
-              ? 'أوقفت الاستطلاع التلقائي بعد ${_pollTimeout.inMinutes} دقائق حتى لا تُستنزف البطارية.\n'
-                  'طلبك «${_nameCtrl.text.trim()}» ما زال موجوداً عند المدير في شاشة «الأجهزة والمستخدمين».\n'
-                  'إن وافق المدير الآن، اضغط «إعادة المحاولة» وسيتم الربط فوراً بلا إدخال رمز جديد.\n'
-                  'لم يُمسس أي شيء في هذا الجهاز.'
-              : 'أوقفت المحاولات التلقائية حتى لا تُستنزف الشبكة والبطارية.\n'
-                  'تحقّق من الاتصال ثم أعد المحاولة يدوياً — لم يُمسس أي شيء في هذا الجهاز.',
+          'فشل الربط بعد موافقة المدير. لم يُمسس أي شيء في هذا الجهاز.\n'
+          'السبب والحل موضحان في الرسالة الحمراء أدناه.',
           textAlign: TextAlign.center,
           style: TextStyle(
               fontSize: 12.5, height: 1.7, color: AppColors.text2Of(context)),
@@ -736,22 +758,20 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         FilledButton.icon(
           onPressed: _busy ? null : _retryNow,
           icon: const Icon(Icons.refresh, size: 18),
-          label: Text(isTimeout ? 'إعادة فحص الموافقة' : 'إعادة المحاولة'),
+          label: const Text('إعادة المحاولة'),
         ),
-        if (isTimeout) ...[
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: () => setState(() {
-              _error = '';
-              _gaveUp = false;
-              _approvalTimeout = false;
-              _step = _JoinStep.method;
-              _sentOnce = false;
-            }),
-            icon: const Icon(Icons.qr_code, size: 18),
-            label: const Text('إدخال رمز جديد'),
-          ),
-        ],
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () => setState(() {
+            _error = '';
+            _gaveUp = false;
+            _approvalTimeout = false;
+            _step = _JoinStep.method;
+            _sentOnce = false;
+          }),
+          icon: const Icon(Icons.qr_code, size: 18),
+          label: const Text('إدخال رمز جديد'),
+        ),
       ],
     );
   }

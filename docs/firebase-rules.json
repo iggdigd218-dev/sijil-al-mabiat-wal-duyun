@@ -1,66 +1,67 @@
 {
   "rules": {
     "workspaces": {
-      ".read": true,
-      ".write": true,
+      ".read": "auth != null",
+      ".write": "auth != null",
       "$ws": {
         "operations": {
-          ".indexOn": [
-            "server_ts",
-            "timestamp"
-          ],
-          ".read": true,
-          ".write": true
+          ".indexOn": ["server_ts", "timestamp", "$key"],
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "roster": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["updated_at"]
         },
         "evictions": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "invites": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["expiresAt", "pin"]
         },
         "joinRequests": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["status", "requestedAt"]
         },
         "joinSnapshot": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "members": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "subscription": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "creator": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         },
         "codes": {
-          ".read": true,
-          ".write": true
+          ".read": "auth != null",
+          ".write": "auth != null"
         }
       }
     },
     "server_clock": {
       ".read": true,
-      ".write": true
+      ".write": "auth != null"
     },
     "trials": {
-      ".read": true,
-      ".write": true
+      ".read": "auth != null",
+      ".write": "auth != null"
     },
     "invite_index": {
-      ".read": true,
-      ".write": true
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["expiresAt", "ws"]
     }
   }
 }

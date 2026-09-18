@@ -1512,10 +1512,11 @@ class CloudJoin {
 
   /// (المدير) جلب طلبات الانضمام المعلّقة.
   /// (إصلاح 2026-09-18 — طلبات لا تزال تظهر بعد الموافقة)
-  /// كان يعيد أي عقدة status=pending حتى لو كان جهازها موجوداً فعلاً
-  /// في devices كـ paired (حالة شبح: الموافقة كتبت approved لكن الشبكة
-  /// سقطت قبل حذف العقدة، أو العضو أعاد إرسال نفس الطلب). الآن يفلتر
-  /// أي طلب جهازُه موجودٌ فعلاً كمقترن، ويحذفه تلقائياً من السحابة.
+  /// الأسباب الجذرية للطلبات المتكررة:
+  /// 1) كان approve يكتب approved بعد إنشاء الجهاز محلياً — فشل الشبكة يبقي pending
+  /// 2) كان fetch يعيد أي pending حتى لو جهازه موجود فعلاً كـ paired (شبح)
+  /// 3) جهازان مدير يفتحان نفس الطلب في نفس اللحظة — كلاهما يوافق
+  /// الحل: فلترة مزدوجة (محلي + سحابي) + حذف تلقائي للأشباح + كتابة approved أولاً
   static Future<List<Map<String, Object?>>> fetchJoinRequests(
     Repo repo, {
     required String backendUrl,
@@ -1525,11 +1526,28 @@ class CloudJoin {
         await _getJson('${_root(backendUrl, workspaceId)}/joinRequests.json');
     if (all == null) return const [];
     final db = await repo.database;
-    // خريطة سريعة للأجهزة المقترنة فعلياً
+    // 1) الأجهزة المقترنة محلياً
     final pairedRows = await db.query('devices',
         columns: ['id'],
         where: "is_paired = 1 AND COALESCE(revoked_at,'')='' AND COALESCE(expelled_at,'')=''");
     final pairedIds = {for (final r in pairedRows) '${r['id']}'};
+
+    // 2) الأجهزة المقترنة سحابياً (roster) — يغطي حالة مدير ثانٍ لم يسحب بعد
+    Set<String> cloudPairedIds = {};
+    try {
+      final roster = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+      if (roster != null) {
+        for (final e in roster.entries) {
+          final v = e.value;
+          if (v is! Map) continue;
+          final revoked = '${v['revoked_at'] ?? ''}'.isNotEmpty;
+          final expelled = '${v['expelled_at'] ?? ''}'.isNotEmpty;
+          if (!revoked && !expelled) {
+            cloudPairedIds.add('${v['id'] ?? e.key}');
+          }
+        }
+      }
+    } catch (_) {}
 
     final out = <Map<String, Object?>>[];
     for (final e in all.entries) {
@@ -1540,9 +1558,8 @@ class CloudJoin {
       if (status != 'pending') continue;
       final devId = '${m['deviceId'] ?? e.key}';
       if (devId.isEmpty) continue;
-      // إن كان الجهاز موجوداً فعلاً كمقترن، فهذا طلب شبح — احذفه ولا تعرضه
-      if (pairedIds.contains(devId)) {
-        // تنظيف تلقائي في الخلفية
+      // فلترة مزدوجة: محلي + سحابي
+      if (pairedIds.contains(devId) || cloudPairedIds.contains(devId)) {
         unawaited(_delete(
             '${_root(backendUrl, workspaceId)}/joinRequests/${Uri.encodeComponent(devId)}.json'));
         continue;
