@@ -8,6 +8,7 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../core/words.dart';
+import '../data/sync/subscription_guard.dart' show kWatermarkText;
 
 /// بيانات المؤسسة المطبوعة على السند — تأتي من الإعدادات.
 class OrgInfo {
@@ -69,6 +70,7 @@ Future<Uint8List> buildVoucherPdf({
   required CurrencyDef currency,
   required OrgInfo org,
   List<InvoiceLine> items = const [],
+  bool stamp = false,
 }) async {
   final regular = pw.Font.ttf(
     await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'),
@@ -160,10 +162,25 @@ Future<Uint8List> buildVoucherPdf({
 
   doc.addPage(
     pw.Page(
-      pageFormat: PdfPageFormat.a4,
-      textDirection: pw.TextDirection.rtl,
-      theme: pw.ThemeData.withFont(base: regular, bold: bold),
-      margin: const pw.EdgeInsets.all(32),
+      // (دفعة 65-ب) ختم مائي مائل بخلفية الصفحة للحساب المقيد — شفاف
+      // فلا يحجب أرقام السند، ويظهر في الطباعة والمشاركة معاً.
+      pageTheme: pw.PageTheme(
+        pageFormat: PdfPageFormat.a4,
+        textDirection: pw.TextDirection.rtl,
+        theme: pw.ThemeData.withFont(base: regular, bold: bold),
+        margin: const pw.EdgeInsets.all(32),
+        buildBackground: stamp
+            ? (ctx) => pw.Watermark.text(
+                  kWatermarkText,
+                  angle: 0.6,
+                  style: pw.TextStyle(
+                    font: bold,
+                    fontSize: 22,
+                    color: const PdfColor(0.06, 0.46, 0.43, 0.12),
+                  ),
+                )
+            : null,
+      ),
       build: (ctx) => pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.stretch,
         children: [

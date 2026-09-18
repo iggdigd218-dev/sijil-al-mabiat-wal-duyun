@@ -423,23 +423,22 @@ Future<void> showFeatureUpgradeSheet(
   );
 }
 
-/// بوابة المزايا المتقدمة (دفعة 65) — تعتمد [FeatureAccessGuard] بدل
-/// `featureUnlockedProvider`، فالحساب غير المربوط بالسحابة أو المنتهية
-/// تجربته يُعدّ مقيداً. عند الرفض تظهر نافذة سفلية أنيقة.
-Future<bool> ensureFeatureAllowed(
-  BuildContext context,
-  WidgetRef ref,
-  Feature feature, {
-  required String featureName,
-  required String description,
-}) async {
-  final sub = await ref.read(subscriptionProvider.future);
-  if (FeatureAccessGuard.canAccess(sub, feature)) return true;
-  if (!context.mounted) return false;
-  final expired = sub.status != 'none' && sub.expired;
-  await showFeatureUpgradeSheet(context,
-      featureName: featureName, description: description, expired: expired);
-  return false;
+/// (دفعة 65-ب) هل تُوسم مخرجات هذه الميزة بختم التطبيق؟
+///
+/// القاعدة الجديدة: **لا حظر**. الحساب المقيد — غير المربوط بالسحابة أو
+/// منتهية تجربته — يستخدم الميزة كاملة، وتُختم مخرجاتها وحدها:
+///   • إشعارات الواتساب: تُرسل فوراً، بالإجمالي لا بالتفصيل، مع ختم.
+///   • شعار المتجر: مسموح (الشعارات الجمالية لا تُحجب).
+///   • تصدير PDF: متاح، وعليه ختم مائي على كل صفحة.
+/// هكذا يبقى المستخدم منتجاً، ويبقى دافع الترقية ظاهراً ولطيفاً.
+Future<bool> featureNeedsStamp(WidgetRef ref, Feature feature) async {
+  try {
+    final sub = await ref.read(subscriptionProvider.future);
+    return FeatureAccessGuard.shouldWatermark(sub, feature);
+  } catch (_) {
+    // تعذّر حسم حالة الاشتراك: لا نختم عقاباً على خطأ عارض.
+    return false;
+  }
 }
 
 /// بطاقة التفعيل/التجديد: تُستخدم بعد الانتهاء (تجديد) وأثناء السريان

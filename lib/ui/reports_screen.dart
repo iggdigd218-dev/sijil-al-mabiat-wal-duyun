@@ -11,8 +11,8 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import 'trial_ui.dart' show FeatureGate;
 import 'widgets.dart';
-import 'trial_ui.dart' show ensureFeatureAllowed;
-import '../data/sync/subscription_guard.dart' show Feature;
+import 'trial_ui.dart' show featureNeedsStamp;
+import '../data/sync/subscription_guard.dart' show Feature, kWatermarkText;
 
 /// أنواع التقارير — نقل حرفي لـ `REPORT_TABS` في نسخة الويب.
 enum ReportTab {
@@ -682,16 +682,13 @@ class _ReportView extends ConsumerWidget {
                       onPressed: table.rows.isEmpty
                           ? null
                           : () async {
-                              final ok = await ensureFeatureAllowed(
-                                context, ref, Feature.reportsExport,
-                                featureName: 'تصدير التقارير PDF / Excel',
-                                description:
-                                    'صدّر كشف الحساب والتقارير المالية '
-                                    'بصيغة PDF أو Excel نظيفة وجاهزة '
-                                    'للطباعة أو الإرسال.',
-                              );
-                              if (ok && context.mounted) {
-                                await _exportPdf(context, tab, table);
+                              // (دفعة 65-ب) التصدير مسموح دائماً —
+                              // الحساب المقيد يُصدّر بختم مائي.
+                              final stamp = await featureNeedsStamp(
+                                  ref, Feature.reportsExport);
+                              if (context.mounted) {
+                                await _exportPdf(context, tab, table,
+                                    stamp: stamp);
                               }
                             },
                       icon: const Icon(Icons.picture_as_pdf_outlined),
@@ -730,8 +727,9 @@ class _ReportView extends ConsumerWidget {
   Future<void> _exportPdf(
     BuildContext context,
     ReportTab tab,
-    ReportTable t,
-  ) async {
+    ReportTable t, {
+    bool stamp = false,
+  }) async {
     final regular = pw.Font.ttf(
       await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'),
     );
@@ -742,10 +740,25 @@ class _ReportView extends ConsumerWidget {
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        textDirection: pw.TextDirection.rtl,
-        theme: pw.ThemeData.withFont(base: regular, bold: bold),
-        margin: const pw.EdgeInsets.all(28),
+        // (دفعة 65-ب) طبقة خلفية على **كل** صفحة: ختم مائي مائل بنص
+        // التطبيق، شفاف فلا يحجب الأرقام ويظهر في الطباعة والمشاركة معاً.
+        pageTheme: pw.PageTheme(
+          pageFormat: PdfPageFormat.a4,
+          textDirection: pw.TextDirection.rtl,
+          theme: pw.ThemeData.withFont(base: regular, bold: bold),
+          margin: const pw.EdgeInsets.all(28),
+          buildBackground: stamp
+              ? (ctx) => pw.Watermark.text(
+                    kWatermarkText,
+                    angle: 0.6,
+                    style: pw.TextStyle(
+                      font: bold,
+                      fontSize: 22,
+                      color: const PdfColor(0.06, 0.46, 0.43, 0.12),
+                    ),
+                  )
+              : null,
+        ),
         build: (ctx) => [
           pw.Text(tab.label, style: pw.TextStyle(fontSize: 18, font: bold)),
           pw.SizedBox(height: 4),

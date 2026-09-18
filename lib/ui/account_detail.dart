@@ -9,9 +9,10 @@ import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_form.dart';
 import 'tx_form.dart';
-import 'trial_ui.dart' show ensureFeatureAllowed;
+import '../data/sync/subscription_guard.dart'
+    show Feature, kWatermarkText;
+import 'trial_ui.dart' show featureNeedsStamp;
 import 'widgets.dart';
-import '../data/sync/subscription_guard.dart' show Feature;
 
 /// كشف حساب: الرصيد والسجل الزمني وأدوات التواصل.
 class AccountDetailScreen extends ConsumerStatefulWidget {
@@ -256,15 +257,14 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         // 🔒 رسائل الرصيد للعملاء ميزة مدفوعة.
+                        // (دفعة 65-ب) الإشعار المباشر مسموح دائماً —
+                        // الحساب المقيد يُرسل الإجمالي مختوماً فقط.
                         onPressed: () async {
-                          final ok = await ensureFeatureAllowed(context, ref,
-                              Feature.whatsappClaims,
-                              featureName: 'رسائل الرصيد للعملاء',
-                              description:
-                                  'أرسل رصيد العميل وكشف حسابه عبر واتساب '
-                                  'برسالة جاهزة بضغطة واحدة.');
-                          if (ok && context.mounted) {
-                            await _whatsapp(context, a, balance, c);
+                          final stamp = await featureNeedsStamp(
+                              ref, Feature.whatsappClaims);
+                          if (context.mounted) {
+                            await _whatsapp(context, a, balance, c,
+                                stamp: stamp);
                           }
                         },
                         icon: const Icon(Icons.chat, size: 18),
@@ -380,12 +380,15 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     BuildContext context,
     Account a,
     double balance,
-    CurrencyDef c,
-  ) async {
+    CurrencyDef c, {
+    bool stamp = false,
+  }) async {
     final nature = balance > 0 ? 'عليكم' : 'لكم';
+    // (دفعة 65-ب) الإجمالي فقط — لا تفصيل — وختم التطبيق للحساب المقيد.
     final text = 'مرحباً ${a.name}\n'
         'رصيدكم الحالي: ${Fmt.money(balance.abs(), c.decimal)} ${c.symbol} '
-        '($nature)';
+        '($nature)'
+        '${stamp ? '\n―\n$kWatermarkText' : ''}';
     final uri = Uri.parse(
       'https://wa.me/${Fmt.waNumber(a.contactNumber)}?text=${Uri.encodeComponent(text)}',
     );

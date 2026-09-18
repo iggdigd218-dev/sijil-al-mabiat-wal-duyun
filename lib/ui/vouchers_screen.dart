@@ -8,6 +8,8 @@ import '../core/format.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/subscription_guard.dart' show Feature;
+import 'trial_ui.dart' show featureNeedsStamp;
 import 'voucher_doc.dart';
 import 'widgets.dart';
 
@@ -283,6 +285,9 @@ Future<void> openVoucherPreview(
   final settings = await repo.settings();
   final org = OrgInfo.fromSettings(settings);
   if (!context.mounted) return;
+  // (دفعة 65-ب) المعاينة مطابقة تماماً لما يُطبع ويُشارَ: نفس الختم.
+  final stamp = await featureNeedsStamp(ref, Feature.reportsExport);
+  if (!context.mounted) return;
 
   await showModalBottomSheet<void>(
     context: context,
@@ -308,6 +313,7 @@ Future<void> openVoucherPreview(
                 currency: currency,
                 org: org,
                 items: items,
+                stamp: stamp,
               ),
               allowSharing: true,
               allowPrinting: true,

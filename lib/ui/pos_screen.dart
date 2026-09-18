@@ -13,7 +13,9 @@ import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/pos_cart.dart';
 import '../data/providers.dart';
+import '../data/sync/subscription_guard.dart' show Feature, kWatermarkText;
 import 'barcode_scanner.dart';
+import 'trial_ui.dart' show featureNeedsStamp;
 import 'tx_share.dart';
 import 'widgets.dart';
 
@@ -1738,7 +1740,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
                 final tx = txs.firstWhere((t) => t.id == txId);
                 final accs = await repo.accounts(includeArchived: true);
                 final acc = accs.where((a) => a.id == tx.accountId).firstOrNull;
-                await _printThermalInvoice(tx, acc, lines);
+                final stamp = await featureNeedsStamp(
+                    ref, Feature.reportsExport);
+                if (context.mounted) {
+                  await _printThermalInvoice(tx, acc, lines, stamp: stamp);
+                }
               },
             ),
             FilledButton.icon(
@@ -1776,8 +1782,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
   Future<void> _printThermalInvoice(
     Tx tx,
     Account? account,
-    List<InvoiceLine> lines,
-  ) async {
+    List<InvoiceLine> lines, {
+    bool stamp = false,
+  }) async {
     final repo = ref.read(repoProvider);
     final st = await repo.settings();
     final orgName = (st['businessName'] ?? 'المتجر').trim();
@@ -1874,6 +1881,19 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   style: const pw.TextStyle(fontSize: 9),
                   textAlign: pw.TextAlign.center,
                 ),
+                // (دفعة 65-ب) الحراري 80مم يضيق عن ختم مائل مقروء —
+                // نكتفي بسطر ختم صغير أسفل التذييل.
+                if (stamp) ...[
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    kWatermarkText,
+                    style: const pw.TextStyle(
+                      fontSize: 7,
+                      color: PdfColors.grey600,
+                    ),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                ],
               ],
             ),
           );

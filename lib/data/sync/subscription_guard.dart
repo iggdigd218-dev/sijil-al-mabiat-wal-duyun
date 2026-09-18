@@ -189,6 +189,24 @@ enum Feature {
   storeLogo,
 }
 
+/// ختم التطبيق الذي يظهر على مخرجات الحساب المقيد (رسائل واتساب، PDF).
+///
+/// الفلسفة (بقرار صريح): **بدل إغلاق الباب، نترك أثراً لطيفاً**. الحظر
+/// الكامل كان يحرم مستخدماً محلياً من مزايا يستعملها يومياً بلا أي نفع
+/// مقابل؛ الختم يُبقي الميزة تعمل كاملة ويمنح دافعاً واضحاً للترقية
+/// لإزالته — وهو ما يعبّر عنه المستخدم بـ «الشعارات الجمالية».
+const String kWatermarkText = 'تمت عبر تطبيق سجل الحسابات';
+
+/// مستوى الوصول إلى ميزة مدفوعة (دفعة 65-ب) — بديل الحظر الثنائي.
+enum FeatureAccess {
+  /// وصول كامل: بلا ختم وبلا تقليص.
+  full,
+
+  /// مسموح **وموسوم**: الميزة تعمل، لكن مخرجاتها تُختم، ويُكتفى في
+  /// رسائل الواتساب بإجمالي الحساب دون التفصيل.
+  watermarked,
+}
+
 /// الحارس المركزي للصلاحيات والمزايا (دفعة 65).
 ///
 /// الحساب **مقيد** في حالتين:
@@ -207,15 +225,25 @@ class FeatureAccessGuard {
   static bool isRestricted(SubscriptionState sub) =>
       sub.status == 'none' || (sub.expired && !sub.isSubscribed);
 
-  /// هل يُسمح بالوصول إلى [feature]؟
-  static bool canAccess(SubscriptionState sub, Feature feature) {
-    if (isRestricted(sub)) return false;
-    return sub.featureUnlocked((p) => switch (feature) {
+  /// مستوى الوصول إلى [feature]: كامل أو موسوم.
+  ///
+  /// التحوّل الجوهري: الحساب المقيد **لا يُحجب** عن المزايا — الإشعارات
+  /// تُرسل، والشعار مسموح، والتصدير متاح — بل تُوسم مخرجاته فقط. الحظر
+  /// الكامل كان يعطّل مستخدماً محلياً عن مزايا يومية بلا مقابل، أما الختم
+  /// فيحفظ إنتاجيته ويترك له سبباً مفهوماً للترقية.
+  static FeatureAccess accessLevel(SubscriptionState sub, Feature feature) {
+    if (isRestricted(sub)) return FeatureAccess.watermarked;
+    final unlocked = sub.featureUnlocked((p) => switch (feature) {
           Feature.whatsappClaims => p.canSendNotifications,
           Feature.customTemplates => p.canSendNotifications,
           _ => true,
         });
+    return unlocked ? FeatureAccess.full : FeatureAccess.watermarked;
   }
+
+  /// هل تُوسم مخرجات [feature] بختم التطبيق؟
+  static bool shouldWatermark(SubscriptionState sub, Feature feature) =>
+      accessLevel(sub, feature) == FeatureAccess.watermarked;
 }
 
 /// حارس الاشتراك: التفعيل، الفحص الدوري بوقت الخادم، والبوابة المركزية.

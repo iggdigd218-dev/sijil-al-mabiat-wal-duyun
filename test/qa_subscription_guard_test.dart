@@ -608,4 +608,60 @@ void main() {
     expect('${patched['device_id'] ?? ''}', startsWith('DEVICE-'),
         reason: 'السجلات القديمة تصبح قابلة للمطابقة دون إعادة تفعيل');
   });
+
+  // ═══════ (دفعة 65-ب) الختم بدل الحظر ═══════
+  // القاعدة الجديدة: لا ميزة تُحجب عن الحساب المقيد — المخرجات تُوسم فقط.
+  group('(دفعة 65-ب) الختم بدل الحظر', () {
+    SubscriptionState state({
+      required String status,
+      required int expiresAtMs,
+      required int serverNowMs,
+    }) =>
+        SubscriptionState(
+          status: status,
+          createdAtMs: 0,
+          expiresAtMs: expiresAtMs,
+          isActive: true,
+          deviceFingerprint: 'fp',
+          serverNowMs: serverNowMs,
+        );
+
+    test('حساب محلي بلا سحابة: موسوم — لا محجوب', () {
+      final sub = state(status: 'none', expiresAtMs: 0, serverNowMs: 1000);
+      expect(FeatureAccessGuard.isRestricted(sub), isTrue);
+      expect(FeatureAccessGuard.accessLevel(sub, Feature.whatsappClaims),
+          FeatureAccess.watermarked);
+      expect(FeatureAccessGuard.shouldWatermark(sub, Feature.reportsExport),
+          isTrue);
+    });
+
+    test('تجربة منتهية: موسوم — لا محجوب', () {
+      final sub = state(status: 'trial', expiresAtMs: 1000, serverNowMs: 2000);
+      expect(FeatureAccessGuard.isRestricted(sub), isTrue);
+      expect(FeatureAccessGuard.accessLevel(sub, Feature.storeLogo),
+          FeatureAccess.watermarked,
+          reason: 'الشعارات الجمالية مسموحة وموسومة — لا تُحجب');
+    });
+
+    test('اشتراك مدفوع فعّال: وصول كامل بلا ختم', () {
+      final sub = state(status: 'active', expiresAtMs: 1000, serverNowMs: 2000);
+      expect(FeatureAccessGuard.isRestricted(sub), isFalse);
+      expect(FeatureAccessGuard.accessLevel(sub, Feature.whatsappClaims),
+          FeatureAccess.full);
+      expect(FeatureAccessGuard.shouldWatermark(sub, Feature.reportsExport),
+          isFalse);
+    });
+
+    test('تجربة سارية: وصول كامل بلا ختم', () {
+      final sub = state(status: 'trial', expiresAtMs: 5000, serverNowMs: 2000);
+      expect(FeatureAccessGuard.isRestricted(sub), isFalse);
+      expect(FeatureAccessGuard.accessLevel(sub, Feature.reportsExport),
+          FeatureAccess.full);
+    });
+
+    test('نص الختم ثابت ويحمل اسم التطبيق', () {
+      expect(kWatermarkText, isNotEmpty);
+      expect(kWatermarkText, contains('سجل الحسابات'));
+    });
+  });
 }

@@ -18,7 +18,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
 import 'splash.dart' show SplashScreen;
 import 'trial_ui.dart'
-    show SubscriptionDetailsSection, ensureFeatureAllowed, showTrialExpiredSheet;
+    show SubscriptionDetailsSection, showTrialExpiredSheet;
 import 'update_section.dart';
 import 'account_section.dart';
 import 'appearance_screen.dart';
@@ -27,7 +27,6 @@ import 'join_approval_flow.dart' show startJoinApprovalFlow;
 import 'group_management_screen.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
-import '../data/sync/subscription_guard.dart' show Feature;
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -354,12 +353,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _logoPath.trim().isNotEmpty && File(_logoPath).existsSync();
 
   Future<void> _pickLogo() async {
-    final ok = await ensureFeatureAllowed(context, ref, Feature.storeLogo,
-        featureName: 'شعار المتجر على الفواتير',
-        description:
-            'أضف شعار متجرك أعلى الفواتير والإيصالات الحرارية لمنح '
-            'مطبوعاتك هوية احترافية أمام عملائك.');
-    if (!ok) return;
+    // (دفعة 65-ب) الشعارات الجمالية مسموحة للجميع — لا بوابة بعد اليوم.
     setState(() => _logoBusy = true);
     try {
       final picked = await ImagePicker().pickImage(
