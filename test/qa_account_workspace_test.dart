@@ -186,6 +186,46 @@ void main() {
         reason: 'البيانات المحلية سليمة لم تُمسّ');
   });
 
+  test('ACCT-02c (دفعة 65) فشل بعد التفريغ: استرجاع تلقائي بلا فقدان بيانات',
+      () async {
+    final before = repo.requireWorkspaceId;
+    await seedLocalAccount('عميل المساحة القديمة');
+    final store = <String, Object?>{
+      '/workspaces/_registry/accounts_index/${account.uid}.json': {
+        'workspaceId': orgWs,
+        'email': account.email,
+      },
+      // النسخة موجودة (فيُسمح بالتفريغ) لكن بجدول غير معروف: تنجح
+      // pull لأن data خريطة غير فارغة، ويفشل importAll بعد التفريغ.
+      '/workspaces/$orgWs/backup.json': {
+        'payload': {
+          'app': 'nexora',
+          'format': 'nexora-backup',
+          'db_version': 1,
+          'created_at': DateTime.now().toIso8601String(),
+          'group_fingerprint': '',
+          'workspace_mode': 'standalone',
+          'data': {
+            'unknown_table': [
+              {'id': 1}
+            ],
+          },
+        },
+      },
+    };
+    final outcome = await http.runWithClient(
+        () => AccountWorkspace.linkAccountOnly(repo,
+            backendUrl: url, account: account),
+        () => fakeCloud(store));
+    expect(outcome, AccountLinkOutcome.switchRestored,
+        reason: 'الفشل بعد التفريغ يُسترجع تلقائياً بدل ترك الجهاز فارغاً');
+    final accounts = await repo.accounts();
+    expect(accounts.any((a) => a.name == 'عميل المساحة القديمة'), isTrue,
+        reason: 'بيانات المساحة الأصلية تعود كما كانت — لا فقدان صامت');
+    expect(repo.requireWorkspaceId, before,
+        reason: 'يُعكس ترحيل المساحة فلا تبقى البيانات المسترجعة يتيمة');
+  });
+
   test('ACCT-03 جهاز عضو مجموعة لا يُمَس', () async {
     await db.insert(
         'sync_meta', {'key': 'workspaceMode', 'value': 'member'},

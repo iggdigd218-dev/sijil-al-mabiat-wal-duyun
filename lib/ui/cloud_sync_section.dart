@@ -54,9 +54,13 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
   CloudInviteInfo? invite;
   String? error;
   try {
-    invite = await CloudJoin.createInvite(repo).timeout(kCloudOpTimeout);
+    // (دفعة 65 — تصحيح انحدار) إنشاء الدعوة يرفع لقطة قاعدة البيانات
+    // كاملة: مهلة 15 ثانية كانت تجهضه قبل كتابة الدعوة في كل مؤسسة
+    // بحجم واقعي أو اتصال هاتفي، فلا يجد العضو المساحة أبداً.
+    invite = await CloudJoin.createInvite(repo).timeout(kCloudInviteTimeout);
   } on TimeoutException {
-    error = 'انتهت مهلة الاتصال (${kCloudOpTimeout.inSeconds} ثانية) — '
+    error = 'انتهت مهلة إنشاء الدعوة '
+        '(${kCloudInviteTimeout.inSeconds ~/ 60} دقائق) — '
         'تحقّق من شبكتك ثم أعد المحاولة.';
   } catch (e) {
     error = e is CloudJoinException ? e.message : '$e';

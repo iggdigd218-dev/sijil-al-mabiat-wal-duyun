@@ -221,6 +221,21 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               content: Text('هذا الحساب مرتبط بمساحة أخرى ولا توجد لها نسخة '
                   'سحابية — لم نغيّر بياناتك')));
           return;
+        case AccountLinkOutcome.switchRestored:
+          // (دفعة 65) التبديل فشل بعد التفريغ — استُرجعت البيانات فوراً.
+          Sfx.error();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('تعذّر إتمام تبديل المساحة — أُعيدت بياناتك '
+                  'الأصلية كما كانت ولم يضِع شيء')));
+          return;
+        case AccountLinkOutcome.switchDataLost:
+          // (دفعة 65) أسوأ حالة: نُبلغ بمكان النسخة صراحةً.
+          Sfx.error();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('تعذّر تبديل المساحة وتعذّر الاسترجاع التلقائي — '
+                  'بياناتك محفوظة في ملف pre_switch_backup.nexora داخل مجلد '
+                  'النسخ')));
+          return;
         case AccountLinkOutcome.failed:
           Sfx.error();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

@@ -113,6 +113,23 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
               'لم نغيّر بياناتك',
               error: true);
           break;
+        case AccountLinkOutcome.switchRestored:
+          // (دفعة 65) التبديل فشل بعد التفريغ — استُرجعت البيانات فوراً.
+          Sfx.error();
+          showSnack(context,
+              'تعذّر إتمام تبديل المساحة — أُعيدت بياناتك الأصلية كما كانت '
+              'ولم يضِع شيء (نسخة pre_switch_backup.nexora محفوظة)',
+              error: true);
+          break;
+        case AccountLinkOutcome.switchDataLost:
+          // (دفعة 65) أسوأ حالة: نُبلغ بمكان النسخة صراحةً ليستعيدها يدوياً.
+          Sfx.error();
+          showSnack(context,
+              'تعذّر تبديل المساحة وتعذّر الاسترجاع التلقائي — بياناتك '
+              'محفوظة في ملف pre_switch_backup.nexora داخل مجلد النسخ؛ '
+              'استعدها من شاشة النسخ الاحتياطي',
+              error: true);
+          break;
         case AccountLinkOutcome.failed:
           Sfx.error();
           showSnack(context, 'تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة',

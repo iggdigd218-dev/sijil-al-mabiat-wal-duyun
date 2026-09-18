@@ -8,6 +8,7 @@
 //   - انضمام الموظفين يبقى عبر QR/PIN — لا يحتاجون حساب Google.
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/factory_reset.dart';
@@ -39,6 +40,15 @@ enum AccountLinkOutcome {
   /// (دفعة 65) الحساب مرتبط بمساحة أخرى لكن **لا نسخة سحابية** لتلك
   /// المساحة — لم يُفرَّغ شيء، وتعذّر إتمام التبديل.
   switchUnavailable,
+
+  /// (دفعة 65) تعذّر إتمام التبديل **بعد** تفريغ الجداول: استُرجعت
+  /// بيانات المساحة الأصلية من النسخة المحتفظ بها — **بلا فقدان بيانات**.
+  switchRestored,
+
+  /// (دفعة 65) تعذّر التبديل بعد التفريغ **وتعذّر الاسترجاع التلقائي**:
+  /// البيانات الأصلية ما زالت في ملف `pre_switch_backup.nexora` داخل
+  /// مجلد النسخ — يجب إبلاغ المستخدم بمكانها صراحةً.
+  switchDataLost,
 
   /// تعذر الإكمال (شبكة/إعدادات).
   failed,
@@ -125,7 +135,7 @@ class AccountWorkspace {
         final localWs = repo.requireWorkspaceId;
         final remoteWs = await lookup(backendUrl: backendUrl, uid: account.uid);
         if (remoteWs.isNotEmpty && remoteWs != localWs) {
-          return _switchWorkspace(
+          return await _switchWorkspace(
             repo,
             backendUrl: backendUrl,
             account: account,
@@ -176,34 +186,92 @@ class AccountWorkspace {
     }
     if (pulled == null) return AccountLinkOutcome.switchUnavailable;
 
-    // 2) نسخة احتياطية صامتة.
+    // 2) نسخة احتياطية صامتة — نُبقي البيانات في الذاكرة أيضاً:
+    //    الاسترجاع منها مضمون حتى لو تعذّرت كتابة الملف أو قُرئ مشوّهاً.
+    Map<String, Object?>? backupData;
     try {
       final data = await repo.exportAll(withImages: false);
+      backupData = data;
       await FactoryReset.silentBackup(data,
           fileName: FactoryReset.kBackupBeforeSwitch);
     } catch (_) {}
 
-    // 3) تفريغ الجداول المحاسبية.
-    final db = await repo.database;
-    await FactoryReset.wipeAccountingTables(db);
+    // ══ (دفعة 65) حارس ما بعد التفريغ ══
+    // كل ما يلي مُدمّر: التفريغ أول خطوة فيه، وأي فشل في الترحيل أو
+    // الاستيراد أو تدوير الهوية كان يترك الجهاز **فارغاً** بلا بيانات
+    // المساحة الجديدة — فقدان بيانات صامت. والأسوأ: الاستثناء كان يهرب
+    // متجاوزاً `catch` في linkAccountOnly (لأن الإرجاع بلا await)، فلا
+    // يُسترجع شيء ويُبلّغ المستخدم برسالة عامة لا تذكر نسخته أبداً.
+    // الآن نحيط الجزء المدمر بـ try، وعند أي فشل نتراجع فوراً.
+    var swapped = false;
+    try {
+      // 3) تفريغ الجداول المحاسبية.
+      final db = await repo.database;
+      await FactoryReset.wipeAccountingTables(db);
 
-    // 4) ترحيل المساحة ثم استيراد بياناتها.
-    if (fromWorkspaceId != toWorkspaceId) {
-      await WorkspaceRecovery.swapWorkspaceId(db,
-          from: fromWorkspaceId, to: toWorkspaceId);
-      await repo.setSetting('sync.workspaceId', toWorkspaceId);
-      repo.debugSetWorkspaceId(toWorkspaceId);
+      // 4) ترحيل المساحة ثم استيراد بياناتها.
+      if (fromWorkspaceId != toWorkspaceId) {
+        await WorkspaceRecovery.swapWorkspaceId(db,
+            from: fromWorkspaceId, to: toWorkspaceId);
+        swapped = true; // صار لزاماً عكسه إن فشل ما بعده.
+        await repo.setSetting('sync.workspaceId', toWorkspaceId);
+        repo.debugSetWorkspaceId(toWorkspaceId);
+      }
+      await repo.importAll(pulled);
+
+      // 5) هوية سحابية مستقلة مقترنة بالمساحة الجديدة.
+      await FirebaseAuthRest.resetAnonymousSession(repo);
+      await FirebaseAuthRest.saveSession(repo, account);
+      await FirebaseAuthRest.ensureScopedAnonymous(repo, toWorkspaceId);
+      // بعد تدوير الهوية: ابدأ جلسة مجهولة جديدة تُصدر uid المستقل.
+      await FirebaseAuthRest.initSilentAuth(repo);
+      await repo.setSetting('account.type', 'enterprise');
+      return AccountLinkOutcome.switched;
+    } catch (e) {
+      debugPrint('AccountWorkspace: فشل التبديل بعد التفريغ: $e');
+      return await _undoFailedSwitch(
+        repo,
+        backupData: backupData,
+        fromWorkspaceId: fromWorkspaceId,
+        toWorkspaceId: toWorkspaceId,
+        swapped: swapped,
+      );
     }
-    await repo.importAll(pulled);
+  }
 
-    // 5) هوية سحابية مستقلة مقترنة بالمساحة الجديدة.
-    await FirebaseAuthRest.resetAnonymousSession(repo);
-    await FirebaseAuthRest.saveSession(repo, account);
-    await FirebaseAuthRest.ensureScopedAnonymous(repo, toWorkspaceId);
-    // بعد تدوير الهوية: ابدأ جلسة مجهولة جديدة تُصدر uid المستقل.
-    await FirebaseAuthRest.initSilentAuth(repo);
-    await repo.setSetting('account.type', 'enterprise');
-    return AccountLinkOutcome.switched;
+  /// (دفعة 65) تراجع عن تبديل فاشل **بعد** التفريغ: يعكس ترحيل المساحة
+  /// (إن حصل) ثم يستعيد بيانات المساحة الأصلية من النسخة المحتفظ بها.
+  ///
+  /// لا يرمي أبداً — يُبلّغ بالنتيجة ليشرحها المستدعي للمستخدم.
+  static Future<AccountLinkOutcome> _undoFailedSwitch(
+    Repo repo, {
+    required Map<String, Object?>? backupData,
+    required String fromWorkspaceId,
+    required String toWorkspaceId,
+    required bool swapped,
+  }) async {
+    // أ) عكس الترحيل أولاً: الاستيراد لا يلمس جدول workspaces، فلو بقي
+    //    موسوماً بـ (ب) لصارت البيانات المسترجعة (الموسومة بـ (أ)) يتيمة.
+    if (swapped) {
+      try {
+        final db = await repo.database;
+        await WorkspaceRecovery.swapWorkspaceId(db,
+            from: toWorkspaceId, to: fromWorkspaceId);
+        await repo.setSetting('sync.workspaceId', fromWorkspaceId);
+        repo.debugSetWorkspaceId(fromWorkspaceId);
+      } catch (e) {
+        debugPrint('AccountWorkspace: تعذّر عكس ترحيل المساحة: $e');
+      }
+    }
+    // ب) استعادة البيانات الأصلية.
+    if (backupData == null) return AccountLinkOutcome.switchDataLost;
+    try {
+      await repo.importAll(backupData);
+      return AccountLinkOutcome.switchRestored;
+    } catch (e) {
+      debugPrint('AccountWorkspace: تعذّر استرجاع النسخة: $e');
+      return AccountLinkOutcome.switchDataLost;
+    }
   }
 
   /// تثبيت الربط بعد أي مسار ناجح: جلسة + فهرس الحساب + فهرس البصمة +

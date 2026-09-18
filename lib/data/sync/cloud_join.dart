@@ -220,6 +220,22 @@ class JoinRequestWatcher {
 /// ~120 ثانية — داخل حوار غير قابل للإلغاء فيبدو التطبيق معلّقاً تماماً.
 const Duration kCloudOpTimeout = Duration(seconds: 15);
 
+/// (دفعة 65 — تصحيح انحدار) مهلة رفع **لقطة المجموعة الكاملة** إلى
+/// السحابة. كانت `kCloudOpTimeout * 2` (30 ثانية) وهي تكفي قاعدة فارغة
+/// في مختبر سريع، لكنها تسقط أي مؤسسة حقيقية على اتصال هاتفي: رفع
+/// لقطة بعشرات الآلاف من الصفوف يتجاوزها، فيفشل `createInvite` قبل
+/// كتابة الدعوة، فلا يجد العضو المساحة أبداً ويبدو «الربط معطلاً».
+/// اللقطة أثقل عملية في المسار — نمنحها وقتاً واقعياً.
+const Duration kCloudSnapshotUploadTimeout = Duration(minutes: 3);
+
+/// (دفعة 65 — تصحيح انحدار) المهلة الكلية لإنشاء دعوة انضمام من
+/// الواجهة: تشمل رفع اللقطة (الأثقل) ثم الدعوة ثم الفهرس. يجب أن تبقى
+/// **أكبر من** [kCloudSnapshotUploadTimeout] وإلا جهضت الواجهة
+/// العملية بعد أن يكون الخادم قد استلم اللقطة وقبل أن يكتب الدعوة،
+/// فتظهر للمدير «انتهت المهلة» ولا يجد العضو المساحة أبداً — وهو
+/// بالضبط ما جعل «الربط بالمجموعة» يبدو معطلاً بالكامل.
+const Duration kCloudInviteTimeout = Duration(minutes: 3, seconds: 30);
+
 class CloudJoinException implements Exception {
   final String message;
   const CloudJoinException(this.message);
@@ -659,8 +675,9 @@ class CloudJoin {
 
     final now = DateTime.now();
     final root = _root(url, ws);
-    // (دفعة 65) مهلة صريحة: أثقل عملية في المسار (رفع لقطة المجموعة
-    // كاملة) كانت بلا مهلة فتصل إلى دقيقتين مع إعادة محاولة 401.
+    // (دفعة 65) مهلة صريحة وسخية: أثقل عملية في المسار (رفع لقطة
+    // المجموعة كاملة). 30 ثانية كانت تسقط المؤسسات الحقيقية على اتصال
+    // هاتفي فتفشل الدعوة كلها.
     await _putJson(
       '$root/joinSnapshot.json',
       {
@@ -672,7 +689,7 @@ class CloudJoin {
         'compacted_through_ts': now.millisecondsSinceEpoch,
         'data': snapshot,
       },
-      timeout: kCloudOpTimeout * 2,
+      timeout: kCloudSnapshotUploadTimeout,
     );
     // نسجّل العلامة محلياً أيضاً ليعتمدها روتين الضغط.
     try {

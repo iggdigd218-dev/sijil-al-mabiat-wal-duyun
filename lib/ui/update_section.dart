@@ -101,6 +101,32 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
           Sfx.error();
         }
       },
+      // (دفعة 65) بلا onError/onDone كان أي استثناء هارب من المُثبِّت
+      // يُسقط الحدث كخطأ غير معالَج، فيبقى الحوار جاثماً على
+      // «جارٍ تنزيل التحديث…» بلا رسالة خطأ ولا زر إعادة محاولة —
+      // تجمّد تام لا مخرج منه. نردّ الحالة إلى `failed` فيُعرض
+      // السبب ويصبح الحوار قابلاً للإغلاق وإعادة المحاولة.
+      onError: (Object e, StackTrace _) {
+        if (!mounted) return;
+        Sfx.error();
+        setState(
+          () => _state = InstallProgress(InstallPhase.failed,
+              error: 'تعذّر تنزيل التحديث: $e'),
+        );
+      },
+      onDone: () {
+        if (!mounted) return;
+        // أُغلق المجرى قبل بلوغ حالة ختامية (done/failed): نُظهر الفشل
+        // صراحةً بدل إبقاء المستخدم أمام شريط تقدم لا ينتهي أبداً.
+        final phase = _state.phase;
+        if (phase != InstallPhase.done && phase != InstallPhase.failed) {
+          Sfx.error();
+          setState(
+            () => _state = const InstallProgress(InstallPhase.failed,
+                error: 'انتهت عملية التحديث دون نتيجة. أعد المحاولة.'),
+          );
+        }
+      },
     );
   }
 
