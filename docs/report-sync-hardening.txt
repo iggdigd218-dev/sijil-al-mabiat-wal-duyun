@@ -104,7 +104,9 @@ D) ما تم تطويره (إضافة ميزات جديدة)
 9. applyRemoteOperation يقرأ localLatest فعليًا من operations للقرار الدقيق.
 10. حالة LAN ظاهرة في SyncStatusInfo (lanConfigured).
 11. Response /status LAN يشمل workspaceId للتحقق المتبادل.
-12. docs/firebase-rules.json — قواعد إنتاجية مقترحة لـ Firebase RTDB.
+12. firebase/database.rules.json — القواعد المعتمدة والمنشورة فعلياً لـ Firebase
+   RTDB (نسخة docs/firebase-rules.json مطابقة لها تماماً؛ المصدر الوحيد
+   للحقيقة هو مجلد firebase/).
 13. docs/firebase-setup-guide.md — دليل خطوة بخطوة لإعداد Firebase للمستخدم النهائي.
 14. حقل ip_address يُحدّث تلقائيًا عند استقبال أي طلب LAN (يتتبع تغيّرات IP).
 
@@ -263,8 +265,10 @@ L) خطوات إعداد Firebase Console
 2. Build → Authentication → Sign-in method → فعّل Google.
 3. Build → Realtime Database → Create database → اختر أقرب منطقة → ابدأ في
    الوضع المقفول (locked mode).
-4. استبدل قواعد قاعدة البيانات بالمحتوى من docs/firebase-rules.json
-   (موجودة في ملف docs/ بالمشروع أيضاً).
+4. استبدل قواعد قاعدة البيانات بالمحتوى من firebase/database.rules.json
+   — هذا هو الملف المعتمد والمنشور فعلياً. ⚠️ لا تستخدم أي نسخة أخرى:
+   القواعد القديمة كانت تحجب عقد invite_index و server_clock و trials
+   و joinSnapshot و members، فتُسقط كل العمليات السحابية بـ 401.
 5. انسخ رابط قاعدة البيانات من قسم Data (بالشكل
    https://PROJECT-default-rtdb.REGION.firebasedatabase.app).
 6. في التطبيق:
@@ -296,10 +300,13 @@ M) الحالة الأمنية الحالية
 N) هل Firebase Rules أصبحت Production-safe؟
 ================================================================================
 الجواب: جزئيًا.
-القواعد المرفقة في docs/firebase-rules.json:
-  ✅ تتطلب auth != null (مصادقة إجبارية).
-  ✅ تتحقق من وجود الحقول المطلوبة (schema validation على مستوى العملية).
-  ✅ تمنع الكتابة خارج نطاق /workspaces/<wsId>/operations.
+القواعد المعتمدة في firebase/database.rules.json (المنشورة فعلياً):
+  ✅ تغطي كل العقد التي يستخدمها التطبيق: operations، roster، evictions،
+     invites، joinRequests، joinSnapshot، members، subscription، creator،
+     codes، server_clock، trials، invite_index — فلا عقدة محجوبة تُسقط
+     عملية بـ 401.
+  ⚠️ مفتوحة بالكامل (.read/.write = true) بلا تحقّق من العضوية — مقبولة
+     مرحلياً لضمان عدم انقطاع الخدمة، وتحتاج تشديداً مدروساً لاحقاً.
   ⚠️ لا تعزل المستخدمين عن بعضهم بعد: أي مستخدم مصادق به يستطيع القراءة
      والكتابة لأي Workspace (لكتابة Workspace isolation كامل نحتاج حقل
      workspaces/<wsId>/members/<uid> = true وتحديث القواعد للتحقق من ذلك).

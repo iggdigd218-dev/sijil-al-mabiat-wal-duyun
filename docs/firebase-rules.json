@@ -1,19 +1,66 @@
 {
   "rules": {
     "workspaces": {
-      "$wsId": {
-        ".read": "auth != null && (auth.token.email != null || auth.uid != null)",
-        ".write": "auth != null && (auth.token.email != null || auth.uid != null)",
+      ".read": true,
+      ".write": true,
+      "$ws": {
         "operations": {
-          ".indexOn": ["timestamp", "$key"],
-          "$opId": {
-            ".validate": "newData.hasChildren(['id','deviceId','workspaceId','entityType','entityId','opType','version','payload','timestamp']) && newData.child('workspaceId').val() == $wsId"
-          }
+          ".indexOn": [
+            "server_ts",
+            "timestamp"
+          ],
+          ".read": true,
+          ".write": true
         },
-        "meta": { ".write": "auth != null" },
-        "$other": { ".validate": false }
+        "roster": {
+          ".read": true,
+          ".write": true
+        },
+        "evictions": {
+          ".read": true,
+          ".write": true
+        },
+        "invites": {
+          ".read": true,
+          ".write": true
+        },
+        "joinRequests": {
+          ".read": true,
+          ".write": true
+        },
+        "joinSnapshot": {
+          ".read": true,
+          ".write": true
+        },
+        "members": {
+          ".read": true,
+          ".write": true
+        },
+        "subscription": {
+          ".read": true,
+          ".write": true
+        },
+        "creator": {
+          ".read": true,
+          ".write": true
+        },
+        "codes": {
+          ".read": true,
+          ".write": true
+        }
       }
     },
-    "$other": { ".validate": false }
+    "server_clock": {
+      ".read": true,
+      ".write": true
+    },
+    "trials": {
+      ".read": true,
+      ".write": true
+    },
+    "invite_index": {
+      ".read": true,
+      ".write": true
+    }
   }
 }

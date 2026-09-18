@@ -358,23 +358,36 @@ Future<void> performCloudJoin(
   String? failure;
   try {
     final repo = container.read(repoProvider);
+    // (دفعة 65) مهلة كلية على العملية المركّبة (تنزيل + استبدال + إقلاع
+    // المحرك) — بلاها كان الحوار غير القابل للإلغاء يبقى مفتوحاً إلى
+    // الأبد عند أي تعليق شبكي. المهلة أوسع من kCloudOpTimeout لأن
+    // العملية تشمل تنزيل لقطة كاملة.
     await CloudJoin.join(
       repo,
       backendUrl: backendUrl,
       token: token,
       workspaceId: workspaceId,
       cloudCode: cloudCode,
-    );
+    ).timeout(kCloudOpTimeout * 4);
     // إعادة تشغيل محرك المزامنة بالحالة الجديدة (عضو + سحابة مفعّلة).
     final engine = container.read(syncEngineProvider);
     engine.stop();
     await engine.start();
+  } on TimeoutException catch (_) {
+    failure = 'انتهت مهلة تنزيل نسخة المجموعة '
+        '(${(kCloudOpTimeout * 4).inSeconds} ثانية) — تحقّق من الشبكة '
+        'ثم أعد المحاولة. لم يُعتمد أي تغيير على بياناتك.';
   } catch (e) {
     failure = e is CloudJoinException ? e.message : '$e';
+  } finally {
+    // (دفعة 65) إغلاق حتمي: النسخة السابقة كانت تتحقق من `context.mounted`
+    // قبل الإغلاق، فإن غاب السياق بقي الحوار مفتوحاً بلا أمل.
+    if (context.mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
   }
 
   if (!context.mounted) return;
-  Navigator.of(context, rootNavigator: true).pop();
 
   if (failure != null) {
     Sfx.error();
