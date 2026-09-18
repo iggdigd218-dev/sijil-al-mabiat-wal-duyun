@@ -1511,6 +1511,11 @@ class CloudJoin {
       _delete(requestPath(backendUrl, workspaceId, deviceId));
 
   /// (المدير) جلب طلبات الانضمام المعلّقة.
+  /// (إصلاح 2026-09-18 — طلبات لا تزال تظهر بعد الموافقة)
+  /// كان يعيد أي عقدة status=pending حتى لو كان جهازها موجوداً فعلاً
+  /// في devices كـ paired (حالة شبح: الموافقة كتبت approved لكن الشبكة
+  /// سقطت قبل حذف العقدة، أو العضو أعاد إرسال نفس الطلب). الآن يفلتر
+  /// أي طلب جهازُه موجودٌ فعلاً كمقترن، ويحذفه تلقائياً من السحابة.
   static Future<List<Map<String, Object?>>> fetchJoinRequests(
     Repo repo, {
     required String backendUrl,
@@ -1519,13 +1524,30 @@ class CloudJoin {
     final all =
         await _getJson('${_root(backendUrl, workspaceId)}/joinRequests.json');
     if (all == null) return const [];
+    final db = await repo.database;
+    // خريطة سريعة للأجهزة المقترنة فعلياً
+    final pairedRows = await db.query('devices',
+        columns: ['id'],
+        where: "is_paired = 1 AND COALESCE(revoked_at,'')='' AND COALESCE(expelled_at,'')=''");
+    final pairedIds = {for (final r in pairedRows) '${r['id']}'};
+
     final out = <Map<String, Object?>>[];
     for (final e in all.entries) {
       final v = e.value;
       if (v is! Map) continue;
       final m = Map<String, Object?>.from(v);
-      if ('${m['status'] ?? 'pending'}' != 'pending') continue;
-      m['deviceId'] = '${m['deviceId'] ?? e.key}';
+      final status = '${m['status'] ?? 'pending'}';
+      if (status != 'pending') continue;
+      final devId = '${m['deviceId'] ?? e.key}';
+      if (devId.isEmpty) continue;
+      // إن كان الجهاز موجوداً فعلاً كمقترن، فهذا طلب شبح — احذفه ولا تعرضه
+      if (pairedIds.contains(devId)) {
+        // تنظيف تلقائي في الخلفية
+        unawaited(_delete(
+            '${_root(backendUrl, workspaceId)}/joinRequests/${Uri.encodeComponent(devId)}.json'));
+        continue;
+      }
+      m['deviceId'] = devId;
       out.add(m);
     }
     out.sort((a, b) =>
@@ -1535,6 +1557,13 @@ class CloudJoin {
 
   /// (المدير — خطوة 4أ) الموافقة: تعيين الدور + تسجيل الجهاز في roster
   /// + تحديث الطلب إلى approved ليستلمه الجهاز المنتظر فوراً.
+  /// (إصلاح 2026-09-18 — طلبات الانضمام لا تزال تظهر بعد الموافقة)
+  /// كان الترتيب: إنشاء مستخدم + جهاز محلي → رفع roster → كتابة approved.
+  /// إن فشلت كتابة approved (شبكة) يبقى الطلب pending في السحابة، فيظهر
+  /// مرة أخرى عند المدير رغم أن الجهاز انضاف محلياً — «طلبات لا تزال تظهر».
+  /// الإصلاح الجذري: كتابة approved **أولاً** فوراً (يُخفي الطلب من قائمة
+  /// pending ويُنبه العضو لحظياً)، ثم إكمال بقية العمل في الخلفية. حتى لو
+  /// فشل roster لاحقاً، الطلب يبقى approved ولن يظهر مرة أخرى كـ pending.
   static Future<void> approveJoinRequest(
     Repo repo, {
     required String backendUrl,
@@ -1547,34 +1576,55 @@ class CloudJoin {
     if (!owner) {
       throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
     }
-    // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
     await _ensureSubscriptionAllows(repo);
-    // 🪑 (باقة المؤسسات) حد المقاعد max_devices: الموافقة على جهاز يتجاوز
-    // الحد تُرفض برسالة واضحة للمدير.
     await _ensureSeatAvailable(repo,
         backendUrl: backendUrl,
         workspaceId: workspaceId,
         joiningDeviceId: deviceId);
+
+    // 1) اقرأ الطلب الأصلي أولاً (للحصول على uid و token)
+    final existingReq =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+
+    // 2) (الإصلاح الجوهري) اكتب approved فوراً — قبل أي عمل محلي ثقيل.
+    // هذا يُخفي الطلب من قائمة pending عند كل المديرين، ويُنبه العضو
+    // عبر SSE لحظياً ليبدأ الترطيب. حتى لو فشل ما بعده، الطلب لن يظهر
+    // كـ pending مرة أخرى.
+    try {
+      await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+        ...?existingReq,
+        'status': 'approved',
+        'role': roleCode,
+        'approvedAt': {'.sv': 'timestamp'},
+        'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
+            _approvedRequestTtl.inMilliseconds,
+        'expiresAt':
+            DateTime.now().add(_approvedRequestTtl).toIso8601String(),
+      }, timeout: const Duration(seconds: 20));
+    } catch (e) {
+      // فشل كتابة approved = فشل الموافقة كلها — لا نكمل
+      throw CloudJoinException(
+          '❌ فشل الموافقة: تعذر تحديث حالة الطلب في السحابة.\n'
+          'السبب: $e\n'
+          'الحل: تحقق من الإنترنت وأعد المحاولة.');
+    }
+
+    // 3) الآن أكمل العمل المحلي والرفع السحابي — حتى لو فشل، الطلب
+    // يبقى approved ولن يظهر مرة أخرى في قائمة الانتظار.
     final db = await repo.database;
     final now = DateTime.now().toIso8601String();
-    // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).
     final role = UserRole.values.firstWhere((r) => r.code == roleCode,
         orElse: () => UserRole.viewer);
     final perms = defaultPerms(role);
     final permStr =
         perms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    // ══ (إصلاح جذري — منع مشاركة user_id بين جهازين مختلفين) ══
-    // كان البحث باسم الجهاز فقط: جهازان بنفس الاسم «كاشير» يتشاركان نفس
-    // user_id، فطرد أحدهما يؤثر على الآخر وسجل التدقيق يختلط.
-    // الإصلاح: نعيد استخدام مستخدم ظل بنفس الاسم فقط إذا كان غير مرتبط
-    // بجهاز نشط آخر مختلف، وإلا ننشئ اسماً فريداً مع لاحقة رقمية.
+
     int uid;
     String effectiveName = deviceName.trim();
     bool reuse = false;
     final existing = await db.query('users',
         columns: ['id'],
-        where:
-            "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
+        where: "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
         whereArgs: [effectiveName],
         limit: 1);
     if (existing.isNotEmpty) {
@@ -1635,10 +1685,6 @@ class CloudJoin {
       uid = existing.first['id'] as int;
     }
 
-    // ══ (إصلاح جذري — مزامنة المستخدم الجديد) ══
-    // كان إنشاء المستخدم محلياً فقط دون بث عملية، فالجهاز المنضم حديثاً
-    // يطبّق لقطة قديمة لا تحتوي هذا المستخدم، ويبقى user_id معلقاً بلا صف
-    // — تنكسر الصلاحيات ويبدو «الكود لا يستجيب».
     try {
       final userRow = await db.query('users',
           where: 'id = ?', whereArgs: [uid], limit: 1);
@@ -1651,8 +1697,7 @@ class CloudJoin {
         );
       }
     } catch (_) {}
-    // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
-    // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
+
     await db.insert(
         'devices',
         {
@@ -1670,10 +1715,7 @@ class CloudJoin {
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
 
-    // ══ (إصلاح جذري — منع سباق موافقتين يتجاوز المقاعد) ══
-    // بعد الإدراج المحلي نعيد قراءة العدد الفعلي (محلي + roster سحابي).
-    // إن تجاوز الحد نحذف ما أدرجناه ونرمي — الموافقة الثانية المتزامنة
-    // تُرفض بدل تجاوز الحصة.
+    // فحص سباق المقاعد بعد الإدراج
     try {
       final rec2 = await _getJson(
           '${_root(backendUrl, workspaceId)}/subscription.json');
@@ -1694,7 +1736,6 @@ class CloudJoin {
                   .where(activeRow2)
                   .length;
               if (cloudCount > cur2) cur2 = cloudCount;
-              // +1 لأن roster السحابي لم يستقبل جهازنا بعد
               if (!r2.containsKey(deviceId)) cur2++;
             }
           } catch (_) {}
@@ -1702,6 +1743,15 @@ class CloudJoin {
             await db.delete('devices', where: 'id = ?', whereArgs: [deviceId]);
             try {
               await db.delete('users', where: 'id = ?', whereArgs: [uid]);
+            } catch (_) {}
+            // أعد الطلب إلى pending حتى يرى المدير السبب
+            try {
+              await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+                ...?existingReq,
+                'status': 'pending',
+                'requestedAt': DateTime.now().toIso8601String(),
+                'error': 'seat_limit_$cur2/$max2',
+              }, timeout: const Duration(seconds: 20));
             } catch (_) {}
             throw CloudJoinException(
                 '🪑 تم استنفاد عدد الأجهزة أثناء الموافقة '
@@ -1712,21 +1762,18 @@ class CloudJoin {
     } catch (e) {
       if (e is CloudJoinException) rethrow;
     }
-    // رفع للسحابة: roster + حالة الطلب approved.
+
+    // رفع roster و members — أفضل جهد، لا يفشل الموافقة لو تعثر
     final root = _root(backendUrl, workspaceId);
-    final own = await db.query('devices',
-        where: 'id = ?', whereArgs: [deviceId], limit: 1);
-    if (own.isNotEmpty) {
-      await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
-          {..._safeDeviceRow(own.first), 'user_role': role.code},
-          timeout: const Duration(seconds: 20));
-    }
-    final req =
-        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
-    // (المرحلة 2) تسجيل العضو في /members/{uid} بالدور المعيّن — هذه
-    // العقدة هي مرجع قواعد الأمان للسماح لهذا الجهاز بالكتابة في المساحة.
     try {
-      final memberUid = '${req?['uid'] ?? ''}'.trim();
+      final own = await db.query('devices',
+          where: 'id = ?', whereArgs: [deviceId], limit: 1);
+      if (own.isNotEmpty) {
+        await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+            {..._safeDeviceRow(own.first), 'user_role': role.code},
+            timeout: const Duration(seconds: 20));
+      }
+      final memberUid = '${existingReq?['uid'] ?? ''}'.trim();
       if (memberUid.isNotEmpty) {
         await _putJson(
           '$root/members/${Uri.encodeComponent(memberUid)}.json',
@@ -1739,20 +1786,9 @@ class CloudJoin {
           timeout: const Duration(seconds: 20),
         );
       }
-    } catch (_) {}
-    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
-      ...?req,
-      'status': 'approved',
-      'role': role.code,
-      'approvedAt': {'.sv': 'timestamp'},
-      // لا وقت انتظار: العضو يرى «تم الارتباط» فوراً والمزامنة تتم بعدها.
-      // الطلب يُحذف تلقائياً بعد إكمال العضو للربط في completeApprovedJoin،
-      // ويُترك دقيقتين فقط كحد أقصى إن بقي offline ليُلتقط ثم يُقلَّم.
-      'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
-          _approvedRequestTtl.inMilliseconds,
-      'expiresAt':
-          DateTime.now().add(_approvedRequestTtl).toIso8601String(),
-    }, timeout: const Duration(seconds: 20));
+    } catch (_) {
+      // roster فشل — سيُعاد رفعه في دورة المزامنة التالية
+    }
   }
 
   /// (المدير — دفعة 66) إزالة جهاز من المجموعة: حذف عضويته من السجل

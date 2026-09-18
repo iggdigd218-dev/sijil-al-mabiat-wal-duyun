@@ -33,6 +33,12 @@ class _State extends ConsumerState<GroupManagementScreen> {
   // طلب الاقتران يصل للمدير لحظياً بصفر كمون وبلا ضجيج شبكي دوري.
   JoinRequestWatcher? _joinReqWatcher;
 
+  /// (إصلاح 2026-09-18 — طلبات لا تزال تظهر بعد الموافقة)
+  /// أجهزة تمت الموافقة عليها في هذه الجلسة — لا تُعرض مرة أخرى حتى لو
+  /// بقيت عقدتها approved في السحابة لمدة 10 دقائق.
+  final Set<String> _recentlyApproved = {};
+  DateTime _lastCheck = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
@@ -49,8 +55,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
       if (url.isEmpty || !mounted) return;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
-      final ws =
-          wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
       _joinReqWatcher = JoinRequestWatcher(
         backendUrl: url,
         workspaceId: ws,
@@ -71,6 +76,10 @@ class _State extends ConsumerState<GroupManagementScreen> {
 
   Future<void> _checkJoinRequests() async {
     if (!mounted || _joinSheetOpen) return;
+    // منع الاستدعاء المتكرر السريع (debounce 2 ثانية)
+    final now = DateTime.now();
+    if (now.difference(_lastCheck).inSeconds < 2) return;
+    _lastCheck = now;
     try {
       final repo = ref.read(repoProvider);
       if (!await repo.isWorkspaceOwner()) return;
@@ -80,13 +89,49 @@ class _State extends ConsumerState<GroupManagementScreen> {
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
-      final reqs = await CloudJoin.fetchJoinRequests(repo,
+      var reqs = await CloudJoin.fetchJoinRequests(repo,
           backendUrl: url, workspaceId: ws);
+      // فلتر إضافي: لا تعرض ما وافقنا عليه للتو في هذه الجلسة
+      reqs = reqs.where((r) {
+        final id = '${r['deviceId'] ?? ''}';
+        return !_recentlyApproved.contains(id);
+      }).toList();
       if (reqs.isEmpty || !mounted) return;
       _joinSheetOpen = true;
+      final firstId = '${reqs.first['deviceId'] ?? ''}';
       await showJoinApprovalSheet(context, ref, reqs.first, backendUrl: url);
+      // بعد إغلاق النافذة: إن تمت الموافقة، سجّل الجهاز كمُعالج
+      // حتى لا يظهر مرة أخرى حتى لو بقيت عقدة approved في السحابة
+      if (firstId.isNotEmpty) {
+        // تحقق هل الجهاز أصبح مقترناً فعلاً؟
+        final dev = await db.query('devices',
+            where: 'id = ? AND is_paired = 1',
+            whereArgs: [firstId],
+            limit: 1);
+        if (dev.isNotEmpty) {
+          _recentlyApproved.add(firstId);
+          // تنظيف إضافي: احذف أي طلب معلق بنفس المعرف من السحابة
+          try {
+            await CloudJoin.deleteJoinRequest(
+                backendUrl: url, workspaceId: ws, deviceId: firstId);
+          } catch (_) {}
+        }
+      }
       _joinSheetOpen = false;
       if (mounted) bump(ref);
+      // إن كانت هناك طلبات أخرى معلقة، اعرض التالي بعد مهلة قصيرة
+      if (mounted) {
+        final remaining = await CloudJoin.fetchJoinRequests(repo,
+            backendUrl: url, workspaceId: ws);
+        final filtered = remaining.where((r) {
+          final id = '${r['deviceId'] ?? ''}';
+          return !_recentlyApproved.contains(id);
+        }).toList();
+        if (filtered.isNotEmpty) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          if (mounted) _checkJoinRequests();
+        }
+      }
     } catch (_) {
       _joinSheetOpen = false;
     }
