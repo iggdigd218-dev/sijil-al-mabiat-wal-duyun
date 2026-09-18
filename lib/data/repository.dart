@@ -180,6 +180,32 @@ class Repo {
   /// (الاسترداد الذاتي) تحديث كاش معرف المساحة بعد تبديل مستعاد.
   void debugSetWorkspaceId(String ws) => _workspaceId = ws;
 
+  /// (إصلاح حرج 2026-09-19 — المزامنة تموت ثوانٍ بعد الربط) إعادة تحميل
+  /// كاش معرف المساحة من جدول workspaces: الانضمام يستبدل الجدول بلقطة
+  /// المجموعة لكن الكاش يبقى على معرّف ما قبل الربط، فتُصفَّف العمليات
+  /// الجديدة وتُدفع لمساحة خاطئة ويقرأ السحب مساحة خاطئة بينما البيانات
+  /// في الصحيحة — بلا أي خطأ ظاهر. عند تغيّر المعرّف تُصوَّب الصفوف المحلية
+  /// الضالة (عمليات operations المسجلة بالمعرّف القديم) للمساحة
+  /// الصحيحة، فيُنقذ ذلك الأجهزة العالقة حالياً عند أول إقلاع بعد التحديث.
+  Future<void> refreshWorkspaceId() async {
+    final db = await _db;
+    final fresh = await ensureWorkspace(db, repo: this);
+    final old = _workspaceId;
+    if (old == fresh) return;
+    _workspaceId = fresh;
+    // تصويب الصفوف المحلية الضالة: جدول operations يحمل معرّف المساحة في
+    // كل صف — الصفوف المسجلة بالمعرّف القديم تُصوَّب لتُدفع في المسار
+    // الصحيح. (sync_queue لا يحمل معرفاً؛ يشير لعمليات operations فقط.)
+    try {
+      await db.update(
+        'operations',
+        {'workspace_id': fresh},
+        where: 'workspace_id = ?',
+        whereArgs: [old ?? ''],
+      );
+    } catch (_) {}
+  }
+
   // ---------- حالة المساحة (مستقل/مرتبط) ----------
 
   Future<String> workspaceMode() async {

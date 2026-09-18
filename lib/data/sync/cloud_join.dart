@@ -1480,6 +1480,12 @@ class CloudJoin {
         token: token,
         workspaceId: workspaceId,
         cloudCode: cloudCode);
+    // (إصلاح حرج 2026-09-19) الانضمام استبدل جدول workspaces لتوّه —
+    // نُحمّل الكاش قبل استئناف المحرك حتى تُسجل أول عملية بعد الربط في
+    // مساحة المجموعة نفسها لا في مساحة ما قبل الربط.
+    try {
+      await repo.refreshWorkspaceId();
+    } catch (_) {}
     final ourId = await ensureDeviceId(repo);
     try {
       await _delete(requestPath(backendUrl, workspaceId, ourId));

@@ -15,6 +15,7 @@ import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/device_id.dart';
+import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية: تخزّن أي PUT حسب المسار وتعيد GET من نفس المخزن.
@@ -319,6 +320,43 @@ void main() {
         cloud.client);
 
     expect(await repoB.workspaceMode(), 'member');
+  });
+
+  test('QA-JOIN-07 (إصلاح 2026-09-19) تبديل المساحة يصحّح الكاش ويصوّب '
+      'الصفوف الضالة', () async {
+    // محاكاة جهاز ربط للتو: الجدول يحمل مساحة المجموعة لكن الكاش قديم.
+    final db = await repoA.database;
+    final oldWs = repoA.requireWorkspaceId;
+    // join الحقيقي يمسح الجدول ويستبدله بلقطة مساحة المجموعة.
+    await db.delete('workspaces');
+    await db.insert('workspaces', {
+      'id': 'WS-JOINED-77',
+      'name': 'مجموعة الاختبار',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    // صفوف ضالة سُجلت بالمعرّف القديم قبل التصحيح.
+    await repoA.queueOperation(
+        entityType: EntityKind.account,
+        entityId: 'QA07-1',
+        opType: OpKind.create,
+        payload: const {});
+    await repoA.refreshWorkspaceId();
+    expect(repoA.requireWorkspaceId, 'WS-JOINED-77',
+        reason: 'الكاش يعكس جدول workspaces بعد التبديل');
+    // جدول operations هو حامل المعرّف (sync_queue يشير له فقط).
+    final stranded = await db.query('operations',
+        where: 'workspace_id = ?', whereArgs: [oldWs]);
+    expect(stranded, isEmpty,
+        reason: 'الصفوف الضالة تُصوّب للمساحة الصحيحة فلا تُدفع للخاطئة');
+    // العمليات الجديدة تُسجَّل مباشرة بالمعرّف الصحيح.
+    await repoA.queueOperation(
+        entityType: EntityKind.account,
+        entityId: 'QA07-2',
+        opType: OpKind.create,
+        payload: const {});
+    final q2 = await db.query('operations', where: "entity_id = 'QA07-2'");
+    expect(q2.single['workspace_id'], 'WS-JOINED-77');
   });
 
   test('QA-JOIN-06 (دفعة 65) العضو الفعّال يُرفض حقاً',

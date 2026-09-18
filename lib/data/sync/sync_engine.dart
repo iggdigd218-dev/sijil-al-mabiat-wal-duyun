@@ -279,12 +279,27 @@ class SyncEngine {
       } catch (_) {}
       return;
     }
-    if (url == _cloudUrl && _cloudTransport != null) return;
     final db = await _db;
-    // Workspace الحالي.
+    // Workspace الحالي — يُقرأ من الجدول في كل استدعاء: الربط يستبدل
+    // الجدول بلقطة المجموعة، ونقلٌ بُني بالمعرّف القديم يظل يدفع ويسحب من
+    // مسار خاطئ فتموت المزامنة بصمت (إصلاح حرج 2026-09-19).
     final wsRow = await db.query('workspaces', limit: 1);
     final wsId =
         wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
+    if (url == _cloudUrl &&
+        _cloudTransport != null &&
+        _cloudTransport!.workspaceId == wsId) {
+      return;
+    }
+    // العنوان أو المساحة تغيّرت: تقاعد النقل القديم قبل بناء الجديد حتى لا
+    // يبقى استماعه القديم (SSE) نشطاً على مسار بائد.
+    if (_cloudTransport != null) {
+      _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
+      try {
+        await _cloudTransport!.stopListening();
+      } catch (_) {}
+      _cloudTransport = null;
+    }
     _cloudTransport = CloudFirebaseTransport.validated(
       repo: repo,
       dbProvider: dbProvider,
@@ -329,6 +344,11 @@ class SyncEngine {
     if (_started) return;
     _started = true;
     final generation = ++_generation;
+    // (إصلاح حرج 2026-09-19) تصحيح كاش معرّف المساحة قبل بناء أي نقل أو
+    // طابور — جهاز عاد للتشغيل بعد ربط/استرداد يكمل بمعرّف صحيح فوراً.
+    try {
+      await repo.refreshWorkspaceId();
+    } catch (_) {}
     _queue ??= SyncQueueOps(await _db);
     await _queue!.recoverInterrupted();
     // إنقاذ سحابي: عمليات سُجّلت قبل تهيئة السحابة (لا صف cloud لها) —
