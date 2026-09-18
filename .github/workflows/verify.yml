@@ -91,5 +91,6 @@ jobs:
         run: |
           set -o pipefail
           flutter test --reporter expanded \
+            --dart-define=NEXORA_FIREBASE_API_KEY=${{ secrets.NEXORA_FIREBASE_API_KEY }} \
             --total-shards ${{ strategy.job-total }} \
             --shard-index ${{ matrix.shard }}

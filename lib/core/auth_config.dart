@@ -13,13 +13,16 @@ library;
 
 /// مفتاح Web API لمشروع Firebase (إلزامي لتبادل idToken → uid).
 ///
-/// (تثبيت الإنتاج) القيمة الرسمية مضمّنة افتراضياً: كانت تُترك فارغة في كل
-/// بناء لا يُمرَّر له --dart-define، فيُجهض التبادل مع Identity Toolkit
-/// قبل أن يبدأ (يرجع null فوراً) ولا يُستخرج localId أبداً.
-/// يبقى --dart-define قادراً على التجاوز عند الحاجة (بناء خاص/اختبار).
+/// (إصلاح 2026-09-18 — عطل ربط الجهازين الجذري) القيمة الرسمية كانت
+/// مضمّنة هنا بخطأ نسخ حرفين: '0' (صفر) بدل 'O' (حرف) و'Q' بدل 'q' —
+/// فرفضها Identity Toolkit بـ «API key not valid» وعجز كل جهاز عن إنشاء
+/// هوية سحابية (مجهولة أو Google)، فانكسر إنشاء الدعوات والانضمام كلياً.
+/// المفتاح الصحيح يُحقن الآن زمن البناء من سر المستودع:
+///   --dart-define=NEXORA_FIREBASE_API_KEY=‹المفتاح›
+/// (مسارات CI الثلاثة تمرّره تلقائياً) — فلا يستقر مفتاح حي في تاريخ
+/// المستودع العام، ويبقى التجاوز ممكناً للبناءات الخاصة.
 const String kFirebaseWebApiKey = String.fromEnvironment(
   'NEXORA_FIREBASE_API_KEY',
-  defaultValue: 'AIzaSyBHmi_00j58JKi2kNLR8gQQHhRN3grRg3U',
 );
 
 /// معرف عميل OAuth من نوع Web — يُمرَّر لـ GoogleSignIn(serverClientId)

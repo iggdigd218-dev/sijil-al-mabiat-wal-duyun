@@ -69,7 +69,7 @@ jobs:
         run: |
           flutter clean
           flutter pub get
-          flutter build windows --release
+          flutter build windows --release --dart-define=NEXORA_FIREBASE_API_KEY=${{ secrets.NEXORA_FIREBASE_API_KEY }}
 
       - name: Package portable app (folder + EXE + launcher)
         shell: pwsh
