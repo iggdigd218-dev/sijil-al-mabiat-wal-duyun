@@ -146,7 +146,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 70));
       await _drain(tester);
       await _drain(tester);
-      await tester.pump(const Duration(milliseconds: 500));
+      // (إصلاح CI 2026-09-19 — تذبذب QA-E2E) انتظار مقيّد بدل pump ثابت:
+      // على آلات CI البطيئة قد يتأخر انعكاس البطاقة في القائمة عن المهلة
+      // الثابتة فيسقط الاختبار أحمر بلا عطل حقيقي. نضخ إطارات حتى تظهر
+      // البطاقة أو حتى سقف 15 ثانية زمنية افتراضية.
+      for (var i = 0;
+          i < 75 && find.textContaining('QA UI SAVE').evaluate().isEmpty;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
       expect(find.byType(TxForm), findsNothing);
       // (دفعة 58 — متطلب 10) البطاقة تعرض «الوصف · HH:MM» — نطابق جزئياً.
       expect(find.textContaining('QA UI SAVE'), findsOneWidget);
