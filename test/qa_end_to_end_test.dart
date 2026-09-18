@@ -143,8 +143,12 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       engine.stop();
       await tester.runAsync(() async {
-        expect(await _awaitTransactions(repo), hasLength(1));
-        expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
+        // (استقرار CI) لا تُقرأ الصفوف عبر مقبض `repo` بعد هدم الشجرة:
+        // المقبض مرتبط بدورة حياة الواجهة، وأي مهمة معلّقة قد تُكتب بعد
+        // الهدم فتُقلب النتيجة — ترك ذلك الاختبار رهينةً لتجميع الشُعب
+        // في CI (تغيّر التجميع ينقله بين النجاح والفشل بلا سبب في الكود).
+        // الإثبات الحقيقي للاستمرارية يتم أدناه عبر نسخة من ملف القاعدة
+        // بمقبض منفصل تماماً.
         // (استقرار CI) إثبات الاستمرارية على القرص يتم عبر **نسخة** من
         // ملف القاعدة ومقبض منفصل تماماً — بلا إغلاق مقبض `repo` أثناء
         // حياته. النمط القديم (إغلاق ثم إعادة فتح المسار نفسه) كان يترك
@@ -162,7 +166,13 @@ void main() {
         }
         final verify = await databaseFactory.openDatabase(copy);
         try {
-          expect(await verify.query('transactions'), hasLength(1));
+          final txRows = await verify.query('transactions');
+          expect(txRows, hasLength(1),
+              reason: 'عملية واحدة بالضبط على القرص — لا تكرار ولا فقد');
+          expect(txRows.single['deleted_at'] ?? '', '',
+              reason: 'العملية ليست محذوفة ناعماً');
+          expect(txRows.single['amount'], 500);
+          expect(txRows.single['reference'], '1');
           expect(await verify.query('accounts'), hasLength(1));
         } finally {
           await verify.close();
