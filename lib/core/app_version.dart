@@ -10,7 +10,6 @@ const String kAppVersion = '3.66.1';
 
 /// رقم البناء (ما بعد + في pubspec.yaml).
 const int kAppBuild = 118;
-
 /// النص المعروض للمستخدم.
 String get appVersionLabel => 'الإصدار $kAppVersion';
 

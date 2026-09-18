@@ -2,7 +2,6 @@ name: nexora_app
 description: مدير الحسابات — سجل المبيعات والديون
 publish_to: 'none'
 version: 3.66.1+118
-
 environment:
   sdk: '>=3.3.0 <4.0.0'
 

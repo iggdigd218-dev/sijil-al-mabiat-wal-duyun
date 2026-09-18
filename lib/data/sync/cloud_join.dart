@@ -24,6 +24,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/factory_reset.dart';
 import '../../core/models.dart';
 import '../repository.dart';
+import 'operation.dart';
 import 'device_id.dart';
 import 'google_auth_service.dart';
 import 'device_registry.dart';
@@ -35,10 +36,10 @@ import '../../core/cloud_config.dart';
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 /// مهلة بقاء طلب الانضمام بعد أن يُسوّى أمره (قبولاً أو رفضاً).
-///
-/// تُترك العقدة هذه المدة قبل تقليمها لسببين:
-///  ١) الجهاز المنتظر قد يكون offline لحظة القرار، فيحتاج نافذة لالتقاطه.
-///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
+/// تُحذف العقدة بعد هذه المدة إن لم يحذفها العضو بنفسه بعد إكمال الربط.
+/// لا تُستخدم كـ «وقت انتظار» — العضو يرى «تم الارتباط» فور الموافقة.
+/// (إصلاح 2026-09-18) كانت دقيقتين فقط — إن وافق المدير والعضو كان
+/// offline لحظياً (شبكة ضعيفة) ضاع القرار. الآن 10 دقائق آمنة.
 const Duration _approvedRequestTtl = Duration(minutes: 10);
 
   /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
@@ -167,13 +168,35 @@ class JoinRequestWatcher {
         '${backendUrl.replaceAll(RegExp(r'/+$'), '')}/workspaces/${Uri.encodeComponent(workspaceId)}';
     while (_running) {
       try {
+        // (إصلاح 2026-09-18) SSE بلا توكن كان يفشل بصمت عند تشديد القواعد
+        // أو عند انتهاء جلسة مجهولة — نرفق auth idToken مع كل اتصال، مع
+        // تجديد قسري عند auth_revoked/401.
+        String? token = FirebaseAuthRest.cachedIdToken;
+        if (token == null || token.isEmpty) {
+          token = await FirebaseAuthRest.cloudIdToken();
+        }
+        final sseUrl = token == null || token.isEmpty
+            ? '$root/$nodePath.json'
+            : '$root/$nodePath.json?auth=${Uri.encodeComponent(token)}';
         final client = HttpClient()
           ..connectionTimeout = const Duration(seconds: 15);
         _client = client;
-        final req = await client.getUrl(Uri.parse('$root/$nodePath.json'));
+        final req = await client.getUrl(Uri.parse(sseUrl));
         req.headers.set('Accept', 'text/event-stream');
         req.headers.set('Cache-Control', 'no-cache');
         final resp = await req.close().timeout(const Duration(seconds: 20));
+        if (resp.statusCode == 401 || resp.statusCode == 403) {
+          // توكن منتهٍ — جدّد وحاول مرة واحدة فوراً
+          final fresh = await FirebaseAuthRest.forceRefreshToken();
+          if (fresh != null && fresh != token) {
+            try {
+              _client?.close(force: true);
+            } catch (_) {}
+            _client = null;
+            continue; // حلقة جديدة بتوكن جديد
+          }
+          throw StateError('join-sse-http-${resp.statusCode}');
+        }
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
           throw StateError('join-sse-http-${resp.statusCode}');
         }
@@ -195,7 +218,9 @@ class JoinRequestWatcher {
                 }
               } catch (_) {}
             } else if (eventName == 'auth_revoked') {
-              break; // أعد الاتصال.
+              // أعد الاتصال بتوكن جديد فوراً
+              await FirebaseAuthRest.forceRefreshToken();
+              break;
             }
           }
         }
@@ -340,31 +365,45 @@ class CloudJoin {
 
   /// (باقة المؤسسات) بوابة المقاعد: ربط جهاز جديد يتجاوز max_devices
   /// يُرفض برسالة المدير الواضحة. الجهاز المنضم مجدداً (سجله قائم) لا
-  /// يستهلك مقعداً جديداً. فشل قراءة العقدة سحابياً = سماح (fail-open،
-  /// بوابة المزامنة الدورية تحسم لاحقاً).
+  /// يستهلك مقعداً جديداً.
+  /// ══ (إصلاح جذري — إغلاق ثغرة fail-open وسباق الموافقات) ══
+  /// كان أي فشل شبكة أثناء قراءة subscription/roster يعيد سماحاً فورياً،
+  /// فيتجاوز الحد. وأيضاً موافقتان متزامنتان على جهازين مختلفين كانتا
+  /// تقرآن نفس العدد وتقبلان معاً متجاوزتين الحد.
   static Future<void> _ensureSeatAvailable(
     Repo repo, {
     required String backendUrl,
     required String workspaceId,
     required String joiningDeviceId,
   }) async {
-    int maxDevices;
+    int? maxDevices;
     Map<String, dynamic>? rosterCloud;
+    bool subscriptionRead = false;
     try {
       final rec = await _getJson(
           '${_root(backendUrl, workspaceId)}/subscription.json');
       if (rec == null) return; // لا عقدة اشتراك بعد — لا حد مفروضاً.
+      subscriptionRead = true;
       final v = rec['max_devices'];
       maxDevices = v is num ? v.toInt() : 0;
       if (maxDevices <= 0) return; // غير محدد = بلا حد.
       // (احتساب ذري) roster السحابي هو المصدر المشترك اللحظي بين كل
       // الأجهزة — الجدول المحلي قد يتخلف عن موافقات جرت على جهاز آخر
       // للتو، فكان يرفض/يقبل خطأً. نقرأه في نفس لحظة القرار.
-      final r = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
-      if (r != null) rosterCloud = Map<String, dynamic>.from(r);
+      try {
+        final r =
+            await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+        if (r != null) rosterCloud = Map<String, dynamic>.from(r);
+      } catch (_) {
+        // فشل قراءة roster — لا نلغي الفحص، نكمل بالعدد المحلي فقط.
+        rosterCloud = null;
+      }
     } catch (_) {
-      return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
+      if (!subscriptionRead) return; // لا نعرف الحد — fail-open مقبول فقط هنا
+      // عرفنا أن هناك حداً لكن الشبكة سقطت أثناء قراءة roster — نطبق
+      // الحد على العدد المحلي على الأقل بدل السماح المفتوح.
     }
+    if (maxDevices == null) return;
     // إعادة انضمام جهاز قائم (له مقعد في roster أو محلياً) لا تستهلك
     // مقعداً جديداً — تجديد لسجله القديم.
     bool activeRow(Map d) =>
@@ -390,6 +429,25 @@ class CloudJoin {
           .where(activeRow)
           .length;
       if (cloudCount > current) current = cloudCount;
+    }
+    // (سباق دعوتين) عند إنشاء دعوة جديدة joiningDeviceId='__new__'،
+    // نعدّ الدعوات الحية أيضاً كمقاعد محجوزة مؤقتاً — وإلا دعوتان
+    // متزامنتان تتجاوزان الحد.
+    if (joiningDeviceId == '__new__') {
+      try {
+        final invites =
+            await _getJson('${_root(backendUrl, workspaceId)}/invites.json');
+        if (invites != null) {
+          var liveInvites = 0;
+          final now = DateTime.now();
+          for (final v in invites.values) {
+            if (v is! Map) continue;
+            final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+            if (exp != null && now.isBefore(exp)) liveInvites++;
+          }
+          current += liveInvites;
+        }
+      } catch (_) {}
     }
     if (current >= maxDevices) {
       throw CloudJoinException(
@@ -479,14 +537,23 @@ class CloudJoin {
     }
   }
 
+  /// يضمن وجود توكن صالح قبل أي طلب — يحل مشكلة 401 بعد تشديد Rules.
+  /// كان الكود القديم يستخدم cachedIdToken فقط، فإن كان null يرسل بدون
+  /// ?auth فيفشل بـ 401 لأن القواعد الآن auth != null.
+  static Future<String?> _ensureToken([String? overrideToken]) async {
+    if (overrideToken != null && overrideToken.isNotEmpty) return overrideToken;
+    var t = FirebaseAuthRest.cachedIdToken;
+    if (t != null && t.isNotEmpty) return t;
+    // محاولة إنشاء/تجديد هوية مجهولة تلقائياً
+    try {
+      t = await FirebaseAuthRest.cloudIdToken();
+    } catch (_) {}
+    return t;
+  }
+
   /// (401) توقيع أي طلب إلى RTDB بـ `?auth=` — القواعد تشترط `auth != null`.
-  ///
-  /// التوكن هو **توكن Firebase** لا غير: جلسة الحساب بعد استبدال توكن Google
-  /// (`accounts:signInWithIdp`) أو هوية الجهاز المجهولة. توكن Google الخام
-  /// مرفوض أصلاً من RTDB — لذلك لا يُرسَل أبداً.
-  /// إن لم يتوفر توكن في الذاكرة يُترك الطلب كما كان (أفضل جهد بلا كسر).
   static Uri _authedUrl(String url, [String? overrideToken]) {
-    final token = overrideToken ?? FirebaseAuthRest.cachedIdToken;
+    final token = overrideToken;
     final uri = Uri.parse(url);
     if (token == null || token.isEmpty) return uri;
     final q = Map<String, String>.from(uri.queryParameters)..['auth'] = token;
@@ -494,18 +561,23 @@ class CloudJoin {
   }
 
   static Future<Map<String, dynamic>?> _getJson(String url) async {
-    final uri = _authedUrl(url);
+    var token = await _ensureToken();
+    var uri = _authedUrl(url, token);
     var res = await http.get(uri).timeout(const Duration(seconds: 30));
-    if ((res.statusCode == 401 || res.statusCode == 403) &&
-        uri.queryParameters.containsKey('auth')) {
-      // توكن منتهٍ أو مرفوض: تحديث قسري ومحاولة واحدة **موقّعة**. التراجع إلى
-      // طلب عارٍ أُلغي نهائياً (ثغرة أ-1) — الطلب العاري يُخفي غياب الهوية.
+    if (res.statusCode == 401 || res.statusCode == 403) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
-      if (fresh != null) {
+      if (fresh != null && fresh.isNotEmpty) {
+        token = fresh;
         res = await http
             .get(_authedUrl(url, fresh))
             .timeout(const Duration(seconds: 30));
       }
+    }
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw CloudJoinException(
+          'فشل المصادقة مع السحابة (HTTP ${res.statusCode}). '
+          'تحقق من اتصال الإنترنت ومفتاح Firebase ApiKey. '
+          'إن استمرت المشكلة، أعد تشغيل التطبيق.');
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
@@ -518,24 +590,34 @@ class CloudJoin {
 
   static Future<void> _putJson(String url, Object body,
       {Duration timeout = const Duration(seconds: 60)}) async {
-    final uri = _authedUrl(url);
+    var token = await _ensureToken();
+    if (token == null || token.isEmpty) {
+      throw const CloudJoinException(
+          'تعذّر إنشاء الدعوة: فشل الحصول على هوية سحابية (لا يوجد توكن). '
+          'تحقق من اتصال الإنترنت ومن أن مفتاح Firebase (ApiKey) مضبوط في auth_config.dart، '
+          'ثم أعد تشغيل التطبيق.');
+    }
+    var uri = _authedUrl(url, token);
     var res = await http
         .put(uri,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body))
         .timeout(timeout);
-    if ((res.statusCode == 401 || res.statusCode == 403) &&
-        uri.queryParameters.containsKey('auth')) {
-      // (401 بعد تسجيل الدخول) التجديد ثم إعادة محاولة واحدة موقّعة — هذه هي
-      // النقطة التي كانت تُسقط إنشاء الدعوة قبل الإصلاح.
+    if (res.statusCode == 401 || res.statusCode == 403) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
-      if (fresh != null) {
+      if (fresh != null && fresh.isNotEmpty) {
         res = await http
             .put(_authedUrl(url, fresh),
                 headers: {'Content-Type': 'application/json'},
                 body: jsonEncode(body))
             .timeout(timeout);
       }
+    }
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw CloudJoinException(
+          'فشل الرفع إلى السحابة: المصادقة مرفوضة (HTTP ${res.statusCode}). '
+          'السبب المحتمل: توكن Firebase منتهٍ أو ApiKey غير صحيح أو قواعد RTDB تمنع الكتابة. '
+          'الحل: تأكد من الإنترنت، وأن قواعد Firebase هي auth != null، وأن ApiKey صحيح، ثم أعد المحاولة.');
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
@@ -544,25 +626,39 @@ class CloudJoin {
 
   static Future<void> _delete(String url) async {
     try {
-      await http
-          .delete(_authedUrl(url))
-          .timeout(const Duration(seconds: 20));
+      var token = await _ensureToken();
+      var uri = _authedUrl(url, token);
+      var res = await http.delete(uri).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          await http
+              .delete(_authedUrl(url, fresh))
+              .timeout(const Duration(seconds: 20));
+        }
+      }
     } catch (_) {}
   }
 
-  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم (يُعاد المحاولة
-  /// مرة واحدة). يُستخدم لإبطال توكن الدعوة — تركه حياً ثغرة أمنية.
+  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم
   static Future<void> _deleteStrict(String url) async {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
+        var token = await _ensureToken();
         final res = await http
-            .delete(_authedUrl(url))
+            .delete(_authedUrl(url, token))
             .timeout(const Duration(seconds: 20));
-        // فيربيس يرد 200 على حذف مسار (حتى غير الموجود) — أي 2xx يكفي.
         if (res.statusCode >= 200 && res.statusCode < 300) return;
-      } catch (_) {
-        // خطأ شبكة — جرّب مرة أخيرة.
-      }
+        if (res.statusCode == 401 || res.statusCode == 403) {
+          final fresh = await FirebaseAuthRest.forceRefreshToken();
+          if (fresh != null) {
+            final r2 = await http
+                .delete(_authedUrl(url, fresh))
+                .timeout(const Duration(seconds: 20));
+            if (r2.statusCode >= 200 && r2.statusCode < 300) return;
+          }
+        }
+      } catch (_) {}
     }
     throw const CloudJoinException(
         'تعذّر إبطال رمز الدعوة على السحابة — أُلغي الانضمام حفاظاً على الأمان. '
@@ -640,6 +736,15 @@ class CloudJoin {
           'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');
     }
     _validateHttps(url);
+    // (إصلاح 401) تأكد من وجود هوية سحابية قبل أي رفع — بعد تشديد Rules إلى auth != null
+    // أي طلب بلا ?auth يفشل بـ 401. نحاول إنشاء هوية مجهولة تلقائياً هنا.
+    final preToken = await _ensureToken();
+    if (preToken == null || preToken.isEmpty) {
+      throw const CloudJoinException(
+          'تعذّر إنشاء الدعوة: فشل الحصول على هوية سحابية (401). '
+          'تحقق من: 1) اتصال الإنترنت، 2) مفتاح Firebase ApiKey في lib/core/auth_config.dart، '
+          '3) تفعيل Anonymous Auth في Firebase Console، ثم أعد تشغيل التطبيق.');
+    }
 
     final db = await repo.database;
     final wsRows = await db.query('workspaces', limit: 1);
@@ -741,8 +846,35 @@ class CloudJoin {
       await ensureOwnerMembership(repo, backendUrl: url, workspaceId: ws);
     } catch (_) {}
 
-    final token = _newToken();
-    final pin = newPairPin();
+    // ══ (إصلاح جذري — منع تصادم PIN 6 أرقام) ══
+    // كان توليد PIN يكتب invite_index/pin_XXXXXX مباشرة دون التحقق من
+    // وجوده، فدعوتان متزامنتان بنفس الرقم (احتمال 1/1e6 لكنه حتمي على
+    // نطاق واسع) تكتب إحداهما فوق الأخرى — العضو يدخل PIN فيجد مساحة
+    // خاطئة أو يفشل. الحل: حلقة توليد مع فحص الفهرس حتى نجد مفتاحاً حراً.
+    String token = _newToken();
+    String pin = newPairPin();
+    for (var attempt = 0; attempt < 10; attempt++) {
+      try {
+        final existTok =
+            await _getJson(_inviteIndexPath(url, _inviteTokenKey(token)));
+        if (existTok != null) {
+          token = _newToken();
+          continue;
+        }
+        final existPin =
+            await _getJson(_inviteIndexPath(url, _invitePinKey(pin)));
+        if (existPin != null) {
+          final exp = DateTime.tryParse('${existPin['expiresAt'] ?? ''}');
+          if (exp != null && DateTime.now().isBefore(exp)) {
+            pin = newPairPin();
+            continue;
+          }
+        }
+        break;
+      } catch (_) {
+        break;
+      }
+    }
     // TTL دقيق: 15 دقيقة لمسار الموافقة التفاعلي (كانت 24 ساعة — نافذة
     // أوسع من اللازم أمنياً بعد اعتماد موافقة المدير الصريحة).
     final expires = now.add(const Duration(minutes: 15));
@@ -844,20 +976,27 @@ class CloudJoin {
       throw const CloudJoinException(
           'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
     }
-    // إبطال فوري وحتمي (استخدام لمرة واحدة): تُحذف الدعوة الآن — قبل تطبيق
-    // اللقطة — حتى لا يستطيع أي جهاز آخر (أو إعادة تشغيل لنفس الرابط)
-    // استعمال الرمز نفسه أثناء أو بعد الانضمام. الحذف شرط للمتابعة:
-    // إن تعذّر إبطال الدعوة يُلغى الانضمام كله (لا نترك رمزاً حياً قابلاً
-    // لإعادة الاستخدام). فشل الانضمام يتطلب دعوة جديدة من المدير —
-    // أرخص أمنياً من دعوة مفتوحة.
+
+    // ══ (إصلاح جذري — منع فقدان البيانات) ══
+    // كان الترتيب القديم: حذف الدعوة → مسح الجداول → جلب اللقطة.
+    // إن فشل جلب اللقطة بعد الحذف والمسح، الجهاز يفقد بياناته المحاسبية
+    // ولا يستطيع إعادة المحاولة بنفس الدعوة (لأنها حُذفت) — يعلق بلا بيانات.
+    // الترتيب الصحيح: جلب اللقطة أولاً (قراءة فقط)، ثم حذف الدعوة، ثم المسح
+    // والتطبيق. هكذا فشل الشبكة أثناء الجلب يترك الجهاز سليماً والدعوة صالحة
+    // لإعادة المحاولة.
+    final snapRec = await _getJson('$root/joinSnapshot.json');
+    final snapData = snapRec?['data'];
+    if (snapData is! Map) {
+      throw const CloudJoinException(
+          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
+    }
+    final snap = Map<String, Object?>.from(snapData);
+
+    // إبطال الدعوة بعد التأكد من وجود اللقطة — استخدام لمرة واحدة.
     await _deleteStrict('$root/invites/$tok.json');
-    // (أ-2) محو فهرسي الدعوة مع أصلها — لا مفاتيح ميتة في /invite_index.
     await _purgeInviteIndex(url, pin: '${invite['pin'] ?? ''}', token: tok);
 
     // ══════════ (دفعة 65) الانضمام الآمن — أربع خطوات قبل أي دمج ══════════
-    // يُنفَّذ هنا فقط: بعد التحقق من صلاحية الدعوة وإبطالها، وقبل تطبيق
-    // لقطة المالك. هكذا لا يُفرَّغ الجهاز عند إدخال رمز خاطئ.
-
     // 1) نسخة احتياطية صامتة — أفضل جهد (فشلها لا يُلغي الانضمام).
     try {
       final data = await repo.exportAll(withImages: false);
@@ -885,14 +1024,6 @@ class CloudJoin {
 
     // 4) نوع الحساب يصير «مؤسسة» فوراً بعد انضمام ناجح.
     await repo.setSetting('account.type', 'enterprise');
-
-    final snapRec = await _getJson('$root/joinSnapshot.json');
-    final snapData = snapRec?['data'];
-    if (snapData is! Map) {
-      throw const CloudJoinException(
-          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
-    }
-    final snap = Map<String, Object?>.from(snapData);
 
     final db = await repo.database;
     final ourId = await ensureDeviceId(repo);
@@ -1283,12 +1414,16 @@ class CloudJoin {
     final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
     if (exp == null || DateTime.now().isAfter(exp)) {
       await _delete('$root/invites/$matchedToken.json');
+      await _purgeInviteIndex(url,
+          pin: '${invite['pin'] ?? ''}', token: matchedToken);
       throw const CloudJoinException(
           'انتهت صلاحية رمز الاقتران — اطلب من المدير رمزاً جديداً.');
     }
-    // (أ-2) الدعوة استُهلكت: يُمحى فهرساها مع أصلها.
-    await _purgeInviteIndex(url,
-        pin: '${invite['pin'] ?? ''}', token: matchedToken);
+    // (إصلاح 2026-09-18) لا نمحي فهرس الدعوة عند الطلب — فقط عند
+    // الانضمام الناجح (join). محو الفهرس عند الطلب كان يمنع إعادة
+    // المحاولة بنفس الرمز إذا فشل دفع الطلب شبكياً، ويجبر المسار البطيء
+    // (مسح كل المساحات). الآن الفهرس يبقى حتى completeApprovedJoin
+    // يحذفه مع الدعوة، فيستطيع العضو إعادة المحاولة بنفس PIN بسهولة.
     // حفظ اسم الجهاز محلياً + دفع الطلب.
     await setDeviceName(repo, deviceName.trim());
     final ourId = await ensureDeviceId(repo);
@@ -1423,6 +1558,12 @@ class CloudJoin {
       _delete(requestPath(backendUrl, workspaceId, deviceId));
 
   /// (المدير) جلب طلبات الانضمام المعلّقة.
+  /// (إصلاح 2026-09-18 — طلبات لا تزال تظهر بعد الموافقة)
+  /// الأسباب الجذرية للطلبات المتكررة:
+  /// 1) كان approve يكتب approved بعد إنشاء الجهاز محلياً — فشل الشبكة يبقي pending
+  /// 2) كان fetch يعيد أي pending حتى لو جهازه موجود فعلاً كـ paired (شبح)
+  /// 3) جهازان مدير يفتحان نفس الطلب في نفس اللحظة — كلاهما يوافق
+  /// الحل: فلترة مزدوجة (محلي + سحابي) + حذف تلقائي للأشباح + كتابة approved أولاً
   static Future<List<Map<String, Object?>>> fetchJoinRequests(
     Repo repo, {
     required String backendUrl,
@@ -1431,13 +1572,46 @@ class CloudJoin {
     final all =
         await _getJson('${_root(backendUrl, workspaceId)}/joinRequests.json');
     if (all == null) return const [];
+    final db = await repo.database;
+    // 1) الأجهزة المقترنة محلياً
+    final pairedRows = await db.query('devices',
+        columns: ['id'],
+        where: "is_paired = 1 AND COALESCE(revoked_at,'')='' AND COALESCE(expelled_at,'')=''");
+    final pairedIds = {for (final r in pairedRows) '${r['id']}'};
+
+    // 2) الأجهزة المقترنة سحابياً (roster) — يغطي حالة مدير ثانٍ لم يسحب بعد
+    Set<String> cloudPairedIds = {};
+    try {
+      final roster = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+      if (roster != null) {
+        for (final e in roster.entries) {
+          final v = e.value;
+          if (v is! Map) continue;
+          final revoked = '${v['revoked_at'] ?? ''}'.isNotEmpty;
+          final expelled = '${v['expelled_at'] ?? ''}'.isNotEmpty;
+          if (!revoked && !expelled) {
+            cloudPairedIds.add('${v['id'] ?? e.key}');
+          }
+        }
+      }
+    } catch (_) {}
+
     final out = <Map<String, Object?>>[];
     for (final e in all.entries) {
       final v = e.value;
       if (v is! Map) continue;
       final m = Map<String, Object?>.from(v);
-      if ('${m['status'] ?? 'pending'}' != 'pending') continue;
-      m['deviceId'] = '${m['deviceId'] ?? e.key}';
+      final status = '${m['status'] ?? 'pending'}';
+      if (status != 'pending') continue;
+      final devId = '${m['deviceId'] ?? e.key}';
+      if (devId.isEmpty) continue;
+      // فلترة مزدوجة: محلي + سحابي
+      if (pairedIds.contains(devId) || cloudPairedIds.contains(devId)) {
+        unawaited(_delete(
+            '${_root(backendUrl, workspaceId)}/joinRequests/${Uri.encodeComponent(devId)}.json'));
+        continue;
+      }
+      m['deviceId'] = devId;
       out.add(m);
     }
     out.sort((a, b) =>
@@ -1447,6 +1621,13 @@ class CloudJoin {
 
   /// (المدير — خطوة 4أ) الموافقة: تعيين الدور + تسجيل الجهاز في roster
   /// + تحديث الطلب إلى approved ليستلمه الجهاز المنتظر فوراً.
+  /// (إصلاح 2026-09-18 — طلبات الانضمام لا تزال تظهر بعد الموافقة)
+  /// كان الترتيب: إنشاء مستخدم + جهاز محلي → رفع roster → كتابة approved.
+  /// إن فشلت كتابة approved (شبكة) يبقى الطلب pending في السحابة، فيظهر
+  /// مرة أخرى عند المدير رغم أن الجهاز انضاف محلياً — «طلبات لا تزال تظهر».
+  /// الإصلاح الجذري: كتابة approved **أولاً** فوراً (يُخفي الطلب من قائمة
+  /// pending ويُنبه العضو لحظياً)، ثم إكمال بقية العمل في الخلفية. حتى لو
+  /// فشل roster لاحقاً، الطلب يبقى approved ولن يظهر مرة أخرى كـ pending.
   static Future<void> approveJoinRequest(
     Repo repo, {
     required String backendUrl,
@@ -1459,46 +1640,100 @@ class CloudJoin {
     if (!owner) {
       throw const CloudJoinException('الموافقة لجهاز المدير فقط.');
     }
-    // 🔒 (التجربة) انتهاء الفترة يمنع قبول طلبات ربط أجهزة جديدة.
     await _ensureSubscriptionAllows(repo);
-    // 🪑 (باقة المؤسسات) حد المقاعد max_devices: الموافقة على جهاز يتجاوز
-    // الحد تُرفض برسالة واضحة للمدير.
     await _ensureSeatAvailable(repo,
         backendUrl: backendUrl,
         workspaceId: workspaceId,
         joiningDeviceId: deviceId);
+
+    // 1) اقرأ الطلب الأصلي أولاً (للحصول على uid و token)
+    final existingReq =
+        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
+
+    // 2) (الإصلاح الجوهري) اكتب approved فوراً — قبل أي عمل محلي ثقيل.
+    // هذا يُخفي الطلب من قائمة pending عند كل المديرين، ويُنبه العضو
+    // عبر SSE لحظياً ليبدأ الترطيب. حتى لو فشل ما بعده، الطلب لن يظهر
+    // كـ pending مرة أخرى.
+    try {
+      await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+        ...?existingReq,
+        'status': 'approved',
+        'role': roleCode,
+        'approvedAt': {'.sv': 'timestamp'},
+        'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
+            _approvedRequestTtl.inMilliseconds,
+        'expiresAt':
+            DateTime.now().add(_approvedRequestTtl).toIso8601String(),
+      }, timeout: const Duration(seconds: 20));
+    } catch (e) {
+      // فشل كتابة approved = فشل الموافقة كلها — لا نكمل
+      throw CloudJoinException(
+          '❌ فشل الموافقة: تعذر تحديث حالة الطلب في السحابة.\n'
+          'السبب: $e\n'
+          'الحل: تحقق من الإنترنت وأعد المحاولة.');
+    }
+
+    // 3) الآن أكمل العمل المحلي والرفع السحابي — حتى لو فشل، الطلب
+    // يبقى approved ولن يظهر مرة أخرى في قائمة الانتظار.
     final db = await repo.database;
     final now = DateTime.now().toIso8601String();
-    // مستخدم منطقي بالدور المعيّن (أو إعادة استخدام مستخدم بنفس الاسم).
     final role = UserRole.values.firstWhere((r) => r.code == roleCode,
         orElse: () => UserRole.viewer);
     final perms = defaultPerms(role);
     final permStr =
         perms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    // (دفعة 58 — متطلب 3) لا مستخدمي ظل مكررين: انضمام نفس الجهاز مجدداً
-    // يعيد استخدام مستخدم الظل القائم بنفس الاسم بدل إنشاء نسخة ثانية.
+
     int uid;
+    String effectiveName = deviceName.trim();
+    bool reuse = false;
     final existing = await db.query('users',
         columns: ['id'],
-        where:
-            "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
-        whereArgs: [deviceName],
+        where: "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
+        whereArgs: [effectiveName],
         limit: 1);
     if (existing.isNotEmpty) {
-      uid = existing.first['id'] as int;
-      await db.update(
-          'users',
-          {
-            'role': role.code,
-            'permissions': permStr,
-            'active': 1,
-            'updated_at': now,
-          },
-          where: 'id = ?',
-          whereArgs: [uid]);
-    } else {
+      final candId = existing.first['id'] as int;
+      final linked = await db.query('devices',
+          columns: ['id'],
+          where:
+              "user_id = ? AND id <> ? AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' AND is_paired = 1",
+          whereArgs: [candId, deviceId],
+          limit: 1);
+      if (linked.isEmpty) {
+        reuse = true;
+        uid = candId;
+        await db.update(
+            'users',
+            {
+              'role': role.code,
+              'permissions': permStr,
+              'active': 1,
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [uid]);
+      } else {
+        var suffix = 2;
+        var baseName = effectiveName;
+        while (true) {
+          final tryName = '$baseName $suffix';
+          final dup = await db.query('users',
+              columns: ['id'],
+              where: "name = ? AND COALESCE(deleted_at,'') = ''",
+              whereArgs: [tryName],
+              limit: 1);
+          if (dup.isEmpty) {
+            effectiveName = tryName;
+            break;
+          }
+          suffix++;
+          if (suffix > 99) break;
+        }
+      }
+    }
+    if (!reuse) {
       uid = await db.insert('users', {
-        'name': deviceName,
+        'name': effectiveName,
         'role': role.code,
         'pin': '',
         'password': '',
@@ -1510,9 +1745,23 @@ class CloudJoin {
         'created_at': now,
         'updated_at': now,
       });
+    } else {
+      uid = existing.first['id'] as int;
     }
-    // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
-    // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
+
+    try {
+      final userRow = await db.query('users',
+          where: 'id = ?', whereArgs: [uid], limit: 1);
+      if (userRow.isNotEmpty) {
+        await repo.queueOperation(
+          entityType: EntityKind.user,
+          entityId: '$uid',
+          opType: reuse ? OpKind.update : OpKind.create,
+          payload: Map<String, Object?>.from(userRow.first),
+        );
+      }
+    } catch (_) {}
+
     await db.insert(
         'devices',
         {
@@ -1529,21 +1778,66 @@ class CloudJoin {
           'updated_at': now,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
-    // رفع للسحابة: roster + حالة الطلب approved.
-    final root = _root(backendUrl, workspaceId);
-    final own = await db.query('devices',
-        where: 'id = ?', whereArgs: [deviceId], limit: 1);
-    if (own.isNotEmpty) {
-      await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
-          {..._safeDeviceRow(own.first), 'user_role': role.code},
-          timeout: const Duration(seconds: 20));
-    }
-    final req =
-        await _getJson(requestPath(backendUrl, workspaceId, deviceId));
-    // (المرحلة 2) تسجيل العضو في /members/{uid} بالدور المعيّن — هذه
-    // العقدة هي مرجع قواعد الأمان للسماح لهذا الجهاز بالكتابة في المساحة.
+
+    // فحص سباق المقاعد بعد الإدراج
     try {
-      final memberUid = '${req?['uid'] ?? ''}'.trim();
+      final rec2 = await _getJson(
+          '${_root(backendUrl, workspaceId)}/subscription.json');
+      if (rec2 != null) {
+        final v2 = rec2['max_devices'];
+        final max2 = v2 is num ? v2.toInt() : 0;
+        if (max2 > 0) {
+          bool activeRow2(Map d) =>
+              '${d['revoked_at'] ?? ''}'.isEmpty &&
+              '${d['expelled_at'] ?? ''}'.isEmpty;
+          int cur2 = await connectedDevicesCount(repo);
+          try {
+            final r2 = await _getJson(
+                '${_root(backendUrl, workspaceId)}/roster.json');
+            if (r2 != null) {
+              final cloudCount = (r2 as Map).values
+                  .whereType<Map>()
+                  .where(activeRow2)
+                  .length;
+              if (cloudCount > cur2) cur2 = cloudCount;
+              if (!r2.containsKey(deviceId)) cur2++;
+            }
+          } catch (_) {}
+          if (cur2 > max2) {
+            await db.delete('devices', where: 'id = ?', whereArgs: [deviceId]);
+            try {
+              await db.delete('users', where: 'id = ?', whereArgs: [uid]);
+            } catch (_) {}
+            // أعد الطلب إلى pending حتى يرى المدير السبب
+            try {
+              await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
+                ...?existingReq,
+                'status': 'pending',
+                'requestedAt': DateTime.now().toIso8601String(),
+                'error': 'seat_limit_$cur2/$max2',
+              }, timeout: const Duration(seconds: 20));
+            } catch (_) {}
+            throw CloudJoinException(
+                '🪑 تم استنفاد عدد الأجهزة أثناء الموافقة '
+                '($cur2/$max2) — سباق موافقات متزامنة. يرجى المحاولة بعد ترقية الباقة.');
+          }
+        }
+      }
+    } catch (e) {
+      if (e is CloudJoinException) rethrow;
+    }
+
+    // رفع roster و members — أفضل جهد، لا يفشل الموافقة لو تعثر
+    final root = _root(backendUrl, workspaceId);
+    try {
+      final own = await db.query('devices',
+          where: 'id = ?', whereArgs: [deviceId], limit: 1);
+      if (own.isNotEmpty) {
+        await _putJson('$root/roster/${Uri.encodeComponent(deviceId)}.json',
+            {..._safeDeviceRow(own.first), 'user_role': role.code},
+            timeout: const Duration(seconds: 20));
+      }
+      final memberUid = '${existingReq?['uid'] ?? ''}'.trim();
       if (memberUid.isNotEmpty) {
         await _putJson(
           '$root/members/${Uri.encodeComponent(memberUid)}.json',
@@ -1556,22 +1850,9 @@ class CloudJoin {
           timeout: const Duration(seconds: 20),
         );
       }
-    } catch (_) {}
-    await _putJson(requestPath(backendUrl, workspaceId, deviceId), {
-      ...?req,
-      'status': 'approved',
-      'role': role.code,
-      // (ساعة الخادم) توقيت الموافقة من Firebase لا من ساعة جهاز المدير —
-      // فروق التوقيت المحلي كانت تُفسد ترتيب الطلبات وحساب المهل.
-      'approvedAt': {'.sv': 'timestamp'},
-      // (تنظيف مؤجل بدل الحذف الفوري) الطلب يبقى 10 دقائق بعد الموافقة
-      // ليتلقّاه الجهاز المنتظر، ثم يُقلَّم تلقائياً. الحذف الفوري كان
-      // يجعل العضو يقرأ missing فيعلّق إلى الأبد.
-      'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
-          _approvedRequestTtl.inMilliseconds,
-      'expiresAt':
-          DateTime.now().add(_approvedRequestTtl).toIso8601String(),
-    }, timeout: const Duration(seconds: 20));
+    } catch (_) {
+      // roster فشل — سيُعاد رفعه في دورة المزامنة التالية
+    }
   }
 
   /// (المدير — دفعة 66) إزالة جهاز من المجموعة: حذف عضويته من السجل
@@ -1666,6 +1947,10 @@ class CloudJoin {
   /// وإن لم تبق أي دعوة حيّة يحذف joinSnapshot.json نهائياً — لقطة
   /// الأعمال الكاملة لا تبقى معلقة بمسار قابل للتخمين بعد انتهاء
   /// نافذة الانضمام (15 دقيقة). يعيد true إن حُذفت اللقطة.
+  /// (إصلاح 2026-09-18) كان يحذف اللقطة بمجرد انتهاء الدعوات حتى لو
+  /// كان هناك طلبات انضمام معلقة (pending) أو موافق عليها للتو (approved
+  /// خلال 10 دقائق) — فيفشل الترطيب عند العضو بـ «لا توجد نسخة بيانات».
+  /// الآن يتحقق أيضاً من وجود طلبات معلقة/موافق عليها قبل الحذف.
   static Future<bool> purgeStaleInviteArtifacts({
     required String backendUrl,
     String workspaceId = 'default',
@@ -1697,7 +1982,31 @@ class CloudJoin {
       }
     }
     if (liveInvite) return false;
-    // لا دعوات حية: هل توجد لقطة أصلاً؟ احذفها.
+    // (إصلاح) لا تحذف اللقطة إن كانت هناك طلبات انضمام معلقة أو موافق
+    // عليها حديثاً — العضو قد يكون في مرحلة الترطيب الآن.
+    try {
+      final reqs = await _getJson('$root/joinRequests.json');
+      if (reqs != null && reqs.isNotEmpty) {
+        for (final v in reqs.values) {
+          if (v is! Map) continue;
+          final status = '${v['status'] ?? 'pending'}';
+          if (status == 'pending') return false; // طلب معلق — اللقطة مطلوبة
+          if (status == 'approved') {
+            // موافق عليه خلال آخر 10 دقائق — قد يكون العضو ينزل اللقطة الآن
+            final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+            if (exp != null && now.isBefore(exp)) return false;
+            final approvedAt = v['approvedAt'];
+            if (approvedAt is Map && approvedAt['.sv'] == 'timestamp') {
+              return false; // ختم خادم حديث — لا نحذف
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // تعذر قراءة الطلبات — لا نحذف احتياطاً
+      return false;
+    }
+    // لا دعوات حية ولا طلبات معلقة: هل توجد لقطة أصلاً؟ احذفها.
     try {
       final snap = await _getJson('$root/joinSnapshot.json');
       if (snap == null) return false;
@@ -1725,13 +2034,28 @@ class CloudJoin {
     final cutoffMs = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
     Map<String, dynamic>? all;
     try {
+      final token = await _ensureToken();
       final uri = Uri.parse('$root/operations.json').replace(
         queryParameters: {
           'orderBy': jsonEncode('server_ts'),
           'endAt': '$cutoffMs',
+          if (token != null && token.isNotEmpty) 'auth': token,
         },
       );
-      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      var res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if ((res.statusCode == 401 || res.statusCode == 403) && token != null) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          final rUri = Uri.parse('$root/operations.json').replace(
+            queryParameters: {
+              'orderBy': jsonEncode('server_ts'),
+              'endAt': '$cutoffMs',
+              'auth': fresh,
+            },
+          );
+          res = await http.get(rUri).timeout(const Duration(seconds: 30));
+        }
+      }
       if (res.statusCode == 400 && res.body.contains('Index not defined')) {
         all = await _getJson('$root/operations.json');
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -1766,13 +2090,28 @@ class CloudJoin {
     Map<String, dynamic>? all;
     try {
       // ترشيح خادمي إن توفر الفهرس.
-      final uri = Uri.parse('$root/operations.json').replace(
+      final token = await _ensureToken();
+      var uri = Uri.parse('$root/operations.json').replace(
         queryParameters: {
           'orderBy': jsonEncode('server_ts'),
           'endAt': '$throughTsMs',
+          if (token != null && token.isNotEmpty) 'auth': token,
         },
       );
-      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      var res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if ((res.statusCode == 401 || res.statusCode == 403) && token != null) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          uri = Uri.parse('$root/operations.json').replace(
+            queryParameters: {
+              'orderBy': jsonEncode('server_ts'),
+              'endAt': '$throughTsMs',
+              'auth': fresh,
+            },
+          );
+          res = await http.get(uri).timeout(const Duration(seconds: 30));
+        }
+      }
       if (res.statusCode == 400 && res.body.contains('Index not defined')) {
         all = await _getJson('$root/operations.json');
       } else if (res.statusCode >= 200 && res.statusCode < 300) {

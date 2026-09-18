@@ -32,6 +32,31 @@ Future<List<Tx>> _awaitTransactions(Repo repo, {int expected = 1}) async {
   return repo.transactions();
 }
 
+/// يفتح **نسخة** من ملف القاعدة بمقبض منفصل تماماً، وينتظر أن تصل عملية
+/// الاختبار إلى القرص قبل الفحص.
+///
+/// تدفق SQLite إلى القرص غير متزامن: نسخة الملف قد تسبق كتابة العملية
+/// بفاصل وجيز تحت حمل الآلة، فيُرى صفر صفوف على القرص رغم نجاحها في
+/// المقبض الحيّ — وهو ما جعل هذا الاختبار يفشل مرة ويمرّ أخرى بتغيّر
+/// تجميع الشُعب في CI. ننتظر وصول الصف بحدّ زمني واضح (6 ثوانٍ)، ثم
+/// يبقى التأكيد (hasLength(1)) صارماً في كشف التكرار أو الفقد.
+Future<Database> _openDiskCopy(String dir) async {
+  const src = 'e2e.db';
+  for (var i = 0; i < 60; i++) {
+    final copy = '$dir/e2e_verify_$i.db';
+    for (final suf in const ['', '-wal', '-shm']) {
+      final f = File('$dir/$src$suf');
+      if (await f.exists()) await f.copy('$copy$suf');
+    }
+    final verify = await databaseFactory.openDatabase(copy);
+    final rows = await verify.query('transactions');
+    if (rows.isNotEmpty) return verify;
+    await verify.close();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  throw StateError('انتهت مهلة انتظار وصول العملية إلى القرص (6 ثوانٍ).');
+}
+
 Future<void> _drain(WidgetTester tester) async {
   for (var i = 0; i < 5; i++) {
     await tester
@@ -143,26 +168,22 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       engine.stop();
       await tester.runAsync(() async {
-        expect(await _awaitTransactions(repo), hasLength(1));
-        expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
         // (استقرار CI) إثبات الاستمرارية على القرص يتم عبر **نسخة** من
         // ملف القاعدة ومقبض منفصل تماماً — بلا إغلاق مقبض `repo` أثناء
-        // حياته. النمط القديم (إغلاق ثم إعادة فتح المسار نفسه) كان يترك
-        // نافذة زمنية ترى فيها أي عملية معلّقة مقبضاً مغلقاً
-        // (DatabaseException: database_closed) — فشل متقلّب ظهر مع
-        // تقسيم الاختبارات في CI (تجميع مختلف للمهام).
+        // حياته. النمط القديم (قراءة الصفوف عبر `repo` بعد هدم الشجرة)
+        // كان يجعل النتيجة رهينةً لتجميع الشُعب: المقبض مرتبط بدورة حياة
+        // الواجهة، وتدفق SQLite إلى القرص غير متزامن.
         // ملاحظة: sqflite يعيد النسخة نفسها للمسار الواحد، لذا فتح مسار
         // ثانٍ قبل إغلاق الأول لا يعطي مقبضاً مستقلاً — النسخ تحلّها.
-        final src = '${tmp.path}/e2e.db';
-        final copy = '${tmp.path}/e2e_verify.db';
-        await File(src).copy(copy);
-        for (final suf in const ['-wal', '-shm']) {
-          final f = File('$src$suf');
-          if (await f.exists()) await f.copy('$copy$suf');
-        }
-        final verify = await databaseFactory.openDatabase(copy);
+        final verify = await _openDiskCopy(tmp.path);
         try {
-          expect(await verify.query('transactions'), hasLength(1));
+          final txRows = await verify.query('transactions');
+          expect(txRows, hasLength(1),
+              reason: 'عملية واحدة بالضبط على القرص — لا تكرار ولا فقد');
+          expect(txRows.single['deleted_at'] ?? '', '',
+              reason: 'العملية ليست محذوفة ناعماً');
+          expect(txRows.single['amount'], 500);
+          expect(txRows.single['reference'], '1');
           expect(await verify.query('accounts'), hasLength(1));
         } finally {
           await verify.close();

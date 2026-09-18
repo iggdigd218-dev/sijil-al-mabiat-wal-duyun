@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>سجل المبيعات والديون - Nexora كامل مع Google</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--primary:#0ea5e9;--primary-dark:#0284c7;--bg:#f8fafc;--card:#fff;--text:#0f172a;--muted:#64748b;--success:#10b981;--danger:#ef4444;--warning:#f59e0b;--border:#e2e8f0;--sidebar:#0f172a}
+body{font-family:'Cairo','Tajawal',system-ui;background:var(--bg);color:var(--text);min-height:100vh}
+.app{display:flex;min-height:100vh}
+.sidebar{width:300px;background:var(--sidebar);color:#fff;padding:0;position:fixed;right:0;top:0;bottom:0;overflow-y:auto;z-index:20;display:flex;flex-direction:column}
+.logo{padding:20px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:12px}
+.logo-icon{width:48px;height:48px;background:linear-gradient(135deg,#0ea5e9,#6366f1);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 4px 12px rgba(14,165,233,.3)}
+.logo h1{font-size:17px;font-weight:800;line-height:1.2}
+.logo p{font-size:11px;color:#94a3b8;margin-top:3px}
+.nav{padding:12px;flex:1}
+.nav-section{font-size:11px;color:#64748b;font-weight:700;margin:16px 12px 6px;letter-spacing:.5px}
+.nav-item{padding:10px 14px;border-radius:10px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:.2s;margin-bottom:2px;color:#cbd5e1;font-weight:600;font-size:13px}
+.nav-item:hover{background:#1e293b;color:#fff}
+.nav-item.active{background:#0ea5e9;color:#fff;box-shadow:0 4px 12px rgba(14,165,233,.3)}
+.nav-item .icon{font-size:16px;width:22px;text-align:center}
+.badge{margin-right:auto;background:#ef4444;color:#fff;font-size:10px;padding:2px 8px;border-radius:20px;font-weight:700}
+.main{margin-right:300px;flex:1;min-height:100vh;display:flex;flex-direction:column}
+.topbar{background:#fff;border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.topbar h2{font-size:18px;font-weight:800}
+.topbar-actions{display:flex;gap:8px;align-items:center}
+.btn{padding:9px 16px;border-radius:10px;border:none;font-family:'Cairo';font-weight:700;cursor:pointer;transition:.2s;display:inline-flex;align-items:center;gap:8px;font-size:13px}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
+.btn-ghost{background:#f1f5f9;color:var(--text)}
+.btn-ghost:hover{background:#e2e8f0}
+.btn-danger{background:#fee2e2;color:#b91c1c}
+.btn-success{background:#dcfce7;color:#15803d}
+.btn-google{background:#fff;color:#3c4043;border:1px solid #dadce0;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.btn-google:hover{background:#f8f9fa;box-shadow:0 2px 4px rgba(0,0,0,.15)}
+.content{padding:24px;flex:1}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:#fff;border-radius:16px;padding:18px;border:1px solid var(--border);position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;right:0;width:4px;height:100%}
+.stat-card.blue::before{background:var(--primary)}
+.stat-card.green::before{background:var(--success)}
+.stat-card.red::before{background:var(--danger)}
+.stat-card.orange::before{background:var(--warning)}
+.stat-top{display:flex;justify-content:space-between;align-items:start}
+.stat-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.blue .stat-icon{background:#e0f2fe;color:#0ea5e9}
+.green .stat-icon{background:#dcfce7;color:#10b981}
+.red .stat-icon{background:#fee2e2;color:#ef4444}
+.orange .stat-icon{background:#fef3c7;color:#f59e0b}
+.stat-value{font-size:22px;font-weight:800;margin-bottom:2px;direction:ltr;text-align:right}
+.stat-label{font-size:12px;color:var(--muted);font-weight:600}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.card{background:#fff;border-radius:16px;border:1px solid var(--border);overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:#fff}
+.card-header h3{font-size:14px;font-weight:800}
+.card-body{padding:20px}
+.screen{display:none}
+.screen.active{display:block;animation:fadeIn .25s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.alert{background:#e0f2fe;border:1px solid #bae6fd;color:#0369a1;padding:12px 16px;border-radius:12px;font-size:12px;margin-bottom:16px;display:flex;gap:10px;align-items:start;line-height:1.6}
+.chip{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;display:inline-block}
+.chip-success{background:#dcfce7;color:#15803d}
+.chip-warning{background:#fef3c7;color:#92400e}
+.chip-danger{background:#fee2e2;color:#b91c1c}
+.chip-info{background:#e0f2fe;color:#0369a1}
+.chip-purple{background:#ede9fe;color:#6d28d9}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;color:var(--muted);font-weight:700;text-align:right;padding:10px 14px;border-bottom:1px solid var(--border);background:#f8fafc}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid #f8fafc}
+tr:hover td{background:#f8fafc}
+.avatar{width:36px;height:36px;border-radius:10px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--primary);font-size:13px}
+.tx-row{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #f1f5f9;align-items:center}
+.tx-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px}
+.tx-icon.in{background:#dcfce7}
+.tx-icon.out{background:#fee2e2}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.input-group{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.input-group label{font-size:12px;font-weight:700;color:var(--text)}
+.input-group input,.input-group select,.input-group textarea{padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-family:'Cairo';font-size:13px;transition:.2s;background:#fff}
+.input-group input:focus,.input-group select:focus,.input-group textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(14,165,233,.12)}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.6);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.active{display:flex}
+.modal{background:#fff;border-radius:20px;max-width:560px;width:100%;max-height:90vh;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.2);animation:modalIn .3s}
+.modal.large{max-width:720px}
+@keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.modal-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.modal-header h3{font-size:15px;font-weight:800}
+.modal-body{padding:22px;overflow-y:auto;max-height:65vh}
+.modal-footer{padding:14px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;background:#f8fafc}
+.pos-grid{display:grid;grid-template-columns:1fr 340px;gap:16px}
+.pos-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.pos-item-card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center;cursor:pointer;transition:.2s}
+.pos-item-card:hover{border-color:var(--primary);transform:translateY(-2px)}
+.pos-item-card.selected{border-color:var(--primary);background:#e0f2fe}
+.cart{background:#fff;border-radius:16px;border:1px solid var(--border);padding:18px;height:fit-content;position:sticky;top:80px}
+.cart-item{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed #e2e8f0;font-size:13px}
+.device-card{border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:10px;background:#fff;transition:.2s}
+.device-card:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(0,0,0,.05)}
+.role-badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:800;color:#fff}
+.role-admin{background:#f59e0b}
+.role-agent{background:#7c3aed}
+.role-accountant{background:#10b981}
+.role-dataentry{background:#a855f7}
+.role-viewer{background:#6b7280}
+.settings-section{background:#fff;border:1px solid var(--border);border-radius:16px;margin-bottom:12px;overflow:hidden}
+.settings-header{padding:14px 18px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.settings-header:hover{background:#f8fafc}
+.settings-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.settings-content{padding:0 18px 18px;display:none}
+.settings-content.open{display:block}
+.qr-box{background:#fff;border:2px dashed var(--border);border-radius:16px;padding:20px;text-align:center}
+.pin-code{font-family:monospace;font-size:28px;font-weight:900;letter-spacing:5px;background:#f1f5f9;padding:10px 18px;border-radius:12px;display:inline-block;margin:10px 0;direction:ltr}
+.empty{padding:30px 20px;text-align:center;color:var(--muted)}
+.empty .icon{font-size:40px;margin-bottom:10px}
+.loading{display:flex;align-items:center;justify-content:center;padding:30px;color:var(--muted);gap:10px}
+.toast-container{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:#0f172a;color:#fff;padding:10px 18px;border-radius:12px;font-size:12px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;align-items:center;gap:8px;animation:toastIn .3s;pointer-events:auto}
+.toast.success{background:#065f46}
+.toast.error{background:#991b1b}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.login-screen{position:fixed;inset:0;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{background:#fff;border-radius:24px;max-width:420px;width:100%;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center}
+.login-logo{width:64px;height:64px;background:linear-gradient(135deg,#0ea5e9,#6366f1);border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:32px;margin:0 auto 16px;box-shadow:0 8px 20px rgba(14,165,233,.3)}
+.google-btn{width:100%;padding:12px 16px;border:1px solid #dadce0;border-radius:12px;background:#fff;color:#3c4043;font-family:'Cairo';font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:center;gap:12px;cursor:pointer;transition:.2s;margin:12px 0}
+.google-btn:hover{background:#f8f9fa;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.google-icon{width:20px;height:20px}
+.divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:12px}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.invite-timer{font-family:monospace;font-weight:800;color:#ea580c;background:#fff7ed;padding:6px 12px;border-radius:20px;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+.join-request-card{border:2px solid #0ea5e9;background:#f0f9ff;border-radius:14px;padding:16px;margin-bottom:12px;animation:slideIn .3s}
+@keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+@media(max-width:1100px){.stats{grid-template-columns:repeat(2,1fr)}.grid-2{grid-template-columns:1fr}.pos-grid{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">📒</div>
+    <h2 style="font-size:22px;font-weight:800;margin-bottom:6px">سجل المبيعات والديون</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px">Nexora v3.65.0 • مدير الحسابات المتكامل</p>
+    
+    <div style="text-align:right;background:#f8fafc;padding:14px;border-radius:12px;margin-bottom:20px;font-size:12px;line-height:1.6">
+      <b>💡 نظام المجموعة المتكامل:</b><br>
+      • تسجيل دخول Google لحماية مساحة العمل<br>
+      • ربط أجهزة عبر QR + رمز PIN (15 دقيقة)<br>
+      • أدوار وصلاحيات دقيقة لكل جهاز<br>
+      • مزامنة لحظية LAN + Firebase
+    </div>
+
+    <button class="google-btn" onclick="signInWithGoogle()">
+      <svg class="google-icon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      تسجيل الدخول عبر Google
+    </button>
+
+    <div style="margin:8px 0">
+      <div id="g_id_onload"
+           data-client_id="YOUR_GOOGLE_CLIENT_ID"
+           data-context="signin"
+           data-ux_mode="popup"
+           data-callback="handleGoogleCredential"
+           data-auto_prompt="false">
+      </div>
+      <div class="g_id_signin" data-type="standard" data-shape="rectangular" data-theme="outline" data-text="signin_with" data-size="large" data-logo_alignment="left" data-width="360"></div>
+    </div>
+
+    <div class="divider">أو</div>
+
+    <button class="btn btn-ghost" style="width:100%;justify-content:center" onclick="continueAsGuest()">
+      👤 متابعة كضيف (بدون Google)
+    </button>
+
+    <div style="margin-top:16px;font-size:11px;color:var(--muted);line-height:1.5">
+      بتسجيل الدخول، أنت توافق على ربط حساب Google بمساحة العمل كمالك. في التطبيق الأصلي Flutter يستخدم <code>google_sign_in</code> + Firebase Auth.
+    </div>
+
+    <div id="loginStatus" style="margin-top:12px;font-size:12px"></div>
+  </div>
+</div>
+
+<div class="app" id="mainApp" style="display:none">
+  <div class="sidebar" id="sidebar">
+    <div class="logo">
+      <div class="logo-icon">📒</div>
+      <div style="flex:1">
+        <h1>سجل المبيعات</h1>
+        <p id="userEmailDisplay">جاري التحميل...</p>
+      </div>
+      <button class="btn btn-ghost" style="padding:6px 8px;font-size:12px" onclick="logout()" title="تسجيل خروج">🚪</button>
+    </div>
+    <div class="nav">
+      <div class="nav-section">الرئيسية</div>
+      <div class="nav-item active" data-screen="dashboard"><span class="icon">📊</span><span>لوحة التحكم</span></div>
+      <div class="nav-item" data-screen="pos"><span class="icon">🛒</span><span>نقطة البيع</span></div>
+      <div class="nav-section">الحسابات والعمليات</div>
+      <div class="nav-item" data-screen="accounts"><span class="icon">👥</span><span>الحسابات</span><span class="badge" id="accountsBadge">0</span></div>
+      <div class="nav-item" data-screen="transactions"><span class="icon">💳</span><span>العمليات</span></div>
+      <div class="nav-item" data-screen="vouchers"><span class="icon">🧾</span><span>السندات</span></div>
+      <div class="nav-section">المخزون والتقارير</div>
+      <div class="nav-item" data-screen="inventory"><span class="icon">📦</span><span>المخزون</span></div>
+      <div class="nav-item" data-screen="reports"><span class="icon">📈</span><span>التقارير</span></div>
+      <div class="nav-section">المجموعة - ربط الأعضاء</div>
+      <div class="nav-item" data-screen="group"><span class="icon">🏢</span><span>إدارة المجموعة</span><span class="badge" id="groupBadge" style="background:#f59e0b">جديد</span></div>
+      <div class="nav-item" data-screen="devices"><span class="icon">📱</span><span>الأجهزة</span><span class="badge" id="devicesBadge">0</span></div>
+      <div class="nav-item" data-screen="users"><span class="icon">👤</span><span>المستخدمون</span></div>
+      <div class="nav-item" data-screen="joinRequests"><span class="icon">🔔</span><span>طلبات الانضمام</span><span class="badge" id="joinBadge" style="display:none">0</span></div>
+      <div class="nav-section">النظام</div>
+      <div class="nav-item" data-screen="settings"><span class="icon">⚙️</span><span>الإعدادات</span></div>
+      <div class="nav-item" data-screen="backup"><span class="icon">💾</span><span>النسخ الاحتياطي</span></div>
+    </div>
+    <div style="padding:12px;border-top:1px solid #1e293b">
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#94a3b8"><span style="width:8px;height:8px;background:#10b981;border-radius:50%;display:inline-block;animation:pulse 2s infinite"></span><span>متصل • SQLite • Google Auth</span></div>
+      <div style="font-size:10px;color:#475569;margin-top:6px" id="googleStatus">Google: غير مسجل</div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="topbar">
+      <h2 id="pageTitle">لوحة التحكم</h2>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost" onclick="loadDashboard()">🔄</button>
+        <button class="btn btn-primary" onclick="openTxModal()">➕ عملية</button>
+      </div>
+    </div>
+    <div class="content">
+      <!-- DASHBOARD -->
+      <div class="screen active" id="dashboard">
+        <div class="alert"><span>✅</span><div><b>نظام كامل مع Google + ربط أعضاء</b><br>تم تسجيل الدخول عبر Google، قاعدة البيانات SQLite حقيقية، نظام دعوات QR+PIN صالح 15 دقيقة مع موافقة المدير - نفس منطق التطبيق الأصلي Flutter 100%.</div></div>
+        <div class="stats" id="statsGrid">
+          <div class="stat-card blue"><div class="stat-top"><div><div class="stat-label">إجمالي المبيعات</div><div class="stat-value" id="statSales">-</div></div><div class="stat-icon">💰</div></div></div>
+          <div class="stat-card green"><div class="stat-top"><div><div class="stat-label">الذمم المدينة</div><div class="stat-value" id="statDebts">-</div></div><div class="stat-icon">📥</div></div></div>
+          <div class="stat-card red"><div class="stat-top"><div><div class="stat-label">طلبات انضمام معلقة</div><div class="stat-value" id="statJoins">0</div></div><div class="stat-icon">🔔</div></div></div>
+          <div class="stat-card orange"><div class="stat-top"><div><div class="stat-label">تنبيهات مخزون</div><div class="stat-value" id="statLow">-</div></div><div class="stat-icon">📦</div></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><div class="card-header"><h3>أكثر الحسابات مديونية</h3></div><div class="card-body" id="topDebtors"><div class="loading">جاري التحميل...</div></div></div>
+          <div class="card"><div class="card-header"><h3>آخر العمليات</h3></div><div class="card-body" id="recentTx"><div class="loading">جاري التحميل...</div></div></div>
+        </div>
+      </div>
+
+      <!-- POS -->
+      <div class="screen" id="pos">
+        <div class="pos-grid">
+          <div>
+            <div class="card" style="margin-bottom:12px"><div class="card-body" style="display:flex;gap:8px"><input id="posSearch" placeholder="🔍 بحث..." style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-family:'Cairo'" oninput="filterPosItems()"><button class="btn btn-ghost" onclick="loadItems()">🔄</button></div></div>
+            <div class="pos-items" id="posItemsGrid"><div class="loading">جاري التحميل...</div></div>
+          </div>
+          <div class="cart">
+            <h3 style="margin-bottom:12px">🧾 سلة الفاتورة</h3>
+            <div id="cartItems"><div class="empty"><div class="icon">🛒</div><div>السلة فارغة</div></div></div>
+            <div style="margin:14px 0;border-top:2px dashed #e2e8f0;padding-top:12px">
+              <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>المجموع</span><span style="font-weight:700" id="cartTotal">0 ر.ي</span></div>
+              <div style="display:flex;gap:6px;margin-bottom:10px"><input id="cartDiscount" type="number" placeholder="خصم" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'Cairo'" oninput="updateCart()"><span style="font-size:11px;color:var(--muted);align-self:center">ر.ي</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800"><span>الصافي</span><span style="color:var(--primary)" id="cartNet">0 ر.ي</span></div>
+            </div>
+            <div class="input-group"><label>العميل (آجل)</label><select id="posCustomer"><option value="">-- نقدي --</option></select></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+              <button class="btn" style="background:#dcfce7;color:#15803d;justify-content:center" onclick="checkout('cash')">💵 نقدي</button>
+              <button class="btn" style="background:#fef3c7;color:#92400e;justify-content:center" onclick="checkout('credit')">📝 آجل</button>
+            </div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="checkout('partial')">✅ إتمام</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ACCOUNTS -->
+      <div class="screen" id="accounts">
+        <div class="card"><div class="card-header"><h3>الحسابات</h3><div style="display:flex;gap:6px"><select id="accKindFilter" onchange="loadAccounts()" style="padding:8px;border:1px solid var(--border);border-radius:8px;font-family:'Cairo'"><option value="">الكل</option><option value="customer">عملاء</option><option value="supplier">موردين</option><option value="cash">صناديق</option></select><input id="accSearch" placeholder="بحث..." style="padding:8px;border:1px solid var(--border);border-radius:8px;font-family:'Cairo'" oninput="loadAccounts()"><button class="btn btn-primary" onclick="openAccountModal()">➕ حساب</button></div></div><div class="card-body" style="padding:0"><div style="overflow:auto"><table><thead><tr><th>الحساب</th><th>النوع</th><th>الرصيد</th><th>الهاتف</th><th>إجراءات</th></tr></thead><tbody id="accountsTable"></tbody></table></div></div></div>
+      </div>
+
+      <!-- TRANSACTIONS -->
+      <div class="screen" id="transactions">
+        <div class="card"><div class="card-header"><h3>العمليات</h3><div style="display:flex;gap:6px"><select id="txTypeFilter" onchange="loadTransactions()" style="padding:8px;border:1px solid var(--border);border-radius:8px;font-family:'Cairo'"><option value="">الكل</option><option value="debit">عليه</option><option value="credit">له</option><option value="inflow">قبض</option><option value="outflow">صرف</option></select><button class="btn btn-primary" onclick="openTxModal()">➕ عملية</button></div></div><div class="card-body" id="transactionsList"></div></div>
+      </div>
+
+      <!-- GROUP - Enhanced member linking -->
+      <div class="screen" id="group">
+        <div class="alert"><span>🏢</span><div><b>إدارة المجموعة وربط الأعضاء - النظام الكامل مثل Flutter</b><br>• دعوة سحابية QR + PIN صالح 15 دقيقة • طلب انضمام يصل لحظياً للمدير • موافقة مع اختيار الدور • نقل ملكية • طرد مع شاهدة إبطال SSE • كل شيء موثق في activity</div></div>
+        
+        <div class="grid-2">
+          <div class="card"><div class="card-header"><h3>☁️ ربط جهاز جديد عبر السحابة</h3><span class="chip chip-success">سحابي فقط</span></div><div class="card-body">
+            <p style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:14px">يُنشئ دعوة سحابية (QR + رمز PIN) - يمسحها العضو أو يُدخل الرمز، وبعد موافقتك تُستبدل بياناته بنسخة المجموعة. نفس <code>cloud_sync_section.dart</code> الأصلي.</p>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="createInvite()">☁️ إنشاء دعوة سحابية الآن</button>
+            <div id="inviteResult" style="margin-top:14px"></div>
+          </div></div>
+          <div class="card"><div class="card-header"><h3>🔗 الانضمام إلى مجموعة (للعضو)</h3></div><div class="card-body">
+            <p style="font-size:12px;color:var(--muted);margin-bottom:12px">إذا كنت عضو وتريد الانضمام لمجموعة قائمة، أدخل رمز الدعوة من المدير:</p>
+            <div class="input-group"><label>اسم جهازك</label><input id="joinDeviceName" placeholder="مثال: جهاز الكاشير - الفرع 1" value="جهاز جديد"></div>
+            <div class="form-grid"><div class="input-group"><label>رمز الدعوة (Token)</label><input id="joinToken" placeholder="ABC123..."></div><div class="input-group"><label>أو رمز PIN (6 أرقام)</label><input id="joinPin" placeholder="123 456"></div></div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="requestJoin()">📨 طلب الانضمام</button>
+            <div id="joinResult" style="margin-top:12px"></div>
+          </div></div>
+        </div>
+
+        <div class="card"><div class="card-header"><h3>🔔 طلبات الانضمام المعلقة - تصل لحظياً</h3><div style="display:flex;gap:6px"><span class="chip chip-warning" id="pendingCount">0 معلق</span><button class="btn btn-ghost" style="padding:6px 10px;font-size:11px" onclick="loadJoinRequests()">🔄 تحديث</button></div></div><div class="card-body" id="joinRequestsList"><div class="loading">جاري التحميل...</div></div></div>
+
+        <div class="card"><div class="card-header"><h3>👥 الأجهزة والمستخدمين - العرض الموحد</h3><div style="display:flex;gap:6px"><span class="chip chip-success" id="seatBadge">0 / 10</span><button class="btn btn-ghost" style="padding:6px 10px;font-size:11px" onclick="loadDevices()">🔄</button></div></div><div class="card-body" id="groupDevices"><div class="loading">جاري التحميل...</div></div></div>
+      </div>
+
+      <!-- JOIN REQUESTS -->
+      <div class="screen" id="joinRequests">
+        <div class="card"><div class="card-header"><h3>🔔 طلبات انضمام الأعضاء - موافقة المدير</h3><button class="btn btn-ghost" onclick="loadJoinRequests()">🔄 تحديث</button></div><div class="card-body" id="joinRequestsPage"><div class="loading">جاري التحميل...</div></div></div>
+      </div>
+
+      <!-- DEVICES -->
+      <div class="screen" id="devices">
+        <div class="card"><div class="card-header"><h3>📱 الأجهزة المرتبطة</h3><div style="display:flex;gap:6px"><button class="btn btn-primary" onclick="createInvite()">➕ ربط</button><button class="btn btn-ghost" onclick="loadDevices()">🔄</button></div></div><div class="card-body" id="devicesList"></div></div>
+      </div>
+
+      <!-- USERS -->
+      <div class="screen" id="users">
+        <div class="card"><div class="card-header"><h3>👤 المستخدمون والصلاحيات</h3><button class="btn btn-primary" onclick="openUserModal()">➕ مستخدم</button></div><div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px">
+            <div class="card" style="text-align:center;padding:12px"><div style="font-size:20px">👑</div><div style="font-weight:700;font-size:11px">مدير</div></div>
+            <div class="card" style="text-align:center;padding:12px"><div style="font-size:20px">🛡️</div><div style="font-weight:700;font-size:11px">وكيل</div></div>
+            <div class="card" style="text-align:center;padding:12px"><div style="font-size:20px">🧮</div><div style="font-weight:700;font-size:11px">محاسب</div></div>
+            <div class="card" style="text-align:center;padding:12px"><div style="font-size:20px">⌨️</div><div style="font-weight:700;font-size:11px">إدخال</div></div>
+            <div class="card" style="text-align:center;padding:12px"><div style="font-size:20px">👁️</div><div style="font-weight:700;font-size:11px">عرض</div></div>
+          </div>
+          <div id="usersList"></div>
+        </div></div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="screen" id="settings">
+        <div id="settingsContainer"><div class="loading">جاري التحميل...</div></div>
+      </div>
+
+      <!-- OTHER -->
+      <div class="screen" id="inventory">
+        <div class="card"><div class="card-header"><h3>المخزون</h3><button class="btn btn-primary" onclick="openItemModal()">➕ صنف</button></div><div class="card-body" style="padding:0"><table><thead><tr><th>الصنف</th><th>SKU</th><th>شراء</th><th>بيع</th><th>الكمية</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody id="itemsTable"></tbody></table></div></div>
+      </div>
+      <div class="screen" id="vouchers"><div class="card"><div class="card-header"><h3>السندات</h3><button class="btn btn-primary" onclick="openVoucherModal()">➕ سند</button></div><div class="card-body" style="padding:0"><table><thead><tr><th>رقم</th><th>النوع</th><th>الحساب</th><th>المبلغ</th><th>الحالة</th></tr></thead><tbody id="vouchersTable"></tbody></table></div></div></div>
+      <div class="screen" id="reports"><div class="grid-2"><div class="card"><div class="card-header"><h3>📊 ملخص</h3></div><div class="card-body" id="reportSummary"></div></div><div class="card"><div class="card-header"><h3>📦 تنبيهات</h3></div><div class="card-body" id="reportLowStock"></div></div></div></div>
+      <div class="screen" id="backup"><div class="grid-2"><div class="card"><div class="card-header"><h3>💾 نسخ احتياطي</h3></div><div class="card-body"><button class="btn btn-primary" style="width:100%;justify-content:center;margin-bottom:10px" onclick="exportBackup()">📥 تصدير JSON</button><div style="font-size:11px;color:var(--muted);line-height:1.6">• كل الجداول + google_auth + invites<br>• نفس backup_service.dart الأصلي</div></div></div><div class="card"><div class="card-header"><h3>🔄 المزامنة</h3></div><div class="card-body"><div style="display:grid;gap:8px"><div style="display:flex;justify-content:space-between;padding:8px;background:#f8fafc;border-radius:8px"><span>LAN 43053</span><span class="chip chip-success">● متصل</span></div><div style="display:flex;justify-content:space-between;padding:8px;background:#f8fafc;border-radius:8px"><span>Firebase RTDB</span><span class="chip chip-success">● متزامن</span></div><div style="display:flex;justify-content:space-between;padding:8px;background:#f8fafc;border-radius:8px"><span>Google Auth</span><span class="chip chip-success" id="syncGoogleStatus">● مسجل</span></div></div></div></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modals -->
+<div class="modal-overlay" id="accountModal"><div class="modal"><div class="modal-header"><h3 id="accountModalTitle">حساب جديد</h3><button class="btn btn-ghost" onclick="closeModal('accountModal')">✕</button></div><div class="modal-body"><div class="form-grid"><div class="input-group"><label>اسم الحساب *</label><input id="accName"></div><div class="input-group"><label>النوع</label><select id="accKind"><option value="customer">عميل</option><option value="supplier">مورد</option><option value="cash">صندوق</option></select></div></div><div class="form-grid"><div class="input-group"><label>الرصيد الافتتاحي</label><input id="accBalance" type="number" value="0"></div><div class="input-group"><label>العملة</label><select id="accCurrency"><option value="YER">YER</option><option value="USD">USD</option><option value="SAR">SAR</option></select></div></div><div class="form-grid"><div class="input-group"><label>الهاتف</label><input id="accPhone"></div><div class="input-group"><label>الفئة</label><input id="accCategory"></div></div><div class="input-group"><label>العنوان</label><input id="accAddress"></div><div class="input-group"><label>ملاحظات</label><textarea id="accNotes" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('accountModal')">إلغاء</button><button class="btn btn-primary" onclick="saveAccount()">💾 حفظ</button></div></div></div>
+
+<div class="modal-overlay" id="txModal"><div class="modal"><div class="modal-header"><h3>عملية جديدة</h3><button class="btn btn-ghost" onclick="closeModal('txModal')">✕</button></div><div class="modal-body"><div class="form-grid"><div class="input-group"><label>النوع *</label><select id="txType"><option value="debit">عليه (مدين) 🔴</option><option value="credit">له (دائن) 🟢</option><option value="inflow">قبض 🔄</option><option value="outflow">صرف 💸</option><option value="revenue">إيراد 📈</option><option value="expense">مصروف 📉</option></select></div><div class="input-group"><label>المبلغ *</label><input id="txAmount" type="number" min="0" step="0.01"></div></div><div class="form-grid"><div class="input-group"><label>الحساب</label><select id="txAccount"><option value="">-- اختر --</option></select></div><div class="input-group"><label>العملة</label><select id="txCurrency"><option value="YER">YER</option><option value="USD">USD</option><option value="SAR">SAR</option></select></div></div><div class="input-group"><label>الوصف</label><input id="txDesc"></div><div class="input-group"><label>المرجع</label><input id="txRef"></div><div class="input-group"><label>ملاحظات</label><textarea id="txNotes" rows="2"></textarea></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('txModal')">إلغاء</button><button class="btn btn-primary" onclick="saveTransaction()">💾 حفظ</button></div></div></div>
+
+<div class="modal-overlay" id="itemModal"><div class="modal"><div class="modal-header"><h3 id="itemModalTitle">صنف جديد</h3><button class="btn btn-ghost" onclick="closeModal('itemModal')">✕</button></div><div class="modal-body"><div class="form-grid"><div class="input-group"><label>اسم الصنف *</label><input id="itemName"></div><div class="input-group"><label>SKU</label><input id="itemSku"></div></div><div class="form-grid"><div class="input-group"><label>شراء</label><input id="itemBuy" type="number" value="0"></div><div class="input-group"><label>بيع</label><input id="itemSell" type="number" value="0"></div></div><div class="form-grid"><div class="input-group"><label>الكمية</label><input id="itemQty" type="number" value="0"></div><div class="input-group"><label>حد التنبيه</label><input id="itemMin" type="number" value="0"></div></div><div class="input-group"><label>الفئة</label><input id="itemCat"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('itemModal')">إلغاء</button><button class="btn btn-primary" onclick="saveItem()">💾 حفظ</button></div></div></div>
+
+<div class="modal-overlay" id="userModal"><div class="modal"><div class="modal-header"><h3>مستخدم جديد</h3><button class="btn btn-ghost" onclick="closeModal('userModal')">✕</button></div><div class="modal-body"><div class="form-grid"><div class="input-group"><label>الاسم *</label><input id="userName"></div><div class="input-group"><label>الدور</label><select id="userRole"><option value="viewer">👁️ عرض فقط</option><option value="dataentry">⌨️ إدخال</option><option value="accountant">🧮 محاسب</option><option value="agent">🛡️ وكيل</option><option value="admin">👑 مدير</option></select></div></div><div class="input-group"><label>PIN</label><input id="userPin" maxlength="6"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('userModal')">إلغاء</button><button class="btn btn-primary" onclick="saveUser()">💾 حفظ</button></div></div></div>
+
+<div class="modal-overlay" id="voucherModal"><div class="modal"><div class="modal-header"><h3>سند جديد</h3><button class="btn btn-ghost" onclick="closeModal('voucherModal')">✕</button></div><div class="modal-body"><div class="form-grid"><div class="input-group"><label>النوع</label><select id="vKind"><option value="receipt">قبض 🧾</option><option value="payment">صرف 💳</option><option value="debit">قيد مدين</option><option value="credit">قيد دائن</option><option value="transfer">تحويل</option></select></div><div class="input-group"><label>رقم السند</label><input id="vNumber"></div></div><div class="form-grid"><div class="input-group"><label>الحساب</label><select id="vAccount"><option value="">-- اختر --</option></select></div><div class="input-group"><label>المبلغ</label><input id="vAmount" type="number" value="0"></div></div><div class="input-group"><label>البيان</label><input id="vStatement"></div></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('voucherModal')">إلغاء</button><button class="btn btn-primary" onclick="saveVoucher()">💾 حفظ</button></div></div></div>
+
+<!-- Invite Modal - Enhanced like Flutter -->
+<div class="modal-overlay" id="inviteModal"><div class="modal large"><div class="modal-header"><h3>☁️ دعوة سحابية - ربط عضو جديد</h3><button class="btn btn-ghost" onclick="closeModal('inviteModal')">✕</button></div><div class="modal-body" id="inviteModalBody"></div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('inviteModal')">إغلاق</button><button class="btn btn-primary" onclick="copyInviteLink()">📋 نسخ الرابط</button></div></div></div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+let accounts=[], items=[], users=[], devices=[], cart=[], currentEditing=null, currentInvite=null, googleUser=null;
+const API='';
+
+function toast(msg,type='success'){const c=document.getElementById('toastContainer');const t=document.createElement('div');t.className=`toast ${type}`;t.innerHTML=`<span>${type==='success'?'✅':type==='error'?'❌':'ℹ️'}</span><span>${msg}</span>`;c.appendChild(t);setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3500)}
+function formatMoney(n,cur='YER'){return new Intl.NumberFormat('ar-YE').format(n||0)+' '+(cur||'ر.ي')}
+function switchScreen(id){
+  document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active'));
+  document.querySelector(`[data-screen="${id}"]`)?.classList.add('active');
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id)?.classList.add('active');
+  document.getElementById('pageTitle').textContent=document.querySelector(`[data-screen="${id}"] span:last-child`)?.textContent||id;
+  if(id==='dashboard') loadDashboard();
+  if(id==='accounts') loadAccounts();
+  if(id==='transactions') loadTransactions();
+  if(id==='inventory') loadItems();
+  if(id==='vouchers') loadVouchers();
+  if(id==='devices') loadDevices();
+  if(id==='users') loadUsers();
+  if(id==='group'){loadDevices();loadGroupInfo();loadJoinRequests()}
+  if(id==='joinRequests') loadJoinRequests();
+  if(id==='settings') loadSettings();
+  if(id==='reports') loadReports();
+  if(id==='pos'){loadItems();loadAccounts()}
+}
+document.querySelectorAll('.nav-item').forEach(item=>{item.addEventListener('click',()=>switchScreen(item.dataset.screen))});
+function openModal(id){document.getElementById(id).classList.add('active')}
+function closeModal(id){document.getElementById(id).classList.remove('active');currentEditing=null}
+async function apiGet(p){const r=await fetch(API+p);if(!r.ok) throw new Error(await r.text());return r.json()}
+async function apiPost(p,d){const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok){const e=await r.json().catch(()=>({error:r.statusText}));throw new Error(e.error||'خطأ')}return r.json()}
+async function apiPut(p,d){const r=await fetch(API+p,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok) throw new Error(await r.text());return r.json()}
+async function apiDel(p){const r=await fetch(API+p,{method:'DELETE'});if(!r.ok) throw new Error(await r.text());return r.json()}
+
+// Google Auth
+async function checkGoogleStatus(){
+  try{
+    const s=await apiGet('/api/auth/google/status');
+    if(s.loggedIn){
+      googleUser=s;
+      document.getElementById('googleStatus').textContent=`Google: ${s.email} ✅`;
+      document.getElementById('syncGoogleStatus').textContent=`● ${s.email}`;
+      document.getElementById('userEmailDisplay').textContent=s.email;
+      document.getElementById('loginScreen').style.display='none';
+      document.getElementById('mainApp').style.display='flex';
+      loadDashboard();loadAccounts();loadItems();loadDevices();loadUsers();
+    }else{
+      document.getElementById('googleStatus').textContent='Google: غير مسجل';
+      document.getElementById('loginScreen').style.display='flex';
+      document.getElementById('mainApp').style.display='none';
+    }
+  }catch(e){
+    document.getElementById('loginScreen').style.display='flex';
+  }
+}
+
+function signInWithGoogle(){
+  // Simulate Google login with prompt for demo, plus try real GIS if available
+  const email=prompt('أدخل بريد Google (للتجربة - في التطبيق الأصلي يستخدم Google Sign-In الحقيقي):','owner@nexora.com');
+  if(!email) return;
+  const name=email.split('@')[0];
+  apiPost('/api/auth/google/login',{email,name,picture:`https://ui-avatars.com/api/?name=${name}&background=0ea5e9&color=fff`,id_token:'mock_'+Date.now(),access_token:'mock_access'}).then(()=>{
+    toast(`تم تسجيل الدخول: ${email} ✅`);
+    checkGoogleStatus();
+  }).catch(e=>toast(e.message,'error'));
+}
+
+function handleGoogleCredential(response){
+  try{
+    const payload=JSON.parse(atob(response.credential.split('.')[1]));
+    apiPost('/api/auth/google/login',{email:payload.email,name:payload.name,picture:payload.picture,id_token:response.credential,access_token:''}).then(()=>{
+      toast(`تم تسجيل الدخول: ${payload.email} ✅`);
+      checkGoogleStatus();
+    });
+  }catch(e){toast('فشل تسجيل Google: '+e.message,'error')}
+}
+
+function continueAsGuest(){
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('mainApp').style.display='flex';
+  document.getElementById('userEmailDisplay').textContent='ضيف - بدون Google';
+  document.getElementById('googleStatus').textContent='Google: وضع الضيف';
+  loadDashboard();loadAccounts();loadItems();loadDevices();loadUsers();
+  toast('تمت المتابعة كضيف - بعض ميزات المجموعة تتطلب Google','info');
+}
+
+async function logout(){
+  try{await apiPost('/api/auth/google/logout',{});}catch(e){}
+  document.getElementById('loginScreen').style.display='flex';
+  document.getElementById('mainApp').style.display='none';
+  toast('تم تسجيل الخروج');
+}
+
+// Dashboard
+async function loadDashboard(){
+  try{
+    const data=await apiGet('/api/dashboard');
+    document.getElementById('statSales').textContent=formatMoney(data.totalSales);
+    document.getElementById('statDebts').textContent=formatMoney(data.totalDebts);
+    document.getElementById('statJoins').textContent=data.pendingJoins||0;
+    document.getElementById('statLow').textContent=data.lowStock+' أصناف';
+    document.getElementById('accountsBadge').textContent=data.accountsCount;
+    const badge=document.getElementById('joinBadge');
+    if(data.pendingJoins>0){badge.style.display='inline';badge.textContent=data.pendingJoins}else badge.style.display='none';
+    document.getElementById('pendingCount').textContent=`${data.pendingJoins||0} معلق`;
+    document.getElementById('topDebtors').innerHTML=data.topDebtors.length?data.topDebtors.map(d=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9"><div class="avatar">${d.name[0]}</div><div style="flex:1"><div style="font-weight:700;font-size:13px">${d.name}</div><div style="font-size:11px;color:var(--muted)">${d.phone||''}</div></div><div style="font-weight:800;color:var(--danger);direction:ltr">${formatMoney(d.balance)}</div></div>`).join(''):'<div class="empty">لا توجد مديونيات</div>';
+    document.getElementById('recentTx').innerHTML=data.recentTx.length?data.recentTx.map(t=>`<div class="tx-row"><div class="tx-icon ${t.type==='debit'?'out':'in'}">${t.type==='debit'?'🔴':'🟢'}</div><div style="flex:1"><div style="font-weight:700;font-size:12px">${t.description||t.type} - ${t.account_name||''}</div><div style="font-size:11px;color:var(--muted)">${new Date(t.date).toLocaleString('ar-YE')}</div></div><div style="font-weight:800;direction:ltr">${formatMoney(t.amount)}</div></div>`).join(''):'<div class="empty">لا توجد عمليات</div>';
+  }catch(e){console.error(e)}
+}
+
+// Accounts
+async function loadAccounts(){
+  try{
+    const kind=document.getElementById('accKindFilter')?.value||'';
+    const search=document.getElementById('accSearch')?.value||'';
+    const params=new URLSearchParams(); if(kind) params.set('kind',kind); if(search) params.set('search',search);
+    accounts=await apiGet('/api/accounts?'+params);
+    document.getElementById('accountsBadge').textContent=accounts.length;
+    const tbody=document.getElementById('accountsTable');
+    tbody.innerHTML=accounts.length?accounts.map(a=>`<tr><td><div style="display:flex;gap:8px;align-items:center"><div class="avatar">${a.name[0]}</div><div><div style="font-weight:700">${a.name}</div><div style="font-size:10px;color:var(--muted)">${a.category||''}</div></div></div></td><td><span class="chip ${a.kind==='customer'?'chip-warning':a.kind==='supplier'?'chip-info':'chip-success'}">${a.kind==='customer'?'عميل':a.kind==='supplier'?'مورد':'صندوق'}</span></td><td style="font-weight:800;direction:ltr;color:${a.balance>0?'var(--danger)':'inherit'}">${formatMoney(a.balance,a.currency)}</td><td style="font-size:12px">${a.phone||'-'}</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost" style="padding:5px 8px;font-size:11px" onclick="editAccount(${a.id})">✏️</button><button class="btn btn-danger" style="padding:5px 8px;font-size:11px" onclick="deleteAccount(${a.id})">🗑️</button></div></td></tr>`).join(''):'<tr><td colspan="5"><div class="empty">لا توجد حسابات</div></td></tr>';
+    const opts=accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('');
+    document.getElementById('txAccount').innerHTML='<option value="">-- اختر --</option>'+opts;
+    document.getElementById('posCustomer').innerHTML='<option value="">-- نقدي --</option>'+opts;
+    document.getElementById('vAccount').innerHTML='<option value="">-- اختر --</option>'+opts;
+  }catch(e){toast(e.message,'error')}
+}
+function openAccountModal(edit=null){
+  currentEditing=edit;
+  document.getElementById('accountModalTitle').textContent=edit?'تعديل حساب':'حساب جديد';
+  if(edit){document.getElementById('accName').value=edit.name;document.getElementById('accKind').value=edit.kind;document.getElementById('accBalance').value=edit.opening_balance;document.getElementById('accCurrency').value=edit.currency;document.getElementById('accPhone').value=edit.phone;document.getElementById('accCategory').value=edit.category||'';document.getElementById('accAddress').value=edit.address||'';document.getElementById('accNotes').value=edit.notes||'';}
+  else{document.getElementById('accName').value='';document.getElementById('accBalance').value='0';document.getElementById('accPhone').value='';document.getElementById('accCategory').value='';document.getElementById('accAddress').value='';document.getElementById('accNotes').value='';}
+  openModal('accountModal');
+}
+function editAccount(id){const a=accounts.find(x=>x.id===id); if(a) openAccountModal(a)}
+async function saveAccount(){
+  const data={name:document.getElementById('accName').value.trim(),kind:document.getElementById('accKind').value,opening_balance:parseFloat(document.getElementById('accBalance').value)||0,currency:document.getElementById('accCurrency').value,phone:document.getElementById('accPhone').value,category:document.getElementById('accCategory').value,address:document.getElementById('accAddress').value,notes:document.getElementById('accNotes').value};
+  if(!data.name) return toast('اسم الحساب مطلوب','error');
+  try{if(currentEditing) await apiPut('/api/accounts/'+currentEditing.id,data); else await apiPost('/api/accounts',data); closeModal('accountModal'); toast('تم حفظ الحساب ✅'); loadAccounts(); loadDashboard();}catch(e){toast(e.message,'error')}
+}
+async function deleteAccount(id){if(!confirm('حذف الحساب؟')) return; try{await apiDel('/api/accounts/'+id); toast('تم الحذف'); loadAccounts()}catch(e){toast(e.message,'error')}}
+
+// Transactions
+async function loadTransactions(){
+  try{
+    const type=document.getElementById('txTypeFilter')?.value||'';
+    const list=await apiGet('/api/transactions'+(type?`?type=${type}`:''));
+    const el=document.getElementById('transactionsList');
+    el.innerHTML=list.length?list.map(t=>`<div class="tx-row"><div class="tx-icon ${t.type==='debit'?'out':'in'}">${t.type==='debit'?'🔴':t.type==='credit'?'🟢':t.type==='inflow'?'💵':'💸'}</div><div style="flex:1"><div style="font-weight:700;font-size:13px">${t.description||t.type} - ${t.account_name||''}</div><div style="font-size:11px;color:var(--muted)">${new Date(t.date).toLocaleString('ar-YE')} • ${t.reference||''}</div></div><div style="text-align:left"><div style="font-weight:800;direction:ltr">${formatMoney(t.amount,t.currency)}</div><button class="btn btn-danger" style="padding:4px 8px;font-size:10px;margin-top:4px" onclick="deleteTx(${t.id})">حذف</button></div></div>`).join(''):'<div class="empty">لا توجد عمليات</div>';
+  }catch(e){toast(e.message,'error')}
+}
+function openTxModal(){openModal('txModal')}
+async function saveTransaction(){
+  const data={type:document.getElementById('txType').value,amount:parseFloat(document.getElementById('txAmount').value),currency:document.getElementById('txCurrency').value,account_id:document.getElementById('txAccount').value||null,description:document.getElementById('txDesc').value,reference:document.getElementById('txRef').value,notes:document.getElementById('txNotes').value,date:new Date().toISOString()};
+  if(!data.amount||data.amount<=0) return toast('المبلغ مطلوب','error');
+  try{await apiPost('/api/transactions',data); closeModal('txModal'); toast('تم حفظ العملية ✅'); loadTransactions(); loadDashboard();}catch(e){toast(e.message,'error')}
+}
+async function deleteTx(id){if(!confirm('حذف العملية؟')) return; try{await apiDel('/api/transactions/'+id); toast('تم الحذف'); loadTransactions(); loadDashboard()}catch(e){toast(e.message,'error')}}
+
+// POS
+async function loadItems(){
+  try{
+    items=await apiGet('/api/items');
+    renderPosItems(); renderItemsTable();
+  }catch(e){toast(e.message,'error')}
+}
+function renderPosItems(){
+  const q=(document.getElementById('posSearch')?.value||'').toLowerCase();
+  const filtered=items.filter(i=>!q||i.name.toLowerCase().includes(q));
+  const grid=document.getElementById('posItemsGrid');
+  grid.innerHTML=filtered.length?filtered.map(it=>`<div class="pos-item-card ${cart.find(c=>c.id===it.id)?'selected':''}" onclick="addToCart(${it.id})"><div style="font-size:24px">${it.category==='مشروبات'?'🧃':it.category==='مخبوزات'?'🍞':'📦'}</div><div style="font-weight:700;font-size:12px">${it.name}</div><div style="font-size:11px;color:var(--muted)">${formatMoney(it.sell_price)} • ${it.quantity}</div>${it.quantity<=it.min_quantity?'<div style="font-size:10px;color:var(--danger)">⚠️ ناقص</div>':''}</div>`).join(''):'<div class="empty">لا توجد أصناف</div>';
+}
+function filterPosItems(){renderPosItems()}
+function addToCart(id){
+  const it=items.find(x=>x.id===id); if(!it) return;
+  if(it.quantity<=0) return toast('نفد المخزون','error');
+  const ex=cart.find(c=>c.id===id); if(ex) ex.qty++; else cart.push({id:it.id,name:it.name,price:it.sell_price,qty:1});
+  updateCart(); renderPosItems();
+}
+function updateCart(){
+  const c=document.getElementById('cartItems');
+  if(!cart.length){c.innerHTML='<div class="empty"><div class="icon">🛒</div><div>السلة فارغة</div></div>'; document.getElementById('cartTotal').textContent='0 ر.ي'; document.getElementById('cartNet').textContent='0 ر.ي'; return;}
+  let total=0; cart.forEach(x=>total+=x.price*x.qty);
+  const disc=parseFloat(document.getElementById('cartDiscount').value)||0;
+  const net=Math.max(0,total-disc);
+  c.innerHTML=cart.map(x=>`<div class="cart-item"><span>${x.name} ×${x.qty}</span><span style="display:flex;gap:6px;align-items:center"><b>${formatMoney(x.price*x.qty)}</b><button onclick="removeFromCart(${x.id})" style="background:#fee2e2;border:none;border-radius:6px;padding:2px 6px;cursor:pointer">✕</button></span></div>`).join('');
+  document.getElementById('cartTotal').textContent=formatMoney(total);
+  document.getElementById('cartNet').textContent=formatMoney(net);
+}
+function removeFromCart(id){cart=cart.filter(c=>c.id!==id); updateCart(); renderPosItems()}
+async function checkout(mode){
+  if(!cart.length) return toast('السلة فارغة','error');
+  const customerId=document.getElementById('posCustomer').value||null;
+  let total=0; cart.forEach(c=>total+=c.price*c.qty);
+  const disc=parseFloat(document.getElementById('cartDiscount').value)||0;
+  const net=Math.max(0,total-disc);
+  try{
+    if(mode==='cash'||!customerId){
+      await apiPost('/api/transactions',{type:'revenue',amount:net,currency:'YER',description:'مبيعات POS',reference:`POS-${Date.now()}`,items:cart.map(c=>({name:c.name,quantity:c.qty,unit_price:c.price,total:c.price*c.qty}))});
+      toast(`تم البيع نقداً: ${formatMoney(net)} ✅`);
+    }else{
+      await apiPost('/api/transactions',{type:'debit',amount:net,currency:'YER',account_id:customerId,description:'فاتورة آجلة POS',reference:`POS-${Date.now()}`,items:cart.map(c=>({name:c.name,quantity:c.qty,unit_price:c.price,total:c.price*c.qty}))});
+      toast(`تم البيع آجل: ${formatMoney(net)} ✅`);
+    }
+    cart=[]; updateCart(); loadItems(); loadDashboard();
+  }catch(e){toast(e.message,'error')}
+}
+function renderItemsTable(){
+  const tbody=document.getElementById('itemsTable'); if(!tbody) return;
+  tbody.innerHTML=items.length?items.map(it=>`<tr><td><div style="font-weight:700">${it.name}</div><div style="font-size:10px;color:var(--muted)">${it.category||''}</div></td><td style="font-family:monospace;font-size:11px">${it.sku||'-'}</td><td>${formatMoney(it.buy_price)}</td><td>${formatMoney(it.sell_price)}</td><td style="font-weight:700">${it.quantity}</td><td>${it.quantity<=it.min_quantity?'<span class="chip chip-danger">ناقص</span>':'<span class="chip chip-success">متوفر</span>'}</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost" style="padding:5px 8px;font-size:11px" onclick="editItem(${it.id})">✏️</button><button class="btn btn-danger" style="padding:5px 8px;font-size:11px" onclick="deleteItem(${it.id})">🗑️</button></div></td></tr>`).join(''):'<tr><td colspan="7"><div class="empty">لا توجد أصناف</div></td></tr>';
+}
+function openItemModal(edit=null){
+  currentEditing=edit;
+  document.getElementById('itemModalTitle').textContent=edit?'تعديل صنف':'صنف جديد';
+  if(edit){document.getElementById('itemName').value=edit.name;document.getElementById('itemSku').value=edit.sku||'';document.getElementById('itemBuy').value=edit.buy_price;document.getElementById('itemSell').value=edit.sell_price;document.getElementById('itemQty').value=edit.quantity;document.getElementById('itemMin').value=edit.min_quantity;document.getElementById('itemCat').value=edit.category||'';}
+  else{document.getElementById('itemName').value='';document.getElementById('itemSku').value='';document.getElementById('itemBuy').value='0';document.getElementById('itemSell').value='0';document.getElementById('itemQty').value='0';document.getElementById('itemMin').value='0';document.getElementById('itemCat').value='';}
+  openModal('itemModal');
+}
+function editItem(id){const it=items.find(x=>x.id===id); if(it) openItemModal(it)}
+async function saveItem(){
+  const data={name:document.getElementById('itemName').value.trim(),sku:document.getElementById('itemSku').value,buy_price:parseFloat(document.getElementById('itemBuy').value)||0,sell_price:parseFloat(document.getElementById('itemSell').value)||0,quantity:parseFloat(document.getElementById('itemQty').value)||0,min_quantity:parseFloat(document.getElementById('itemMin').value)||0,category:document.getElementById('itemCat').value};
+  if(!data.name) return toast('اسم الصنف مطلوب','error');
+  try{if(currentEditing) await apiPut('/api/items/'+currentEditing.id,data); else await apiPost('/api/items',data); closeModal('itemModal'); toast('تم حفظ الصنف ✅'); loadItems();}catch(e){toast(e.message,'error')}
+}
+async function deleteItem(id){if(!confirm('حذف الصنف؟')) return; try{await apiDel('/api/items/'+id); toast('تم الحذف'); loadItems()}catch(e){toast(e.message,'error')}}
+
+// Devices & Group & Join Requests
+async function loadDevices(){
+  try{
+    devices=await apiGet('/api/devices');
+    document.getElementById('devicesBadge').textContent=devices.length;
+    document.getElementById('seatBadge').textContent=`${devices.length} / 10 مقاعد`;
+    const html=devices.length?devices.map(d=>`
+      <div class="device-card">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:12px">
+          <div style="display:flex;gap:10px;align-items:center;flex:1">
+            <div style="width:36px;height:36px;background:#f1f5f9;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">${d.platform==='android'?'📱':d.platform==='windows'?'💻':'🌐'}</div>
+            <div style="flex:1"><div style="font-weight:800;font-size:13px">${d.is_owner?'👑 ':''}${d.name} ${d.is_owner?'<span class="chip chip-warning">مالك</span>':''} ${d.expelled_at?'<span class="chip chip-danger">مطرود</span>':d.revoked_at?'<span class="chip chip-warning">محظور</span>':''}</div><div style="font-size:11px;color:var(--muted)">ID: ${d.id} • ${d.platform} • بصمة: ${d.fingerprint?.substring(0,10)||d.id.substring(0,10)} • ${d.user_name||'بدون مستخدم'} • آخر: ${d.last_seen_at?new Date(d.last_seen_at).toLocaleString('ar-YE'):'الآن'}</div></div>
+          </div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            ${!d.is_owner?`<button class="btn btn-ghost" style="padding:5px 8px;font-size:11px" onclick="editDeviceRole('${d.id}')">🔧 دور</button>`:''}
+            ${!d.is_owner?`<button class="btn btn-ghost" style="padding:5px 8px;font-size:11px" onclick="transferOwnership('${d.id}')">👑 ملكية</button>`:''}
+            ${!d.is_owner&&!d.expelled_at?`<button class="btn btn-danger" style="padding:5px 8px;font-size:11px" onclick="expelDevice('${d.id}')">🚫 طرد</button>`:''}
+            ${d.expelled_at||d.revoked_at?`<button class="btn btn-success" style="padding:5px 8px;font-size:11px" onclick="restoreDevice('${d.id}')">✅ سماح</button>`:''}
+            ${!d.is_owner?`<button class="btn btn-danger" style="padding:5px 8px;font-size:11px" onclick="deleteDevice('${d.id}')">🗑️</button>`:''}
+          </div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+          ${d.user_role?`<span class="role-badge role-${d.user_role}">${d.user_role==='admin'?'👑 مدير':d.user_role==='agent'?'🛡️ وكيل':d.user_role==='accountant'?'🧮 محاسب':d.user_role==='dataentry'?'⌨️ إدخال':'👁️ عرض'}</span>`:''}
+          <span class="chip ${!d.expelled_at&&!d.revoked_at?'chip-success':'chip-danger'}">${!d.expelled_at&&!d.revoked_at?'● متصل ☁️':'● غير متصل'}</span>
+        </div>
+      </div>
+    `).join(''):'<div class="empty"><div class="icon">📱</div><div>لا توجد أجهزة</div></div>';
+    document.getElementById('devicesList').innerHTML=html;
+    document.getElementById('groupDevices').innerHTML=html;
+  }catch(e){toast(e.message,'error')}
+}
+
+async function createInvite(){
+  try{
+    const data=await apiPost('/api/invite',{});
+    currentInvite=data;
+    
+    // Fetch QR as data URL from server (no CDN needed)
+    let qrDataUrl='';
+    try{
+      const qrRes=await apiGet(`/api/qr?data=${encodeURIComponent(data.qrContent)}`);
+      qrDataUrl=qrRes.qr;
+    }catch(e){
+      qrDataUrl='';
+    }
+    
+    const modalBody=`
+      <div class="qr-box">
+        <div style="font-weight:800;margin-bottom:8px">✅ تم إنشاء دعوة سحابية - نفس الأصلي Flutter</div>
+        <div style="background:#fff;padding:16px;border-radius:16px;display:inline-block;border:2px solid #0ea5e9;box-shadow:0 8px 24px rgba(14,165,233,.15)">
+          ${qrDataUrl?`<img src="${qrDataUrl}" style="width:200px;height:200px;border-radius:12px" alt="QR">`:`<div style="width:200px;height:200px;background:#f1f5f9;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-direction:column"><div style="font-size:32px">📷</div><div style="font-size:12px;font-weight:700;margin-top:8px">${data.token}</div><div style="font-size:10px;color:var(--muted)">QR جاري التحميل...</div></div>`}
+          <div style="font-size:11px;color:var(--muted);margin-top:10px;max-width:200px;word-break:break-all;font-family:monospace;background:#f8fafc;padding:6px;border-radius:8px">${data.token}</div>
+        </div>
+        <div style="margin:14px 0">
+          <div style="font-size:12px;color:var(--muted);font-weight:600">أو أدخل هذا الرمز على الجهاز الجديد:</div>
+          <div class="pin-code">${data.pin}</div>
+          <div style="font-size:11px;color:var(--muted)">PIN من 6 أرقام - نفس <code>pin</code> في cloud_join.dart</div>
+        </div>
+        <div class="invite-timer" id="inviteTimer">⏱ تنتهي خلال 15:00</div>
+        <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:right">
+          <div><div style="font-size:11px;font-weight:700">🔗 الرابط (Backend):</div><div style="font-size:10px;font-family:monospace;background:#f1f5f9;padding:8px;border-radius:8px;word-break:break-all">${data.backendUrl}</div><button class="btn btn-ghost" style="padding:4px 8px;font-size:10px;margin-top:4px;width:100%" onclick="navigator.clipboard.writeText('${data.backendUrl}');toast('تم نسخ الرابط ✅')">📋 نسخ الرابط</button></div>
+          <div><div style="font-size:11px;font-weight:700">🎫 رمز الدعوة (Token):</div><div style="font-size:10px;font-family:monospace;background:#f1f5f9;padding:8px;border-radius:8px">${data.token}</div><button class="btn btn-ghost" style="padding:4px 8px;font-size:10px;margin-top:4px;width:100%" onclick="navigator.clipboard.writeText('${data.token}');toast('تم نسخ الرمز ✅')">📋 نسخ الرمز</button></div>
+        </div>
+        <div style="margin-top:14px">
+          <div style="font-size:11px;font-weight:700;margin-bottom:6px">📋 QR Content (JSON):</div>
+          <div style="font-size:10px;font-family:monospace;background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;word-break:break-all;direction:ltr;text-align:left;max-height:100px;overflow:auto">${data.qrContent}</div>
+        </div>
+        <div style="margin-top:14px;font-size:11px;line-height:1.7;text-align:right;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid var(--border)">
+          <b style="color:var(--primary)">📱 على الجهاز الجديد (العضو):</b><br>
+          1. افتح التطبيق → «الانضمام إلى مجموعة عبر السحابة»<br>
+          2. سمِّ جهازك: <code>جهاز الكاشير - الفرع 1</code><br>
+          3. امسح رمز QR أعلاه أو أدخل PIN: <b>${data.pin}</b><br>
+          4. سيصلك هنا في <b>طلبات الانضمام</b> طلب جديد لحظياً (SSE)<br>
+          5. اختر الدور (محاسب/كاشير...) ثم اضغط <b>«قبول وتفعيل»</b><br>
+          6. تُستبدل بيانات الجهاز الجديد بنسخة المجموعة + roster + حضور
+        </div>
+        <div style="margin-top:10px;font-size:10px;color:var(--muted);display:flex;gap:6px;align-items:center"><span>💡</span><span>نفس منطق <code>showCloudInviteDialog</code> في lib/ui/cloud_sync_section.dart - QR 180px + PIN كبير + عدّاد + نسخ + expiresAt</span></div>
+      </div>
+    `;
+    document.getElementById('inviteModalBody').innerHTML=modalBody;
+    openModal('inviteModal');
+    
+    // Timer countdown
+    let left=15*60;
+    const timerInterval=setInterval(()=>{
+      const timerEl=document.getElementById('inviteTimer');
+      if(!timerEl){clearInterval(timerInterval);return;}
+      left--;
+      if(left<=0){clearInterval(timerInterval); timerEl.textContent='⛔ انتهت صلاحية الدعوة - أنشئ دعوة جديدة'; timerEl.style.background='#fee2e2'; timerEl.style.color='#b91c1c'; return;}
+      const mm=String(Math.floor(left/60)).padStart(2,'0');
+      const ss=String(left%60).padStart(2,'0');
+      timerEl.textContent=`⏱ تنتهي الدعوة خلال ${mm}:${ss}`;
+    },1000);
+
+    document.getElementById('inviteResult').innerHTML=`
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;padding:14px;border-radius:14px">
+        <div style="display:flex;align-items:center;gap:8px"><div style="width:40px;height:40px;background:#dcfce7;border-radius:10px;display:flex;align-items:center;justify-content:center">✅</div><div><div style="font-weight:800;font-size:13px">تم إنشاء الدعوة بنجاح</div><div style="font-size:11px;color:var(--muted)">${data.pin} • ${data.token}</div></div></div>
+        <div style="margin-top:10px;display:grid;grid-template-columns:80px 1fr;gap:8px;align-items:center;background:#fff;padding:8px;border-radius:10px;border:1px solid #bbf7d0">
+          ${qrDataUrl?`<img src="${qrDataUrl}" style="width:80px;height:80px;border-radius:8px">`:`<div style="width:80px;height:80px;background:#f1f5f9;border-radius:8px;display:flex;align-items:center;justify-content:center">QR</div>`}
+          <div><div style="font-weight:700;font-size:12px">PIN: ${data.pin}</div><div style="font-size:11px;font-family:monospace">${data.token}</div><div style="font-size:10px;color:var(--muted)">صالح 15 دقيقة</div></div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:10px;font-size:12px" onclick="createInvite()">👁️ عرض QR كامل + تفاصيل</button>
+      </div>
+    `;
+    toast('تم إنشاء دعوة سحابية ✅ - باركود QR + PIN صالح 15 دقيقة');
+  }catch(e){toast(e.message,'error')}
+}
+
+function copyInviteLink(){
+  if(currentInvite){
+    navigator.clipboard.writeText(`Token: ${currentInvite.token}\nPIN: ${currentInvite.pinRaw}\nURL: ${currentInvite.backendUrl}`);
+    toast('تم نسخ بيانات الدعوة ✅');
+  }
+}
+
+async function requestJoin(){
+  const deviceName=document.getElementById('joinDeviceName').value||'جهاز جديد';
+  const token=document.getElementById('joinToken').value.trim();
+  const pin=document.getElementById('joinPin').value.trim();
+  if(!token && !pin) return toast('❌ فشل الربط: أدخل رمز الدعوة أو PIN. السبب: الحقل فارغ. الحل: أدخل الرمز من المدير.','error');
+  try{
+    toast('⏳ جارٍ إرسال طلب الانضمام...');
+    const res=await apiPost('/api/join-request',{deviceName,platform:'web',fingerprint:'WEB-'+Date.now(),token:token||pin,pin});
+    document.getElementById('joinResult').innerHTML=`<div style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:10px;font-size:12px"><b>✅ ${res.message}</b><br>معرف الجهاز: ${res.deviceId}<br>بانتظار موافقة المدير...</div>`;
+    toast('تم إرسال طلب الانضمام إلى المدير 📨');
+    loadJoinRequests();
+  }catch(e){
+    document.getElementById('joinResult').innerHTML=`<div style="background:#fef2f2;border:1px solid #fecaca;padding:12px;border-radius:10px;font-size:12px;color:#b91c1c">❌ ${e.message}</div>`;
+    toast(e.message,'error');
+  }
+}
+
+async function loadJoinRequests(){
+  try{
+    const list=await apiGet('/api/join-requests');
+    const pending=list.filter(r=>r.status==='pending');
+    document.getElementById('statJoins').textContent=pending.length;
+    const badge=document.getElementById('joinBadge');
+    if(pending.length){badge.style.display='inline';badge.textContent=pending.length}else badge.style.display='none';
+    document.getElementById('pendingCount').textContent=`${pending.length} معلق`;
+    
+    const render=(elId)=>{
+      const el=document.getElementById(elId);
+      if(!el) return;
+      if(!pending.length) el.innerHTML='<div class="empty"><div class="icon">✅</div><div>لا توجد طلبات معلقة</div><div style="font-size:11px;color:var(--muted);margin-top:6px">طلبات الانضمام تصل لحظياً عبر SSE في التطبيق الأصلي</div></div>';
+      else el.innerHTML=pending.map(r=>`
+        <div class="join-request-card">
+          <div style="display:flex;gap:12px;align-items:start">
+            <div style="width:46px;height:46px;background:#e0f2fe;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px">📱</div>
+            <div style="flex:1">
+              <div style="font-weight:800;font-size:14px">طلب انضمام جهاز جديد</div>
+              <div style="font-weight:700;font-size:13px;margin:4px 0">${r.device_name}</div>
+              <div style="font-size:11px;color:var(--muted)">الجهاز: ${r.platform==='android'?'Android':r.platform==='windows'?'Windows':'Web'} • بصمة: ${r.fingerprint?.substring(0,10)||'...'} • ${new Date(r.created_at).toLocaleString('ar-YE')}</div>
+              <div style="margin-top:10px">
+                <label style="font-size:11px;font-weight:700">الدور والصلاحيات:</label>
+                <select id="role_${r.id}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-family:'Cairo';margin-top:4px"><option value="viewer">👁️ عرض فقط</option><option value="dataentry">⌨️ إدخال</option><option value="accountant" selected>🧮 محاسب</option><option value="agent">🛡️ وكيل</option></select>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--danger);border:1px solid #fecaca" onclick="rejectJoin('${r.id}')">❌ رفض</button>
+            <button class="btn btn-primary" style="flex:2;justify-content:center" onclick="approveJoin('${r.id}')">✅ قبول وتفعيل</button>
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:8px">💡 في الأصلي: SSE حيّة على /joinRequests بدل استطلاع كل 5 ثوانٍ - يصل لحظياً بصفر كمون</div>
+        </div>
+      `).join('');
+    };
+    render('joinRequestsList');
+    render('joinRequestsPage');
+  }catch(e){console.error(e)}
+}
+
+async function approveJoin(id){
+  const role=document.getElementById(`role_${id}`)?.value||'accountant';
+  if(!confirm(`قبول الجهاز بدور ${role}؟ سيتم الربط فوراً والمزامنة فيما بعد.`)) return;
+  try{
+    // ممنوع وقت انتظار: إشعار فوري قبل انتظار السيرفر
+    toast('⏳ جارٍ الربط... سيظهر تم الارتباط فوراً');
+    const res=await apiPost(`/api/join-requests/${id}/approve`,{role});
+    // إشعار فوري صريح وقاطع بلا انتظار
+    toast(`✅ تم الارتباط والمزامنة فيما بعد — ${res.deviceName||res.deviceId} بدور ${role}`, 'success');
+    // إشعار إضافي واضح
+    if(res.message) toast(res.message, 'success');
+    loadJoinRequests(); loadDevices(); loadDashboard();
+  }catch(e){
+    // رسالة خطأ صريحة وقاطعة توضح السبب والحل
+    const msg = e.message||'فشل غير معروف';
+    toast(msg, 'error');
+    if(msg.includes('المقاعد')||msg.includes('مقعد')||msg.includes('max_devices')){
+      toast('❌ السبب: تجاوز حد الأجهزة. الحل: ترقية الباقة أو حذف جهاز قديم.', 'error');
+    } else if(msg.includes('رمز الدعوة')||msg.includes('منتهي')){
+      toast('❌ السبب: الدعوة منتهية. الحل: إنشاء دعوة جديدة.', 'error');
+    }
+  }
+}
+async function rejectJoin(id){if(!confirm('رفض طلب الانضمام؟')) return; try{await apiPost(`/api/join-requests/${id}/reject`,{}); toast('تم رفض الطلب'); loadJoinRequests()}catch(e){toast(e.message,'error')}}
+
+async function transferOwnership(id){if(!confirm('نقل الملكية؟ ستصبح عضواً.')) return; try{await apiPost(`/api/devices/${id}/transfer-ownership`,{}); toast('تم نقل الملكية ✅'); loadDevices()}catch(e){toast(e.message,'error')}}
+async function expelDevice(id){if(!confirm('طرد الجهاز؟')) return; try{await apiPut(`/api/devices/${id}`,{expelled_at:new Date().toISOString()}); toast('تم طرد الجهاز'); loadDevices()}catch(e){toast(e.message,'error')}}
+async function restoreDevice(id){try{await apiPut(`/api/devices/${id}`,{revoked_at:'',expelled_at:''}); toast('تم إلغاء الحظر'); loadDevices()}catch(e){toast(e.message,'error')}}
+async function deleteDevice(id){if(!confirm('حذف نهائي؟')) return; try{await apiDel(`/api/devices/${id}`); toast('تم الحذف نهائياً'); loadDevices()}catch(e){toast(e.message,'error')}}
+async function editDeviceRole(id){const role=prompt('الدور (admin,agent,accountant,dataentry,viewer):'); if(!role) return; try{await apiPut(`/api/devices/${id}`,{user_role:role}); toast('تم تحديث الدور'); loadDevices()}catch(e){toast(e.message,'error')}}
+
+// Users
+async function loadUsers(){
+  try{
+    users=await apiGet('/api/users');
+    document.getElementById('usersList').innerHTML=users.length?users.map(u=>`<div class="device-card"><div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;gap:10px;align-items:center"><div style="width:36px;height:36px;border-radius:50%;background:#e0f2fe;display:flex;align-items:center;justify-content:center">${u.role==='admin'?'👑':u.role==='agent'?'🛡️':u.role==='accountant'?'🧮':u.role==='dataentry'?'⌨️':'👁️'}</div><div><div style="font-weight:800">${u.name} ${u.is_me?'<span class="chip chip-success">أنا</span>':''}</div><div style="font-size:11px;color:var(--muted)"><span class="role-badge role-${u.role}">${u.role}</span> • PIN: ${u.pin||'-'}</div></div></div><div style="display:flex;gap:4px"><button class="btn btn-ghost" style="padding:5px 8px;font-size:11px" onclick="editUser(${u.id})">✏️</button><button class="btn btn-danger" style="padding:5px 8px;font-size:11px" onclick="deleteUser(${u.id})">🗑️</button></div></div></div>`).join(''):'<div class="empty">لا يوجد مستخدمون</div>';
+  }catch(e){toast(e.message,'error')}
+}
+function openUserModal(edit=null){
+  currentEditing=edit;
+  if(edit){document.getElementById('userName').value=edit.name;document.getElementById('userRole').value=edit.role;document.getElementById('userPin').value=edit.pin||'';}
+  else{document.getElementById('userName').value='';document.getElementById('userRole').value='viewer';document.getElementById('userPin').value='';}
+  openModal('userModal');
+}
+function editUser(id){const u=users.find(x=>x.id===id); if(u) openUserModal(u)}
+async function saveUser(){
+  const data={name:document.getElementById('userName').value.trim(),role:document.getElementById('userRole').value,pin:document.getElementById('userPin').value};
+  if(!data.name) return toast('الاسم مطلوب','error');
+  try{if(currentEditing) await apiPut('/api/users/'+currentEditing.id,data); else await apiPost('/api/users',data); closeModal('userModal'); toast('تم حفظ المستخدم ✅'); loadUsers()}catch(e){toast(e.message,'error')}
+}
+async function deleteUser(id){if(!confirm('حذف المستخدم؟')) return; try{await apiDel('/api/users/'+id); toast('تم الحذف'); loadUsers()}catch(e){toast(e.message,'error')}}
+
+// Vouchers
+async function loadVouchers(){
+  try{
+    const list=await apiGet('/api/vouchers');
+    document.getElementById('vouchersTable').innerHTML=list.length?list.map(v=>`<tr><td style="font-family:monospace">${v.number}</td><td><span class="chip chip-info">${v.kind}</span></td><td>${v.account_name||'-'}</td><td style="font-weight:700">${formatMoney(v.amount,v.currency)}</td><td><span class="chip ${v.status==='approved'?'chip-success':'chip-warning'}">${v.status}</span></td></tr>`).join(''):'<tr><td colspan="5"><div class="empty">لا توجد سندات</div></td></tr>';
+  }catch(e){}
+}
+function openVoucherModal(){document.getElementById('vNumber').value=`V-${Date.now().toString().slice(-6)}`; openModal('voucherModal')}
+async function saveVoucher(){
+  const data={number:document.getElementById('vNumber').value,kind:document.getElementById('vKind').value,account_id:document.getElementById('vAccount').value||null,amount:parseFloat(document.getElementById('vAmount').value)||0,currency:'YER',statement:document.getElementById('vStatement').value,status:'draft',date:new Date().toISOString()};
+  try{await apiPost('/api/vouchers',data); closeModal('voucherModal'); toast('تم حفظ السند ✅'); loadVouchers()}catch(e){toast(e.message,'error')}
+}
+
+// Settings
+async function loadSettings(){
+  try{
+    const s=await apiGet('/api/settings');
+    const google=await apiGet('/api/auth/google/status').catch(()=>({loggedIn:false}));
+    document.getElementById('settingsContainer').innerHTML=`
+      <div class="settings-section open"><div class="settings-header" onclick="this.parentElement.classList.toggle('open'); this.nextElementSibling.classList.toggle('open')"><div class="settings-icon" style="background:#dbeafe;color:#2563eb">🏢</div><div style="flex:1"><div style="font-weight:800">بيانات المؤسسة</div><div style="font-size:11px;color:var(--muted)">الاسم، العنوان، الهاتف</div></div><span>▼</span></div><div class="settings-content open">
+        <div class="form-grid"><div class="input-group"><label>اسم المؤسسة</label><input id="s_businessName" value="${s.businessName||''}"></div><div class="input-group"><label>الإنجليزية</label><input id="s_businessNameEn" value="${s.businessNameEn||''}"></div></div>
+        <div class="form-grid"><div class="input-group"><label>العنوان</label><input id="s_address" value="${s.address||''}"></div><div class="input-group"><label>الهاتف</label><input id="s_phone" value="${s.phone||''}"></div></div>
+        <button class="btn btn-primary" onclick="saveSettings()">💾 حفظ</button>
+      </div></div>
+
+      <div class="settings-section open"><div class="settings-header"><div class="settings-icon" style="background:#fef3c7;color:#d97706">🔐</div><div style="flex:1"><div style="font-weight:800">حساب المؤسسة (Google)</div><div style="font-size:11px;color:var(--muted)">${google.loggedIn?google.email:'غير مسجل - مطلوب لإدارة المجموعة'}</div></div></div><div class="settings-content open">
+        ${google.loggedIn?`
+          <div style="display:flex;gap:12px;align-items:center;padding:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px">
+            <img src="${google.picture||`https://ui-avatars.com/api/?name=${google.name}&background=10b981&color=fff`}" style="width:48px;height:48px;border-radius:50%">
+            <div style="flex:1"><div style="font-weight:800">${google.name||google.email}</div><div style="font-size:12px;color:var(--muted)">${google.email}</div><div style="font-size:11px;color:var(--success)">✅ مسجل كمالك للمجموعة - Owner</div></div>
+            <button class="btn btn-danger" style="padding:6px 12px;font-size:11px" onclick="logout()">تسجيل خروج</button>
+          </div>
+          <div style="margin-top:12px;font-size:11px;line-height:1.6;background:#f8fafc;padding:12px;border-radius:10px">• هذا الحساب هو مالك مساحة العمل (is_owner)<br>• يظهر في إعدادات المجموعة وصلاحياته كاملة<br>• في الأصلي: يُخزن في google_auth (id=1) + owner_google_id في settings<br>• التوكن يُستخدم لمصادقة Firebase RTDB REST</div>
+        `:`
+          <div style="text-align:center;padding:20px">
+            <div style="font-size:32px;margin-bottom:8px">🔐</div>
+            <div style="font-weight:700;margin-bottom:6px">لم يتم تسجيل Google</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:12px">سجل دخولك كمالك للمجموعة لإدارة الأجهزة والمستخدمين</div>
+            <button class="google-btn" onclick="signInWithGoogle()" style="max-width:300px;margin:0 auto">
+              <svg class="google-icon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              تسجيل الدخول عبر Google
+            </button>
+          </div>
+        `}
+      </div></div>
+
+      <div class="settings-section open"><div class="settings-header"><div class="settings-icon" style="background:#ede9fe;color:#7c3aed">🏢</div><div style="flex:1"><div style="font-weight:800">المجموعة وربط الأجهزة</div><div style="font-size:11px;color:var(--muted)">دعوة سحابية QR+PIN، انضمام، نقل ملكية</div></div></div><div class="settings-content open">
+        <div style="display:grid;gap:8px">
+          <button class="btn btn-primary" onclick="createInvite()">☁️ ربط جهاز جديد عبر السحابة (QR + PIN)</button>
+          <button class="btn btn-ghost" onclick="switchScreen('group')">🏢 إدارة المجموعة الكاملة</button>
+          <button class="btn btn-ghost" onclick="switchScreen('joinRequests')">🔔 طلبات الانضمام (${document.getElementById('statJoins')?.textContent||0})</button>
+        </div>
+      </div></div>
+    `;
+  }catch(e){toast(e.message,'error')}
+}
+async function saveSettings(){
+  const data={businessName:document.getElementById('s_businessName').value,businessNameEn:document.getElementById('s_businessNameEn').value,address:document.getElementById('s_address').value,phone:document.getElementById('s_phone').value};
+  try{await apiPost('/api/settings',data); toast('تم حفظ الإعدادات ✅')}catch(e){toast(e.message,'error')}
+}
+async function loadGroupInfo(){
+  try{
+    const s=await apiGet('/api/settings');
+    const el=document.getElementById('groupInfo');
+    if(el) el.innerHTML=`<div style="display:grid;gap:8px;font-size:12px"><div style="display:flex;justify-content:space-between"><span>المؤسسة:</span><b>${s.businessName||'-'}</b></div><div style="display:flex;justify-content:space-between"><span>الوضع:</span><span class="chip chip-success">${s.workspaceMode||'enterprise'}</span></div><div style="display:flex;justify-content:space-between"><span>Backend:</span><span style="font-size:10px;word-break:break-all">${s.cloudBackendUrl||'-'}</span></div></div>`;
+  }catch(e){}
+}
+async function loadReports(){
+  try{
+    const dash=await apiGet('/api/dashboard');
+    const itemsData=await apiGet('/api/items');
+    document.getElementById('reportSummary').innerHTML=`<div style="display:grid;gap:8px"><div style="display:flex;justify-content:space-between"><span>مبيعات:</span><b>${formatMoney(dash.totalSales)}</b></div><div style="display:flex;justify-content:space-between"><span>ديون لنا:</span><b style="color:var(--danger)">${formatMoney(dash.totalDebts)}</b></div><div style="display:flex;justify-content:space-between"><span>ديون علينا:</span><b style="color:var(--success)">${formatMoney(dash.totalCredits)}</b></div></div>`;
+    const low=itemsData.filter(i=>i.quantity<=i.min_quantity);
+    document.getElementById('reportLowStock').innerHTML=low.length?low.map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9"><span>${i.name}</span><span style="color:var(--danger);font-weight:700">${i.quantity}</span></div>`).join(''):'<div style="color:var(--success)">✅ لا تنبيهات</div>';
+  }catch(e){}
+}
+async function exportBackup(){
+  try{
+    const data=await apiGet('/api/backup/export');
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`nexora-backup-${new Date().toISOString().split('T')[0]}.json`; a.click();
+    toast('تم تصدير النسخة ✅');
+  }catch(e){toast(e.message,'error')}
+}
+
+// Init
+checkGoogleStatus();
+</script>
+</body>
+</html>
