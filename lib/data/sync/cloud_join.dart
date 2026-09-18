@@ -36,11 +36,9 @@ import '../../core/cloud_config.dart';
 const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 /// مهلة بقاء طلب الانضمام بعد أن يُسوّى أمره (قبولاً أو رفضاً).
-///
-/// تُترك العقدة هذه المدة قبل تقليمها لسببين:
-///  ١) الجهاز المنتظر قد يكون offline لحظة القرار، فيحتاج نافذة لالتقاطه.
-///  ٢) حذفها فوراً يجعل `pollJoinStatus` يُعيد `missing` فيعلّق العضو.
-const Duration _approvedRequestTtl = Duration(minutes: 10);
+/// تُحذف العقدة بعد هذه المدة إن لم يحذفها العضو بنفسه بعد إكمال الربط.
+/// لا تُستخدم كـ «وقت انتظار» — العضو يرى «تم الارتباط» فور الموافقة.
+const Duration _approvedRequestTtl = Duration(minutes: 2);
 
   /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
 ///
@@ -897,13 +895,17 @@ class CloudJoin {
     final invite = await _getJson('$root/invites/$tok.json');
     if (invite == null) {
       throw const CloudJoinException(
-          'رمز الدعوة غير صحيح أو انتهت صلاحيته أو استُخدم من قبل.');
+          '❌ فشل الربط: رمز الدعوة غير صحيح أو منتهي أو استُخدم من قبل. '
+          'السبب: الدعوة غير موجودة في السحابة. '
+          'الحل: تأكد من الرمز أو اطلب دعوة جديدة من المدير.');
     }
     final exp = DateTime.tryParse('${invite['expiresAt'] ?? ''}');
     if (exp == null || DateTime.now().isAfter(exp)) {
       await _delete('$root/invites/$tok.json');
       throw const CloudJoinException(
-          'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
+          '❌ فشل الربط: انتهت صلاحية رمز الدعوة (15 دقيقة). '
+          'السبب: انتهاء المهلة الزمنية للدعوة. '
+          'الحل: اطلب من المدير إنشاء دعوة جديدة.');
     }
 
     // ══ (إصلاح جذري — منع فقدان البيانات) ══
@@ -917,7 +919,9 @@ class CloudJoin {
     final snapData = snapRec?['data'];
     if (snapData is! Map) {
       throw const CloudJoinException(
-          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
+          '❌ فشل الربط: لا توجد نسخة بيانات للمجموعة في السحابة. '
+          'السبب: المدير لم يرفع اللقطة أو انتهت صلاحية الدعوة. '
+          'الحل: اطلب من المدير إنشاء دعوة جديدة وإعادة المحاولة.');
     }
     final snap = Map<String, Object?>.from(snapData);
 
@@ -1716,12 +1720,10 @@ class CloudJoin {
       ...?req,
       'status': 'approved',
       'role': role.code,
-      // (ساعة الخادم) توقيت الموافقة من Firebase لا من ساعة جهاز المدير —
-      // فروق التوقيت المحلي كانت تُفسد ترتيب الطلبات وحساب المهل.
       'approvedAt': {'.sv': 'timestamp'},
-      // (تنظيف مؤجل بدل الحذف الفوري) الطلب يبقى 10 دقائق بعد الموافقة
-      // ليتلقّاه الجهاز المنتظر، ثم يُقلَّم تلقائياً. الحذف الفوري كان
-      // يجعل العضو يقرأ missing فيعلّق إلى الأبد.
+      // لا وقت انتظار: العضو يرى «تم الارتباط» فوراً والمزامنة تتم بعدها.
+      // الطلب يُحذف تلقائياً بعد إكمال العضو للربط في completeApprovedJoin،
+      // ويُترك دقيقتين فقط كحد أقصى إن بقي offline ليُلتقط ثم يُقلَّم.
       'deleteAfterMs': DateTime.now().millisecondsSinceEpoch +
           _approvedRequestTtl.inMilliseconds,
       'expiresAt':

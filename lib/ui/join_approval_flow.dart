@@ -48,15 +48,12 @@ class JoinApprovalScreen extends ConsumerStatefulWidget {
 
 enum _JoinStep { naming, method, waiting, done, rejected }
 
-/// (منع الاستنزاف) أقصى عدد لمحاولات الترطيب التلقائي قبل إيقاف كل شيء
-/// وتسليم القرار للمستخدم عبر زر «إعادة المحاولة».
-const int _maxHydrateRetries = 3;
+/// ممنوع إضافة وقت انتظار عند الموافقة: محاولة واحدة فقط، ثم رسالة صريحة.
+const int _maxHydrateRetries = 1;
 
-/// (منع الاستنزاف) التباعد التصاعدي بين المحاولات: 15s ثم 30s ثم 60s.
+/// لا تباعد — فشل الربط يظهر فوراً برسالة واضحة، بلا انتظار 15/30/60 ثانية.
 const List<Duration> _backoffSteps = <Duration>[
-  Duration(seconds: 15),
-  Duration(seconds: 30),
-  Duration(seconds: 60),
+  Duration(seconds: 1),
 ];
 
 /// (دفعة 65) فاصل الاستطلاع **الثابت** لحالة الموافقة. كان التباعد
@@ -370,10 +367,27 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     }
   }
 
-  // ---------- خطوة 4: الترطيب النظيف ----------
+  // ---------- خطوة 4: الترطيب النظيف — إشعار فوري بلا انتظار ----------
   Future<void> _hydrate() async {
     if (_busy || !mounted) return;
-    setState(() => _busy = true);
+    // ممنوع وقت انتظار عند الموافقة: نظهر «تم الارتباط» فوراً
+    if (mounted) {
+      setState(() {
+        _step = _JoinStep.done;
+        _busy = true;
+        _error = '';
+      });
+      Sfx.pair();
+      // إشعار فوري صريح
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ تم الارتباط والمزامنة فيما بعد',
+              style: TextStyle(fontWeight: FontWeight.w800)),
+          backgroundColor: Color(0xFF16A34A),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
     final container = ProviderScope.containerOf(context, listen: false);
     try {
       final repo = container.read(repoProvider);
@@ -387,56 +401,46 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       engine.stop();
       await engine.start();
       container.read(refreshProvider.notifier).state++;
-      Sfx.pair();
       if (!mounted) return;
-      setState(() => _step = _JoinStep.done);
-      await Future.delayed(const Duration(milliseconds: 900));
-      if (!mounted) return;
+      // انتقال فوري للرئيسية بعد الربط — المزامنة تتم في الخلفية
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LockGate(child: HomeShell())),
         (_) => false,
       );
     } catch (e) {
       if (!mounted) return;
-      // (لا استنزاف) خطأ نهائي (طرد/إبطال/مقاعد/اشتراك/صلاحية) لا يُعاد
-      // أبداً: تكراره لن يغيّر النتيجة، بل يُبقي الشاشة تستنزف الشبكة
-      // وتُخفي السبب الحقيقي خلف «إعادة المحاولة» مفتوحة الأمد.
-      if (_isTerminalError(e)) {
-        _stopDrain();
-        Sfx.error();
-        setState(() {
-          _busy = false;
-          _gaveUp = true;
-          _step = _JoinStep.waiting;
-          _error = 'توقّف الانضمام: $e — راجع مدير المجموعة.';
-        });
-        return;
+      _stopDrain();
+      Sfx.error();
+      // رسالة خطأ صريحة وقاطعة توضح السبب والحل — بلا انتظار
+      String explicitError;
+      final msg = e.toString();
+      if (msg.contains('لا توجد نسخة بيانات')) {
+        explicitError = '❌ فشل الربط: لا توجد نسخة بيانات للمجموعة في السحابة.\n'
+            'السبب: المدير لم يرفع اللقطة أو انتهت صلاحية الدعوة.\n'
+            'الحل: اطلب من المدير إنشاء دعوة جديدة.';
+      } else if (msg.contains('رمز الدعوة') || msg.contains('غير صحيح')) {
+        explicitError = '❌ فشل الربط: رمز الدعوة غير صالح أو منتهي.\n'
+            'السبب: $msg\n'
+            'الحل: اطلب دعوة جديدة من المدير.';
+      } else if (msg.contains('المقاعد') || msg.contains('مقعد') || msg.contains('seat')) {
+        explicitError = '❌ فشل الربط: تم استنفاد مقاعد الباقة.\n'
+            'السبب: $msg\n'
+            'الحل: ترقية الاشتراك أو إزالة جهاز قديم.';
+      } else if (msg.contains('شبكة') || msg.contains('الاتصال') || msg.contains('HTTP')) {
+        explicitError = '❌ فشل الربط: تعذر الاتصال بالسحابة.\n'
+            'السبب: $msg\n'
+            'الحل: تحقق من الإنترنت وأعد المحاولة.';
+      } else {
+        explicitError = '❌ فشل الربط: $msg\n'
+            'السبب: خطأ غير متوقع أثناء المزامنة.\n'
+            'الحل: أعد المحاولة أو راجع مدير المجموعة.';
       }
-      _hydrateAttempts++;
-      if (_hydrateAttempts >= _maxHydrateRetries) {
-        // (منع الاستنزاف) استُنفدت المحاولات: إيقاف فوري للمؤقت وقناة SSE،
-        // ورسالة واضحة مع زر يدوي بدل ترك المستخدم معلقاً إلى الأبد.
-        _stopDrain();
-        Sfx.error();
-        setState(() {
-          _busy = false;
-          _gaveUp = true;
-          _step = _JoinStep.waiting;
-          _error = 'تعذّر تنزيل نسخة المجموعة بعد $_maxHydrateRetries '
-              'محاولات: $e';
-        });
-        return;
-      }
-      // تباعد تصاعدي: 15s → 30s → 60s، ثم توقف تام.
-      final delay = _nextPollDelay();
       setState(() {
         _busy = false;
+        _gaveUp = true;
         _step = _JoinStep.waiting;
-        _error = 'تعذّر تنزيل نسخة المجموعة: $e — '
-            'ستُعاد المحاولة خلال ${delay.inSeconds} ثانية '
-            '(المحاولة $_hydrateAttempts من $_maxHydrateRetries).';
+        _error = explicitError;
       });
-      _schedulePoll(delay);
     }
   }
 
@@ -646,8 +650,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
 
   // ═══════════ خطوة 3: الانتظار ═══════════
   Widget _waitingStep() {
-    // (منع الاستنزاف) بعد استنفاد المحاولات: لا مؤقت ولا قناة تعمل —
-    // بطاقة خطأ وزر يدوي فقط بدل انتظار لا ينتهي.
     if (_gaveUp) return _giveUpStep();
     return Column(
       children: [
@@ -668,8 +670,8 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         ),
         const SizedBox(height: 10),
         Text(
-          'وصل طلبك إلى جهاز المدير. فور القبول سيُهيأ هذا الجهاز '
-          'تلقائياً ببيانات المجموعة — لا تغلق هذه الشاشة.',
+          'وصل طلبك إلى جهاز المدير. فور القبول سيظهر «تم الارتباط والمزامنة فيما بعد» '
+          'وتنتقل للرئيسية فوراً — المزامنة تتم في الخلفية.',
           textAlign: TextAlign.center,
           style: TextStyle(
               fontSize: 12.5, height: 1.7, color: AppColors.text2Of(context)),
@@ -713,9 +715,13 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
           SizedBox(height: 20),
           Icon(Icons.check_circle, size: 64, color: Color(0xFF16A34A)),
           SizedBox(height: 18),
-          Text('تمت الموافقة! جارٍ تجهيز الجهاز…',
+          Text('✅ تم الارتباط والمزامنة فيما بعد',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          SizedBox(height: 8),
+          Text('تم ربط جهازك بالمجموعة بنجاح. سيتم مزامنة البيانات في الخلفية.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12.5, height: 1.6, color: Colors.black54)),
         ],
       );
 
