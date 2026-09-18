@@ -5,7 +5,7 @@
       ".write": "auth != null",
       "$ws": {
         "operations": {
-          ".indexOn": ["server_ts", "timestamp", "$key"],
+          ".indexOn": ["server_ts", "timestamp"],
           ".read": "auth != null",
           ".write": "auth != null"
         },
