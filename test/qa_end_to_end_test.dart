@@ -19,6 +19,19 @@ import 'package:nexora_app/ui/tx_form.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:nexora_app/core/cloud_config.dart';
 
+/// (استقرار CI) الكتابة إلى SQLite تتم في مهمة غير متزامنة بعد إغلاق
+/// النموذج؛ تحت حمل الآلة قد تتأخر بضعة أجزاء من الثانية، والتأكيد
+/// الفوري كان يرى صفر صفوف في fail متقلّب. ننتظر وصول الصف بحدّ زمني
+/// واضح، ثم نُبقي التأكيد نفسه (hasLength(1)) صارماً في كشف التكرار.
+Future<List<Tx>> _awaitTransactions(Repo repo, {int expected = 1}) async {
+  for (var i = 0; i < 80; i++) {
+    final rows = await repo.transactions();
+    if (rows.length >= expected) return rows;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  return repo.transactions();
+}
+
 Future<void> _drain(WidgetTester tester) async {
   for (var i = 0; i < 5; i++) {
     await tester
@@ -113,7 +126,7 @@ void main() {
       // (دفعة 58 — متطلب 10) البطاقة تعرض «الوصف · HH:MM» — نطابق جزئياً.
       expect(find.textContaining('QA UI SAVE'), findsOneWidget);
       await tester.runAsync(() async {
-        final rows = await repo.transactions();
+        final rows = await _awaitTransactions(repo);
         expect(rows, hasLength(1));
         expect(rows.single.amount, 500);
         expect(rows.single.reference, '1');
@@ -130,7 +143,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       engine.stop();
       await tester.runAsync(() async {
-        expect(await repo.transactions(), hasLength(1));
+        expect(await _awaitTransactions(repo), hasLength(1));
         expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
         // (استقرار CI) إثبات الاستمرارية على القرص يتم عبر **نسخة** من
         // ملف القاعدة ومقبض منفصل تماماً — بلا إغلاق مقبض `repo` أثناء
