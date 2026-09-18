@@ -102,7 +102,6 @@ void main() {
             () => Future<void>.delayed(const Duration(milliseconds: 60)));
         await tester.pump(const Duration(milliseconds: 120));
       }
-      await tester.pumpAndSettle(const Duration(milliseconds: 100));
       // شاشة المبيعات فُتحت فعلاً والنموذج أُغلق.
       expect(find.byType(PosScreen), findsOneWidget);
       expect(find.byType(TxForm), findsNothing);
