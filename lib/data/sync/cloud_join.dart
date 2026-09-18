@@ -294,7 +294,7 @@ class CloudJoin {
       await _putJson(path, {
         'role': 'owner',
         'uid': uid,
-        'deviceId': repo.requireDeviceId,
+        'deviceId': devId,
         'email': (st[FirebaseAuthRest.emailKey] ?? '').trim(),
         'joined_at': {'.sv': 'timestamp'},
       }, timeout: const Duration(seconds: 20));
@@ -1188,6 +1188,12 @@ class CloudJoin {
         uid == previousUid) {
       return false;
     }
+    // `requireDeviceId` **يرمي** StateError إن لم تُهيَّأ هوية الجهاز (دفعة 57:
+    // الفشل بصوت عالٍ بدل 'DEVICE-UNKNOWN' الصامت) — وهو هنا مسار خلفية لا
+    // يجوز أن يرمي، فنقرأ المعرّف المحفوظ بلا توليد ولا رمي: غيابه يعني أن
+    // initSyncInfra لم يكتمل بعد، وعندها نؤجّل الترحيل إلى دورة لاحقة.
+    final devId = await getDeviceIdCached(repo) ?? '';
+    if (devId.isEmpty) return false;
     final root = _root(backendUrl, workspaceId);
     final oldPath =
         '$root/members/${Uri.encodeComponent(previousUid)}.json';
@@ -1204,7 +1210,7 @@ class CloudJoin {
       await _putJson('$root/members/${Uri.encodeComponent(uid)}.json', {
         ...old,
         'uid': uid,
-        'deviceId': repo.requireDeviceId,
+        'deviceId': devId,
         'migrated_from': previousUid,
         'migrated_at': {'.sv': 'timestamp'},
       }, timeout: const Duration(seconds: 20));
@@ -1230,7 +1236,8 @@ class CloudJoin {
   }) async {
     final uid = FirebaseAuthRest.currentUid;
     if (backendUrl.trim().isEmpty || uid.isEmpty) return false;
-    final devId = repo.requireDeviceId;
+    // انظر migrateMemberUid: وصول غير رامٍ (المسار خلفية دورية).
+    final devId = await getDeviceIdCached(repo) ?? '';
     if (devId.isEmpty) return false;
     final root = _root(backendUrl, workspaceId);
     Map<String, dynamic>? all;

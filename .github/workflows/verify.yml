@@ -89,7 +89,33 @@ jobs:
 
       - name: Run test shard
         run: |
-          set -o pipefail
+          # السجلات الخام تُخزَّن على مضيف خارجي قد يتعذّر تنزيله (كما في
+          # البيئات المحجوبة بقائمة سماح TLS)، فيصير الفشل «exit code 1»
+          # بلا أسماء. لذلك تُلتقط أسماء الاختبارات الفاشلة في ملخّص
+          # الخطوة — وهو قابل للقراءة عبر API المستودع دون تنزيل سجل.
+          set +e
           flutter test --reporter expanded \
             --total-shards ${{ strategy.job-total }} \
-            --shard-index ${{ matrix.shard }}
+            --shard-index ${{ matrix.shard }} 2>&1 | tee /tmp/shard.log
+          CODE=${PIPESTATUS[0]}
+
+          FAILING=$(grep -oE '^[0-9]{2}:[0-9]{2} \+[0-9]+( -[0-9]+)?: \[[^]]+\] .*\[E\]$' /tmp/shard.log \
+            | sed -E 's/^[0-9:]+ \+[0-9]+( -[0-9]+)?: \[//; s/\] \[E\]$//' || true)
+          {
+            echo "### شريحة ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo ""
+            if [ -n "$FAILING" ]; then
+              echo "عدد الفاشل: $(printf '%s\n' "$FAILING" | wc -l)"
+              echo ""
+              printf '%s\n' "$FAILING" | sed 's/^/- `/' | sed 's/$/`/'
+            else
+              echo "_لا اختبارات فاشلة محدَّدة الاسم._"
+            fi
+            echo ""
+            echo "آخر 60 سطراً من السجل:"
+            echo '```'
+            tail -n 60 /tmp/shard.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $CODE
