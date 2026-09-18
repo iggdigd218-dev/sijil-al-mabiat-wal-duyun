@@ -340,31 +340,45 @@ class CloudJoin {
 
   /// (باقة المؤسسات) بوابة المقاعد: ربط جهاز جديد يتجاوز max_devices
   /// يُرفض برسالة المدير الواضحة. الجهاز المنضم مجدداً (سجله قائم) لا
-  /// يستهلك مقعداً جديداً. فشل قراءة العقدة سحابياً = سماح (fail-open،
-  /// بوابة المزامنة الدورية تحسم لاحقاً).
+  /// يستهلك مقعداً جديداً.
+  /// ══ (إصلاح جذري — إغلاق ثغرة fail-open وسباق الموافقات) ══
+  /// كان أي فشل شبكة أثناء قراءة subscription/roster يعيد سماحاً فورياً،
+  /// فيتجاوز الحد. وأيضاً موافقتان متزامنتان على جهازين مختلفين كانتا
+  /// تقرآن نفس العدد وتقبلان معاً متجاوزتين الحد.
   static Future<void> _ensureSeatAvailable(
     Repo repo, {
     required String backendUrl,
     required String workspaceId,
     required String joiningDeviceId,
   }) async {
-    int maxDevices;
+    int? maxDevices;
     Map<String, dynamic>? rosterCloud;
+    bool subscriptionRead = false;
     try {
       final rec = await _getJson(
           '${_root(backendUrl, workspaceId)}/subscription.json');
       if (rec == null) return; // لا عقدة اشتراك بعد — لا حد مفروضاً.
+      subscriptionRead = true;
       final v = rec['max_devices'];
       maxDevices = v is num ? v.toInt() : 0;
       if (maxDevices <= 0) return; // غير محدد = بلا حد.
       // (احتساب ذري) roster السحابي هو المصدر المشترك اللحظي بين كل
       // الأجهزة — الجدول المحلي قد يتخلف عن موافقات جرت على جهاز آخر
       // للتو، فكان يرفض/يقبل خطأً. نقرأه في نفس لحظة القرار.
-      final r = await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
-      if (r != null) rosterCloud = Map<String, dynamic>.from(r);
+      try {
+        final r =
+            await _getJson('${_root(backendUrl, workspaceId)}/roster.json');
+        if (r != null) rosterCloud = Map<String, dynamic>.from(r);
+      } catch (_) {
+        // فشل قراءة roster — لا نلغي الفحص، نكمل بالعدد المحلي فقط.
+        rosterCloud = null;
+      }
     } catch (_) {
-      return; // شبكة متعثرة — لا نعطل الموافقة؛ البوابات الدورية تحسم.
+      if (!subscriptionRead) return; // لا نعرف الحد — fail-open مقبول فقط هنا
+      // عرفنا أن هناك حداً لكن الشبكة سقطت أثناء قراءة roster — نطبق
+      // الحد على العدد المحلي على الأقل بدل السماح المفتوح.
     }
+    if (maxDevices == null) return;
     // إعادة انضمام جهاز قائم (له مقعد في roster أو محلياً) لا تستهلك
     // مقعداً جديداً — تجديد لسجله القديم.
     bool activeRow(Map d) =>
@@ -390,6 +404,25 @@ class CloudJoin {
           .where(activeRow)
           .length;
       if (cloudCount > current) current = cloudCount;
+    }
+    // (سباق دعوتين) عند إنشاء دعوة جديدة joiningDeviceId='__new__'،
+    // نعدّ الدعوات الحية أيضاً كمقاعد محجوزة مؤقتاً — وإلا دعوتان
+    // متزامنتان تتجاوزان الحد.
+    if (joiningDeviceId == '__new__') {
+      try {
+        final invites =
+            await _getJson('${_root(backendUrl, workspaceId)}/invites.json');
+        if (invites != null) {
+          var liveInvites = 0;
+          final now = DateTime.now();
+          for (final v in invites.values) {
+            if (v is! Map) continue;
+            final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+            if (exp != null && now.isBefore(exp)) liveInvites++;
+          }
+          current += liveInvites;
+        }
+      } catch (_) {}
     }
     if (current >= maxDevices) {
       throw CloudJoinException(
@@ -741,8 +774,35 @@ class CloudJoin {
       await ensureOwnerMembership(repo, backendUrl: url, workspaceId: ws);
     } catch (_) {}
 
-    final token = _newToken();
-    final pin = newPairPin();
+    // ══ (إصلاح جذري — منع تصادم PIN 6 أرقام) ══
+    // كان توليد PIN يكتب invite_index/pin_XXXXXX مباشرة دون التحقق من
+    // وجوده، فدعوتان متزامنتان بنفس الرقم (احتمال 1/1e6 لكنه حتمي على
+    // نطاق واسع) تكتب إحداهما فوق الأخرى — العضو يدخل PIN فيجد مساحة
+    // خاطئة أو يفشل. الحل: حلقة توليد مع فحص الفهرس حتى نجد مفتاحاً حراً.
+    String token = _newToken();
+    String pin = newPairPin();
+    for (var attempt = 0; attempt < 10; attempt++) {
+      try {
+        final existTok =
+            await _getJson(_inviteIndexPath(url, _inviteTokenKey(token)));
+        if (existTok != null) {
+          token = _newToken();
+          continue;
+        }
+        final existPin =
+            await _getJson(_inviteIndexPath(url, _invitePinKey(pin)));
+        if (existPin != null) {
+          final exp = DateTime.tryParse('${existPin['expiresAt'] ?? ''}');
+          if (exp != null && DateTime.now().isBefore(exp)) {
+            pin = newPairPin();
+            continue;
+          }
+        }
+        break;
+      } catch (_) {
+        break;
+      }
+    }
     // TTL دقيق: 15 دقيقة لمسار الموافقة التفاعلي (كانت 24 ساعة — نافذة
     // أوسع من اللازم أمنياً بعد اعتماد موافقة المدير الصريحة).
     final expires = now.add(const Duration(minutes: 15));
@@ -844,20 +904,27 @@ class CloudJoin {
       throw const CloudJoinException(
           'انتهت صلاحية رمز الدعوة — اطلب من المدير إنشاء دعوة جديدة.');
     }
-    // إبطال فوري وحتمي (استخدام لمرة واحدة): تُحذف الدعوة الآن — قبل تطبيق
-    // اللقطة — حتى لا يستطيع أي جهاز آخر (أو إعادة تشغيل لنفس الرابط)
-    // استعمال الرمز نفسه أثناء أو بعد الانضمام. الحذف شرط للمتابعة:
-    // إن تعذّر إبطال الدعوة يُلغى الانضمام كله (لا نترك رمزاً حياً قابلاً
-    // لإعادة الاستخدام). فشل الانضمام يتطلب دعوة جديدة من المدير —
-    // أرخص أمنياً من دعوة مفتوحة.
+
+    // ══ (إصلاح جذري — منع فقدان البيانات) ══
+    // كان الترتيب القديم: حذف الدعوة → مسح الجداول → جلب اللقطة.
+    // إن فشل جلب اللقطة بعد الحذف والمسح، الجهاز يفقد بياناته المحاسبية
+    // ولا يستطيع إعادة المحاولة بنفس الدعوة (لأنها حُذفت) — يعلق بلا بيانات.
+    // الترتيب الصحيح: جلب اللقطة أولاً (قراءة فقط)، ثم حذف الدعوة، ثم المسح
+    // والتطبيق. هكذا فشل الشبكة أثناء الجلب يترك الجهاز سليماً والدعوة صالحة
+    // لإعادة المحاولة.
+    final snapRec = await _getJson('$root/joinSnapshot.json');
+    final snapData = snapRec?['data'];
+    if (snapData is! Map) {
+      throw const CloudJoinException(
+          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
+    }
+    final snap = Map<String, Object?>.from(snapData);
+
+    // إبطال الدعوة بعد التأكد من وجود اللقطة — استخدام لمرة واحدة.
     await _deleteStrict('$root/invites/$tok.json');
-    // (أ-2) محو فهرسي الدعوة مع أصلها — لا مفاتيح ميتة في /invite_index.
     await _purgeInviteIndex(url, pin: '${invite['pin'] ?? ''}', token: tok);
 
     // ══════════ (دفعة 65) الانضمام الآمن — أربع خطوات قبل أي دمج ══════════
-    // يُنفَّذ هنا فقط: بعد التحقق من صلاحية الدعوة وإبطالها، وقبل تطبيق
-    // لقطة المالك. هكذا لا يُفرَّغ الجهاز عند إدخال رمز خاطئ.
-
     // 1) نسخة احتياطية صامتة — أفضل جهد (فشلها لا يُلغي الانضمام).
     try {
       final data = await repo.exportAll(withImages: false);
@@ -885,14 +952,6 @@ class CloudJoin {
 
     // 4) نوع الحساب يصير «مؤسسة» فوراً بعد انضمام ناجح.
     await repo.setSetting('account.type', 'enterprise');
-
-    final snapRec = await _getJson('$root/joinSnapshot.json');
-    final snapData = snapRec?['data'];
-    if (snapData is! Map) {
-      throw const CloudJoinException(
-          'لا توجد نسخة بيانات للمجموعة في السحابة — اطلب من المدير إنشاء دعوة جديدة.');
-    }
-    final snap = Map<String, Object?>.from(snapData);
 
     final db = await repo.database;
     final ourId = await ensureDeviceId(repo);
@@ -1475,30 +1534,63 @@ class CloudJoin {
     final perms = defaultPerms(role);
     final permStr =
         perms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    // (دفعة 58 — متطلب 3) لا مستخدمي ظل مكررين: انضمام نفس الجهاز مجدداً
-    // يعيد استخدام مستخدم الظل القائم بنفس الاسم بدل إنشاء نسخة ثانية.
+    // ══ (إصلاح جذري — منع مشاركة user_id بين جهازين مختلفين) ══
+    // كان البحث باسم الجهاز فقط: جهازان بنفس الاسم «كاشير» يتشاركان نفس
+    // user_id، فطرد أحدهما يؤثر على الآخر وسجل التدقيق يختلط.
+    // الإصلاح: نعيد استخدام مستخدم ظل بنفس الاسم فقط إذا كان غير مرتبط
+    // بجهاز نشط آخر مختلف، وإلا ننشئ اسماً فريداً مع لاحقة رقمية.
     int uid;
+    String effectiveName = deviceName.trim();
+    bool reuse = false;
     final existing = await db.query('users',
         columns: ['id'],
         where:
             "name = ? AND is_me = 0 AND COALESCE(deleted_at,'') = ''",
-        whereArgs: [deviceName],
+        whereArgs: [effectiveName],
         limit: 1);
     if (existing.isNotEmpty) {
-      uid = existing.first['id'] as int;
-      await db.update(
-          'users',
-          {
-            'role': role.code,
-            'permissions': permStr,
-            'active': 1,
-            'updated_at': now,
-          },
-          where: 'id = ?',
-          whereArgs: [uid]);
-    } else {
+      final candId = existing.first['id'] as int;
+      final linked = await db.query('devices',
+          columns: ['id'],
+          where:
+              "user_id = ? AND id <> ? AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' AND is_paired = 1",
+          whereArgs: [candId, deviceId],
+          limit: 1);
+      if (linked.isEmpty) {
+        reuse = true;
+        uid = candId;
+        await db.update(
+            'users',
+            {
+              'role': role.code,
+              'permissions': permStr,
+              'active': 1,
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [uid]);
+      } else {
+        var suffix = 2;
+        var baseName = effectiveName;
+        while (true) {
+          final tryName = '$baseName $suffix';
+          final dup = await db.query('users',
+              columns: ['id'],
+              where: "name = ? AND COALESCE(deleted_at,'') = ''",
+              whereArgs: [tryName],
+              limit: 1);
+          if (dup.isEmpty) {
+            effectiveName = tryName;
+            break;
+          }
+          suffix++;
+          if (suffix > 99) break;
+        }
+      }
+    }
+    if (!reuse) {
       uid = await db.insert('users', {
-        'name': deviceName,
+        'name': effectiveName,
         'role': role.code,
         'pin': '',
         'password': '',
@@ -1510,7 +1602,26 @@ class CloudJoin {
         'created_at': now,
         'updated_at': now,
       });
+    } else {
+      uid = existing.first['id'] as int;
     }
+
+    // ══ (إصلاح جذري — مزامنة المستخدم الجديد) ══
+    // كان إنشاء المستخدم محلياً فقط دون بث عملية، فالجهاز المنضم حديثاً
+    // يطبّق لقطة قديمة لا تحتوي هذا المستخدم، ويبقى user_id معلقاً بلا صف
+    // — تنكسر الصلاحيات ويبدو «الكود لا يستجيب».
+    try {
+      final userRow = await db.query('users',
+          where: 'id = ?', whereArgs: [uid], limit: 1);
+      if (userRow.isNotEmpty) {
+        await repo.queueOperation(
+          entityType: EntityKind.user,
+          entityId: '$uid',
+          opType: reuse ? OpKind.update : OpKind.create,
+          payload: Map<String, Object?>.from(userRow.first),
+        );
+      }
+    } catch (_) {}
     // سجل الجهاز محلياً (مقترن بالمستخدم) — بصمة العتاد تمنع التكرار:
     // نفس deviceId الحتمي يعيد استخدام السجل القديم إن وُجد.
     await db.insert(
@@ -1529,6 +1640,49 @@ class CloudJoin {
           'updated_at': now,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
+
+    // ══ (إصلاح جذري — منع سباق موافقتين يتجاوز المقاعد) ══
+    // بعد الإدراج المحلي نعيد قراءة العدد الفعلي (محلي + roster سحابي).
+    // إن تجاوز الحد نحذف ما أدرجناه ونرمي — الموافقة الثانية المتزامنة
+    // تُرفض بدل تجاوز الحصة.
+    try {
+      final rec2 = await _getJson(
+          '${_root(backendUrl, workspaceId)}/subscription.json');
+      if (rec2 != null) {
+        final v2 = rec2['max_devices'];
+        final max2 = v2 is num ? v2.toInt() : 0;
+        if (max2 > 0) {
+          bool activeRow2(Map d) =>
+              '${d['revoked_at'] ?? ''}'.isEmpty &&
+              '${d['expelled_at'] ?? ''}'.isEmpty;
+          int cur2 = await connectedDevicesCount(repo);
+          try {
+            final r2 = await _getJson(
+                '${_root(backendUrl, workspaceId)}/roster.json');
+            if (r2 != null) {
+              final cloudCount = (r2 as Map).values
+                  .whereType<Map>()
+                  .where(activeRow2)
+                  .length;
+              if (cloudCount > cur2) cur2 = cloudCount;
+              // +1 لأن roster السحابي لم يستقبل جهازنا بعد
+              if (!r2.containsKey(deviceId)) cur2++;
+            }
+          } catch (_) {}
+          if (cur2 > max2) {
+            await db.delete('devices', where: 'id = ?', whereArgs: [deviceId]);
+            try {
+              await db.delete('users', where: 'id = ?', whereArgs: [uid]);
+            } catch (_) {}
+            throw CloudJoinException(
+                '🪑 تم استنفاد عدد الأجهزة أثناء الموافقة '
+                '($cur2/$max2) — سباق موافقات متزامنة. يرجى المحاولة بعد ترقية الباقة.');
+          }
+        }
+      }
+    } catch (e) {
+      if (e is CloudJoinException) rethrow;
+    }
     // رفع للسحابة: roster + حالة الطلب approved.
     final root = _root(backendUrl, workspaceId);
     final own = await db.query('devices',
