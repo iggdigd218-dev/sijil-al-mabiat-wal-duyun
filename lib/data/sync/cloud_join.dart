@@ -1549,6 +1549,38 @@ class CloudJoin {
     }, timeout: const Duration(seconds: 20));
   }
 
+  /// (استرداد 2026-09-19 — الموافقة التي اختفت قبل أول استطلاع) قراءة
+  /// سجل الجهاز في roster السحابي بلا رمي: null = غير موجود. المدير
+  /// يكتبه لحظة الموافقة (broadcastRosterChange والمصالحة الدورية) فهو
+  /// دليل قطعي على حدوث الموافقة حتى لو حذفت نسخة مدير أقدم عقدة
+  /// /joinRequests خلال ثانية واحدة — قبل أن يلحق العضو برؤيتها.
+  static Future<Map<String, dynamic>?> peekRosterEntry({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required String deviceId,
+  }) async {
+    try {
+      return await _getJson('${_root(backendUrl, workspaceId)}/roster/'
+          '${Uri.encodeComponent(deviceId)}.json');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// (استرداد 2026-09-19) سجل العضوية /members/{uid} — دليل ثانٍ.
+  static Future<Map<String, dynamic>?> peekMemberEntry({
+    required String backendUrl,
+    String workspaceId = 'default',
+    required String uid,
+  }) async {
+    try {
+      return await _getJson('${_root(backendUrl, workspaceId)}/members/'
+          '${Uri.encodeComponent(uid)}.json');
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// (المدير) حذف طلب انضمام/مغادرة من السحابة (رفض أو تنظيف).
   static Future<void> deleteJoinRequest({
     required String backendUrl,

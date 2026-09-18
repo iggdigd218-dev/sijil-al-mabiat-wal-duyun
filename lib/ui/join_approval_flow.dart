@@ -17,6 +17,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart'
     show CloudJoin, CloudJoinException, JoinRequestWatcher, kCloudOpTimeout;
 import '../data/sync/device_id.dart';
+import '../data/sync/firebase_auth_service.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
 import 'qr_pair_scanner.dart' show scanQrPair;
@@ -90,6 +91,9 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   bool _sentOnce = false;
   /// استُنفدت المحاولات التلقائية — بانتظار تدخّل المستخدم.
   bool _gaveUp = false;
+  /// (استرداد 2026-09-19) عدّات الاختفاء المتتالي: لا حكم نهائي من أول
+  /// «missing» — كتابة الموافقة قد تكون ما زالت في الطريق.
+  int _missingHits = 0;
   /// هل التوقف بسبب انتهاء مهلة انتظار المدير (وليس فشل تنزيل)؟
   bool _approvalTimeout = false;
   String _joinUrl = '';
@@ -325,6 +329,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       );
       final status = st['status'];
       if (status == 'approved') {
+        _missingHits = 0;
         // (منع الاستنزاف) القرار وصل: نوقف المؤقت والقناة قبل الترطيب.
         _stopDrain();
         _joinToken = st['token'] ?? '';
@@ -345,6 +350,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         Sfx.error();
         if (mounted) setState(() => _step = _JoinStep.rejected);
       } else if (status == 'pending' || status == '') {
+        _missingHits = 0;
         // (دفعة 65) الطلب ما زال قيد الانتظار — أعد الجدولة بعد 4 ثوانٍ.
         // هذا الفرع هو صمام الحلقة المفقود: بلا إعادة الجدولة كان
         // الاستطلاع ينفّذ محاولتين ثم يتوقف، فيبقى العضو معلّقاً على
@@ -356,11 +362,39 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         // نُكمل الترطيب بالتوكن المحفوظ — اللقطة والدعوة عقدتان مستقلتان
         // لا يمسهما حذف الطلب.
         final saved = await repo.settings();
-        if ((saved['pendingJoin.approved'] ?? '').toString().isNotEmpty) {
+        var canRecover =
+            (saved['pendingJoin.approved'] ?? '').toString().isNotEmpty;
+        if (!canRecover) {
+          // (استرداد 2026-09-19) نسخ المدير الأقدم (≤3.66.1) تحذف الطلب
+          // خلال ثانية من الموافقة — قبل أول استطلاع لنا، فلا نرى approved
+          // أبداً ولا يفيد العلم. الدليل القطعي المستقل عن عقدة الطلب:
+          // سجل roster لجهازنا (يكتبه المدير لحظة الموافقة) ثم سجل
+          // العضوية members/{uid}. وجد أحدهما = الموافقة حدثت فعلاً →
+          // نكمل الترطيب بالتوكن المحفوظ (الدعوة واللقطة عقدتان مستقلتان).
+          final ourId = await ensureDeviceId(repo);
+          final ros = await CloudJoin.peekRosterEntry(
+              backendUrl: _joinUrl, workspaceId: _joinWs, deviceId: ourId);
+          canRecover = ros != null;
+          if (!canRecover) {
+            final uid = FirebaseAuthRest.currentUid;
+            if (uid.isNotEmpty) {
+              final mem = await CloudJoin.peekMemberEntry(
+                  backendUrl: _joinUrl, workspaceId: _joinWs, uid: uid);
+              canRecover = mem != null;
+            }
+          }
+        }
+        if (canRecover) {
           final savedToken = (saved['pendingJoin.token'] ?? '').toString();
           if (savedToken.isNotEmpty) _joinToken = savedToken;
           _stopDrain();
           await _hydrate();
+          return;
+        }
+        // (لا حكم من أول اختفاء) كتابة الموافقة قد تكون ما زالت propagate:
+        // ثلاث دورات متتالية (~12 ثانية) بلا طلب ولا دليل = إلغاء حقيقي.
+        if (++_missingHits < 3) {
+          _scheduleNextPoll();
           return;
         }
         // (العضو لا يعلّق أبداً) عقدة الطلب لم تعد موجودة — حُذفت من
@@ -490,6 +524,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       _gaveUp = false;
       _approvalTimeout = false;
       _hydrateAttempts = 0;
+      _missingHits = 0;
       _error = '';
       _step = _JoinStep.waiting;
     });
