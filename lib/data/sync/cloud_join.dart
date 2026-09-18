@@ -1012,6 +1012,11 @@ class CloudJoin {
 
     // 3) هوية مجهولة مقترنة بمساحة المالك: تسجيل خروج أي حساب Google
     //    شخصي أولاً، ثم جلسة مجهولة مستقلة لا ترث بصمة الموظف.
+    // (ربط الأعضاء) نلتقط الـ uid **قبل** التدوير: عليه كُتبت عضويتنا في
+    // /members لحظة موافقة المدير (من حقل uid في طلب الانضمام)، والتدوير
+    // أدناه سيُبطله فيصدر uid جديد — فبدون هذا الالتقاط تبقى العضوية يتيمة
+    // ويصير الجهاز بلا مرجعية عضوية (انظر migrateMemberUid).
+    final uidBeforeRotation = FirebaseAuthRest.currentUid;
     try {
       await GoogleAuthService(await repo.database).signOut();
     } catch (e) {
@@ -1131,6 +1136,128 @@ class CloudJoin {
     try {
       await _delete('$root/invites/$tok.json');
     } catch (_) {}
+
+    // (ربط الأعضاء) آخر خطوة: ترحيل عضويتنا في /members من uid ما قبل
+    // التدوير إلى uid الجاري. تُنفَّذ **بعد** رفع roster حتى يتطابق
+    // السجلان (roster.user_id وmembers.uid) على نفس الهوية، فلا يظهر
+    // الجهاز لدى المدير بعضوية تختلف عمّا يصادق به فعلاً.
+    if (uidBeforeRotation.isNotEmpty &&
+        uidBeforeRotation != FirebaseAuthRest.currentUid) {
+      try {
+        await migrateMemberUid(repo,
+            backendUrl: url,
+            workspaceId: workspaceId,
+            previousUid: uidBeforeRotation);
+      } catch (_) {
+        // أفضل جهد — reconcileMemberMembership تعيده في دورة الصيانة.
+      }
+    }
+  }
+
+  /// (ربط الأعضاء) ترحيل عضوية الجهاز إثر **تدوير هويته** داخل `join()`.
+  ///
+  /// العلّة: `requestJoin` يسجّل في الطلب `uid` الجهاز الجاري
+  /// (`FirebaseAuthRest.currentUid`)، و`approveJoinRequest` يكتب على أساسه
+  /// `/members/{uid}` بالدور المعيّن. لكن `join()` — بعد الموافقة — يدوّر
+  /// الهوية قصداً (دفعة 65: `clearSession` ← `resetAnonymousSession` ←
+  /// `ensureScopedAnonymous` ← `initSilentAuth`) حتى لا يرث العضو بصمة
+  /// مساحته الشخصية، فيصدر Firebase **uid جديداً كلياً**. النتيجة:
+  ///   • `/members/{uid_القديم}` تبقى يتيمة لا يصادق بها أحد — ركام دائم.
+  ///   • الجهاز يصادق بـ uid الجديد **ولا عضوية له** في `/members`.
+  ///   • `/roster/{deviceId}` يُرفع بـ uid الجديد ← السجلان متناقضان.
+  ///
+  /// الأثر اليوم محدود لأن قواعد RTDB المنشورة تكتفي بـ `auth != null`، لكنه
+  /// يصبح **حرماناً كاملاً من المزامنة** لحظة تشديد القواعد إلى مرجعية
+  /// `/members/{auth.uid}` — وهي المرجعية التي تصفها تعليقات هذا الملف نفسه
+  /// («هذه العقدة هي مرجع قواعد الأمان للسماح لهذا الجهاز بالكتابة في
+  /// المساحة»)، وقد أُعيدت `migrateOwnerMembership` للسبب ذاته عند ربط حساب
+  /// Google. هذا هو نظيرها في مسار الانضمام.
+  ///
+  /// أفضل جهد: فشل الشبكة هنا لا يُلغي الانضمام (تمّ فعلاً) — تُعيد دورة
+  /// المزامنة التالية المحاولة عبر `reconcileMemberMembership`.
+  static Future<bool> migrateMemberUid(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String previousUid,
+  }) async {
+    final uid = FirebaseAuthRest.currentUid;
+    if (backendUrl.trim().isEmpty ||
+        uid.isEmpty ||
+        previousUid.isEmpty ||
+        uid == previousUid) {
+      return false;
+    }
+    final root = _root(backendUrl, workspaceId);
+    final oldPath =
+        '$root/members/${Uri.encodeComponent(previousUid)}.json';
+    Map<String, dynamic>? old;
+    try {
+      old = await _getJson(oldPath);
+    } catch (_) {
+      return false;
+    }
+    if (old == null || old.isEmpty) return false; // لم تُكتب عضوية أصلاً.
+    try {
+      // الكتابة أولاً: إن فشلت لا نفقد العضوية القديمة (نفس مبدأ
+      // migrateOwnerMembership).
+      await _putJson('$root/members/${Uri.encodeComponent(uid)}.json', {
+        ...old,
+        'uid': uid,
+        'deviceId': repo.requireDeviceId,
+        'migrated_from': previousUid,
+        'migrated_at': {'.sv': 'timestamp'},
+      }, timeout: const Duration(seconds: 20));
+    } catch (_) {
+      return false;
+    }
+    await _delete(oldPath); // محو اليتيمة — لا ركام في /members.
+    return true;
+  }
+
+  /// (ربط الأعضاء) مطابقة دورية: يضمن أن عضوية هذا الجهاز في `/members`
+  /// معلّقة على الـ uid الجاري لا على uid قديم.
+  ///
+  /// شبكة أمان لمسارَين يفشل فيهما `migrateMemberUid` داخل `join()`:
+  ///   ١) انقطاع الشبكة لحظة الانضمام (الترحيل أفضل جهد).
+  ///   ٢) أجهزة انضمت على إصدار سابق فبقيت عضويتها يتيمة — تُصلح نفسها
+  ///      هنا دون تدخل المدير (يُستدل على العضوية من `deviceId`).
+  /// تُستدعى من دورة صيانة المحرك؛ رخيصة: قراءة واحدة لعقدة `/members`.
+  static Future<bool> reconcileMemberMembership(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+  }) async {
+    final uid = FirebaseAuthRest.currentUid;
+    if (backendUrl.trim().isEmpty || uid.isEmpty) return false;
+    final devId = repo.requireDeviceId;
+    if (devId.isEmpty) return false;
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? all;
+    try {
+      all = await _getJson('$root/members.json');
+    } catch (_) {
+      return false;
+    }
+    if (all == null || all.isEmpty) return false;
+    final mine = all[uid];
+    if (mine is Map && '${mine['deviceId'] ?? ''}' == devId) {
+      return false; // العضوية سليمة ومعلّقة على uid الجاري.
+    }
+    // ابحث عن عضويتنا المعلّقة على uid قديم (بمعرّف الجهاز، لا بالاسم).
+    for (final e in all.entries) {
+      if (e.key == uid) continue;
+      final v = e.value;
+      if (v is! Map) continue;
+      if ('${v['deviceId'] ?? ''}' != devId) continue;
+      final role = '${v['role'] ?? ''}';
+      if (role == 'owner') continue; // ملكية مدير لا تُرحَّل آلياً أبداً.
+      return await migrateMemberUid(repo,
+          backendUrl: backendUrl,
+          workspaceId: workspaceId,
+          previousUid: e.key);
+    }
+    return false;
   }
 
   // ==================== سجل الأجهزة السحابي (roster) ====================

@@ -387,6 +387,10 @@ class SyncEngine {
       const Duration(hours: 6),
       (_) async {
         await _checkExpulsionAndAutoPurge();
+        // (ربط الأعضاء) جانب العضو: مطابقة عضويتنا في /members مع uid الجاري.
+        try {
+          await _reconcileOwnMembership();
+        } catch (_) {}
         try {
           await _pruneOperationPayloads();
         } catch (_) {}
@@ -586,6 +590,29 @@ class SyncEngine {
         await t.pull(resolver: ConflictResolver());
         await processQueue();
       }
+    } catch (_) {}
+  }
+
+  /// (ربط الأعضاء) شبكة أمان العضو: تضمن أن عضويته في `/members` معلّقة على
+  /// الـ uid الذي يصادق به **الآن**، لا على uid قديم.
+  ///
+  /// تلزم لأن `join()` يدوّر هوية الجهاز قصداً بعد موافقة المدير، فتبقى
+  /// العضوية التي كتبها المدير (على uid وقت الطلب) يتيمة. `migrateMemberUid`
+  /// تعالجها لحظة الانضمام، وهذه الدالة تغطي حالتَي: انقطاع الشبكة وقتها،
+  /// والأجهزة التي انضمت على إصدار سابق فبقيت عضويتها يتيمة — تُصلح نفسها
+  /// دون تدخل المدير. كلفتها قراءة واحدة لعقدة `/members` كل 6 ساعات.
+  ///
+  /// المدير مستثنى: مساره `migrateOwnerMembership` عند ربط حساب Google.
+  Future<void> _reconcileOwnMembership() async {
+    if (!_started) return;
+    try {
+      if (await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      if (url.isEmpty) return;
+      final ws = _cloudTransport?.workspaceId ?? 'default';
+      await CloudJoin.reconcileMemberMembership(repo,
+          backendUrl: url, workspaceId: ws);
     } catch (_) {}
   }
 
