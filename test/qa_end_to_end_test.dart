@@ -140,8 +140,21 @@ void main() {
       expect(find.textContaining('1,500'), findsWidgets);
       expect(tester.takeException(), isNull);
     } finally {
+      // ═══ تشخيص مرحلي مؤقت (يُحذف بعد تحديد موضع الفقد) ═══
+      await tester.runAsync(() async {
+        print('DIAG-A قبل الهدم: tx=${(await db.query('transactions')).length}'
+            ' accounts=${(await db.query('accounts')).length}');
+      });
       await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async {
+        print('DIAG-B بعد pumpWidget: tx=${(await db.query('transactions')).length}'
+            ' accounts=${(await db.query('accounts')).length}');
+      });
       engine.stop();
+      await tester.runAsync(() async {
+        print('DIAG-C بعد engine.stop: tx=${(await db.query('transactions')).length}'
+            ' accounts=${(await db.query('accounts')).length}');
+      });
       await tester.runAsync(() async {
         // (استقرار CI) لا تُقرأ الصفوف عبر مقبض `repo` بعد هدم الشجرة:
         // المقبض مرتبط بدورة حياة الواجهة، وأي مهمة معلّقة قد تُكتب بعد
@@ -166,6 +179,8 @@ void main() {
         }
         final verify = await databaseFactory.openDatabase(copy);
         try {
+          print('DIAG-D على النسخة: tx=${(await verify.query('transactions')).length}'
+              ' accounts=${(await verify.query('accounts')).length}');
           final txRows = await verify.query('transactions');
           expect(txRows, hasLength(1),
               reason: 'عملية واحدة بالضبط على القرص — لا تكرار ولا فقد');
