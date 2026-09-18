@@ -1605,8 +1605,13 @@ class CloudJoin {
       if (status != 'pending') continue;
       final devId = '${m['deviceId'] ?? e.key}';
       if (devId.isEmpty) continue;
-      // فلترة مزدوجة: محلي + سحابي
-      if (pairedIds.contains(devId) || cloudPairedIds.contains(devId)) {
+      // فلترة مزدوجة: محلي + سحابي — لطلبات الانضمام فقط.
+      // (إصلاح 2026-09-18) طلب المغادرة (kind=leave) يأتي حتماً من جهاز
+      // مقترن — هذه غايته. تطبيق فلتر المقترنين عليه كان يبتلع كل طلبات
+      // المغادرة ويحذفها من السحابة بصمت فلا يراها المدير أبداً.
+      final kind = '${m['kind'] ?? ''}';
+      if (kind != 'leave' &&
+          (pairedIds.contains(devId) || cloudPairedIds.contains(devId))) {
         unawaited(_delete(
             '${_root(backendUrl, workspaceId)}/joinRequests/${Uri.encodeComponent(devId)}.json'));
         continue;

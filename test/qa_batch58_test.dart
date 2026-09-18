@@ -18,6 +18,19 @@ class _FakeCloud {
         'content-type': 'application/json; charset=utf-8',
       });
   http.Client client() => MockClient((req) async {
+        // (إصلاح 2026-09-18) محاكاة Identity Toolkit/securetoken — منذ
+        // اعتماد الهوية السحابية الإلزامية (Rules: auth != null) تمر كل
+        // مسارات الدعوة/الانضمام أولاً بـ accounts:signUp. بلا هذه
+        // الاستجابة كان المحاكي يرجع 'null' لطلبات POST فيفشل إنشاء
+        // الهوية وتنهار اختبارات الربط كلها (11 اختباراً).
+        if (req.method == 'POST') {
+          if (req.url.host.contains('securetoken')) {
+            return _json('{"id_token":"TOK-QA","refresh_token":"REF-QA",'
+                '"expires_in":"3600","user_id":"UID-QA-ANON"}', 200);
+          }
+          return _json('{"idToken":"TOK-QA","refreshToken":"REF-QA",'
+              '"expiresIn":"3600","localId":"UID-QA-ANON"}', 200);
+        }
         final key = req.url.path;
         if (req.method == 'PUT') {
           store[key] = jsonDecode(req.body);
