@@ -537,14 +537,23 @@ class CloudJoin {
     }
   }
 
+  /// يضمن وجود توكن صالح قبل أي طلب — يحل مشكلة 401 بعد تشديد Rules.
+  /// كان الكود القديم يستخدم cachedIdToken فقط، فإن كان null يرسل بدون
+  /// ?auth فيفشل بـ 401 لأن القواعد الآن auth != null.
+  static Future<String?> _ensureToken([String? overrideToken]) async {
+    if (overrideToken != null && overrideToken.isNotEmpty) return overrideToken;
+    var t = FirebaseAuthRest.cachedIdToken;
+    if (t != null && t.isNotEmpty) return t;
+    // محاولة إنشاء/تجديد هوية مجهولة تلقائياً
+    try {
+      t = await FirebaseAuthRest.cloudIdToken();
+    } catch (_) {}
+    return t;
+  }
+
   /// (401) توقيع أي طلب إلى RTDB بـ `?auth=` — القواعد تشترط `auth != null`.
-  ///
-  /// التوكن هو **توكن Firebase** لا غير: جلسة الحساب بعد استبدال توكن Google
-  /// (`accounts:signInWithIdp`) أو هوية الجهاز المجهولة. توكن Google الخام
-  /// مرفوض أصلاً من RTDB — لذلك لا يُرسَل أبداً.
-  /// إن لم يتوفر توكن في الذاكرة يُترك الطلب كما كان (أفضل جهد بلا كسر).
   static Uri _authedUrl(String url, [String? overrideToken]) {
-    final token = overrideToken ?? FirebaseAuthRest.cachedIdToken;
+    final token = overrideToken;
     final uri = Uri.parse(url);
     if (token == null || token.isEmpty) return uri;
     final q = Map<String, String>.from(uri.queryParameters)..['auth'] = token;
@@ -552,18 +561,23 @@ class CloudJoin {
   }
 
   static Future<Map<String, dynamic>?> _getJson(String url) async {
-    final uri = _authedUrl(url);
+    var token = await _ensureToken();
+    var uri = _authedUrl(url, token);
     var res = await http.get(uri).timeout(const Duration(seconds: 30));
-    if ((res.statusCode == 401 || res.statusCode == 403) &&
-        uri.queryParameters.containsKey('auth')) {
-      // توكن منتهٍ أو مرفوض: تحديث قسري ومحاولة واحدة **موقّعة**. التراجع إلى
-      // طلب عارٍ أُلغي نهائياً (ثغرة أ-1) — الطلب العاري يُخفي غياب الهوية.
+    if (res.statusCode == 401 || res.statusCode == 403) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
-      if (fresh != null) {
+      if (fresh != null && fresh.isNotEmpty) {
+        token = fresh;
         res = await http
             .get(_authedUrl(url, fresh))
             .timeout(const Duration(seconds: 30));
       }
+    }
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw CloudJoinException(
+          'فشل المصادقة مع السحابة (HTTP ${res.statusCode}). '
+          'تحقق من اتصال الإنترنت ومفتاح Firebase ApiKey. '
+          'إن استمرت المشكلة، أعد تشغيل التطبيق.');
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
@@ -576,24 +590,34 @@ class CloudJoin {
 
   static Future<void> _putJson(String url, Object body,
       {Duration timeout = const Duration(seconds: 60)}) async {
-    final uri = _authedUrl(url);
+    var token = await _ensureToken();
+    if (token == null || token.isEmpty) {
+      throw const CloudJoinException(
+          'تعذّر إنشاء الدعوة: فشل الحصول على هوية سحابية (لا يوجد توكن). '
+          'تحقق من اتصال الإنترنت ومن أن مفتاح Firebase (ApiKey) مضبوط في auth_config.dart، '
+          'ثم أعد تشغيل التطبيق.');
+    }
+    var uri = _authedUrl(url, token);
     var res = await http
         .put(uri,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body))
         .timeout(timeout);
-    if ((res.statusCode == 401 || res.statusCode == 403) &&
-        uri.queryParameters.containsKey('auth')) {
-      // (401 بعد تسجيل الدخول) التجديد ثم إعادة محاولة واحدة موقّعة — هذه هي
-      // النقطة التي كانت تُسقط إنشاء الدعوة قبل الإصلاح.
+    if (res.statusCode == 401 || res.statusCode == 403) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
-      if (fresh != null) {
+      if (fresh != null && fresh.isNotEmpty) {
         res = await http
             .put(_authedUrl(url, fresh),
                 headers: {'Content-Type': 'application/json'},
                 body: jsonEncode(body))
             .timeout(timeout);
       }
+    }
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw CloudJoinException(
+          'فشل الرفع إلى السحابة: المصادقة مرفوضة (HTTP ${res.statusCode}). '
+          'السبب المحتمل: توكن Firebase منتهٍ أو ApiKey غير صحيح أو قواعد RTDB تمنع الكتابة. '
+          'الحل: تأكد من الإنترنت، وأن قواعد Firebase هي auth != null، وأن ApiKey صحيح، ثم أعد المحاولة.');
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
@@ -602,25 +626,39 @@ class CloudJoin {
 
   static Future<void> _delete(String url) async {
     try {
-      await http
-          .delete(_authedUrl(url))
-          .timeout(const Duration(seconds: 20));
+      var token = await _ensureToken();
+      var uri = _authedUrl(url, token);
+      var res = await http.delete(uri).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          await http
+              .delete(_authedUrl(url, fresh))
+              .timeout(const Duration(seconds: 20));
+        }
+      }
     } catch (_) {}
   }
 
-  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم (يُعاد المحاولة
-  /// مرة واحدة). يُستخدم لإبطال توكن الدعوة — تركه حياً ثغرة أمنية.
+  /// حذف حتمي: يفشل بصوت عالٍ إن لم يتأكد الحذف من الخادم
   static Future<void> _deleteStrict(String url) async {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
+        var token = await _ensureToken();
         final res = await http
-            .delete(_authedUrl(url))
+            .delete(_authedUrl(url, token))
             .timeout(const Duration(seconds: 20));
-        // فيربيس يرد 200 على حذف مسار (حتى غير الموجود) — أي 2xx يكفي.
         if (res.statusCode >= 200 && res.statusCode < 300) return;
-      } catch (_) {
-        // خطأ شبكة — جرّب مرة أخيرة.
-      }
+        if (res.statusCode == 401 || res.statusCode == 403) {
+          final fresh = await FirebaseAuthRest.forceRefreshToken();
+          if (fresh != null) {
+            final r2 = await http
+                .delete(_authedUrl(url, fresh))
+                .timeout(const Duration(seconds: 20));
+            if (r2.statusCode >= 200 && r2.statusCode < 300) return;
+          }
+        }
+      } catch (_) {}
     }
     throw const CloudJoinException(
         'تعذّر إبطال رمز الدعوة على السحابة — أُلغي الانضمام حفاظاً على الأمان. '
@@ -698,6 +736,15 @@ class CloudJoin {
           'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');
     }
     _validateHttps(url);
+    // (إصلاح 401) تأكد من وجود هوية سحابية قبل أي رفع — بعد تشديد Rules إلى auth != null
+    // أي طلب بلا ?auth يفشل بـ 401. نحاول إنشاء هوية مجهولة تلقائياً هنا.
+    final preToken = await _ensureToken();
+    if (preToken == null || preToken.isEmpty) {
+      throw const CloudJoinException(
+          'تعذّر إنشاء الدعوة: فشل الحصول على هوية سحابية (401). '
+          'تحقق من: 1) اتصال الإنترنت، 2) مفتاح Firebase ApiKey في lib/core/auth_config.dart، '
+          '3) تفعيل Anonymous Auth في Firebase Console، ثم أعد تشغيل التطبيق.');
+    }
 
     final db = await repo.database;
     final wsRows = await db.query('workspaces', limit: 1);
@@ -1987,13 +2034,28 @@ class CloudJoin {
     final cutoffMs = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
     Map<String, dynamic>? all;
     try {
+      final token = await _ensureToken();
       final uri = Uri.parse('$root/operations.json').replace(
         queryParameters: {
           'orderBy': jsonEncode('server_ts'),
           'endAt': '$cutoffMs',
+          if (token != null && token.isNotEmpty) 'auth': token,
         },
       );
-      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      var res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if ((res.statusCode == 401 || res.statusCode == 403) && token != null) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          final rUri = Uri.parse('$root/operations.json').replace(
+            queryParameters: {
+              'orderBy': jsonEncode('server_ts'),
+              'endAt': '$cutoffMs',
+              'auth': fresh,
+            },
+          );
+          res = await http.get(rUri).timeout(const Duration(seconds: 30));
+        }
+      }
       if (res.statusCode == 400 && res.body.contains('Index not defined')) {
         all = await _getJson('$root/operations.json');
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -2028,13 +2090,28 @@ class CloudJoin {
     Map<String, dynamic>? all;
     try {
       // ترشيح خادمي إن توفر الفهرس.
-      final uri = Uri.parse('$root/operations.json').replace(
+      final token = await _ensureToken();
+      var uri = Uri.parse('$root/operations.json').replace(
         queryParameters: {
           'orderBy': jsonEncode('server_ts'),
           'endAt': '$throughTsMs',
+          if (token != null && token.isNotEmpty) 'auth': token,
         },
       );
-      final res = await http.get(uri).timeout(const Duration(seconds: 30));
+      var res = await http.get(uri).timeout(const Duration(seconds: 30));
+      if ((res.statusCode == 401 || res.statusCode == 403) && token != null) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null) {
+          uri = Uri.parse('$root/operations.json').replace(
+            queryParameters: {
+              'orderBy': jsonEncode('server_ts'),
+              'endAt': '$throughTsMs',
+              'auth': fresh,
+            },
+          );
+          res = await http.get(uri).timeout(const Duration(seconds: 30));
+        }
+      }
       if (res.statusCode == 400 && res.body.contains('Index not defined')) {
         all = await _getJson('$root/operations.json');
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
