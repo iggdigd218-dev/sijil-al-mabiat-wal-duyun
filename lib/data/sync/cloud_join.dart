@@ -22,6 +22,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/factory_reset.dart';
+import 'account_workspace.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'operation.dart';
@@ -1952,6 +1953,168 @@ class CloudJoin {
       } catch (_) {}
     }
     return removed;
+  }
+
+  /// تدمير مساحة سحابية مع الاحتفاظ بالاشتراك إن وُجد.
+  static Future<void> destroyWorkspaceKeepSubscription(
+      String base, String ws) async {
+    if (ws.isEmpty || ws == '_registry') return;
+    final root = _root(base, ws);
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+      'members',
+      'evictions',
+      'chat',
+      'notifications',
+      'devices',
+      'backup',
+      'creator',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+  }
+
+  /// حذف المساحة الشخصية للعضو عند الانضمام أو التهيئة.
+  static Future<void> deleteIndividualWorkspace(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+      'members',
+      'evictions',
+      'chat',
+      'notifications',
+      'devices',
+      'backup',
+      'creator',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+  }
+
+  /// حذف قيد الفهرس السحابي accounts_index للحساب الحالي.
+  static Future<void> forgetIndex(
+      Repo repo, {required String backendUrl}) async {
+    try {
+      final uid = FirebaseAuthRest.currentUid;
+      if (uid.isEmpty) return;
+      final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+      for (final p in [
+        '$base/workspaces/_registry/accounts_index/'
+            '${Uri.encodeComponent(uid)}.json',
+        '$base/accounts_index/${Uri.encodeComponent(uid)}.json',
+      ]) {
+        try {
+          await _delete(p);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  /// مسح الجهاز من السحابة تماماً (للتنظيف وإعادة الضبط).
+  static Future<void> purgeDeviceEverywhere(
+      Repo repo, {required String backendUrl}) async {
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final ws = repo.requireWorkspaceId;
+    final root = _root(backendUrl, ws);
+    String mode = 'standalone';
+    try {
+      mode = await repo.workspaceMode();
+    } catch (_) {}
+    if (mode == 'member') {
+      final st = await repo.settings();
+      final ourId = (st['sync.deviceId'] ?? '').toString();
+      if (ourId.isNotEmpty) {
+        for (final p in [
+          '$root/roster/${Uri.encodeComponent(ourId)}.json',
+          '$root/joinRequests/${Uri.encodeComponent(ourId)}.json',
+        ]) {
+          try {
+            await _delete(p);
+          } catch (_) {}
+        }
+      }
+      try {
+        final uid = FirebaseAuthRest.currentUid;
+        if (uid.isNotEmpty) {
+          await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
+        }
+      } catch (_) {}
+      if (ourId.isNotEmpty) {
+        try {
+          final ops = await _getJson('$root/operations.json');
+          if (ops != null) {
+            for (final e in ops.entries) {
+              final v = e.value;
+              final dev = v is Map ? '${v['device_id'] ?? ''}' : '';
+              if (dev == ourId) {
+                try {
+                  await _delete(
+                      '$root/operations/${Uri.encodeComponent(e.key)}.json');
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } else {
+      for (final node in const [
+        'roster',
+        'operations',
+        'invites',
+        'joinRequests',
+        'joinSnapshot',
+        'members',
+        'evictions',
+        'chat',
+        'notifications',
+        'devices',
+        'backup',
+        'creator',
+      ]) {
+        try {
+          await _delete('$root/$node.json');
+        } catch (_) {}
+      }
+    }
+    try {
+      final uid = FirebaseAuthRest.currentUid;
+      if (uid.isNotEmpty) {
+        final rws =
+            await AccountWorkspace.lookup(backendUrl: backendUrl, uid: uid);
+        if (rws.isNotEmpty && rws != ws) {
+          await destroyWorkspaceKeepSubscription(base, rws);
+        }
+      }
+    } catch (_) {}
+    try {
+      final fp = await DeviceRegistry.fingerprintKey(repo);
+      if (fp.isNotEmpty) {
+        final di =
+            await _getJson('$base/device_index/${Uri.encodeComponent(fp)}.json');
+        final iws = di == null ? '' : '${di['workspaceId'] ?? ''}';
+        if (iws.isNotEmpty && iws != ws) {
+          await destroyWorkspaceKeepSubscription(base, iws);
+        }
+        await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
+      }
+    } catch (_) {}
+    await forgetIndex(repo, backendUrl: backendUrl);
   }
 
   /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،

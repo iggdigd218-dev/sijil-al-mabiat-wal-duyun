@@ -232,6 +232,8 @@ class Sfx {
   // ============ الأزرار/التنقل ============
 
   /// نقرة خفيفة عامة للأزرار والتبويبات.
+  static void tap() => click();
+
   static void click() {
     if (_muted) return;
     final h = _hapticEnabled;
