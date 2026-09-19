@@ -238,6 +238,10 @@ class Sfx {
     if (h) HapticFeedback.selectionClick();
   }
 
+  /// نقرة تفاعلية مختصرة للأزرار وعناصر الواجهة.
+  /// تبقى كاسم مستقل حتى يمكن تمييز النقرات السريعة عن نقرات الأزرار العامة.
+  static void tap() => click();
+
   /// فتح/إغلاق نوافذ أو إجراء كبير.
   static void pop() {
     if (_muted) return;
