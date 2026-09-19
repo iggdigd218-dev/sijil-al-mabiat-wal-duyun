@@ -11,7 +11,11 @@ import 'dart:io' show Platform;
 // أو وقت التشغيل بضبط رابط مخصص في الإعدادات ← المزامنة السحابية.
 const String kDefaultCloudBackendUrl = String.fromEnvironment(
   'NEXORA_BACKEND_URL',
-  defaultValue: '',
+  // (إعادة تثبيت 2026-09-19) الرابط الرسمي الافتراضي الدائم — بدونه
+  // يموت الإقلاع صفري الإعداد (Zero-Config) وتفشل CLOUD-CFG-01: التراجع
+  // الأخير تركه فارغاً بينما توثيق هذا الملف وعقد الاختبار يتطلبانه.
+  defaultValue:
+      'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app',
 );
 
 /// (اختبارات فقط) تجاوز الرابط الافتراضي — تضبطه حزم الاختبار على ''

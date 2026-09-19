@@ -17,7 +17,6 @@ import '../data/providers.dart';
 import '../data/sync/cloud_join.dart'
     show CloudJoin, CloudJoinException, JoinRequestWatcher, kCloudOpTimeout;
 import '../data/sync/device_id.dart';
-import '../data/sync/firebase_auth_service.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
 import 'qr_pair_scanner.dart' show scanQrPair;
@@ -284,7 +283,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       );
       final status = st['status'];
       if (status == 'approved') {
-        _missingHits = 0;
         // (منع الاستنزاف) القرار وصل: نوقف المؤقت والقناة قبل الترطيب.
         _stopDrain();
         _joinToken = st['token'] ?? '';
@@ -448,7 +446,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     Sfx.click();
     setState(() {
       _gaveUp = false;
-      _missingHits = 0;
       _error = '';
       _step = _JoinStep.waiting;
     });

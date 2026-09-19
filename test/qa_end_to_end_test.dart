@@ -135,19 +135,26 @@ void main() {
             home: const HomeShell(),
           )));
       await _drain(tester);
-      // في الواجهة الجديدة شاشة العمليات تُفتح من أيقونة «المعاملات» على لوحة
-      // التحكم (ولم يعد «العمليات» عنصراً في الشريط السفلي).
-      final txTile = find.text('المعاملات');
+      // (تحديث الواجهة 2026-09-19) شاشة العمليات تُفتح من الشريط الجانبي
+      // ببلاطة «سجل الفواتير اليومية» (بدل بلاطة «المعاملات» القديمة).
+      final txTile = find.text('سجل الفواتير اليومية');
       await _waitFor(tester, txTile);
       await tester.ensureVisible(txTile);
       await tester.pumpAndSettle();
       await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
-      final fab = find.text('تسجيل عملية');
+      // الزر العائم الجديد دائري بعلامة «عملية» (بدل «تسجيل عملية»).
+      final fab = find.text('عملية');
       await _waitFor(tester, fab);
       await tester.ensureVisible(fab);
       await tester.pumpAndSettle();
       await tester.tap(fab, warnIfMissed: false);
+      await _drain(tester);
+      // (قانون 2026-09-19) الزر العائم «إجراء سريع»: يفتح ورقة خيارات —
+      // نختار «تسجيل عملية مالية» منها فيفتح نموذج العملية.
+      final sheetAction = find.text('تسجيل عملية مالية');
+      await _waitFor(tester, sheetAction);
+      await tester.tap(sheetAction);
       await _drain(tester);
       final debitTab = find.text('عليه');
       await _waitFor(tester, debitTab);
