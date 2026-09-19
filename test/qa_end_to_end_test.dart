@@ -69,10 +69,11 @@ Future<void> _drain(WidgetTester tester) async {
 /// على آلات CI المحمّلة يتأخر تحميل الشاشة الأولى (قراءة القاعدة الحقيقية
 /// تتم خارج الزمن الافتراضي) عن الضخ الثابت، فيرمي ensureVisible/tap
 /// «No element» ويسقط الاختبار بلا عطل حقيقي — ويفشل بعده انتظار القرص
-/// كتابعة. نضخ إطارات مع فسحات حقيقية حتى يظهر العنصر (سقف ~6 ثوانٍ
-/// حقيقية) ثم تكمل التدفقات الحازمة كما هي.
+/// كتابعة. نضخ إطارات مع فسحات حقيقية حتى يظهر العنصر (سقف ~24 ثانية
+/// حقيقية، لأن قاعدة SQLite قد تكون مشغولة بإقلاع HomeShell على CI) ثم
+/// تكمل التدفقات الحازمة كما هي.
 Future<void> _waitFor(WidgetTester tester, Finder finder,
-    {int maxTries = 60}) async {
+    {int maxTries = 240}) async {
   for (var i = 0; i < maxTries && finder.evaluate().isEmpty; i++) {
     await tester
         .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
