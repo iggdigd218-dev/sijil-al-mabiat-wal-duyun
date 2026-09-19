@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Database, Download, Upload, ShieldCheck, Clock, FileText, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Database, Download, Upload, ShieldCheck, Clock, FileText, CheckCircle2, RefreshCw } from 'lucide-react';
 import { ActivityItem } from '../types';
 import { api } from '../api';
 import { ConfirmModal } from './ConfirmModal';
@@ -154,10 +154,10 @@ export const BackupView: React.FC<BackupViewProps> = ({ onShowToast, onRefreshAl
         <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center gap-2 text-sky-600 font-bold text-xs">
             <RefreshCw className="w-4 h-4" />
-            <span>مزامنة الأجهزة الفورية</span>
+            <span>تحديث فوري وموثوق</span>
           </div>
           <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-            عند استعادة أي نسخة احتياطية، يتم بث تحديث فوري (SSE) لتحديث جميع أجهزة الموظفين المرتبطة فوراً.
+            عند استعادة أي نسخة احتياطية، يتم تحديث واجهات التطبيق والجداول وقاعدة البيانات فوراً دون تأخير.
           </p>
         </div>
 

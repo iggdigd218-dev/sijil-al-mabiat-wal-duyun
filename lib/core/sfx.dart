@@ -232,9 +232,6 @@ class Sfx {
   // ============ الأزرار/التنقل ============
 
   /// نقرة خفيفة عامة للأزرار والتبويبات.
-  /// (تحديث الواجهة 2026-09-19) نقر خفيف للتنقل الجديد — مرادف لـ click.
-  static void tap() => click();
-
   static void click() {
     if (_muted) return;
     final h = _hapticEnabled;

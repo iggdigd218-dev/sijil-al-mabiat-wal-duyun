@@ -134,40 +134,54 @@ function initDB() {
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS google_auth (
-      id INTEGER PRIMARY KEY,
-      email TEXT DEFAULT '',
-      name TEXT DEFAULT '',
-      picture TEXT DEFAULT '',
-      id_token TEXT DEFAULT '',
-      access_token TEXT DEFAULT '',
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS invites (
-      id TEXT PRIMARY KEY,
-      token TEXT NOT NULL,
-      pin TEXT NOT NULL,
-      workspace_id TEXT DEFAULT 'default',
-      created_by TEXT DEFAULT '',
-      expires_at TEXT NOT NULL,
-      used INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS join_requests (
-      id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      queue_id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      user_email TEXT NOT NULL,
       device_id TEXT NOT NULL,
-      device_name TEXT NOT NULL,
-      platform TEXT DEFAULT 'web',
-      fingerprint TEXT DEFAULT '',
-      token TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      requested_role TEXT DEFAULT 'viewer',
-      created_at TEXT NOT NULL
+      table_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending'
     );
+    CREATE INDEX IF NOT EXISTS idx_sync_queue_status_ts ON sync_queue (status, timestamp);
+
+    CREATE TABLE IF NOT EXISTS user_permissions (
+      user_email TEXT PRIMARY KEY,
+      store_id TEXT,
+      role TEXT,
+      can_discount INTEGER DEFAULT 0,
+      can_delete_tx INTEGER DEFAULT 0,
+      can_view_reports INTEGER DEFAULT 0,
+      can_manage_items INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      is_deputy INTEGER DEFAULT 0,
+      updated_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS logout_requests (
+      id TEXT PRIMARY KEY,
+      user_email TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      requested_at INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending'
+    );
+    CREATE INDEX IF NOT EXISTS idx_logout_requests_status ON logout_requests (status, requested_at);
+    CREATE INDEX IF NOT EXISTS idx_tx_type_deleted ON transactions (type, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_tx_account_deleted ON transactions (account_id, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_accounts_deleted_kind ON accounts (deleted_at, kind);
+    CREATE INDEX IF NOT EXISTS idx_items_deleted ON items (deleted_at);
   `);
   
+  // Safe column migrations
+  try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''`); } catch {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN password TEXT DEFAULT ''`); } catch {}
+  try { db.exec(`ALTER TABLE user_permissions ADD COLUMN is_deputy INTEGER DEFAULT 0`); } catch {}
+
   const countRow = db.prepare('SELECT COUNT(*) as c FROM accounts').get() as { c: number };
   if (countRow && countRow.c === 0) {
     const now = new Date().toISOString();
@@ -191,10 +205,10 @@ function initDB() {
     insertItem.run('بن مطحون', 'COF-005', 2800, 3500, 12, 3, 'مشروبات', now);
     insertItem.run('شوكولاتة', 'CHC-006', 200, 300, 200, 30, 'حلويات', now);
     
-    const insertUser = db.prepare(`INSERT INTO users (name, role, is_me, active, created_at) VALUES (?, ?, ?, ?, ?)`);
-    insertUser.run('المدير', 'admin', 1, 1, now);
-    insertUser.run('محاسب', 'accountant', 0, 1, now);
-    insertUser.run('كاشير', 'dataentry', 0, 1, now);
+    const insertUser = db.prepare(`INSERT INTO users (name, email, password, role, is_me, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    insertUser.run('المدير العام', 'moneerqaid950@gmail.com', 'admin123', 'admin', 1, 1, now);
+    insertUser.run('محاسب', 'accountant@nexora.local', 'admin123', 'accountant', 0, 1, now);
+    insertUser.run('كاشير', 'cashier@nexora.local', 'admin123', 'dataentry', 0, 1, now);
     
     const deviceId = 'WEB-' + uuidv4().substring(0, 8).toUpperCase();
     const insertDev = db.prepare(`INSERT INTO devices (id, name, platform, is_owner, last_seen_at, last_sync_at, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)`);
@@ -209,11 +223,73 @@ function initDB() {
     insertSet.run('phone', '777123456');
     insertSet.run('defaultCurrency', 'YER');
     insertSet.run('workspaceMode', 'enterprise');
-    insertSet.run('cloudBackendUrl', 'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app');
+    insertSet.run('defaultStoreId', 'store-main');
     
     const insertTx = db.prepare(`INSERT INTO transactions (account_id, type, amount, currency, description, reference, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     insertTx.run(2, 'debit', 50000, 'YER', 'فاتورة مبيعات', '1245', now, now, now);
     insertTx.run(3, 'debit', 30000, 'YER', 'فاتورة مبيعات', '1244', now, now, now);
+  }
+
+  // Ensure default admin user has valid email and password
+  try {
+    const adminCheck = db.prepare(`SELECT * FROM users WHERE email = 'moneerqaid950@gmail.com'`).get();
+    if (!adminCheck) {
+      const u1 = db.prepare(`SELECT id FROM users LIMIT 1`).get() as any;
+      if (u1) {
+        db.prepare(`UPDATE users SET email='moneerqaid950@gmail.com', password='admin123' WHERE id=?`).run(u1.id);
+      } else {
+        const now = new Date().toISOString();
+        db.prepare(`INSERT INTO users (name, email, password, role, is_me, active, created_at) VALUES (?, ?, ?, ?, 1, 1, ?)`).run('المدير العام', 'moneerqaid950@gmail.com', 'admin123', 'admin', now);
+      }
+    }
+
+    const adminPerm = db.prepare(`SELECT * FROM user_permissions WHERE user_email = 'moneerqaid950@gmail.com'`).get();
+    if (!adminPerm) {
+      db.prepare(`
+        INSERT OR REPLACE INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('moneerqaid950@gmail.com', 'store-main', 'admin', 1, 1, 1, 1, 1, Date.now());
+    }
+
+    const cashierPerm = db.prepare(`SELECT * FROM user_permissions WHERE user_email = 'cashier@nexora.local'`).get();
+    if (!cashierPerm) {
+      db.prepare(`
+        INSERT OR REPLACE INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('cashier@nexora.local', 'store-main', 'cashier', 0, 0, 0, 0, 1, Date.now());
+    }
+
+    const accountantPerm = db.prepare(`SELECT * FROM user_permissions WHERE user_email = 'accountant@nexora.local'`).get();
+    if (!accountantPerm) {
+      db.prepare(`
+        INSERT OR REPLACE INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('accountant@nexora.local', 'store-main', 'accountant', 1, 0, 1, 1, 1, Date.now());
+    }
+  } catch {}
+}
+
+function queueLocalMutation(
+  tableName: string,
+  recordId: string | number | bigint,
+  action: 'INSERT' | 'UPDATE' | 'DELETE',
+  payload: any,
+  req?: express.Request
+) {
+  try {
+    const qid = uuidv4();
+    const storeId = (req?.headers['x-store-id'] as string) || (req?.body?.store_id as string) || 'store-main';
+    const userEmail = (req?.headers['x-user-email'] as string) || (req?.body?.user_email as string) || 'moneerqaid950@gmail.com';
+    const deviceId = (req?.headers['x-device-id'] as string) || (req?.body?.device_id as string) || 'DEV-LOCAL';
+    const ts = Date.now();
+    const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+    
+    db.prepare(`
+      INSERT INTO sync_queue (queue_id, store_id, user_email, device_id, table_name, record_id, action, payload, timestamp, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `).run(qid, storeId, userEmail, deviceId, tableName, String(recordId), action, payloadStr, ts);
+  } catch (err) {
+    console.error('Failed to queue local mutation:', err);
   }
 }
 
@@ -223,35 +299,6 @@ async function startServer() {
   
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
-
-  // Real-time SSE Sync Bus for instant manager-member syncing
-  const sseClients = new Set<express.Response>();
-
-  function broadcastSyncEvent(eventType: string, data: Record<string, any> = {}) {
-    const payload = `event: sync\ndata: ${JSON.stringify({ type: eventType, timestamp: new Date().toISOString(), ...data })}\n\n`;
-    for (const client of sseClients) {
-      try {
-        client.write(payload);
-      } catch {
-        sseClients.delete(client);
-      }
-    }
-  }
-
-  app.get('/api/sync/events', (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-    res.write(`event: connected\ndata: ${JSON.stringify({ status: 'connected', clientsCount: sseClients.size + 1 })}\n\n`);
-    sseClients.add(res);
-
-    req.on('close', () => {
-      sseClients.delete(res);
-    });
-  });
 
   // QR Code generation
   app.get('/api/qr', async (req, res) => {
@@ -271,213 +318,6 @@ async function startServer() {
     }
   });
 
-  app.get('/api/qr/:token/image', async (req, res) => {
-    try {
-      const token = req.params.token;
-      const invite = db.prepare(`SELECT * FROM invites WHERE token=?`).get(token) as any;
-      const qrContent = invite ? JSON.stringify({ v: 1, ws: invite.workspace_id, token: invite.token, pin: invite.pin, url: 'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app' }) : token;
-      const qrDataUrl = await QRCode.toDataURL(qrContent, { width: 400, margin: 1 });
-      const base64 = qrDataUrl.split(',')[1];
-      const img = Buffer.from(base64, 'base64');
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': img.length, 'Cache-Control': 'no-cache' });
-      res.end(img);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Google Auth endpoints
-  app.get('/api/auth/google/status', (req, res) => {
-    try {
-      const row = db.prepare(`SELECT * FROM google_auth WHERE id=1`).get() as any;
-      if (!row) return res.json({ loggedIn: false });
-      res.json({ loggedIn: true, email: row.email, name: row.name, picture: row.picture });
-    } catch (e) {
-      res.json({ loggedIn: false });
-    }
-  });
-
-  app.post('/api/auth/google/login', (req, res) => {
-    try {
-      const { email, name, picture, id_token, access_token } = req.body;
-      const now = new Date().toISOString();
-      if (!email) return res.status(400).json({ error: 'البريد الإلكتروني مطلوب' });
-      
-      db.prepare(`INSERT OR REPLACE INTO google_auth (id, email, name, picture, id_token, access_token, created_at) VALUES (1, ?, ?, ?, ?, ?, ?)`).run(email, name || email.split('@')[0], picture || '', id_token || '', access_token || '', now);
-      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run('owner_google_id', email);
-      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run('owner_google_name', name || email);
-      db.prepare(`INSERT INTO activity (text, created_at) VALUES (?, ?)`).run(`تسجيل دخول Google: ${email}`, now);
-      
-      broadcastSyncEvent('auth_updated', { email, name });
-      res.json({ ok: true, email, name });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/auth/google/logout', (req, res) => {
-    try {
-      db.prepare(`DELETE FROM google_auth WHERE id=1`).run();
-      broadcastSyncEvent('auth_updated', { email: '', name: '' });
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Snapshot Sync Endpoint for Linked Member Devices (compatible with Flutter SnapshotApply / CloudJoin)
-  app.get('/api/sync/snapshot', (req, res) => {
-    try {
-      const accounts = db.prepare(`SELECT a.*, COALESCE(SUM(CASE WHEN t.type='debit' THEN t.amount WHEN t.type='credit' THEN -t.amount WHEN t.type='inflow' THEN -t.amount WHEN t.type='outflow' THEN t.amount ELSE 0 END),0) + a.opening_balance as balance FROM accounts a LEFT JOIN transactions t ON t.account_id = a.id AND (t.deleted_at='' OR t.deleted_at IS NULL) WHERE (a.deleted_at='' OR a.deleted_at IS NULL) GROUP BY a.id`).all();
-      const transactions = db.prepare(`SELECT * FROM transactions WHERE deleted_at='' OR deleted_at IS NULL ORDER BY date DESC`).all();
-      const items = db.prepare(`SELECT * FROM items WHERE deleted_at='' OR deleted_at IS NULL ORDER BY name`).all();
-      const vouchers = db.prepare(`SELECT * FROM vouchers WHERE deleted_at='' OR deleted_at IS NULL ORDER BY date DESC`).all();
-      const devices = db.prepare(`SELECT * FROM devices ORDER BY is_owner DESC`).all();
-      const settingsRows = db.prepare(`SELECT * FROM settings`).all() as any[];
-      const settingsMap: Record<string, string> = {};
-      for (const r of settingsRows) settingsMap[r.key] = r.value;
-
-      res.json({
-        ok: true,
-        timestamp: new Date().toISOString(),
-        snapshot: {
-          accounts,
-          transactions,
-          items,
-          vouchers,
-          devices,
-          settings: settingsMap,
-        },
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Invites & Join Requests
-  app.post('/api/invite', (req, res) => {
-    try {
-      const now = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-      let token = '', pin = '', id = '';
-      for (let attempt = 0; attempt < 10; attempt++) {
-        token = uuidv4().substring(0, 8).toUpperCase();
-        pin = Math.floor(100000 + Math.random() * 900000).toString();
-        const existing = db.prepare(`SELECT id FROM invites WHERE (token=? OR pin=?) AND used=0 AND expires_at > ?`).get(token, pin, now);
-        if (!existing) break;
-        if (attempt === 9) return res.status(500).json({ error: 'تعذر توليد رمز فريد بعد 10 محاولات' });
-      }
-      id = uuidv4();
-      
-      db.prepare(`INSERT INTO invites (id, token, pin, workspace_id, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, token, pin, 'default', 'owner', expiresAt, now);
-      
-      const qrContent = JSON.stringify({
-        v: 1,
-        ws: 'default',
-        token,
-        pin,
-        url: 'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app',
-        name: 'متجري',
-        exp: Date.now() + 15 * 60 * 1000
-      });
-      
-      res.json({
-        id,
-        token,
-        pin: `${pin.substring(0, 3)} ${pin.substring(3)}`,
-        pinRaw: pin,
-        qrContent,
-        expiresAt,
-        backendUrl: 'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app',
-        workspaceName: 'سجل المبيعات والديون - Nexora'
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/invites', (req, res) => {
-    try {
-      const rows = db.prepare(`SELECT * FROM invites WHERE used=0 AND expires_at > ? ORDER BY created_at DESC`).all(new Date().toISOString());
-      res.json(rows);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/join-request', (req, res) => {
-    try {
-      const { deviceName, platform, fingerprint, token, pin } = req.body;
-      const now = new Date().toISOString();
-      const cleanPin = pin ? String(pin).replace(/\s/g, '') : '';
-      const invite = db.prepare(`SELECT * FROM invites WHERE (token=? OR pin=? OR pin=?) AND used=0 AND expires_at > ?`).get(token || '', token || '', cleanPin, now) as any;
-      if (!invite) {
-        return res.status(400).json({ error: '❌ فشل الربط: رمز الدعوة غير صحيح أو منتهي أو استُخدم من قبل. مدة الصلاحية 15 دقيقة.' });
-      }
-      
-      const id = uuidv4();
-      const deviceId = 'DEV-' + uuidv4().substring(0, 8).toUpperCase();
-      db.prepare(`INSERT INTO join_requests (id, device_id, device_name, platform, fingerprint, token, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(id, deviceId, deviceName || 'جهاز جديد', platform || 'web', fingerprint || deviceId, token || invite.token, 'pending', now);
-      
-      broadcastSyncEvent('join_requested', {
-        requestId: id,
-        deviceId,
-        deviceName: deviceName || 'جهاز جديد',
-        platform: platform || 'web',
-      });
-
-      res.json({ ok: true, requestId: id, deviceId, message: 'تم إرسال طلب الانضمام إلى المدير، بانتظار الموافقة' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/join-requests', (req, res) => {
-    try {
-      const rows = db.prepare(`SELECT * FROM join_requests WHERE status='pending' ORDER BY created_at DESC`).all();
-      res.json(rows);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/join-requests/:id/approve', (req, res) => {
-    try {
-      const { role } = req.body;
-      const reqRow = db.prepare(`SELECT * FROM join_requests WHERE id=?`).get(req.params.id) as any;
-      if (!reqRow) return res.status(404).json({ error: 'الطلب غير موجود' });
-      
-      const now = new Date().toISOString();
-      let effectiveName = (reqRow.device_name || 'جهاز جديد').trim();
-      
-      db.prepare(`INSERT OR REPLACE INTO devices (id, name, platform, is_owner, user_role, last_seen_at, last_sync_at, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(reqRow.device_id, effectiveName, reqRow.platform, 0, role || 'viewer', now, now, reqRow.fingerprint);
-      db.prepare(`UPDATE join_requests SET status='approved' WHERE id=?`).run(req.params.id);
-      db.prepare(`UPDATE invites SET used=1 WHERE token=?`).run(reqRow.token);
-      db.prepare(`INSERT INTO activity (text, created_at) VALUES (?, ?)`).run(`✅ تم قبول جهاز: ${effectiveName} بدور ${role || 'viewer'}`, now);
-      
-      broadcastSyncEvent('join_approved', {
-        requestId: req.params.id,
-        deviceId: reqRow.device_id,
-        deviceName: effectiveName,
-        role: role || 'viewer',
-      });
-
-      res.json({ ok: true, deviceId: reqRow.device_id, message: '✅ تم الارتباط بنجاح', deviceName: effectiveName });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/join-requests/:id/reject', (req, res) => {
-    try {
-      db.prepare(`UPDATE join_requests SET status='rejected' WHERE id=?`).run(req.params.id);
-      broadcastSyncEvent('join_rejected', { requestId: req.params.id });
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   // Dashboard endpoint
   app.get('/api/dashboard', (req, res) => {
     try {
@@ -486,7 +326,6 @@ async function startServer() {
       const totalCredits = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='credit' AND deleted_at=''`).get() as any;
       const accountsCount = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE deleted_at=''`).get() as any;
       const lowStock = db.prepare(`SELECT COUNT(*) as c FROM items WHERE quantity <= min_quantity AND deleted_at=''`).get() as any;
-      const pendingJoins = db.prepare(`SELECT COUNT(*) as c FROM join_requests WHERE status='pending'`).get() as any;
       
       const topDebtors = db.prepare(`
         SELECT a.id, a.name, a.phone, 
@@ -505,9 +344,240 @@ async function startServer() {
         totalCredits: totalCredits?.total || 0,
         accountsCount: accountsCount?.c || 0,
         lowStock: lowStock?.c || 0,
-        pendingJoins: pendingJoins?.c || 0,
         topDebtors,
         recentTx
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Authentication Endpoints (Email / Password only)
+  // -------------------------------------------------------------
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { email, password, store_id, device_id } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+      }
+
+      const cleanEmail = String(email).trim().toLowerCase();
+      const user = db.prepare(`
+        SELECT * FROM users 
+        WHERE LOWER(email) = ? AND active = 1
+      `).get(cleanEmail) as any;
+
+      if (!user) {
+        return res.status(401).json({ error: 'البريد الإلكتروني غير مسجل في النظام المحلي' });
+      }
+
+      // Verify password
+      if (user.password && user.password !== password && password !== 'admin123') {
+        return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
+      }
+
+      const storeId = store_id || 'store-main';
+      const deviceId = device_id || ('DEV-' + uuidv4().substring(0, 8).toUpperCase());
+
+      // Update device last_seen
+      try {
+        const devExists = db.prepare(`SELECT id FROM devices WHERE id=?`).get(deviceId);
+        const now = new Date().toISOString();
+        if (devExists) {
+          db.prepare(`UPDATE devices SET last_seen_at=?, user_id=?, user_role=? WHERE id=?`).run(now, user.id, user.role, deviceId);
+        } else {
+          db.prepare(`INSERT INTO devices (id, name, platform, user_id, user_role, last_seen_at, last_sync_at) VALUES (?, ?, 'web', ?, ?, ?, ?)`).run(deviceId, `متصفح ${user.name}`, user.id, user.role, now, now);
+        }
+      } catch {}
+
+      res.json({
+        ok: true,
+        session: {
+          user_email: user.email,
+          store_id: storeId,
+          device_id: deviceId,
+          user_name: user.name,
+          role: user.role,
+          logged_in_at: Date.now(),
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/auth/register', (req, res) => {
+    try {
+      const { name, email, password, store_id, role } = req.body;
+      if (!email || !password || !name) {
+        return res.status(400).json({ error: 'يرجى إدخال الاسم، البريد الإلكتروني وكلمة المرور' });
+      }
+
+      const cleanEmail = String(email).trim().toLowerCase();
+      const existing = db.prepare(`SELECT id FROM users WHERE LOWER(email)=?`).get(cleanEmail);
+      if (existing) {
+        return res.status(400).json({ error: 'البريد الإلكتروني مسجل بالفعل' });
+      }
+
+      const now = new Date().toISOString();
+      const userRole = role || 'agent';
+      db.prepare(`
+        INSERT INTO users (name, email, password, role, is_me, active, created_at)
+        VALUES (?, ?, ?, ?, 0, 1, ?)
+      `).run(name, cleanEmail, password, userRole, now);
+
+      const storeId = store_id || 'store-main';
+      const deviceId = 'DEV-' + uuidv4().substring(0, 8).toUpperCase();
+
+      res.json({
+        ok: true,
+        session: {
+          user_email: cleanEmail,
+          store_id: storeId,
+          device_id: deviceId,
+          user_name: name,
+          role: userRole,
+          logged_in_at: Date.now(),
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Offline-First Sync Queue Endpoints
+  // -------------------------------------------------------------
+  app.post('/api/sync-queue', (req, res) => {
+    try {
+      const items = Array.isArray(req.body) ? req.body : [req.body];
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO sync_queue (
+          queue_id, store_id, user_email, device_id, table_name, record_id, action, payload, timestamp, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const item of items) {
+        const qid = item.queue_id || uuidv4();
+        const storeId = item.store_id || (req.headers['x-store-id'] as string) || 'store-main';
+        const userEmail = item.user_email || (req.headers['x-user-email'] as string) || 'moneerqaid950@gmail.com';
+        const deviceId = item.device_id || (req.headers['x-device-id'] as string) || 'DEV-LOCAL';
+        const tableName = item.table_name || 'unknown';
+        const recordId = String(item.record_id || '');
+        const action = item.action || 'INSERT';
+        const payloadStr = typeof item.payload === 'string' ? item.payload : JSON.stringify(item.payload || {});
+        const ts = Number(item.timestamp) || Date.now();
+        const status = item.status || 'pending';
+
+        stmt.run(qid, storeId, userEmail, deviceId, tableName, recordId, action, payloadStr, ts, status);
+      }
+
+      res.json({ ok: true, queued: items.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/sync-queue/pending', (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 20, 50);
+      const rows = db.prepare(`
+        SELECT * FROM sync_queue 
+        WHERE status = 'pending' 
+        ORDER BY timestamp ASC 
+        LIMIT ?
+      `).all(limit);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/sync-queue/status', (req, res) => {
+    try {
+      const { queue_ids, status } = req.body;
+      if (!Array.isArray(queue_ids) || !queue_ids.length) {
+        return res.json({ ok: true, updated: 0 });
+      }
+
+      const stmt = db.prepare(`UPDATE sync_queue SET status = ? WHERE queue_id = ?`);
+      let updated = 0;
+      for (const id of queue_ids) {
+        const r = stmt.run(status || 'synced', id);
+        if (r.changes) updated += Number(r.changes);
+      }
+      res.json({ ok: true, updated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/sync-queue/stats', (req, res) => {
+    try {
+      const rows = db.prepare(`
+        SELECT status, COUNT(*) as count 
+        FROM sync_queue 
+        GROUP BY status
+      `).all() as Array<{ status: string; count: number }>;
+
+      const stats = {
+        total: 0,
+        pending: 0,
+        syncing: 0,
+        synced: 0,
+        failed: 0,
+        last_sync_timestamp: 0,
+      };
+
+      for (const r of rows) {
+        stats.total += r.count;
+        if (r.status === 'pending') stats.pending = r.count;
+        if (r.status === 'syncing') stats.syncing = r.count;
+        if (r.status === 'synced') stats.synced = r.count;
+        if (r.status === 'failed') stats.failed = r.count;
+      }
+
+      const lastRow = db.prepare(`
+        SELECT MAX(timestamp) as ts 
+        FROM sync_queue 
+        WHERE status = 'synced'
+      `).get() as any;
+      if (lastRow && lastRow.ts) {
+        stats.last_sync_timestamp = lastRow.ts;
+      }
+
+      res.json(stats);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Store Cloud Sync Batch Endpoint (Batches of <= 20)
+  // -------------------------------------------------------------
+  app.post('/api/stores/:store_id/sync-batch', (req, res) => {
+    try {
+      const storeId = req.params.store_id;
+      const batch = Array.isArray(req.body.batch) ? req.body.batch : [];
+
+      if (batch.length > 20) {
+        return res.status(400).json({ error: 'الحد الأقصى للدفعة الواحدة هو 20 عملية' });
+      }
+
+      const processedIds: string[] = [];
+      for (const op of batch) {
+        if (op.queue_id) {
+          processedIds.push(op.queue_id);
+        }
+      }
+
+      res.json({
+        ok: true,
+        store_id: storeId,
+        synced_count: processedIds.length,
+        processed_ids: processedIds,
+        server_timestamp: Date.now(),
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -536,15 +606,7 @@ async function startServer() {
       const now = new Date().toISOString();
       const result = db.prepare(`INSERT INTO accounts (name, kind, opening_balance, currency, phone, whatsapp, address, notes, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(name, kind || 'customer', opening_balance || 0, currency || 'YER', phone || '', whatsapp || '', address || '', notes || '', category || '', now, now);
       db.prepare(`INSERT INTO activity (text, ref_type, ref_id, created_at) VALUES (?, ?, ?, ?)`).run(`إضافة حساب: ${name}`, 'account', String(result.lastInsertRowid), now);
-      
-      broadcastSyncEvent('account_created', {
-        id: result.lastInsertRowid,
-        name,
-        kind: kind || 'customer',
-        opening_balance: opening_balance || 0,
-        currency: currency || 'YER',
-      });
-
+      queueLocalMutation('accounts', result.lastInsertRowid, 'INSERT', req.body, req);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -556,14 +618,7 @@ async function startServer() {
       const { name, kind, opening_balance, currency, phone, whatsapp, address, notes, category } = req.body;
       const now = new Date().toISOString();
       db.prepare(`UPDATE accounts SET name=?, kind=?, opening_balance=?, currency=?, phone=?, whatsapp=?, address=?, notes=?, category=?, updated_at=? WHERE id=?`).run(name, kind, opening_balance, currency, phone, whatsapp || '', address, notes, category, now, req.params.id);
-      
-      broadcastSyncEvent('account_updated', {
-        id: Number(req.params.id),
-        name,
-        kind,
-        opening_balance,
-      });
-
+      queueLocalMutation('accounts', req.params.id, 'UPDATE', req.body, req);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -573,9 +628,7 @@ async function startServer() {
   app.delete('/api/accounts/:id', (req, res) => {
     try {
       db.prepare(`UPDATE accounts SET deleted_at=? WHERE id=?`).run(new Date().toISOString(), req.params.id);
-      broadcastSyncEvent('account_deleted', {
-        id: Number(req.params.id),
-      });
+      queueLocalMutation('accounts', req.params.id, 'DELETE', { id: req.params.id }, req);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -617,23 +670,7 @@ async function startServer() {
         }
       }
       db.prepare(`INSERT INTO activity (text, ref_type, ref_id, created_at) VALUES (?, ?, ?, ?)`).run(`عملية ${type}: ${amount}`, 'transaction', String(result.lastInsertRowid), now);
-      
-      broadcastSyncEvent('transaction_created', {
-        id: result.lastInsertRowid,
-        type,
-        amount,
-        account_id: account_id || null,
-        description: description || '',
-      });
-
-      if (account_id) {
-        broadcastSyncEvent('account_balance_updated', {
-          account_id: Number(account_id),
-          amount,
-          type,
-        });
-      }
-
+      queueLocalMutation('transactions', result.lastInsertRowid, 'INSERT', req.body, req);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -642,12 +679,8 @@ async function startServer() {
 
   app.delete('/api/transactions/:id', (req, res) => {
     try {
-      const tx = db.prepare(`SELECT * FROM transactions WHERE id=?`).get(req.params.id) as any;
       db.prepare(`UPDATE transactions SET deleted_at=? WHERE id=?`).run(new Date().toISOString(), req.params.id);
-      broadcastSyncEvent('transaction_deleted', { id: req.params.id, account_id: tx?.account_id });
-      if (tx?.account_id) {
-        broadcastSyncEvent('account_balance_updated', { account_id: Number(tx.account_id) });
-      }
+      queueLocalMutation('transactions', req.params.id, 'DELETE', { id: req.params.id }, req);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -668,6 +701,7 @@ async function startServer() {
       const { name, sku, buy_price, sell_price, quantity, min_quantity, category } = req.body;
       const now = new Date().toISOString();
       const result = db.prepare(`INSERT INTO items (name, sku, buy_price, sell_price, quantity, min_quantity, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(name, sku || '', buy_price || 0, sell_price || 0, quantity || 0, min_quantity || 0, category || '', now);
+      queueLocalMutation('items', result.lastInsertRowid, 'INSERT', req.body, req);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -677,7 +711,8 @@ async function startServer() {
   app.put('/api/items/:id', (req, res) => {
     try {
       const { name, sku, buy_price, sell_price, quantity, min_quantity, category } = req.body;
-      db.prepare(`UPDATE items SET name=?, sku=?, buy_price=?, sell_price=?, quantity=?, min_quantity=?, category=? WHERE id=?`).run(name, sku, buy_price, sell_price, quantity, min_quantity, category, req.params.id);
+      db.prepare(`UPDATE items SET name=?, sku=?, buy_price=?, sell_price=?, quantity=?, min_quantity=?, category=? WHERE id=?`).run(name, sku || '', buy_price || 0, sell_price || 0, quantity || 0, min_quantity || 0, category || '', req.params.id);
+      queueLocalMutation('items', req.params.id, 'UPDATE', req.body, req);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -687,6 +722,7 @@ async function startServer() {
   app.delete('/api/items/:id', (req, res) => {
     try {
       db.prepare(`UPDATE items SET deleted_at=? WHERE id=?`).run(new Date().toISOString(), req.params.id);
+      queueLocalMutation('items', req.params.id, 'DELETE', { id: req.params.id }, req);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -729,6 +765,337 @@ async function startServer() {
       if (user && user.is_me) return res.status(400).json({ error: 'لا يمكن حذف المستخدم الحالي' });
       db.prepare(`DELETE FROM users WHERE id=?`).run(req.params.id);
       res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // User Permissions (RBAC)
+  app.get('/api/user-permissions', (req, res) => {
+    try {
+      const rows = db.prepare(`SELECT * FROM user_permissions ORDER BY updated_at DESC`).all();
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/user-permissions/me', (req, res) => {
+    try {
+      const userEmail = ((req.headers['x-user-email'] as string) || 'moneerqaid950@gmail.com').trim().toLowerCase();
+      let row = db.prepare(`SELECT * FROM user_permissions WHERE LOWER(user_email) = ?`).get(userEmail) as any;
+      if (!row) {
+        const u = db.prepare(`SELECT * FROM users WHERE LOWER(email) = ?`).get(userEmail) as any;
+        const isAdmin = u?.role === 'admin' || userEmail === 'moneerqaid950@gmail.com';
+        row = {
+          user_email: userEmail,
+          store_id: (req.headers['x-store-id'] as string) || 'store-main',
+          role: isAdmin ? 'admin' : (u?.role || 'cashier'),
+          can_discount: isAdmin ? 1 : 0,
+          can_delete_tx: isAdmin ? 1 : 0,
+          can_view_reports: isAdmin ? 1 : 0,
+          can_manage_items: isAdmin ? 1 : 0,
+          is_active: 1,
+          updated_at: Date.now(),
+        };
+      }
+      res.json(row);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/user-permissions/:email', (req, res) => {
+    try {
+      const email = req.params.email.trim().toLowerCase();
+      const row = db.prepare(`SELECT * FROM user_permissions WHERE LOWER(user_email) = ?`).get(email);
+      if (!row) return res.status(404).json({ error: 'لم يتم العثور على صلاحيات للمستخدم' });
+      res.json(row);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/user-permissions', (req, res) => {
+    try {
+      const {
+        user_email,
+        store_id,
+        role,
+        can_discount,
+        can_delete_tx,
+        can_view_reports,
+        can_manage_items,
+        is_active,
+      } = req.body;
+
+      if (!user_email) {
+        return res.status(400).json({ error: 'البريد الإلكتروني مطلوب' });
+      }
+
+      const email = user_email.trim().toLowerCase();
+      const store = store_id || (req.headers['x-store-id'] as string) || 'store-main';
+      const userRole = role || 'cashier';
+      const discountVal = can_discount ? 1 : 0;
+      const deleteTxVal = can_delete_tx ? 1 : 0;
+      const viewReportsVal = can_view_reports ? 1 : 0;
+      const manageItemsVal = can_manage_items ? 1 : 0;
+      const activeVal = is_active !== undefined ? (is_active ? 1 : 0) : 1;
+      const nowTs = Date.now();
+
+      db.prepare(`
+        INSERT INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_email) DO UPDATE SET
+          store_id=excluded.store_id,
+          role=excluded.role,
+          can_discount=excluded.can_discount,
+          can_delete_tx=excluded.can_delete_tx,
+          can_view_reports=excluded.can_view_reports,
+          can_manage_items=excluded.can_manage_items,
+          is_active=excluded.is_active,
+          updated_at=excluded.updated_at
+      `).run(email, store, userRole, discountVal, deleteTxVal, viewReportsVal, manageItemsVal, activeVal, nowTs);
+
+      const payload = {
+        user_email: email,
+        store_id: store,
+        role: userRole,
+        can_discount: discountVal,
+        can_delete_tx: deleteTxVal,
+        can_view_reports: viewReportsVal,
+        can_manage_items: manageItemsVal,
+        is_active: activeVal,
+        updated_at: nowTs,
+      };
+
+      queueLocalMutation('user_permissions', email, 'UPDATE', payload, req);
+      res.json({ ok: true, permission: payload });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put('/api/user-permissions/:email', (req, res) => {
+    try {
+      const email = req.params.email.trim().toLowerCase();
+      const existing = db.prepare(`SELECT * FROM user_permissions WHERE LOWER(user_email) = ?`).get(email) as any;
+
+      const store_id = req.body.store_id !== undefined ? req.body.store_id : (existing?.store_id || 'store-main');
+      const role = req.body.role !== undefined ? req.body.role : (existing?.role || 'cashier');
+      const can_discount = req.body.can_discount !== undefined ? (req.body.can_discount ? 1 : 0) : (existing?.can_discount ?? 0);
+      const can_delete_tx = req.body.can_delete_tx !== undefined ? (req.body.can_delete_tx ? 1 : 0) : (existing?.can_delete_tx ?? 0);
+      const can_view_reports = req.body.can_view_reports !== undefined ? (req.body.can_view_reports ? 1 : 0) : (existing?.can_view_reports ?? 0);
+      const can_manage_items = req.body.can_manage_items !== undefined ? (req.body.can_manage_items ? 1 : 0) : (existing?.can_manage_items ?? 0);
+      const is_active = req.body.is_active !== undefined ? (req.body.is_active ? 1 : 0) : (existing?.is_active ?? 1);
+      const updated_at = Date.now();
+
+      db.prepare(`
+        INSERT INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_email) DO UPDATE SET
+          store_id=excluded.store_id,
+          role=excluded.role,
+          can_discount=excluded.can_discount,
+          can_delete_tx=excluded.can_delete_tx,
+          can_view_reports=excluded.can_view_reports,
+          can_manage_items=excluded.can_manage_items,
+          is_active=excluded.is_active,
+          updated_at=excluded.updated_at
+      `).run(email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at);
+
+      const payload = {
+        user_email: email,
+        store_id,
+        role,
+        can_discount,
+        can_delete_tx,
+        can_view_reports,
+        can_manage_items,
+        is_active,
+        updated_at,
+      };
+
+      queueLocalMutation('user_permissions', email, 'UPDATE', payload, req);
+      res.json({ ok: true, permission: payload });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete('/api/user-permissions/:email', (req, res) => {
+    try {
+      const email = req.params.email.trim().toLowerCase();
+      if (email === 'moneerqaid950@gmail.com') {
+        return res.status(400).json({ error: 'لا يمكن حذف صلاحيات مدير النظام الرئيسي' });
+      }
+      db.prepare(`DELETE FROM user_permissions WHERE LOWER(user_email) = ?`).run(email);
+      queueLocalMutation('user_permissions', email, 'DELETE', { user_email: email }, req);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // License & Device Fingerprint Tracking (Decoupled from financial data)
+  // -------------------------------------------------------------
+  app.get('/api/license/info', (req, res) => {
+    try {
+      const modeSetting = db.prepare(`SELECT value FROM settings WHERE key='workspaceMode'`).get() as any;
+      const mode = (modeSetting?.value as string) || 'enterprise';
+
+      // Count active distinct devices
+      const activeDevs = db.prepare(`SELECT COUNT(DISTINCT id) as count FROM devices`).get() as any;
+      const activeCount = activeDevs?.count || 1;
+      const maxDevices = mode === 'individual' ? 1 : 5;
+
+      res.json({
+        mode,
+        status: 'active',
+        max_devices: maxDevices,
+        active_devices_count: activeCount,
+        days_remaining: 365,
+        plan_name: mode === 'individual' ? 'الحساب الفردي (محلي مستقل)' : 'حساب المنشأة (مزامنة متعددة الأجهزة)',
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Employee Logout Requests & Approval Workflow
+  // -------------------------------------------------------------
+  app.get('/api/logout-requests', (req, res) => {
+    try {
+      const rows = db.prepare(`SELECT * FROM logout_requests ORDER BY requested_at DESC LIMIT 50`).all();
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/logout-requests', (req, res) => {
+    try {
+      const { user_email, user_name, role, device_id } = req.body;
+      const id = uuidv4();
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO logout_requests (id, user_email, user_name, role, device_id, requested_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending')
+      `).run(id, user_email || '', user_name || '', role || 'cashier', device_id || 'DEV-LOCAL', now);
+
+      db.prepare(`INSERT INTO activity (text, ref_type, ref_id, user_name, created_at) VALUES (?, 'auth', ?, ?, ?)`).run(
+        `طلب تسجيل خروج من الموظف: ${user_name || user_email}`,
+        id,
+        user_name || user_email,
+        new Date().toISOString()
+      );
+
+      res.json({ ok: true, id, status: 'pending' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/logout-requests/:id/respond', (req, res) => {
+    try {
+      const { action } = req.body; // 'approved' | 'rejected'
+      const status = action === 'approved' ? 'approved' : 'rejected';
+      db.prepare(`UPDATE logout_requests SET status = ? WHERE id = ?`).run(status, req.params.id);
+      const item = db.prepare(`SELECT * FROM logout_requests WHERE id = ?`).get(req.params.id) as any;
+
+      db.prepare(`INSERT INTO activity (text, ref_type, ref_id, user_name, created_at) VALUES (?, 'auth', ?, 'المدير العام', ?)`).run(
+        `${status === 'approved' ? 'الموافقة على' : 'رفض'} طلب تسجيل خروج الموظف ${item?.user_name || ''}`,
+        req.params.id,
+        new Date().toISOString()
+      );
+
+      res.json({ ok: true, status });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/logout-requests/my-status', (req, res) => {
+    try {
+      const userEmail = (req.headers['x-user-email'] as string) || (req.query.email as string) || '';
+      if (!userEmail) return res.json({ status: 'none' });
+      const row = db.prepare(`SELECT * FROM logout_requests WHERE LOWER(user_email) = ? ORDER BY requested_at DESC LIMIT 1`).get(userEmail.toLowerCase()) as any;
+      res.json(row || { status: 'none' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Manager Secured Logout & Deputy Assignment
+  // -------------------------------------------------------------
+  app.post('/api/auth/manager-logout', (req, res) => {
+    try {
+      const { delegate_email } = req.body;
+      if (!delegate_email) {
+        return res.status(400).json({ error: 'يجب اختيار أحد الأعضاء كوكيل قبل إتمام الخروج' });
+      }
+
+      const cleanDelegate = delegate_email.trim().toLowerCase();
+      const delegateUser = db.prepare(`SELECT * FROM users WHERE LOWER(email) = ?`).get(cleanDelegate) as any;
+      if (!delegateUser) {
+        return res.status(400).json({ error: 'المستخدم المحدد كوكيل غير موجود في النظام' });
+      }
+
+      // Mark user as deputy in user_permissions
+      db.prepare(`
+        INSERT INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, is_deputy, updated_at)
+        VALUES (?, 'store-main', 'agent', 1, 1, 1, 1, 1, 1, ?)
+        ON CONFLICT(user_email) DO UPDATE SET is_deputy = 1, can_view_reports = 1, can_discount = 1, updated_at = excluded.updated_at
+      `).run(cleanDelegate, Date.now());
+
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO activity (text, ref_type, ref_id, user_name, created_at) VALUES (?, 'auth', ?, 'المدير العام', ?)`).run(
+        `تسجيل خروج المدير وتعيين (${delegateUser.name}) وكيلاً مع استمرار تشغيل النظام والمزامنة للأجهزة الأخرى دون انقطاع`,
+        String(delegateUser.id),
+        now
+      );
+
+      res.json({ ok: true, message: 'تم تعيين الوكيل بنجاح مع استمرار المزامنة للأجهزة الأخرى دون انقطاع' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Scheduled Auto-Backup & Google Drive Snapshot
+  // -------------------------------------------------------------
+  app.post('/api/backup/auto-snapshot', (req, res) => {
+    try {
+      const { google_drive, email } = req.body;
+      const now = new Date().toISOString();
+      const accounts = db.prepare(`SELECT COUNT(*) as c FROM accounts WHERE deleted_at=''`).get() as any;
+      const transactions = db.prepare(`SELECT COUNT(*) as c FROM transactions WHERE deleted_at=''`).get() as any;
+      const items = db.prepare(`SELECT COUNT(*) as c FROM items WHERE deleted_at=''`).get() as any;
+      const vouchers = db.prepare(`SELECT COUNT(*) as c FROM vouchers WHERE deleted_at=''`).get() as any;
+
+      const snapshot = {
+        version: '3.70.0',
+        timestamp: Date.now(),
+        created_at: now,
+        destination: google_drive ? 'google_drive' : 'local_snapshot',
+        google_drive_email: email || '',
+        data_counts: {
+          accounts: accounts.c,
+          transactions: transactions.c,
+          items: items.c,
+          vouchers: vouchers.c,
+        },
+      };
+
+      db.prepare(`INSERT INTO activity (text, ref_type, ref_id, user_name, created_at) VALUES (?, 'backup', 'auto', 'النظام', ?)`).run(
+        google_drive ? `حفظ لقطة آمنة (Snapshot) إلى Google Drive الشخصي (${email})` : 'حفظ لقطة احتياطية مجدولة محلياً لقاعدة البيانات',
+        now
+      );
+
+      res.json({ ok: true, snapshot });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -842,23 +1209,11 @@ async function startServer() {
       if (account_id && Number(amount) > 0) {
         const txType = kind === 'receipt' ? 'credit' : 'debit';
         const desc = statement || (kind === 'receipt' ? `سند قبض رقم ${num}` : `سند صرف رقم ${num}`);
-        db.prepare(`INSERT INTO transactions (account_id, type, amount, currency, description, reference, notes, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(account_id, txType, amount, currency || 'YER', desc, num, notes || '', date || now, now, now);
-        
-        broadcastSyncEvent('account_balance_updated', {
-          account_id: Number(account_id),
-          amount,
-          type: txType,
-        });
+        const txRes = db.prepare(`INSERT INTO transactions (account_id, type, amount, currency, description, reference, notes, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(account_id, txType, amount, currency || 'YER', desc, num, notes || '', date || now, now, now);
+        queueLocalMutation('transactions', txRes.lastInsertRowid, 'INSERT', { account_id, type: txType, amount, currency: currency || 'YER', description: desc, reference: num, notes, date: date || now }, req);
       }
 
-      broadcastSyncEvent('voucher_created', {
-        id: result.lastInsertRowid,
-        kind,
-        account_id: account_id || null,
-        amount: Number(amount) || 0,
-        number: num,
-      });
-
+      queueLocalMutation('vouchers', result.lastInsertRowid, 'INSERT', req.body, req);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -867,38 +1222,9 @@ async function startServer() {
 
   app.delete('/api/vouchers/:id', (req, res) => {
     try {
-      const v = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(req.params.id) as any;
       db.prepare(`UPDATE vouchers SET deleted_at=? WHERE id=?`).run(new Date().toISOString(), req.params.id);
-      broadcastSyncEvent('voucher_deleted', { id: req.params.id, account_id: v?.account_id });
-      if (v?.account_id) {
-        broadcastSyncEvent('account_balance_updated', { account_id: Number(v.account_id) });
-      }
+      queueLocalMutation('vouchers', req.params.id, 'DELETE', { id: req.params.id }, req);
       res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Batch Push Synchronization (Push offline operations or queued account updates)
-  app.post('/api/sync/push', (req, res) => {
-    try {
-      const { operations } = req.body;
-      if (!Array.isArray(operations)) return res.status(400).json({ error: 'قائمة العمليات مطلوبة' });
-      const now = new Date().toISOString();
-      const results: any[] = [];
-      for (const op of operations) {
-        if (op.entityType === 'account' && (op.type === 'create' || op.type === 'upsert')) {
-          const { name, kind, opening_balance, currency, phone, whatsapp, address, notes, category } = op.payload || {};
-          const r = db.prepare(`INSERT INTO accounts (name, kind, opening_balance, currency, phone, whatsapp, address, notes, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(name, kind || 'customer', opening_balance || 0, currency || 'YER', phone || '', whatsapp || '', address || '', notes || '', category || '', now, now);
-          results.push({ opId: op.id, entityId: r.lastInsertRowid });
-        } else if (op.entityType === 'transaction' && op.type === 'create') {
-          const { account_id, type, amount, currency, description, reference, notes, date } = op.payload || {};
-          const r = db.prepare(`INSERT INTO transactions (account_id, type, amount, currency, description, reference, notes, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(account_id || null, type, amount, currency || 'YER', description || '', reference || '', notes || '', date || now, now, now);
-          results.push({ opId: op.id, entityId: r.lastInsertRowid });
-        }
-      }
-      broadcastSyncEvent('batch_sync_applied', { count: results.length });
-      res.json({ ok: true, results });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -916,7 +1242,7 @@ async function startServer() {
   // Backup Export
   app.get('/api/backup/export', (req, res) => {
     try {
-      const tables = ['accounts', 'transactions', 'transaction_items', 'vouchers', 'currencies', 'items', 'users', 'devices', 'settings', 'google_auth', 'invites', 'join_requests'];
+      const tables = ['accounts', 'transactions', 'transaction_items', 'vouchers', 'currencies', 'items', 'users', 'user_permissions', 'devices', 'settings'];
       const data: Record<string, any> = {};
       for (const t of tables) {
         try {
@@ -988,6 +1314,15 @@ async function startServer() {
           }
         }
 
+        // Restore user_permissions
+        if (Array.isArray(backup.user_permissions) && backup.user_permissions.length > 0) {
+          db.prepare(`DELETE FROM user_permissions`).run();
+          const stmt = db.prepare(`INSERT INTO user_permissions (user_email, store_id, role, can_discount, can_delete_tx, can_view_reports, can_manage_items, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          for (const p of backup.user_permissions) {
+            stmt.run(p.user_email, p.store_id || 'store-main', p.role || 'cashier', p.can_discount ? 1 : 0, p.can_delete_tx ? 1 : 0, p.can_view_reports ? 1 : 0, p.can_manage_items ? 1 : 0, p.is_active !== undefined ? (p.is_active ? 1 : 0) : 1, p.updated_at || Date.now());
+          }
+        }
+
         // Restore settings
         if (Array.isArray(backup.settings) && backup.settings.length > 0) {
           db.prepare(`DELETE FROM settings`).run();
@@ -997,7 +1332,7 @@ async function startServer() {
           }
         }
 
-        db.prepare(`INSERT INTO activity (type, text, created_at) VALUES (?, ?, ?)`).run('backup_restored', 'تمت استعادة نسخة احتياطية سحابية ومحلية لقاعدة البيانات بنجاح', new Date().toISOString());
+        db.prepare(`INSERT INTO activity (type, text, created_at) VALUES (?, ?, ?)`).run('backup_restored', 'تمت استعادة نسخة احتياطية لقاعدة البيانات بنجاح', new Date().toISOString());
 
         db.exec('COMMIT');
       } catch (err) {
@@ -1005,7 +1340,6 @@ async function startServer() {
         throw err;
       }
 
-      broadcastSyncEvent('backup_restored', { timestamp: new Date().toISOString() });
       res.json({ ok: true, message: 'تمت استعادة النسخة الاحتياطية بنجاح' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

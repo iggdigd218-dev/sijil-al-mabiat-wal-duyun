@@ -12,6 +12,7 @@ import {
 import { Transaction, Account } from '../types';
 import { api } from '../api';
 import { ConfirmModal } from './ConfirmModal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface TransactionsViewProps {
   transactions: Transaction[];
@@ -34,6 +35,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const [deleteTxId, setDeleteTxId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const { canDeleteTx } = usePermissions();
+
   const filtered = transactions.filter((tx) => {
     const matchesType = typeFilter === 'all' || tx.type === typeFilter;
     const matchesAccount = accountFilter === 'all' || String(tx.account_id) === accountFilter;
@@ -45,7 +48,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   });
 
   const handleConfirmDelete = async () => {
-    if (!deleteTxId) return;
+    if (!deleteTxId || !canDeleteTx) return;
     setIsDeleting(true);
     try {
       await api.deleteTransaction(deleteTxId);
@@ -218,13 +221,16 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
                       {/* Action */}
                       <td className="py-3.5 px-4 text-left">
-                        <button
-                          onClick={() => setDeleteTxId(tx.id)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                          title="حذف العملية"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canDeleteTx && (
+                          <button
+                            id={`btn-delete-tx-${tx.id}`}
+                            onClick={() => setDeleteTxId(tx.id)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                            title="حذف العملية"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

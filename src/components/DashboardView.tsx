@@ -5,11 +5,8 @@ import {
   Users,
   AlertTriangle,
   ArrowUpRight,
-  UserCheck,
-  CheckCircle2,
   Clock,
   Phone,
-  MessageCircle,
 } from 'lucide-react';
 import { DashboardData, Transaction } from '../types';
 
@@ -17,16 +14,12 @@ interface DashboardViewProps {
   data: DashboardData | null;
   onSelectAccount: (accountId: number) => void;
   onOpenTxModal: () => void;
-  onOpenInviteModal: () => void;
-  onGoToJoinRequests: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   data,
   onSelectAccount,
   onOpenTxModal,
-  onOpenInviteModal,
-  onGoToJoinRequests,
 }) => {
   const formatMoney = (num: number, cur = 'ر.ي') => {
     return `${new Intl.NumberFormat('ar-YE').format(Math.round(num || 0))} ${cur}`;
@@ -53,25 +46,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Alert Banner matching Flutter logic */}
-      <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-4 flex items-start gap-3.5 shadow-xs">
-        <div className="p-2 rounded-xl bg-sky-100 text-sky-600 shrink-0 mt-0.5">
-          <CheckCircle2 className="w-5 h-5" />
-        </div>
-        <div className="flex-1">
-          <h4 className="text-xs font-bold text-sky-950">نظام محاسبي متكامل مع ربط أجهزة سحابي ومحلي</h4>
-          <p className="text-xs text-sky-800 leading-relaxed mt-0.5">
-            يعمل التطبيق بقاعدة بيانات SQLite حقيقية، ويدعم تسجيل دخول Google، ومزامنة الدعوات عبر QR Code ورمز PIN صالح 15 دقيقة مع موافقة مسبقة للمدير كما في تطبيق Flutter الأصلي.
-          </p>
-        </div>
-        <button
-          onClick={onOpenInviteModal}
-          className="shrink-0 px-3 py-1.5 text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-xs transition-colors"
-        >
-          دعوة جهاز جديد
-        </button>
-      </div>
-
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Sales */}
@@ -112,27 +86,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Pending Joins */}
-        <div
-          onClick={onGoToJoinRequests}
-          className={`bg-white rounded-2xl p-4 border border-slate-200 shadow-xs relative overflow-hidden cursor-pointer transition-all hover:border-amber-300 ${
-            (data?.pendingJoins || 0) > 0 ? 'ring-2 ring-amber-400/40 bg-amber-50/20' : ''
-          }`}
-        >
-          <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
+        {/* Accounts Count */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs relative overflow-hidden">
+          <div className="absolute top-0 right-0 left-0 h-1 bg-indigo-500" />
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-xs font-semibold text-slate-500">طلبات انضمام الأجهزة</span>
+              <span className="text-xs font-semibold text-slate-500">الحسابات والعملاء</span>
               <div className="text-xl font-black text-slate-900 mt-1 font-mono">
-                {data?.pendingJoins || 0} طلب
+                {data?.accountsCount || 0} حساب
               </div>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-              <UserCheck className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <Users className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-3 text-[11px] text-amber-600 font-bold flex items-center gap-1">
-            {(data?.pendingJoins || 0) > 0 ? '⚠️ يتطلب موافقة المدير' : 'لا توجد طلبات معلقة'}
+          <div className="mt-3 text-[11px] text-slate-400 flex items-center gap-1">
+            <span>إجمالي العملاء والموردين المسجلين</span>
           </div>
         </div>
 

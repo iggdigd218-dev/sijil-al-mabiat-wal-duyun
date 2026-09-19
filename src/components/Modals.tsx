@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Plus, QrCode, Copy, Check, Clock } from 'lucide-react';
-import { Account, Transaction, Item, User, Voucher, Invite, AccountKind, TransactionType, UserRole, VoucherKind } from '../types';
+import { X, Save, Plus } from 'lucide-react';
+import { Account, Transaction, Item, User, Voucher, AccountKind, TransactionType, UserRole, VoucherKind } from '../types';
 import { api } from '../api';
 
 // ==========================================

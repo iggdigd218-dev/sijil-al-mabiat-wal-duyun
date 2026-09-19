@@ -39,11 +39,6 @@ class SyncEngine {
   Timer? _rosterTimer;
   Timer? _cloudPullTimer;
   bool _cloudPulling = false;
-
-  /// (قانون 2026-09-19) عدّاد الفحوصات المتتالية لزوال عقدة المجموعة:
-  /// 6 ضربات (≈30 ثانية) قبل قلب العضو إلى حساب فردي — لا تحويل عابر
-  /// (تشديد 2026-09-19: قراءة فارغة عابرة لا يجوز أن تفصل عضواً).
-  int _dissolveMisses = 0;
   int _generation = 0;
   bool _running = false;
   bool _started = false;
@@ -287,15 +282,10 @@ class SyncEngine {
     final db = await _db;
     // Workspace الحالي — يُقرأ من الجدول في كل استدعاء: الربط يستبدل
     // الجدول بلقطة المجموعة، ونقلٌ بُني بالمعرّف القديم يظل يدفع ويسحب من
-    // مسار خاطئ فتموت المزامنة بصمت (إصلاح حرج 2026-09-19).
+    // مسار خاطئ فتموت المزامنة بصمت.
     final wsRow = await db.query('workspaces', limit: 1);
-    var wsId =
+    final wsId =
         wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
-    // (إصلاح حرج 2026-09-19) الكاش المصحَّح (sync.workspaceId — انظر
-    // ensureWorkspace) أولويته أعلى من «أول صف»: صف مساحة شخصية قديمة
-    // كان يخطف النقل إلى مسار ميت فتموت مزامنة العضو كلياً.
-    final cached = repo.requireWorkspaceId;
-    if (cached.isNotEmpty && cached != defaultWorkspaceId) wsId = cached;
     if (url == _cloudUrl &&
         _cloudTransport != null &&
         _cloudTransport!.workspaceId == wsId) {
@@ -354,11 +344,6 @@ class SyncEngine {
     if (_started) return;
     _started = true;
     final generation = ++_generation;
-    // (إصلاح حرج 2026-09-19) تصحيح كاش معرّف المساحة قبل بناء أي نقل أو
-    // طابور — جهاز عاد للتشغيل بعد ربط/استرداد يكمل بمعرّف صحيح فوراً.
-    try {
-      await repo.refreshWorkspaceId();
-    } catch (_) {}
     _queue ??= SyncQueueOps(await _db);
     await _queue!.recoverInterrupted();
     // إنقاذ سحابي: عمليات سُجّلت قبل تهيئة السحابة (لا صف cloud لها) —
@@ -493,37 +478,6 @@ class SyncEngine {
           try {
             onSyncActivity?.call();
           } catch (_) {}
-        }
-      } catch (_) {}
-      // (قانون 2026-09-19 — حل المجموعة؛ تشديد 2026-09-19 — لا أعضاء
-      // عالقون) عضو ماتت مجموعته: زالت عقدة roster، أو بقي وحده فيها
-      // بلا مدير، أو مُزيل قيده بلا سجل طرد — بعد 6 فحوصات متتالية
-      // (~30 ثانية) يعود حساباً فردياً مستقلاً وبياناته تبقى له، ثم
-      // تُمسح كل بقاياه السحابية فلا يعود عالقا ولا يُسحب رجوعا أبدا.
-      try {
-        if (_started && await repo.workspaceMode() == 'member') {
-          final t = _cloudTransport!;
-          if (await CloudJoin.groupNodeGone(repo,
-              backendUrl: t.backendUrl, workspaceId: t.workspaceId)) {
-            _dissolveMisses++;
-          } else {
-            _dissolveMisses = 0;
-          }
-          if (_dissolveMisses >= 6) {
-            _dissolveMisses = 0;
-            await repo.becomeIndividualAfterDissolution();
-            // (2026-09-19 — لا أعضاء عالقون) مسح بقاياه هو من السحابة:
-            // قيد roster وطلب معلق وعضوية وبصمة وفهرس Google.
-            try {
-              await CloudJoin.releaseMemberBindings(repo,
-                  backendUrl: t.backendUrl, workspaceId: t.workspaceId);
-            } catch (_) {}
-            try {
-              onSyncActivity?.call();
-            } catch (_) {}
-          }
-        } else {
-          _dissolveMisses = 0;
         }
       } catch (_) {}
     } catch (_) {

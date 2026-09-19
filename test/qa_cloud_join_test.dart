@@ -335,10 +335,6 @@ void main() {
       'created_at': DateTime.now().toIso8601String(),
       'updated_at': DateTime.now().toIso8601String(),
     }, conflictAlgorithm: ConflictAlgorithm.replace);
-    // (عقد 3.66.12 — جذر كارثة المزامنة) الانضمام الحقيقي لم يعد يكتفي
-    // باستبدال الجدول: يثبّت الربط الصريح sync.workspaceId على مساحة
-    // المجموعة — وهو مصدر الحقيقة الذي يقرأه ensureWorkspace الآن.
-    await repoA.setSetting('sync.workspaceId', 'WS-JOINED-77');
     // صفوف ضالة سُجلت بالمعرّف القديم قبل التصحيح.
     await repoA.queueOperation(
         entityType: EntityKind.account,

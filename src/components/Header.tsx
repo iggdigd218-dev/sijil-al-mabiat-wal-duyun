@@ -9,7 +9,6 @@ interface HeaderProps {
   onOpenHelpGuide?: () => void;
   onOpenMobileMenu?: () => void;
   isLoading?: boolean;
-  isSseConnected?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,7 +19,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHelpGuide,
   onOpenMobileMenu,
   isLoading,
-  isSseConnected = true,
 }) => {
   const [currentFont, setCurrentFont] = useState<string>(() => {
     return localStorage.getItem('app-font') || 'naskh';
@@ -54,14 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div>
           <h2 className="text-lg font-black text-slate-800 tracking-tight">{title}</h2>
           <div className="flex items-center gap-2 mt-0.5">
-            <p className="text-xs text-slate-600 font-medium">سجل المبيعات والديون • خط النسخ</p>
-            <span className="hidden sm:inline-block w-1 h-1 rounded-full bg-slate-300"></span>
-            <span className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-              isSseConnected ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${isSseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-              <span>{isSseConnected ? 'المزامنة الفورية نشطة' : 'المزامنة متوقفة'}</span>
-            </span>
+            <p className="text-xs text-slate-600 font-medium">سجل المبيعات والديون • نظام محلي متكامل</p>
           </div>
         </div>
       </div>

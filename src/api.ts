@@ -1,12 +1,17 @@
-import { Account, Transaction, Item, Voucher, User, Device, JoinRequest, Invite, DashboardData, ActivityItem } from './types';
+import { Account, Transaction, Item, Voucher, User, DashboardData, ActivityItem, AuthSession, SyncQueueItem, SyncQueueStats, UserPermission, LicenseInfo, LogoutRequest } from './types';
+import { getAuthSession } from './services/syncQueueService';
 
 const BASE_URL = '/api';
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const session = getAuthSession();
   const res = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'x-store-id': session?.store_id || 'store-main',
+      'x-user-email': session?.user_email || 'moneerqaid950@gmail.com',
+      'x-device-id': session?.device_id || 'DEV-LOCAL',
       ...(options?.headers || {}),
     },
   });
@@ -26,11 +31,27 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // Auth
-  getGoogleStatus: () => request<{ loggedIn: boolean; email?: string; name?: string; picture?: string }>('/auth/google/status'),
-  loginGoogle: (data: { email: string; name?: string; picture?: string; id_token?: string; access_token?: string }) =>
-    request<{ ok: boolean; email: string; name: string }>('/auth/google/login', { method: 'POST', body: JSON.stringify(data) }),
-  logoutGoogle: () => request<{ ok: boolean }>('/auth/google/logout', { method: 'POST' }),
+  // Authentication (Email / Password only)
+  login: (credentials: { email: string; password: string; store_id?: string; device_id?: string }) =>
+    request<{ ok: boolean; session: AuthSession }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
+    }),
+
+  register: (data: { name: string; email: string; password: string; store_id?: string; role?: string }) =>
+    request<{ ok: boolean; session: AuthSession }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Sync Queue
+  getSyncQueueStats: () => request<SyncQueueStats>('/sync-queue/stats'),
+  getPendingSyncQueue: (limit = 20) => request<SyncQueueItem[]>(`/sync-queue/pending?limit=${limit}`),
+  updateSyncQueueStatus: (queue_ids: string[], status: 'synced' | 'failed' | 'pending' | 'syncing') =>
+    request<{ ok: boolean; updated: number }>('/sync-queue/status', {
+      method: 'POST',
+      body: JSON.stringify({ queue_ids, status }),
+    }),
 
   // Dashboard
   getDashboard: () => request<DashboardData>('/dashboard'),
@@ -65,6 +86,7 @@ export const api = {
   // Vouchers
   getVouchers: () => request<Voucher[]>('/vouchers'),
   createVoucher: (voucher: Partial<Voucher>) => request<{ id: number }>('/vouchers', { method: 'POST', body: JSON.stringify(voucher) }),
+  deleteVoucher: (id: number) => request<{ ok: boolean }>(`/vouchers/${id}`, { method: 'DELETE' }),
 
   // Users
   getUsers: () => request<User[]>('/users'),
@@ -72,21 +94,12 @@ export const api = {
   updateUser: (id: number, user: Partial<User>) => request<{ ok: boolean }>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(user) }),
   deleteUser: (id: number) => request<{ ok: boolean }>(`/users/${id}`, { method: 'DELETE' }),
 
-  // Devices
-  getDevices: () => request<Device[]>('/devices'),
-  createDevice: (device: Partial<Device>) => request<{ id: string }>('/devices', { method: 'POST', body: JSON.stringify(device) }),
-  updateDevice: (id: string, updates: Partial<Device>) => request<{ ok: boolean }>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(updates) }),
-  deleteDevice: (id: string) => request<{ ok: boolean }>(`/devices/${id}`, { method: 'DELETE' }),
-  transferOwnership: (id: string) => request<{ ok: boolean }>(`/devices/${id}/transfer-ownership`, { method: 'POST' }),
-
-  // Invites & Join Requests
-  createInvite: () => request<Invite>('/invite', { method: 'POST' }),
-  getInvites: () => request<Invite[]>('/invites'),
-  requestJoin: (data: { deviceName: string; platform: string; fingerprint?: string; token?: string; pin?: string }) =>
-    request<{ ok: boolean; requestId: string; deviceId: string; message: string }>('/join-request', { method: 'POST', body: JSON.stringify(data) }),
-  getJoinRequests: () => request<JoinRequest[]>('/join-requests'),
-  approveJoinRequest: (id: string, role: string) => request<{ ok: boolean; message: string; deviceId: string; deviceName: string }>(`/join-requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ role }) }),
-  rejectJoinRequest: (id: string) => request<{ ok: boolean }>(`/join-requests/${id}/reject`, { method: 'POST' }),
+  // User Permissions (RBAC)
+  getUserPermissions: () => request<UserPermission[]>('/user-permissions'),
+  getMyPermissions: () => request<UserPermission>('/user-permissions/me'),
+  saveUserPermissions: (data: Partial<UserPermission>) => request<{ ok: boolean; permission: UserPermission }>('/user-permissions', { method: 'POST', body: JSON.stringify(data) }),
+  updateUserPermissions: (email: string, data: Partial<UserPermission>) => request<{ ok: boolean; permission: UserPermission }>(`/user-permissions/${encodeURIComponent(email)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteUserPermissions: (email: string) => request<{ ok: boolean }>(`/user-permissions/${encodeURIComponent(email)}`, { method: 'DELETE' }),
 
   // Settings
   getSettings: () => request<Record<string, string>>('/settings'),
@@ -96,8 +109,28 @@ export const api = {
   getActivity: () => request<ActivityItem[]>('/activity'),
   getBackup: () => request<any>('/backup/export'),
   restoreBackup: (backup: any) => request<{ ok: boolean; message: string }>('/backup/restore', { method: 'POST', body: JSON.stringify(backup) }),
+  triggerAutoSnapshot: (options: { google_drive?: boolean; email?: string }) => request<{ ok: boolean; snapshot: any }>('/backup/auto-snapshot', { method: 'POST', body: JSON.stringify(options) }),
 
-  // Sync Engine & Snapshot
-  getSnapshot: () => request<{ ok: boolean; timestamp: string; snapshot: any }>('/sync/snapshot'),
-  pushSync: (operations: any[]) => request<{ ok: boolean; results: any[] }>('/sync/push', { method: 'POST', body: JSON.stringify({ operations }) }),
+  // License & Plan
+  getLicenseInfo: () => request<LicenseInfo>('/license/info'),
+
+  // Secured Logout Flow & Approvals
+  getLogoutRequests: () => request<LogoutRequest[]>('/logout-requests'),
+  submitLogoutRequest: (data: { user_email: string; user_name: string; role: string; device_id: string }) =>
+    request<{ ok: boolean; id: string; status: string }>('/logout-requests', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  respondLogoutRequest: (id: string, action: 'approved' | 'rejected') =>
+    request<{ ok: boolean; status: string }>(`/logout-requests/${id}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  getMyLogoutStatus: (email?: string) => request<LogoutRequest | { status: 'none' }>(`/logout-requests/my-status${email ? `?email=${encodeURIComponent(email)}` : ''}`),
+  managerLogout: (delegate_email: string) =>
+    request<{ ok: boolean; message: string }>('/auth/manager-logout', {
+      method: 'POST',
+      body: JSON.stringify({ delegate_email }),
+    }),
 };
+

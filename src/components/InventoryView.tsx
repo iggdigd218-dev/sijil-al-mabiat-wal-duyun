@@ -3,6 +3,7 @@ import { Package, Plus, Search, Edit2, Trash2, AlertTriangle } from 'lucide-reac
 import { Item } from '../types';
 import { api } from '../api';
 import { ConfirmModal } from './ConfirmModal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface InventoryViewProps {
   items: Item[];
@@ -22,6 +23,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [deleteItemTarget, setDeleteItemTarget] = useState<Item | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const { canManageItems } = usePermissions();
+
   const categories = ['all', ...Array.from(new Set(items.map((i) => i.category).filter(Boolean)))];
 
   const filtered = items.filter((item) => {
@@ -33,7 +36,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   });
 
   const handleConfirmDelete = async () => {
-    if (!deleteItemTarget) return;
+    if (!deleteItemTarget || !canManageItems) return;
     setIsDeleting(true);
     try {
       await api.deleteItem(deleteItemTarget.id);
@@ -79,14 +82,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             />
           </div>
 
-          <button
-            id="btn-add-item-view"
-            onClick={() => onOpenItemModal()}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-xs transition-colors shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span>صنف جديد</span>
-          </button>
+          {canManageItems && (
+            <button
+              id="btn-add-item-view"
+              onClick={() => onOpenItemModal()}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-xs transition-colors shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>صنف جديد</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -163,22 +168,24 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </td>
 
                       <td className="py-3.5 px-4 text-left">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => onOpenItemModal(item)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-                            title="تعديل الصنف"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setDeleteItemTarget(item)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            title="حذف الصنف"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        {canManageItems ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => onOpenItemModal(item)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                              title="تعديل الصنف"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setDeleteItemTarget(item)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                              title="حذف الصنف"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   );

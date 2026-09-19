@@ -455,10 +455,6 @@ class Repo {
     try {
       await setSetting('sync.workspaceId', freshWs);
     } catch (_) {}
-    // (قانون 2026-09-19) العودة للاستقلال = عودة إلى الحساب الفردي.
-    try {
-      await setSetting('account.type', 'individual');
-    } catch (_) {}
     _currentUserId = null;
     final me = await currentUser();
     _currentUserId = me?.id;
@@ -2565,43 +2561,6 @@ class Repo {
   /// يُعيد الجهاز إلى الوضع المستقل بعد الطرد من قِبل المدير.
   /// يستدعيها العضو عندما يكتشف أنه مطرود (من استجابة 410 في /ops).
   Future<void> resetToStandaloneAfterExpulsion() => _resetToStandalone();
-
-  /// (قانون 2026-09-19 — حل المجموعة) العضو يعود **حساباً فردياً**:
-  /// الوضع مستقل + account.type=individual + جهازه مالك + مستخدمه مدير،
-  /// وبياناته المحلية تبقى له (سياسة دفعة 66). يُستدعى حين يكتشف محرك
-  /// المزامنة زوال عقدة المجموعة من السحابة (3 فحوصات متتالية).
-  Future<void> becomeIndividualAfterDissolution() async {
-    final db = await _db;
-    final now = DateTime.now().toIso8601String();
-    final adminPerms = defaultPerms(UserRole.admin);
-    final permStr =
-        adminPerms.entries.where((e) => e.value).map((e) => e.key).join(',');
-    try {
-      await db.update(
-        'devices',
-        {'is_owner': 1, 'expelled_at': '', 'revoked_at': '', 'updated_at': now},
-        where: 'id = ?',
-        whereArgs: [_deviceId],
-      );
-    } catch (_) {}
-    try {
-      await db.update(
-        'users',
-        {'role': 'admin', 'permissions': permStr, 'updated_at': now},
-        where: 'COALESCE(is_me,0) = 1',
-      );
-    } catch (_) {}
-    await db.insert(
-        'sync_meta',
-        {'key': 'workspaceMode', 'value': 'standalone'},
-        conflictAlgorithm: ConflictAlgorithm.replace);
-    try {
-      await setSetting('account.type', 'individual');
-    } catch (_) {}
-    _currentUserId = null;
-    final me = await currentUser();
-    _currentUserId = me?.id;
-  }
 
   // ==================== تهيئة المجموعة من الصفر (المدير فقط) ====================
 

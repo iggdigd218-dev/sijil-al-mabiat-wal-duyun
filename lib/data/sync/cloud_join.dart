@@ -22,7 +22,6 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/factory_reset.dart';
-import 'account_workspace.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'operation.dart';
@@ -1036,32 +1035,6 @@ class CloudJoin {
     // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
     await SnapshotApply.applySnapshot(() async => db, ourId, snap);
 
-    // (إصلاح حرج 2026-09-19 — جذر كارثة موت المزامنة) مساحة المجموعة تصير
-    // الصف **الوحيد** في جدول workspaces: أي صف مساحة شخصية قديمة يُحذف
-    // (كان يبقى أولاً فيلتقطه المحرك فتُدفع عمليات العضو لمسار ميت)،
-    // والربط الصريح sync.workspaceId يُثبَّت على مساحة المجموعة.
-    try {
-      await db.delete('workspaces',
-          where: 'id <> ?', whereArgs: [workspaceId]);
-      final left = await db.query('workspaces',
-          where: 'id = ?', whereArgs: [workspaceId], limit: 1);
-      if (left.isEmpty) {
-        final nowIso = DateTime.now().toIso8601String();
-        await db.insert('workspaces', {
-          'id': workspaceId,
-          'name': 'متجري',
-          'owner_google_id': '',
-          'owner_email': '',
-          'owner_name': '',
-          'created_at': nowIso,
-          'updated_at': nowIso,
-        });
-      }
-    } catch (_) {}
-    try {
-      await repo.setSetting('sync.workspaceId', workspaceId);
-    } catch (_) {}
-
     // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
     final ourRowAfter = await db.query('devices',
         where: 'id = ?', whereArgs: [ourId], limit: 1);
@@ -1514,12 +1487,6 @@ class CloudJoin {
         token: token,
         workspaceId: workspaceId,
         cloudCode: cloudCode);
-    // (إصلاح حرج 2026-09-19) الانضمام استبدل جدول workspaces لتوّه —
-    // نُحمّل الكاش قبل استئناف المحرك حتى تُسجل أول عملية بعد الربط في
-    // مساحة المجموعة نفسها لا في مساحة ما قبل الربط.
-    try {
-      await repo.refreshWorkspaceId();
-    } catch (_) {}
     final ourId = await ensureDeviceId(repo);
     try {
       await _delete(requestPath(backendUrl, workspaceId, ourId));
@@ -1530,11 +1497,6 @@ class CloudJoin {
       await DeviceRegistry.bindAsMember(repo,
           backendUrl: backendUrl, workspaceId: workspaceId);
     } catch (_) {}
-    // (كارثة الاختطاف 2026-09-19) إن كان للعضو حساب Google مفهرس على
-    // مساحة شخصية سابقة فاحذف القيد — وإلا أعاده أي تسجيل لاحق إليها
-    // فانسلخ عن المجموعة وماتت المزامنة (الأدلة الحية: عمليات العضو هبطت
-    // في مساحته الشخصية بعد دقائق من انضمامه).
-    await forgetIndex(repo, backendUrl: backendUrl);
     // تنظيف سياق الانتظار.
     final db = await repo.database;
     await db.delete('settings',
@@ -1592,38 +1554,6 @@ class CloudJoin {
       'status': 'pending',
       'requestedAt': DateTime.now().toIso8601String(),
     }, timeout: const Duration(seconds: 20));
-  }
-
-  /// (استرداد 2026-09-19 — الموافقة التي اختفت قبل أول استطلاع) قراءة
-  /// سجل الجهاز في roster السحابي بلا رمي: null = غير موجود. المدير
-  /// يكتبه لحظة الموافقة (broadcastRosterChange والمصالحة الدورية) فهو
-  /// دليل قطعي على حدوث الموافقة حتى لو حذفت نسخة مدير أقدم عقدة
-  /// /joinRequests خلال ثانية واحدة — قبل أن يلحق العضو برؤيتها.
-  static Future<Map<String, dynamic>?> peekRosterEntry({
-    required String backendUrl,
-    String workspaceId = 'default',
-    required String deviceId,
-  }) async {
-    try {
-      return await _getJson('${_root(backendUrl, workspaceId)}/roster/'
-          '${Uri.encodeComponent(deviceId)}.json');
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// (استرداد 2026-09-19) سجل العضوية /members/{uid} — دليل ثانٍ.
-  static Future<Map<String, dynamic>?> peekMemberEntry({
-    required String backendUrl,
-    String workspaceId = 'default',
-    required String uid,
-  }) async {
-    try {
-      return await _getJson('${_root(backendUrl, workspaceId)}/members/'
-          '${Uri.encodeComponent(uid)}.json');
-    } catch (_) {
-      return null;
-    }
   }
 
   /// (المدير) حذف طلب انضمام/مغادرة من السحابة (رفض أو تنظيف).
@@ -1965,10 +1895,7 @@ class CloudJoin {
   ///  1) كتابة شاهدة طرد لكل جهاز عضو (غير المالك) في /evictions —
   ///     تصلهم لحظياً عبر قنواتهم المخصصة فيبطلون جلساتهم ويعودون مستقلين.
   ///  2) مهلة سماح قصيرة ليلتقط الأعضاء المتصلون الشواهد عبر SSE.
-  ///  3) (2026-09-19 — إلغاء كل الارتباطات فعلياً) حذف عقدة المجموعة
-  ///     بأكملها من السحابة — كل الأقسام عدا `subscription` المدفوع، مع
-  ///     كنس بصمات الدعوات من `invite_index` العام: لا يبقى أثر ميت
-  ///     يعلق به عضو ولا PIN قديم يعيد أحداً إلى مجموعة ميتة.
+  ///  3) حذف عقدة المجموعة بأكملها من السحابة.
   /// يعيد عدد الأجهزة التي بُثّت لها شواهد.
   static Future<int> dissolveGroup(
     Repo repo, {
@@ -2008,28 +1935,7 @@ class CloudJoin {
       } catch (_) {}
     }
 
-    // 3) (2026-09-19 — إلغاء كل الارتباطات) كنس بصمات الدعوات من
-    //    الفهرس العام قبل حذف الدعوات نفسها.
-    try {
-      final invites = await _getJson('$root/invites.json');
-      if (invites != null && invites.isNotEmpty) {
-        final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
-        for (final e in invites.entries) {
-          final pin =
-              e.value is Map ? '${(e.value as Map)['pin'] ?? ''}' : '';
-          for (final k in [
-            'tok_${Uri.encodeComponent(e.key)}',
-            if (pin.isNotEmpty) 'pin_${Uri.encodeComponent(pin)}',
-          ]) {
-            try {
-              await _delete('$base/invite_index/$k.json');
-            } catch (_) {}
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 4) تفكيك عقدة المجموعة السحابية بالكامل — كل الأقسام عدا
+    // 3) تفكيك عقدة المجموعة السحابية بالكامل — كل الأقسام عدا
     //    الاشتراك المدفوع (كل قسم على حدة — أفضل جهد).
     for (final node in const [
       'roster',
@@ -2038,280 +1944,14 @@ class CloudJoin {
       'joinRequests',
       'joinSnapshot',
       'members',
-      'evictions', // تنظيف ما علّق من إصدارات سابقة
       'chat',
       'notifications',
-      'devices',
-      'backup',
-      'creator',
     ]) {
       try {
         await _delete('$root/$node.json');
       } catch (_) {}
     }
     return removed;
-  }
-
-  /// (2026-09-19 — تصفير كامل) يدمّر كل أقسام مساحة سحابية عدا الاشتراك
-  /// المدفوع — يُستخدم لإفناء المساحات الشخصية القديمة الكامنة خلف
-  /// الفهارس العامة عند الحذف الكامل من أول صفحة.
-  static Future<void> destroyWorkspaceKeepSubscription(
-      String base, String ws) async {
-    if (ws.isEmpty || ws == '_registry') return;
-    final root = _root(base, ws);
-    for (final node in const [
-      'roster',
-      'operations',
-      'invites',
-      'joinRequests',
-      'joinSnapshot',
-      'members',
-      'evictions',
-      'chat',
-      'notifications',
-      'devices',
-      'backup',
-      'creator',
-    ]) {
-      try {
-        await _delete('$root/$node.json');
-      } catch (_) {}
-    }
-  }
-
-  /// (2026-09-19 — لا أعضاء عالقون) بعد تحوّل العضو إلى حساب فردي إثر
-  /// موت مجموعته: يمسح بقاياه هو من السحابة — قيده في roster، طلبه
-  /// المعلّق في joinRequests، عضويته في members، ربط بصمته في
-  /// device_index، وفهرس حسابه في accounts_index — فلا يبقى أثر ميت
-  /// ولا يستطيع شيء سحبه إلى المجموعة مجدداً. أفضل جهد: فشل أي حذف
-  /// لا يمنع التحرر (المجموعة ميتة أصلاً).
-  static Future<void> releaseMemberBindings(
-    Repo repo, {
-    required String backendUrl,
-    String workspaceId = 'default',
-  }) async {
-    final root = _root(backendUrl, workspaceId);
-    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
-    try {
-      final ourId = ((await repo.settings())['sync.deviceId'] ?? '').toString();
-      if (ourId.isNotEmpty) {
-        for (final p in [
-          '$root/roster/${Uri.encodeComponent(ourId)}.json',
-          '$root/joinRequests/${Uri.encodeComponent(ourId)}.json',
-        ]) {
-          try {
-            await _delete(p);
-          } catch (_) {}
-        }
-      }
-    } catch (_) {}
-    try {
-      final uid = FirebaseAuthRest.currentUid;
-      if (uid.isNotEmpty) {
-        try {
-          await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
-        } catch (_) {}
-      }
-    } catch (_) {}
-    try {
-      final fp = await DeviceRegistry.fingerprintKey(repo);
-      if (fp.isNotEmpty) {
-        try {
-          await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
-        } catch (_) {}
-      }
-    } catch (_) {}
-    await forgetIndex(repo, backendUrl: backendUrl);
-  }
-
-  /// (قانون 2026-09-19 — حذف الحساب الفردي) يحذف كل عقد المساحة من
-  /// السحابة عدا `subscription` (الاشتراك المدفوع يبقى كما ينص القانون)،
-  /// ولا تُمس `device_index` العامة (بصمة الجهاز تبقى).
-  static Future<void> deleteIndividualWorkspace(
-    Repo repo, {
-    required String backendUrl,
-    String workspaceId = 'default',
-  }) async {
-    final root = _root(backendUrl, workspaceId);
-    for (final node in const [
-      'roster',
-      'operations',
-      'invites',
-      'joinRequests',
-      'joinSnapshot',
-      'members',
-      'evictions',
-      'chat',
-      'notifications',
-      'devices',
-      'backup',
-      'creator',
-    ]) {
-      try {
-        await _delete('$root/$node.json');
-      } catch (_) {}
-    }
-  }
-
-  /// (كارثة الاختطاف 2026-09-19) حذف قيد الفهرس السحابي accounts_index
-  /// للحساب الحالي — حتى لا يسحب أي تسجيل Google لاحق هذا الجهاز من
-  /// مجموعته إلى مساحته الشخصية القديمة (حارس التبديل في linkAccountOnly
-  /// يبدّل المساحة حين يختلف الفهرس عن المحلي).
-  static Future<void> forgetIndex(
-      Repo repo, {required String backendUrl}) async {
-    try {
-      final uid = FirebaseAuthRest.currentUid;
-      if (uid.isEmpty) return;
-      final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
-      // (إصلاح حرج 2026-09-19) الفهرس الرسمي الذي يقرأه حارس التبديل في
-      // linkAccountOnly يسكن workspaces/_registry/accounts_index — النسخة
-      // السابقة كانت تحذف المسار التراثي وحده فينجو قيد Google ويستمر في
-      // سحب العضو خارج مجموعته (الدليل الحي: jntD…→WS-MF38GASA). يُحذف
-      // المساران معاً.
-      for (final p in [
-        '$base/workspaces/_registry/accounts_index/'
-            '${Uri.encodeComponent(uid)}.json',
-        '$base/accounts_index/${Uri.encodeComponent(uid)}.json',
-      ]) {
-        try {
-          await _delete(p);
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }
-
-  /// (طلب 2026-09-19 — الحذف الكامل من أول صفحة) مسح الجهاز من كل مكان
-  /// في السحابة: عضو → تُحذف قيوده هو فقط من مساحة المجموعة
-  /// (roster/members/joinRequests) ولا تُمس بيانات المجموعة نفسها؛
-  /// مستقل/مالك → تُحذف كل عقد مساحته عدا الاشتراك المدفوع. وفي الحالتين
-  /// تُحذف بصمة device_index وفهرس Google — فلا استرجاع بعده للبيانات
-  /// ولا لموقع الجهاز في مجموعته.
-  static Future<void> purgeDeviceEverywhere(
-      Repo repo, {required String backendUrl}) async {
-    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
-    final ws = repo.requireWorkspaceId;
-    final root = _root(backendUrl, ws);
-    String mode = 'standalone';
-    try {
-      mode = await repo.workspaceMode();
-    } catch (_) {}
-    if (mode == 'member') {
-      final st = await repo.settings();
-      final ourId = (st['sync.deviceId'] ?? '').toString();
-      if (ourId.isNotEmpty) {
-        for (final p in [
-          '$root/roster/${Uri.encodeComponent(ourId)}.json',
-          '$root/joinRequests/${Uri.encodeComponent(ourId)}.json',
-        ]) {
-          try {
-            await _delete(p);
-          } catch (_) {}
-        }
-      }
-      try {
-        final uid = FirebaseAuthRest.currentUid;
-        if (uid.isNotEmpty) {
-          await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
-        }
-      } catch (_) {}
-      // (2026-09-19 — تصفير كامل) كل العمليات التي أنشأها هذا الجهاز داخل
-      // المجموعة تُحذف — بياناته هو تُصفَّر تماماً، وبيانات المجموعة نفسها
-      // (عمليات الأعضاء الآخرين والمدير) لا تُمس.
-      if (ourId.isNotEmpty) {
-        try {
-          final ops = await _getJson('$root/operations.json');
-          if (ops != null) {
-            for (final e in ops.entries) {
-              final v = e.value;
-              final dev = v is Map ? '${v['device_id'] ?? ''}' : '';
-              if (dev == ourId) {
-                try {
-                  await _delete(
-                      '$root/operations/${Uri.encodeComponent(e.key)}.json');
-                } catch (_) {}
-              }
-            }
-          }
-        } catch (_) {}
-      }
-    } else {
-      for (final node in const [
-        'roster',
-        'operations',
-        'invites',
-        'joinRequests',
-        'joinSnapshot',
-        'members',
-        'evictions',
-        'chat',
-        'notifications',
-        'devices',
-        'backup',
-        'creator',
-      ]) {
-        try {
-          await _delete('$root/$node.json');
-        } catch (_) {}
-      }
-    }
-    // (2026-09-19 — تصفير كامل) المساحات الشخصية القديمة الكامنة خلف
-    // الفهرسين العامَّين: تُقرأ قبل حذف القيود وتُدمَّر بالكامل (عدا
-    // الاشتراك المدفوع) — فلا تبقى للعضو أي بيانات في السحابة إطلاقاً.
-    try {
-      final uid = FirebaseAuthRest.currentUid;
-      if (uid.isNotEmpty) {
-        final rws =
-            await AccountWorkspace.lookup(backendUrl: backendUrl, uid: uid);
-        if (rws.isNotEmpty && rws != ws) {
-          await destroyWorkspaceKeepSubscription(base, rws);
-        }
-      }
-    } catch (_) {}
-    // الفهرسان العامّان: بصمة العتاد (موقع المجموعة) وحساب Google.
-    try {
-      final fp = await DeviceRegistry.fingerprintKey(repo);
-      if (fp.isNotEmpty) {
-        final di =
-            await _getJson('$base/device_index/${Uri.encodeComponent(fp)}.json');
-        final iws = di == null ? '' : '${di['workspaceId'] ?? ''}';
-        if (iws.isNotEmpty && iws != ws) {
-          await destroyWorkspaceKeepSubscription(base, iws);
-        }
-        await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
-      }
-    } catch (_) {}
-    await forgetIndex(repo, backendUrl: backendUrl);
-  }
-
-  /// (قانون 2026-09-19 — حل المجموعة؛ تشديد 2026-09-19 — لا أعضاء
-  /// عالقون) هل ماتت مجموعة هذا العضو؟ true في ثلاث حالات:
-  ///  أ) عقدة roster محذوفة أو فارغة تماماً؛
-  ///  ب) لا جهاز في roster غير جهاز العضو نفسه — مدير غائب = مجموعة
-  ///     ميتة (كارثة البقايا الحية: مدير رحل بلا حلٍّ فبقي العضو
-  ///     مقيداً للأبد وطلب مغادرته بلا من يجيبه)؛
-  ///  ج) قيد العضو نفسه مُزال من roster بلا سجل طرد — ارتباطه أُلغي.
-  /// أخطاء الشبكة تُرمى استثناءات فلا تُحسب زوالاً (لا تحويل بلا إنترنت).
-  static Future<bool> groupNodeGone(
-    Repo repo, {
-    required String backendUrl,
-    String workspaceId = 'default',
-  }) async {
-    final root = _root(backendUrl, workspaceId);
-    final r = await _getJson('$root/roster.json');
-    if (r == null) return true;
-    final keys = r.keys.where((k) => k.isNotEmpty).toList();
-    if (keys.isEmpty) return true;
-    final ourId = ((await repo.settings())['sync.deviceId'] ?? '').toString();
-    if (ourId.isEmpty) return false;
-    // (ب) وحدي في roster — لا مدير معي: مجموعة ميتة.
-    if (keys.every((k) => k == ourId)) return true;
-    // (ج) قيدي مُزال — إن وُجد سجل طرد فمسار الطرد هو المعنيّ لا الحل.
-    if (!keys.contains(ourId)) {
-      final ev = await _getJson(
-          '$root/evictions/${Uri.encodeComponent(ourId)}.json');
-      if (ev == null) return true;
-    }
-    return false;
   }
 
   /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،

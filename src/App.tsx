@@ -7,8 +7,6 @@ import { AccountsView } from './components/AccountsView';
 import { TransactionsView } from './components/TransactionsView';
 import { InventoryView } from './components/InventoryView';
 import { VouchersView } from './components/VouchersView';
-import { GroupManagementView } from './components/GroupManagementView';
-import { DevicesView } from './components/DevicesView';
 import { UsersView } from './components/UsersView';
 import { ReportsView } from './components/ReportsView';
 import { SettingsView } from './components/SettingsView';
@@ -16,6 +14,8 @@ import { BackupView } from './components/BackupView';
 import { LoginModal } from './components/LoginModal';
 import { AccountStatementModal } from './components/AccountStatementModal';
 import { WelcomeGuideModal } from './components/WelcomeGuideModal';
+import { ChangelogModal } from './components/ChangelogModal';
+import { LogoutSecurityModal } from './components/LogoutSecurityModal';
 import { MarkedBottomNav } from './components/MarkedBottomNav';
 import {
   AccountModal,
@@ -30,12 +30,18 @@ import {
   Item,
   Voucher,
   User,
-  Device,
-  JoinRequest,
-  Invite,
   DashboardData,
+  AuthSession,
 } from './types';
 import { api } from './api';
+import {
+  startBackgroundSync,
+  getAuthSession,
+  setAuthSession,
+  clearAuthSession,
+} from './services/syncQueueService';
+import { usePermissions } from './hooks/usePermissions';
+import { Lock } from 'lucide-react';
 
 interface Toast {
   id: string;
@@ -46,7 +52,11 @@ interface Toast {
 export function App() {
   const [currentScreen, setCurrentScreen] = useState<string>('dashboard');
   const [isLoading, setIsLoading] = useState(false);
-  const [userEmail, setUserEmail] = useState<string>('owner@nexora.local');
+  const initialSession = getAuthSession();
+  const [authSession, setAuthSessionState] = useState<AuthSession>(initialSession);
+  const [userEmail, setUserEmail] = useState<string>(initialSession.user_email || 'moneerqaid950@gmail.com');
+
+  const { canViewReports, isAdmin, isActive } = usePermissions();
 
   // App Data State
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
@@ -55,9 +65,6 @@ export function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [invites, setInvites] = useState<Invite[]>([]);
-  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
   // Modals
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
@@ -77,6 +84,17 @@ export function App() {
   const [statementAccount, setStatementAccount] = useState<Account | null>(null);
   const [isWelcomeGuideOpen, setIsWelcomeGuideOpen] = useState(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const [isLogoutSecurityModalOpen, setIsLogoutSecurityModalOpen] = useState(false);
+  const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
+
+  // Check and show version 3.70.0 changelog once
+  useEffect(() => {
+    const seen = localStorage.getItem('nexora_version_changelog_seen');
+    if (seen !== '3.70.0') {
+      setIsChangelogModalOpen(true);
+      localStorage.setItem('nexora_version_changelog_seen', '3.70.0');
+    }
+  }, []);
 
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -99,10 +117,6 @@ export function App() {
         its,
         vchs,
         usrs,
-        devs,
-        invs,
-        joins,
-        authStatus,
       ] = await Promise.all([
         api.getDashboard().catch(() => null),
         api.getAccounts().catch(() => []),
@@ -110,10 +124,6 @@ export function App() {
         api.getItems().catch(() => []),
         api.getVouchers().catch(() => []),
         api.getUsers().catch(() => []),
-        api.getDevices().catch(() => []),
-        api.getInvites().catch(() => []),
-        api.getJoinRequests().catch(() => []),
-        api.getGoogleStatus().catch(() => ({ loggedIn: false })),
       ]);
 
       if (dash) setDashboardData(dash);
@@ -122,12 +132,6 @@ export function App() {
       setItems(its);
       setVouchers(vchs);
       setUsers(usrs);
-      setDevices(devs);
-      setInvites(invs);
-      setJoinRequests(joins);
-      if (authStatus.loggedIn && (authStatus as any).email) {
-        setUserEmail((authStatus as any).email);
-      }
     } catch (err: any) {
       console.error('Error fetching data:', err);
     } finally {
@@ -135,78 +139,27 @@ export function App() {
     }
   }, []);
 
-  const [isSseConnected, setIsSseConnected] = useState(false);
-
   useEffect(() => {
     loadAllData();
   }, [loadAllData]);
 
-  // Real-time SSE listener for instant manager-member sync
   useEffect(() => {
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource('/api/sync/events');
-      es.addEventListener('connected', () => {
-        setIsSseConnected(true);
-      });
-      es.addEventListener('sync', (e: MessageEvent) => {
-        setIsSseConnected(true);
-        try {
-          const payload = JSON.parse(e.data);
-          loadAllData();
-          if (payload.type === 'join_requested') {
-            showToast(`📲 جهاز جديد يطلب الانضمام: ${payload.deviceName || 'جهاز'}`, 'info');
-          } else if (payload.type === 'join_approved') {
-            showToast(`✅ تم اعتماد جهاز: ${payload.deviceName} بدور ${payload.role}`, 'success');
-          } else if (payload.type === 'account_created') {
-            showToast(`👤 مزامنة الحسابات: تم إضافة حساب "${payload.name}" فورياً`, 'info');
-          } else if (payload.type === 'account_updated') {
-            showToast(`✏️ مزامنة الحسابات: تم تحديث بيانات الحساب "${payload.name}"`, 'info');
-          } else if (payload.type === 'account_deleted') {
-            showToast(`🗑️ مزامنة الحسابات: تم حذف حساب بواسطة جهاز مرتبط`, 'info');
-          } else if (payload.type === 'voucher_created') {
-            showToast(`🧾 مزامنة فورية: تم إصدار سند ${payload.kind === 'receipt' ? 'قبض' : 'صرف'} بقيمة ${Number(payload.amount || 0).toLocaleString()} ر.ي`, 'info');
-          } else if (payload.type === 'transaction_created') {
-            showToast(`⚡ مزامنة فورية: تم تسجيل عملية بقيمة ${Number(payload.amount || 0).toLocaleString()} ر.ي`, 'info');
-          } else if (payload.type === 'batch_sync_applied') {
-            showToast(`🔄 اكتملت مزامنة ${payload.count} عمليات من الأجهزة المرتبطة`, 'success');
-          } else if (payload.type === 'auth_updated') {
-            showToast(`🔒 تم تحديث حالة الحساب السحابي المرتبط`, 'info');
-          }
-        } catch {
-          loadAllData();
-        }
-      });
-      es.onerror = () => {
-        setIsSseConnected(false);
-      };
-    } catch {
-      setIsSseConnected(false);
-    }
-
-    // نبض مزامنة دوري عالي الاستجابة (كل 5 ثوانٍ) كشبكة أمان في حال انقطاع SSE أو تغيّر الشبكة
-    const pollInterval = setInterval(() => {
-      loadAllData();
-    }, 5000);
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        loadAllData();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
+    const stopSync = startBackgroundSync();
     return () => {
-      es?.close();
-      clearInterval(pollInterval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopSync();
     };
-  }, [loadAllData, showToast]);
+  }, []);
 
-  const handleLogout = async () => {
-    await api.logoutGoogle();
+  const handleLogout = () => {
+    setIsLogoutSecurityModalOpen(true);
+  };
+
+  const handleExecuteLogout = () => {
+    clearAuthSession();
     setUserEmail('guest@local');
+    setIsLogoutSecurityModalOpen(false);
     setIsLoginModalOpen(true);
+    showToast('تم تسجيل الخروج بنجاح', 'info');
   };
 
   const getScreenTitle = () => {
@@ -225,14 +178,8 @@ export function App() {
         return 'المخزون وإدارة الأصناف';
       case 'reports':
         return 'التقارير المالية والتحليلية';
-      case 'group':
-        return 'إدارة المجموعة وربط الأجهزة';
-      case 'devices':
-        return 'الأجهزة المرتبطة وصلاحيات الوصول';
       case 'users':
-        return 'المستخدمون ورموز الدخول';
-      case 'joinRequests':
-        return 'طلبات الانضمام المعلقة';
+        return 'المستخدمون والصلاحيات';
       case 'settings':
         return 'إعدادات المنشأة والترويسة';
       case 'backup':
@@ -241,6 +188,28 @@ export function App() {
         return 'سجل المبيعات والديون';
     }
   };
+
+  if (!isActive && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4 font-sans" dir="rtl">
+        <div className="bg-white rounded-3xl p-8 max-w-md w-full text-slate-900 text-center shadow-2xl space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-black text-slate-900">تم تعطيل هذا الحساب</h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            تم تعطيل صلاحيات الدخول لهذا الحساب ({userEmail}) محلياً من قبل مدير النظام. يرجى مراجعة المسؤول لإعادة التفعيل.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition-colors"
+          >
+            تسجيل الخروج والتبديل لحساب آخر
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-row">
@@ -267,10 +236,9 @@ export function App() {
         currentScreen={currentScreen}
         onSelectScreen={setCurrentScreen}
         accountsCount={accounts.length}
-        devicesCount={devices.length}
-        pendingJoinsCount={joinRequests.filter((r) => r.status === 'pending').length}
         userEmail={userEmail}
         onLogout={handleLogout}
+        onOpenChangelog={() => setIsChangelogModalOpen(true)}
       />
 
       {/* Content Area */}
@@ -289,7 +257,6 @@ export function App() {
           onOpenHelpGuide={() => setIsWelcomeGuideOpen(true)}
           onOpenMobileMenu={() => setIsMobileDrawerOpen(true)}
           isLoading={isLoading}
-          isSseConnected={isSseConnected}
         />
 
         <main className="p-4 sm:p-6 pb-24 md:pb-6 flex-1 max-w-7xl w-full mx-auto">
@@ -303,8 +270,6 @@ export function App() {
                 setTxInitialAccountId(undefined);
                 setIsTxModalOpen(true);
               }}
-              onOpenInviteModal={() => setCurrentScreen('group')}
-              onGoToJoinRequests={() => setCurrentScreen('group')}
             />
           )}
 
@@ -372,52 +337,64 @@ export function App() {
           )}
 
           {currentScreen === 'reports' && (
-            <ReportsView
-              dashboard={dashboardData}
-              accounts={accounts}
-              items={items}
-              transactions={transactions}
-            />
-          )}
-
-          {currentScreen === 'group' && (
-            <GroupManagementView
-              invites={invites}
-              joinRequests={joinRequests}
-              devices={devices}
-              onRefresh={loadAllData}
-              onShowToast={showToast}
-            />
-          )}
-
-          {currentScreen === 'devices' && (
-            <DevicesView
-              devices={devices}
-              onRefresh={loadAllData}
-              onShowToast={showToast}
-            />
+            canViewReports ? (
+              <ReportsView
+                dashboard={dashboardData}
+                accounts={accounts}
+                items={items}
+                transactions={transactions}
+              />
+            ) : (
+              <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center max-w-md mx-auto my-12 shadow-xs space-y-4">
+                <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">غير مصرّح لك بالوصول إلى التقارير</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    تم تقييد صلاحية استعراض التقارير المالية والإحصائيات لحسابك من قبل مدير النظام.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCurrentScreen('pos')}
+                  className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl text-xs transition-colors shadow-xs"
+                >
+                  الانتقال إلى نقطة البيع (POS)
+                </button>
+              </div>
+            )
           )}
 
           {currentScreen === 'users' && (
-            <UsersView
-              users={users}
-              onRefresh={loadAllData}
-              onOpenUserModal={(usr) => {
-                setEditingUser(usr || null);
-                setIsUserModalOpen(true);
-              }}
-              onShowToast={showToast}
-            />
-          )}
-
-          {currentScreen === 'joinRequests' && (
-            <GroupManagementView
-              invites={invites}
-              joinRequests={joinRequests}
-              devices={devices}
-              onRefresh={loadAllData}
-              onShowToast={showToast}
-            />
+            isAdmin ? (
+              <UsersView
+                users={users}
+                onRefresh={loadAllData}
+                onOpenUserModal={(usr) => {
+                  setEditingUser(usr || null);
+                  setIsUserModalOpen(true);
+                }}
+                onShowToast={showToast}
+              />
+            ) : (
+              <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center max-w-md mx-auto my-12 shadow-xs space-y-4">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">إدارة الصلاحيات والموظفين</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    هذه الصفحة مخصصة لمدير المنشأة حصراً لتعديل أذونات الموظفين.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCurrentScreen('dashboard')}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition-colors shadow-xs"
+                >
+                  العودة للوحة التحكم
+                </button>
+              </div>
+            )
           )}
 
           {currentScreen === 'settings' && (
@@ -437,7 +414,6 @@ export function App() {
             setTxInitialAccountId(undefined);
             setIsTxModalOpen(true);
           }}
-          unreadCount={joinRequests.filter((r) => r.status === 'pending').length}
         />
 
         {/* درج القائمة الجانبية للشاشات المحمولة والمعاينة الجانبية */}
@@ -466,10 +442,12 @@ export function App() {
                     setIsMobileDrawerOpen(false);
                   }}
                   accountsCount={accounts.length}
-                  devicesCount={devices.length}
-                  pendingJoinsCount={joinRequests.filter((r) => r.status === 'pending').length}
                   userEmail={userEmail}
                   onLogout={handleLogout}
+                  onOpenChangelog={() => {
+                    setIsMobileDrawerOpen(false);
+                    setIsChangelogModalOpen(true);
+                  }}
                 />
               </div>
             </div>
@@ -521,8 +499,9 @@ export function App() {
 
       <LoginModal
         isOpen={isLoginModalOpen}
-        onSuccess={(email, name) => {
-          setUserEmail(email);
+        onSuccess={(session) => {
+          setAuthSessionState(session);
+          setUserEmail(session.user_email);
           loadAllData();
         }}
         onClose={() => setIsLoginModalOpen(false)}
@@ -541,6 +520,23 @@ export function App() {
         isOpen={isWelcomeGuideOpen}
         onClose={() => setIsWelcomeGuideOpen(false)}
         onNavigate={(screen) => setCurrentScreen(screen)}
+      />
+
+      <ChangelogModal
+        isOpen={isChangelogModalOpen}
+        onClose={() => setIsChangelogModalOpen(false)}
+      />
+
+      <LogoutSecurityModal
+        isOpen={isLogoutSecurityModalOpen}
+        onClose={() => setIsLogoutSecurityModalOpen(false)}
+        isAdmin={isAdmin || authSession.role === 'admin' || userEmail === 'moneerqaid950@gmail.com'}
+        userEmail={userEmail}
+        userName={authSession.user_name || 'المدير'}
+        userRole={authSession.role || (isAdmin ? 'admin' : 'staff')}
+        deviceId={authSession.device_id || 'dev-pos-main'}
+        onConfirmLogout={handleExecuteLogout}
+        onShowToast={showToast}
       />
     </div>
   );

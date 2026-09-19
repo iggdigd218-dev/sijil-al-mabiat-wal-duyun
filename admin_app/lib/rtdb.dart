@@ -56,8 +56,7 @@ class SubscriberEntry {
 /// الرابط الرسمي الإقليمي لقاعدة النظام — نفس المضمّن في تطبيق المستخدم
 /// (المعمارية الصامتة): الأدمن يعمل فوراً بلا إعداد يدوي، مع إمكانية
 /// التجاوز من حوار «الاتصال بقاعدة البيانات».
-const String kOfficialRtdbUrl =
-    'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app';
+const String kOfficialRtdbUrl = '';
 
 class Rtdb {
   Rtdb._();

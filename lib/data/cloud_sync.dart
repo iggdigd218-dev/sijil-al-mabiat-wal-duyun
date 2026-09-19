@@ -293,12 +293,6 @@ class CloudSync {
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return false;
-      // (كارثة الدمج 2026-09-19) العضو لا ينسخ احتياطياً لمسار المجموعة:
-      // نسخته الكاملة كانت تستبدل /backup المجموعة، ثم يعيد الاسترداد
-      // التلقائي تنزيلها فتُدمج بيانات العضو الشخصية داخل مجموعة المدير.
-      // النسخ الصامت للمالك/المستقل فقط — نسخة المجموعة مسؤولية مديرها.
-      final wsMode = await repo.workspaceMode();
-      if (wsMode == 'member') return false;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';

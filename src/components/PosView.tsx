@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Item, Account } from '../types';
 import { api } from '../api';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface PosViewProps {
   items: Item[];
@@ -47,6 +48,8 @@ export const PosView: React.FC<PosViewProps> = ({
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const { canDiscount } = usePermissions();
 
   const categories = ['all', ...Array.from(new Set(items.map((i) => i.category).filter(Boolean)))];
 
@@ -486,20 +489,23 @@ ${lastReceipt.discount > 0 ? `الخصم: ${lastReceipt.discount} ر.ي\n` : ''}
               <span className="font-mono font-bold">{subtotal} ر.ي</span>
             </div>
 
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500">الخصم:</span>
-              <div className="flex items-center gap-1 w-28">
-                <input
-                  type="number"
-                  min="0"
-                  value={discount || ''}
-                  onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-                  placeholder="0"
-                  className="w-full text-left font-mono py-1 px-2 rounded-lg bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-hidden"
-                />
-                <span className="text-[11px] text-slate-400">ر.ي</span>
+            {canDiscount && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-500">الخصم:</span>
+                <div className="flex items-center gap-1 w-28">
+                  <input
+                    id="input-pos-discount"
+                    type="number"
+                    min="0"
+                    value={discount || ''}
+                    onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                    placeholder="0"
+                    className="w-full text-left font-mono py-1 px-2 rounded-lg bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-hidden"
+                  />
+                  <span className="text-[11px] text-slate-400">ر.ي</span>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="flex justify-between items-center text-sm font-black text-slate-900 pt-2 border-t border-slate-100">
               <span>الصافي المطلوب:</span>

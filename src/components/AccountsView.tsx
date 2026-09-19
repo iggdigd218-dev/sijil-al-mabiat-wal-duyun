@@ -37,24 +37,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 }) => {
   const [kindFilter, setKindFilter] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
-  const [isSyncing, setIsSyncing] = useState(false);
   const [deleteAccountTarget, setDeleteAccountTarget] = useState<Account | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const handleSyncSnapshot = async () => {
-    setIsSyncing(true);
-    try {
-      const snap = await api.getSnapshot();
-      if (snap.ok) {
-        onShowToast(`⚡ تم استرداد وتحديث كامل الحسابات (${snap.snapshot.accounts?.length || 0} حساب) ومطابقتها مع الجهاز المضيف!`, 'success');
-        onRefresh();
-      }
-    } catch (e: any) {
-      onShowToast(e.message || 'فشل مزامنة لقطة الحسابات', 'error');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const getInitials = (name: string) => {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -167,13 +151,12 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
           <button
             id="btn-sync-accounts"
-            onClick={handleSyncSnapshot}
-            disabled={isSyncing}
-            title="مزامنة فورية لكافة الحسابات والأرصدة مع الجهاز الرئيسي"
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl shadow-xs transition-colors shrink-0 disabled:opacity-50"
+            onClick={onRefresh}
+            title="تحديث قائمة الحسابات"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl shadow-xs transition-colors shrink-0"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">مزامنة الحسابات</span>
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">تحديث</span>
           </button>
 
           <button

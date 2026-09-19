@@ -84,6 +84,8 @@ export type UserRole = 'admin' | 'agent' | 'accountant' | 'dataentry' | 'viewer'
 export interface User {
   id: number;
   name: string;
+  email?: string;
+  password?: string;
   role: UserRole;
   pin?: string;
   permissions?: string;
@@ -92,46 +94,50 @@ export interface User {
   created_at: string;
 }
 
-export interface Device {
-  id: string;
-  name: string;
-  platform: 'web' | 'android' | 'windows' | 'ios' | 'linux';
-  is_owner: number;
-  user_id?: number;
-  user_name?: string;
-  user_role?: UserRole;
-  last_seen_at?: string;
-  last_sync_at?: string;
-  revoked_at?: string;
-  expelled_at?: string;
-  fingerprint?: string;
-}
+export type SyncAction = 'INSERT' | 'UPDATE' | 'DELETE';
+export type SyncQueueStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 
-export interface JoinRequest {
-  id: string;
+export interface SyncQueueItem {
+  queue_id: string;
+  store_id: string;
+  user_email: string;
   device_id: string;
-  device_name: string;
-  platform: string;
-  fingerprint: string;
-  token: string;
-  status: 'pending' | 'approved' | 'rejected';
-  requested_role?: UserRole;
-  created_at: string;
+  table_name: string;
+  record_id: string;
+  action: SyncAction;
+  payload: string;
+  timestamp: number;
+  status: SyncQueueStatus;
 }
 
-export interface Invite {
-  id: string;
-  token: string;
-  pin: string;
-  workspace_id: string;
-  created_by: string;
-  expires_at: string;
-  used: number;
-  created_at: string;
-  pinRaw?: string;
-  qrContent?: string;
-  backendUrl?: string;
-  workspaceName?: string;
+export interface SyncQueueStats {
+  total: number;
+  pending: number;
+  syncing: number;
+  synced: number;
+  failed: number;
+  last_sync_timestamp?: number;
+}
+
+export interface AuthSession {
+  user_email: string;
+  store_id: string;
+  device_id: string;
+  user_name: string;
+  role: string;
+  logged_in_at: number;
+}
+
+export interface UserPermission {
+  user_email: string;
+  store_id: string;
+  role: string;
+  can_discount: number; // 0 or 1
+  can_delete_tx: number; // 0 or 1
+  can_view_reports: number; // 0 or 1
+  can_manage_items: number; // 0 or 1
+  is_active: number; // 0 or 1
+  updated_at: number;
 }
 
 export interface DashboardData {
@@ -140,7 +146,6 @@ export interface DashboardData {
   totalCredits: number;
   accountsCount: number;
   lowStock: number;
-  pendingJoins: number;
   topDebtors: Array<{
     id: number;
     name: string;
@@ -157,4 +162,34 @@ export interface ActivityItem {
   ref_id?: string;
   user_name?: string;
   created_at: string;
+}
+
+export type WorkspaceMode = 'individual' | 'enterprise';
+
+export interface LogoutRequest {
+  id: string;
+  user_email: string;
+  user_name: string;
+  role: string;
+  device_id: string;
+  requested_at: number;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+export interface AutoBackupConfig {
+  enabled: boolean;
+  frequency: '2hours' | 'daily';
+  last_backup_at?: number;
+  google_drive_connected: boolean;
+  google_drive_email?: string;
+  storage_quota_mb?: number;
+}
+
+export interface LicenseInfo {
+  status: 'active' | 'trial' | 'expired';
+  mode: WorkspaceMode;
+  max_devices: number;
+  active_devices_count: number;
+  days_remaining: number;
+  plan_name: string;
 }
