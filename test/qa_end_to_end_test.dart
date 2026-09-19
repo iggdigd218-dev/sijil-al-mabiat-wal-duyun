@@ -135,15 +135,16 @@ void main() {
             home: const HomeShell(),
           )));
       await _drain(tester);
-      // في الواجهة الجديدة شاشة العمليات تُفتح من أيقونة «المعاملات» على لوحة
-      // التحكم (ولم يعد «العمليات» عنصراً في الشريط السفلي).
-      final txTile = find.text('المعاملات');
+      // (تحديث الواجهة 2026-09-19) شاشة العمليات تُفتح من الشريط الجانبي
+      // ببلاطة «سجل الفواتير اليومية» (بدل بلاطة «المعاملات» القديمة).
+      final txTile = find.text('سجل الفواتير اليومية');
       await _waitFor(tester, txTile);
       await tester.ensureVisible(txTile);
       await tester.pumpAndSettle();
       await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
-      final fab = find.text('تسجيل عملية');
+      // الزر العائم الجديد دائري بعلامة «عملية» (بدل «تسجيل عملية»).
+      final fab = find.text('عملية');
       await _waitFor(tester, fab);
       await tester.ensureVisible(fab);
       await tester.pumpAndSettle();
