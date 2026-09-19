@@ -214,6 +214,9 @@ void main() {
       cloud.store['$root/members/UID-QA-ANON.json'] = {'role': 'member'};
       cloud.store['$root/operations.json'] = {'op1': 1};
       cloud.store['/accounts_index/UID-QA-ANON.json'] = ws;
+      cloud.store['/workspaces/_registry/accounts_index/UID-QA-ANON.json'] = {
+        'workspaceId': ws,
+      };
       final fp = await DeviceRegistry.fingerprintKey(repoA);
       if (fp.isNotEmpty) {
         cloud.store['/device_index/$fp.json'] = ws;
@@ -229,12 +232,100 @@ void main() {
       expect(cloud.store.containsKey('$root/members/UID-QA-ANON.json'), isFalse);
       expect(cloud.store.containsKey('/accounts_index/UID-QA-ANON.json'),
           isFalse, reason: 'فهرس Google يُنسى فلا سحب رجوعاً');
+      expect(
+          cloud.store.containsKey(
+              '/workspaces/_registry/accounts_index/UID-QA-ANON.json'),
+          isFalse,
+          reason: 'الفهرس الرسمي تحت _registry يُحذف أيضاً (إصلاح الاختطاف)');
       if (fp.isNotEmpty) {
         expect(cloud.store.containsKey('/device_index/$fp.json'), isFalse);
       }
       // بيانات المجموعة نفسها لا تُمس في مسار التحرير.
       expect(cloud.store['$root/roster/DEVICE-MGR.json'], isNotNull);
       expect(cloud.store['$root/operations.json'], isNotNull);
+    });
+  });
+
+  group('الحذف الكامل من السحابة — تصفير العضو', () {
+    test('QA-DIS-09 purgeDeviceEverywhere للعضو: عملياته تُصفَّر من '
+        'المجموعة ومساحته الشخصية القديمة تُدمَّر وقيوده تُحذف — وبيانات '
+        'المجموعة نفسها لا تُمس', () async {
+      final ourId = await ensureDeviceId(repoA);
+      final db = await repoA.database;
+      await db.insert(
+          'sync_meta', {'key': 'workspaceMode', 'value': 'member'});
+      final grp = repoA.requireWorkspaceId;
+      final cloud = FakeCloudStore();
+      final root = '/workspaces/$grp';
+      // المجموعة: مدير + عضو، وعمليات لكل منهما.
+      cloud.store['$root/roster/$ourId.json'] = true;
+      cloud.store['$root/roster/DEVICE-MGR.json'] = true;
+      cloud.store['$root/joinRequests/$ourId.json'] = {'kind': 'leave'};
+      cloud.store['$root/members/UID-QA-ANON.json'] = {'role': 'member'};
+      cloud.store['$root/operations/op-mine.json'] = {
+        'device_id': ourId,
+        'entity': 'account',
+      };
+      cloud.store['$root/operations/op-mgr.json'] = {
+        'device_id': 'DEVICE-MGR',
+        'entity': 'account',
+      };
+      // الفهرس الرسمي يشير إلى مساحة شخصية قديمة كامنة.
+      cloud.store['/workspaces/_registry/accounts_index/UID-QA-ANON.json'] = {
+        'workspaceId': 'WS-PERSONAL-OLD',
+      };
+      cloud.store['/workspaces/WS-PERSONAL-OLD/backup.json'] = {'b': 1};
+      cloud.store['/workspaces/WS-PERSONAL-OLD/operations.json'] = {'o': 1};
+      cloud.store['/workspaces/WS-PERSONAL-OLD/roster.json'] = {'r': 1};
+      cloud.store['/workspaces/WS-PERSONAL-OLD/subscription.json'] = {
+        'plan': 'pro',
+      };
+      final fp = await DeviceRegistry.fingerprintKey(repoA);
+      if (fp.isNotEmpty) {
+        cloud.store['/device_index/$fp.json'] = {
+          'workspaceId': grp,
+          'role': 'member',
+          'device_id': ourId,
+        };
+      }
+
+      await http.runWithClient(
+          () => CloudJoin.purgeDeviceEverywhere(repoA, backendUrl: url),
+          cloud.client);
+
+      // عملياته هو صُفّرت — عمليات الآخرين بقيت.
+      expect(cloud.store.containsKey('$root/operations/op-mine.json'), isFalse,
+          reason: 'عمليات العضو نفسه تُحذف من المجموعة');
+      expect(cloud.store['$root/operations/op-mgr.json'], isNotNull,
+          reason: 'بيانات المجموعة نفسها لا تُمس');
+      expect(cloud.store['$root/roster/DEVICE-MGR.json'], isNotNull);
+      // قيوده كلها حُذفت.
+      expect(cloud.store.containsKey('$root/roster/$ourId.json'), isFalse);
+      expect(cloud.store.containsKey('$root/joinRequests/$ourId.json'), isFalse);
+      expect(cloud.store.containsKey('$root/members/UID-QA-ANON.json'), isFalse);
+      // مساحته الشخصية القديمة دُمّرت عدا اشتراكها المدفوع.
+      expect(cloud.store.containsKey('/workspaces/WS-PERSONAL-OLD/backup.json'),
+          isFalse);
+      expect(
+          cloud.store
+              .containsKey('/workspaces/WS-PERSONAL-OLD/operations.json'),
+          isFalse);
+      expect(
+          cloud.store.containsKey('/workspaces/WS-PERSONAL-OLD/roster.json'),
+          isFalse);
+      expect(cloud.store['/workspaces/WS-PERSONAL-OLD/subscription.json'],
+          isNotNull, reason: 'الاشتراك المدفوع يبقى');
+      // الفهرسان العامّان نُسيا.
+      expect(
+          cloud.store.containsKey(
+              '/workspaces/_registry/accounts_index/UID-QA-ANON.json'),
+          isFalse);
+      if (fp.isNotEmpty) {
+        expect(cloud.store.containsKey('/device_index/$fp.json'), isFalse);
+      }
+      expect(await repoA.workspaceMode(), 'member',
+          reason: 'الحذف السحابي لا يغير الوضع المحلي — المسح المحلي '
+              'مسار منفصل في الواجهة');
     });
   });
 

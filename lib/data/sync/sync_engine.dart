@@ -289,8 +289,13 @@ class SyncEngine {
     // الجدول بلقطة المجموعة، ونقلٌ بُني بالمعرّف القديم يظل يدفع ويسحب من
     // مسار خاطئ فتموت المزامنة بصمت (إصلاح حرج 2026-09-19).
     final wsRow = await db.query('workspaces', limit: 1);
-    final wsId =
+    var wsId =
         wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
+    // (إصلاح حرج 2026-09-19) الكاش المصحَّح (sync.workspaceId — انظر
+    // ensureWorkspace) أولويته أعلى من «أول صف»: صف مساحة شخصية قديمة
+    // كان يخطف النقل إلى مسار ميت فتموت مزامنة العضو كلياً.
+    final cached = repo.requireWorkspaceId;
+    if (cached.isNotEmpty && cached != defaultWorkspaceId) wsId = cached;
     if (url == _cloudUrl &&
         _cloudTransport != null &&
         _cloudTransport!.workspaceId == wsId) {

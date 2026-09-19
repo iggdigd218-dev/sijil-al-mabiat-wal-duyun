@@ -22,6 +22,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/factory_reset.dart';
+import 'account_workspace.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'operation.dart';
@@ -1035,6 +1036,32 @@ class CloudJoin {
     // نفس منطق الانضمام المحلي بالضبط — الجهاز يبدأ نظيفاً ببيانات المجموعة.
     await SnapshotApply.applySnapshot(() async => db, ourId, snap);
 
+    // (إصلاح حرج 2026-09-19 — جذر كارثة موت المزامنة) مساحة المجموعة تصير
+    // الصف **الوحيد** في جدول workspaces: أي صف مساحة شخصية قديمة يُحذف
+    // (كان يبقى أولاً فيلتقطه المحرك فتُدفع عمليات العضو لمسار ميت)،
+    // والربط الصريح sync.workspaceId يُثبَّت على مساحة المجموعة.
+    try {
+      await db.delete('workspaces',
+          where: 'id <> ?', whereArgs: [workspaceId]);
+      final left = await db.query('workspaces',
+          where: 'id = ?', whereArgs: [workspaceId], limit: 1);
+      if (left.isEmpty) {
+        final nowIso = DateTime.now().toIso8601String();
+        await db.insert('workspaces', {
+          'id': workspaceId,
+          'name': 'متجري',
+          'owner_google_id': '',
+          'owner_email': '',
+          'owner_name': '',
+          'created_at': nowIso,
+          'updated_at': nowIso,
+        });
+      }
+    } catch (_) {}
+    try {
+      await repo.setSetting('sync.workspaceId', workspaceId);
+    } catch (_) {}
+
     // ضمان وجود سجل جهازنا كعضو بعد الاستبدال (يظهر لدى المدير عبر roster).
     final ourRowAfter = await db.query('devices',
         where: 'id = ?', whereArgs: [ourId], limit: 1);
@@ -2025,6 +2052,33 @@ class CloudJoin {
     return removed;
   }
 
+  /// (2026-09-19 — تصفير كامل) يدمّر كل أقسام مساحة سحابية عدا الاشتراك
+  /// المدفوع — يُستخدم لإفناء المساحات الشخصية القديمة الكامنة خلف
+  /// الفهارس العامة عند الحذف الكامل من أول صفحة.
+  static Future<void> destroyWorkspaceKeepSubscription(
+      String base, String ws) async {
+    if (ws.isEmpty || ws == '_registry') return;
+    final root = _root(base, ws);
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+      'members',
+      'evictions',
+      'chat',
+      'notifications',
+      'devices',
+      'backup',
+      'creator',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+  }
+
   /// (2026-09-19 — لا أعضاء عالقون) بعد تحوّل العضو إلى حساب فردي إثر
   /// موت مجموعته: يمسح بقاياه هو من السحابة — قيده في roster، طلبه
   /// المعلّق في joinRequests، عضويته في members، ربط بصمته في
@@ -2109,7 +2163,20 @@ class CloudJoin {
       final uid = FirebaseAuthRest.currentUid;
       if (uid.isEmpty) return;
       final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
-      await _delete('$base/accounts_index/${Uri.encodeComponent(uid)}.json');
+      // (إصلاح حرج 2026-09-19) الفهرس الرسمي الذي يقرأه حارس التبديل في
+      // linkAccountOnly يسكن workspaces/_registry/accounts_index — النسخة
+      // السابقة كانت تحذف المسار التراثي وحده فينجو قيد Google ويستمر في
+      // سحب العضو خارج مجموعته (الدليل الحي: jntD…→WS-MF38GASA). يُحذف
+      // المساران معاً.
+      for (final p in [
+        '$base/workspaces/_registry/accounts_index/'
+            '${Uri.encodeComponent(uid)}.json',
+        '$base/accounts_index/${Uri.encodeComponent(uid)}.json',
+      ]) {
+        try {
+          await _delete(p);
+        } catch (_) {}
+      }
     } catch (_) {}
   }
 
@@ -2147,6 +2214,26 @@ class CloudJoin {
           await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
         }
       } catch (_) {}
+      // (2026-09-19 — تصفير كامل) كل العمليات التي أنشأها هذا الجهاز داخل
+      // المجموعة تُحذف — بياناته هو تُصفَّر تماماً، وبيانات المجموعة نفسها
+      // (عمليات الأعضاء الآخرين والمدير) لا تُمس.
+      if (ourId.isNotEmpty) {
+        try {
+          final ops = await _getJson('$root/operations.json');
+          if (ops != null) {
+            for (final e in ops.entries) {
+              final v = e.value;
+              final dev = v is Map ? '${v['device_id'] ?? ''}' : '';
+              if (dev == ourId) {
+                try {
+                  await _delete(
+                      '$root/operations/${Uri.encodeComponent(e.key)}.json');
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {}
+      }
     } else {
       for (final node in const [
         'roster',
@@ -2167,10 +2254,29 @@ class CloudJoin {
         } catch (_) {}
       }
     }
+    // (2026-09-19 — تصفير كامل) المساحات الشخصية القديمة الكامنة خلف
+    // الفهرسين العامَّين: تُقرأ قبل حذف القيود وتُدمَّر بالكامل (عدا
+    // الاشتراك المدفوع) — فلا تبقى للعضو أي بيانات في السحابة إطلاقاً.
+    try {
+      final uid = FirebaseAuthRest.currentUid;
+      if (uid.isNotEmpty) {
+        final rws =
+            await AccountWorkspace.lookup(backendUrl: backendUrl, uid: uid);
+        if (rws.isNotEmpty && rws != ws) {
+          await destroyWorkspaceKeepSubscription(base, rws);
+        }
+      }
+    } catch (_) {}
     // الفهرسان العامّان: بصمة العتاد (موقع المجموعة) وحساب Google.
     try {
       final fp = await DeviceRegistry.fingerprintKey(repo);
       if (fp.isNotEmpty) {
+        final di =
+            await _getJson('$base/device_index/${Uri.encodeComponent(fp)}.json');
+        final iws = di == null ? '' : '${di['workspaceId'] ?? ''}';
+        if (iws.isNotEmpty && iws != ws) {
+          await destroyWorkspaceKeepSubscription(base, iws);
+        }
         await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
       }
     } catch (_) {}

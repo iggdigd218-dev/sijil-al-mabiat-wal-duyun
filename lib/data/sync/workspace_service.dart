@@ -36,6 +36,57 @@ bool isLegacyWorkspaceId(String? id) {
 }
 
 Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
+  // (إصلاح حرج 2026-09-19 — جذر كارثة موت المزامنة الحيّة) الربط الصريح
+  // في الإعدادات (sync.workspaceId — يكتبه الانضمام/التزويد ويصل مع لقطة
+  // المجموعة) هو مصدر الحقيقة، لا «أول صف» في جدول workspaces: صف المساحة
+  // الشخصية القديمة كان يبقى أولاً بعد الانضمام فيلتقطه المحرك ويوجّه كل
+  // دفع/سحب العضو إلى مسار ميت — عملياته تهبط في مساحته الشخصية ومزامنة
+  // المجموعة تتوقف كلياً بلا أي خطأ ظاهر (الدليل الحي: اختبار LIVE-DEBUG
+  // 2026-09-19 وعمليات جهاز العضو في WS-MF38GASA ميدانياً).
+  var bound = '';
+  try {
+    if (repo != null) {
+      bound = ((await repo.settings())[_workspaceIdSetting] ?? '').trim();
+    } else {
+      final r = await db.query('settings',
+          columns: ['value'],
+          where: 'key = ?',
+          whereArgs: [_workspaceIdSetting],
+          limit: 1);
+      bound = r.isNotEmpty ? '${r.first['value']}'.trim() : '';
+    }
+  } catch (_) {}
+  if (bound.isNotEmpty &&
+      !isLegacyWorkspaceId(bound) &&
+      !debugForceLegacyWorkspaceId) {
+    final exists = await db.query('workspaces',
+        where: 'id = ?', whereArgs: [bound], limit: 1);
+    if (exists.isEmpty) {
+      final now = DateTime.now().toIso8601String();
+      await db.insert(
+          'workspaces',
+          {
+            'id': bound,
+            'name': 'متجري',
+            'owner_google_id': '',
+            'owner_email': '',
+            'owner_name': '',
+            'created_at': now,
+            'updated_at': now,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    // (عقد المساحة الواحدة) صف الربط هو الصف الوحيد — أي صف مساحة شخصية
+    // قديمة يُحذف فوراً حتى يصلح أول إقلاع بعد التحديث الأجهزة العالقة
+    // التي تخطف منها الصفوف القديمة ثمانية مسارات أخرى تقرأ «أول صف»
+    // (النسخ الاحتياطي الصامت وغيرها). سجل الجهاز إن حُذف عبر CASCADE
+    // يعيد initSyncInfra إنشاءه في نفس الإقلاع.
+    try {
+      await db.delete('workspaces', where: 'id <> ?', whereArgs: [bound]);
+    } catch (_) {}
+    await repo?.setSetting(_workspaceIdSetting, bound);
+    return bound;
+  }
   // تحقق إن كان Workspace موجود في جدول workspaces.
   final rows = await db.query('workspaces', limit: 1);
   if (rows.isNotEmpty) {
@@ -50,6 +101,10 @@ Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
       await _migrateWorkspaceId(db, from: id, to: fresh);
       id = fresh;
     }
+    // (عقد المساحة الواحدة) الصف المختار وحده يبقى — انظر فرع الربط.
+    try {
+      await db.delete('workspaces', where: 'id <> ?', whereArgs: [id]);
+    } catch (_) {}
     await repo?.setSetting(_workspaceIdSetting, id);
     return id;
   }
