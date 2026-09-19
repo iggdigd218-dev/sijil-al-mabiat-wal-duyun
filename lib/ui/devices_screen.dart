@@ -738,10 +738,8 @@ class DeviceCard extends StatelessWidget {
       add('resetsecret', Icons.lock_reset, Colors.blueAccent,
           'إعادة تعيين رمز الجهاز');
     }
-    if (!expelled && !isSelf && !isOwnerDevice && amITheOwner) {
-      add('transfer', Icons.swap_horiz, Colors.purple,
-          'تسليم الإدارة لهذا الجهاز');
-    }
+    // (قانون 2026-09-19) «تسليم الإدارة» أُزيل نهائياً: مدير واحد فقط
+    // داخل المجموعة ولا يظهر أي خيار لتعيين مدير.
     if (!expelled && !isSelf && !isOwnerDevice) {
       add('expel', Icons.person_remove, Colors.red, 'طرد من المجموعة');
     }
@@ -774,8 +772,6 @@ class DeviceCard extends StatelessWidget {
             onCloudLink?.call();
           case 'resetsecret':
             onResetSecret();
-          case 'transfer':
-            onTransferOwner();
           case 'expel':
             onExpel();
           case 'purge':

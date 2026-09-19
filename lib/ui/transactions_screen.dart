@@ -18,10 +18,25 @@ class TransactionsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final page = ref.watch(txPageProvider);
     final hidden = ref.watch(hideBalancesProvider);
+    // (قانون 2026-09-19) زر «إضافة عملية» صريح داخل الشاشة نفسها.
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    final canAdd = me == null || me.can('add_tx');
 
     return Column(
       children: [
         const _TxFilterBar(),
+        if (canAdd)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 2),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FilledButton.icon(
+                onPressed: () => openTxForm(context, ref),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('إضافة عملية'),
+              ),
+            ),
+          ),
         Expanded(
           child: page.when(
             loading: () => const Center(
@@ -61,10 +76,17 @@ class TransactionsScreen extends ConsumerWidget {
             ),
             data: (p) {
               if (p.items.isEmpty) {
-                return const EmptyState(
+                return EmptyState(
                   icon: Icons.receipt_long_outlined,
                   title: 'لا توجد عمليات مطابقة',
                   message: 'غيّر معايير البحث أو سجّل عملية جديدة.',
+                  action: canAdd
+                      ? FilledButton.icon(
+                          onPressed: () => openTxForm(context, ref),
+                          icon: const Icon(Icons.add),
+                          label: const Text('إضافة عملية'),
+                        )
+                      : null,
                 );
               }
               // (دفعة 58) سحب للأسفل = إعادة تحميل + مزامنة فورية.

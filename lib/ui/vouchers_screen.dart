@@ -25,6 +25,18 @@ class VouchersScreen extends ConsumerWidget {
     return Column(
       children: [
         const _VoucherFilterBar(),
+        // (قانون 2026-09-19) زر «سند جديد» صريح داخل الشاشة نفسها.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 6, 14, 2),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton.icon(
+              onPressed: () => openVoucherForm(context, ref),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('سند جديد'),
+            ),
+          ),
+        ),
         Expanded(
           child: list.when(
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -35,11 +47,16 @@ class VouchersScreen extends ConsumerWidget {
             ),
             data: (items) {
               if (items.isEmpty) {
-                return const EmptyState(
+                return EmptyState(
                   icon: Icons.receipt_outlined,
                   title: 'لا توجد سندات',
                   message:
                       'أنشئ سند قبض أو صرف أو قيد — بترقيم تلقائي وطباعة A4.',
+                  action: FilledButton.icon(
+                    onPressed: () => openVoucherForm(context, ref),
+                    icon: const Icon(Icons.add),
+                    label: const Text('سند جديد'),
+                  ),
                 );
               }
               // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.

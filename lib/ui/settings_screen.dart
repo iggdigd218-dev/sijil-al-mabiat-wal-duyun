@@ -16,9 +16,9 @@ import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
+import '../data/sync/google_auth_service.dart';
 import 'splash.dart' show SplashScreen;
-import 'trial_ui.dart'
-    show SubscriptionDetailsSection, showTrialExpiredSheet;
+import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
 import 'account_section.dart';
 import 'appearance_screen.dart';
@@ -865,7 +865,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 // مسار الترقية من الوضع المستقل: تفعيل المزامنة وربط أجهزة —
                 // يفتح معالج إنشاء المجموعة (يصبح هذا الجهاز مضيفاً) دون أي
                 // فقدان للبيانات المحلية القائمة.
-                if (wsMode == 'standalone') ...[
+                // (قانون 2026-09-19) إنشاء المجموعات لحساب المؤسسة فقط —
+                // إعدادات الفردي محصورة ولا يظهر له هذا المسار إطلاقاً.
+                if (wsMode == 'standalone' && !isIndividual) ...[
                   const SizedBox(height: 18),
                   _Collapsible(
                     title: 'المزامنة وربط الأجهزة',
@@ -896,7 +898,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                 ],
                 // (حساب Google) هوية المؤسسة الدائمة — للمدير/المستقل فقط.
-                if (wsOwner || wsMode == 'standalone') ...[
+                // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
+                if ((wsOwner || wsMode == 'standalone') && !isIndividual) ...[
                   const SizedBox(height: 18),
                   const _Collapsible(
                     title: 'حساب المؤسسة (Google)',
@@ -907,7 +910,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ],
                 // (الاشتراك) تفاصيل الاشتراك: للمدير فقط — حالة الترخيص
                 // وتاريخ الانتهاء والوقت المتبقي وزر التجديد/الترقية.
-                if (wsOwner || wsMode == 'standalone') ...[
+                // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
+                if ((wsOwner || wsMode == 'standalone') && !isIndividual) ...[
                   const SizedBox(height: 18),
                   const _Collapsible(
                     title: 'تفاصيل الاشتراك',
@@ -944,90 +948,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             onTap: () => showCloudInviteDialog(context, ref),
                           ),
                         ),
-                      // جهاز مستقل (ليس عضواً): يمكنه الانضمام لمجموعة قائمة.
-                      if (wsMode == 'standalone')
-                        Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.group_add_outlined,
-                                color: Color(0xFF7C3AED)),
-                            title:
-                                const Text('الانضمام إلى مجموعة عبر السحابة'),
-                            subtitle: const Text(
-                              'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
-                              'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
-                              style: TextStyle(fontSize: 11.5, height: 1.5),
-                            ),
-                            trailing: const Icon(Icons.chevron_left),
-                            onTap: () => startJoinApprovalFlow(context, ref),
-                          ),
-                        ),
+                      // (قانون 2026-09-19) «الانضمام إلى مجموعة» لا يظهر
+                      // لحساب المؤسسة إطلاقاً — الانضمام للفردي فقط.
                     ],
                   ),
                 ],
-                // (دفعة 65) الحساب الفردي: شريط دعائي أنيق للترقية إلى مؤسسة.
-                if (isIndividual) ...[
-                  const SizedBox(height: 18),
-                  Card(
-                    color: const Color(0xFF7C3AED).withValues(alpha: .07),
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF7C3AED)
-                                      .withValues(alpha: .12),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(Icons.business_center,
-                                    color: Color(0xFF7C3AED), size: 22),
-                              ),
-                              const SizedBox(width: 10),
-                              const Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text('الترقية إلى حساب مؤسسة',
-                                        style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w800)),
-                                    Text('أضف كاشير وموظفين بصلاحيات',
-                                        style: TextStyle(fontSize: 11.5)),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          const Text(
-                            '• أضف أجهزة كاشير غير محدودة واربطها بحسابك\n'
-                            '• صلاحيات دقيقة لكل موظف (إدخال، تقارير، إدارة)\n'
-                            '• مزامنة لحظية بين كل الأجهزة والفروع\n'
-                            '• نسخ احتياطي سحابي تلقائي لمؤسستك',
-                            style:
-                                TextStyle(fontSize: 12, height: 1.7),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: FilledButton.icon(
-                              onPressed: () => showTrialExpiredSheet(
-                                  context, expired: false),
-                              icon: const Icon(Icons.rocket_launch_outlined,
-                                  size: 18),
-                              label: const Text('ترقية إلى مؤسسة'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                // (قانون 2026-09-19) شريط «الترقية إلى مؤسسة» أُزيل:
+                // إعدادات الفردي محصورة — لا مسارات مؤسسة فيها.
                 // (دفعة 65) الحساب الفردي: خيار «الانضمام إلى مؤسسة قائمة»
                 // يبقى متاحاً ومستقلاً لمن يرغب بالعمل تحت إدارة متجر آخر.
                 if (isIndividual) ...[
@@ -1053,6 +980,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                       ),
                     ],
+                  ),
+                ],
+                // (قانون 2026-09-19) الحساب الفردي: منطقة الخطر — حذف
+                // الحساب نهائياً (كل شيء عدا بصمة الجهاز والاشتراك المدفوع).
+                if (isIndividual && wsMode == 'standalone') ...[
+                  const SizedBox(height: 18),
+                  const _Collapsible(
+                    title: 'منطقة الخطر — حذف الحساب',
+                    icon: Icons.warning_amber_rounded,
+                    color: Color(0xFFDC2626),
+                    children: [_DeleteAccountTile()],
                   ),
                 ],
                 // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،
@@ -1621,8 +1559,8 @@ class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
         content: Text(
           'سيتم حل المجموعة بالكامل:\n\n'
           '• إلغاء ارتباط كل الأجهزة المرتبطة '
-          '${peerCount > 0 ? '($peerCount جهاز) ' : ''}فوراً — كل جهاز '
-          'يعود مستقلاً وتُحذف بيانات المجموعة منه.\n'
+          '${peerCount > 0 ? '($peerCount جهاز) ' : ''}فوراً — كل عضو '
+          'يعود إلى حسابه الفردي المستقل وبياناته المحلية تبقى له.\n'
           '• حذف بيانات المجموعة من السحابة (السجل، العمليات، الدعوات).\n'
           '• حذف الأعضاء والدردشات من جهازك.\n\n'
           'دفاترك (الحسابات والعمليات والأصناف) تبقى سليمة على جهازك، '
@@ -1728,6 +1666,144 @@ class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
           style: TextStyle(fontSize: 11.5, height: 1.5),
         ),
         onTap: _busy ? null : _dissolve,
+      ),
+    );
+  }
+}
+
+
+// ═══════════ (قانون 2026-09-19) حذف الحساب الفردي نهائياً ═══════════
+
+/// زر حذف الحساب الفردي: يحذف كل شيء محلياً ومن قاعدة البيانات السحابية
+/// — ويستثني فقط بصمة الجهاز (device_index) والاشتراك المدفوع
+/// (subscription) كما ينص القانون حرفياً.
+class _DeleteAccountTile extends ConsumerStatefulWidget {
+  const _DeleteAccountTile();
+
+  @override
+  ConsumerState<_DeleteAccountTile> createState() =>
+      _DeleteAccountTileState();
+}
+
+class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
+  bool _busy = false;
+
+  Future<void> _delete() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('⚠️ حذف الحساب نهائياً'),
+        content: const Text(
+          'سيُحذف كل شيء يخص حسابك:\n\n'
+          '• كل البيانات المحلية: الحسابات، العمليات، السندات، الأصناف، '
+          'الإعدادات، الدردشات.\n'
+          '• كل بياناتك من قاعدة البيانات السحابية: المساحة، النسخ، '
+          'السجل، الدعوات.\n\n'
+          'يُستثنى من الحذف: بصمة الجهاز والاشتراك المدفوع فقط.\n\n'
+          'بعدها يعود التطبيق لشاشة الترحيب كأنه مثبت للتو.\n'
+          'هذا الإجراء لا يمكن التراجع عنه.',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف كل شيء نهائياً'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final authed = await Security.authenticate(
+      reason: 'أكّد هويتك لحذف الحساب وكل بياناته نهائياً',
+    );
+    if (!authed) {
+      if (mounted) {
+        showSnack(context, 'لم تكتمل المصادقة — أُلغي الحذف', error: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = true);
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    try {
+      try {
+        engine.stop();
+      } catch (_) {}
+      // 1) السحابة: كل عقد المساحة تُحذف عدا الاشتراك المدفوع، وبصمة
+      //    الجهاز (device_index العامة) لا تُمس إطلاقاً.
+      try {
+        final st = await repo.settings();
+        final url = effectiveBackendUrl(st['cloudBackendUrl']);
+        final db = await repo.database;
+        final wsRows = await db.query('workspaces', limit: 1);
+        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        if (url.isNotEmpty) {
+          await CloudJoin.deleteIndividualWorkspace(repo,
+              backendUrl: url, workspaceId: ws);
+        }
+        // فك ربط Google إن وُجد (أفضل جهد — الجدول يُمحى محلياً على أي حال).
+        try {
+          await GoogleAuthService(db).signOut();
+        } catch (_) {}
+      } catch (_) {}
+      // 2) المحلي: مسح كامل (ملف القاعدة + الوسائط + ملفات الاقتران).
+      await FactoryReset.wipeAllLocalData();
+      Sfx.success();
+      if (!mounted) return;
+      // 3) إقلاع نظيف → شاشة الترحيب (كأنه تثبيت جديد).
+      try {
+        await repo.initSyncInfra().timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      try {
+        await engine.start();
+      } catch (_) {}
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const SplashScreen()),
+        (_) => false,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showSnack(context, 'تعذّر حذف الحساب: $e', error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Colors.red.withValues(alpha: .05),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.red.withValues(alpha: .35)),
+      ),
+      child: ListTile(
+        enabled: !_busy,
+        leading: _busy
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.person_remove_alt_1_outlined,
+                color: Colors.red),
+        title: const Text('حذف الحساب نهائياً',
+            style:
+                TextStyle(fontWeight: FontWeight.w800, color: Colors.red)),
+        subtitle: const Text(
+          'يحذف كل بياناتك محلياً ومن قاعدة البيانات — عدا بصمة الجهاز '
+          'والاشتراك المدفوع.',
+          style: TextStyle(fontSize: 11.5, height: 1.5),
+        ),
+        trailing: const Icon(Icons.chevron_left),
+        onTap: _busy ? null : _delete,
       ),
     );
   }

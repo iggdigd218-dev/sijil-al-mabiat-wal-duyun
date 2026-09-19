@@ -5,7 +5,6 @@ import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
-import '../core/theme.dart';
 import '../data/providers.dart';
 import 'account_detail.dart';
 import 'account_form.dart';

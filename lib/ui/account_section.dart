@@ -191,22 +191,9 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
   ///      لتعرض «الخطة: تجريبية مجانية — متبقي X» بدل «فعّل المزامنة أولاً».
   ///
   /// لا ترفع استثناءً أبداً: تعذّر الشبكة يجب ألّا يُفسد تسجيل الدخول نفسه.
-  Future<void> _provisionCloudAfterSignIn(
-      Repo repo, WidgetRef ref, String url) async {
-    if (url.isEmpty) return;
-    try {
-      final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
-      await CloudJoin.ensureOwnerMembership(repo,
-          backendUrl: url, workspaceId: ws);
-      await SubscriptionGuard.ensureTrialStarted(repo,
-          backendUrl: url, workspaceId: ws);
-      ref.invalidate(subscriptionProvider);
-    } catch (_) {
-      // خلفية صامتة.
-    }
-  }
+  Future<void> _provisionCloudAfterSignIn(Repo repo, WidgetRef ref,
+          String url) =>
+      provisionCloudAfterSignIn(repo, ref, url);
 
   @override
   Widget build(BuildContext context) {
@@ -242,5 +229,25 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
         onTap: linked || _busy ? null : _signIn,
       ),
     );
+  }
+}
+
+
+/// (قانون 2026-09-19) تهيئة سحابية بعد تسجيل Google — مشتركة بين قسم
+/// الحساب في الإعدادات وشاشة الترحيب حتى يسجّل المسارَان سواءً تماماً.
+Future<void> provisionCloudAfterSignIn(
+    Repo repo, WidgetRef ref, String url) async {
+  if (url.isEmpty) return;
+  try {
+    final db = await repo.database;
+    final wsRows = await db.query('workspaces', limit: 1);
+    final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+    await CloudJoin.ensureOwnerMembership(repo,
+        backendUrl: url, workspaceId: ws);
+    await SubscriptionGuard.ensureTrialStarted(repo,
+        backendUrl: url, workspaceId: ws);
+    ref.invalidate(subscriptionProvider);
+  } catch (_) {
+    // خلفية صامتة.
   }
 }

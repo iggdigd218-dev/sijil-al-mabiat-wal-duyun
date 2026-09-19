@@ -1993,6 +1993,46 @@ class CloudJoin {
     return removed;
   }
 
+  /// (قانون 2026-09-19 — حذف الحساب الفردي) يحذف كل عقد المساحة من
+  /// السحابة عدا `subscription` (الاشتراك المدفوع يبقى كما ينص القانون)،
+  /// ولا تُمس `device_index` العامة (بصمة الجهاز تبقى).
+  static Future<void> deleteIndividualWorkspace(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    for (final node in const [
+      'roster',
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+      'members',
+      'evictions',
+      'chat',
+      'notifications',
+      'devices',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+  }
+
+  /// (قانون 2026-09-19 — حل المجموعة) هل زالت عقدة المجموعة من السحابة؟
+  /// true فقط حين يرجع الخادم «لا شيء» صراحةً (العقدة محذوفة) — أخطاء
+  /// الشبكة تُرمى استثناءات فلا تُحسب زوالاً (لا تحويل بلا إنترنت).
+  static Future<bool> groupNodeGone(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final r = await _getJson('$root/roster.json');
+    return r == null;
+  }
+
   /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،
   /// وإن لم تبق أي دعوة حيّة يحذف joinSnapshot.json نهائياً — لقطة
   /// الأعمال الكاملة لا تبقى معلقة بمسار قابل للتخمين بعد انتهاء

@@ -3,6 +3,8 @@
 //   1) استخدام شخصي / متجر فردي  → وضع مستقل تماماً بلا أي مزامنة.
 //   2) ربط شبكي / متجر متعدد الأجهزة → معالج إنشاء/انضمام مجموعة الموجود.
 // بعد اختيار البطاقة يظهر إعداد مصغّر: اسم المتجر + العملة الأساسية.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,6 +17,7 @@ import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
 import '../data/sync/firebase_auth_service.dart';
 import '../data/sync/google_auth_service.dart';
+import 'account_section.dart' show provisionCloudAfterSignIn;
 import 'group_management_screen.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
@@ -66,17 +69,11 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 }
 
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
-  /// 'personal' أو 'network' أو null (لم يُختر بعد).
+  /// نمط الحساب المختار — يُضبط لحظة فتح نافذة الخيار ('personal'/'network').
   String? _choice;
-  final _nameCtrl = TextEditingController(text: 'متجري');
+  String _name = 'متجري';
   String _currency = 'YER';
   bool _busy = false;
-
-  @override
-  void dispose() {
-    _nameCtrl.dispose();
-    super.dispose();
-  }
 
   /// إكمال الإعداد المحلي: اسم المتجر والعملة ونمط الاستخدام.
   ///
@@ -89,7 +86,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     try {
       await completeOnboarding(
         repo,
-        storeName: _nameCtrl.text,
+        storeName: _name,
         currencyCode: _currency,
       );
       await repo.setSetting(
@@ -146,8 +143,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   ///    وصلاحية المالك فوراً (جهاز جديد/بعد مسح البيانات).
   ///  - حساب جديد؟ تُربط مساحته الحالية بـ WS-{uid} وتُؤمَّن سحابياً.
   Future<void> _signInWithGoogle() async {
-    if (_busy) return;
-    setState(() => _busy = true);
+    // (إصلاح القانون 2026-09-19 — زر Google «لا يستجيب»): كان هنا حارس
+    // `if (_busy) return;` يرتد فوراً لأن _startWithGoogle ترفع العلم قبل
+    // الاستدعاء — فيموت الضغط بصمت. الحارس الواحد عند المدخل يكفي،
+    // والمسار صار مطابقاً لتسجيل الإعدادات (ربط + تهيئة سحابية).
     Sfx.click();
     try {
       final repo = ref.read(repoProvider);
@@ -189,6 +188,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           Sfx.pair();
           await repo.setSetting(kOnboardingDoneKey, '1');
           bump(ref);
+          unawaited(provisionCloudAfterSignIn(repo, ref, url));
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content:
@@ -201,6 +201,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
                   '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي')));
+          unawaited(provisionCloudAfterSignIn(repo, ref, url));
           // النمط مختار مسبقاً في التدفق التدريجي — نكمل الانتقال.
           await _finishAndNavigate();
           return;
@@ -213,6 +214,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('✅ تم تبديل مساحة العمل — حُفظت نسخة احتياطية '
                   'ونُزّلت بيانات المساحة الجديدة')));
+          unawaited(provisionCloudAfterSignIn(repo, ref, url));
           await _finishAndNavigate();
           return;
         case AccountLinkOutcome.switchUnavailable:
@@ -297,14 +299,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   _networkCard(),
                 ],
                 const SizedBox(height: 18),
-                // ---------- الإعداد المصغّر ----------
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOut,
-                  child: _choice == null
-                      ? const SizedBox(width: double.infinity)
-                      : _microSetup(),
-                ),
+                // (قانون 2026-09-19) الإعداد يتم داخل نافذة الخيار نفسها —
+                // هنا مؤشر انشغال فقط ريثما يكتمل الحفظ أو تسجيل Google.
+                if (_busy)
+                  const Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
               ],
             ),
           ),
@@ -322,10 +323,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         badge: 'سريع وبسيط',
         description: 'كل بياناتك على هذا الجهاز فقط — بلا مزامنة ولا شبكات. '
             'مثالي للمتجر الواحد ودفتر الديون الشخصي.',
-        onTap: () {
-          Sfx.click();
-          setState(() => _choice = 'personal');
-        },
+        onTap: () => _openModeWindow('personal'),
       );
 
   Widget _networkCard() => _ModeCard(
@@ -337,119 +335,35 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         badge: 'مزامنة وتعاون',
         description: 'اربط أكثر من جهاز على نفس الحسابات: مدير وكاشير '
             'ومدخل بيانات — مزامنة فورية تلقائية بين الجميع.',
-        onTap: () {
-          Sfx.click();
-          setState(() => _choice = 'network');
-        },
+        onTap: () => _openModeWindow('network'),
       );
 
-  Widget _microSetup() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 22),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'إعداد سريع',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _nameCtrl,
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                  labelText: 'اسم المتجر / النشاط',
-                  prefixIcon: Icon(Icons.store_outlined),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<String>(
-                initialValue: _currency,
-                decoration: const InputDecoration(
-                  labelText: 'العملة الأساسية',
-                  prefixIcon: Icon(Icons.currency_exchange),
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  for (final c in kDefaultCurrencies)
-                    DropdownMenuItem(
-                      value: c.code,
-                      child: Text('${c.symbol}  ${c.name}'),
-                    ),
-                ],
-                onChanged: (v) => setState(() => _currency = v ?? 'YER'),
-              ),
-              const SizedBox(height: 20),
-              const Divider(height: 1),
-              const SizedBox(height: 14),
-              const Text(
-                'هل تود ربط حسابك بـ Google للمزامنة وحفظ النسخ الاحتياطي؟',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'يمكنك تخطي هذه الخطوة والعمل محلياً، وربط حسابك لاحقاً من '
-                'الإعدادات في أي وقت.',
-                style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.5,
-                    color: AppColors.text3Of(context)),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: FilledButton.icon(
-                  onPressed: _busy ? null : _startWithGoogle,
-                  icon: _busy
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.account_circle_outlined),
-                  label: const Text(
-                    'ربط بحساب Google والمتابعة',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                height: 46,
-                child: OutlinedButton.icon(
-                  onPressed: _busy ? null : _startLocal,
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                  label: const Text(
-                    'المتابعة بدون حساب (محلياً)',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ),
-              if (_choice == 'network') ...[
-                const SizedBox(height: 10),
-                Text(
-                  'سيُفتح بعدها معالج المجموعة: أنشئ مجموعة جديدة من هذا '
-                  'الجهاز أو امسح رمز QR للانضمام إلى مجموعة قائمة.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.5,
-                    color: AppColors.text3Of(context),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+  /// (قانون 2026-09-19) الضغط على بطاقة النوع يفتح **نافذة جديدة** خاصة
+  /// بالخيار — بلا أي قائمة منسدلة — فيها وصف كامل لنوع الحساب ثم الإعداد
+  /// السريع (الاسم + العملة بشرائح اختيار) وزرّا Google / المتابعة محلياً.
+  Future<void> _openModeWindow(String mode) async {
+    if (_busy) return;
+    Sfx.click();
+    setState(() => _choice = mode);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _ModeWindow(
+        mode: mode,
+        initialName: _name,
+        initialCurrency: _currency,
+        onGoogle: (name, currency) async {
+          _name = name;
+          _currency = currency;
+          Navigator.of(ctx).pop();
+          await _startWithGoogle();
+        },
+        onSkip: (name, currency) async {
+          _name = name;
+          _currency = currency;
+          Navigator.of(ctx).pop();
+          await _startLocal();
+        },
       ),
     );
   }
@@ -583,6 +497,202 @@ class _ModeCardState extends State<_ModeCard> {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// (قانون 2026-09-19) نافذة خيار نوع الحساب: وصف موسّع للنوع + إعداد
+/// سريع (اسم النشاط + العملة بشرائح اختيار — بلا قوائم منسدلة) + زرّا
+/// «ربط بحساب Google» و«المتابعة بدون حساب».
+class _ModeWindow extends StatefulWidget {
+  final String mode; // 'personal' | 'network'
+  final String initialName;
+  final String initialCurrency;
+  final Future<void> Function(String name, String currency) onGoogle;
+  final Future<void> Function(String name, String currency) onSkip;
+  const _ModeWindow({
+    required this.mode,
+    required this.initialName,
+    required this.initialCurrency,
+    required this.onGoogle,
+    required this.onSkip,
+  });
+
+  @override
+  State<_ModeWindow> createState() => _ModeWindowState();
+}
+
+class _ModeWindowState extends State<_ModeWindow> {
+  late final TextEditingController _nameCtrl =
+      TextEditingController(text: widget.initialName);
+  late String _currency = widget.initialCurrency;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit(Future<void> Function(String, String) action) {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final name =
+        _nameCtrl.text.trim().isEmpty ? 'متجري' : _nameCtrl.text.trim();
+    action(name, _currency);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final personal = widget.mode == 'personal';
+    final color =
+        personal ? const Color(0xFF16A34A) : const Color(0xFF0EA5E9);
+    final title = personal ? 'حساب فردي' : 'حساب مؤسسة';
+    final icon =
+        personal ? Icons.storefront_rounded : Icons.hub_rounded;
+    final lead = personal
+        ? 'مناسب للمتجر الواحد ودفتر الديون الشخصي — كل بياناتك على هذا '
+            'الجهاز، وإعداداتك محصورة وبسيطة.'
+        : 'مناسب للمنشآت متعددة الأجهزة والفروع — مزامنة سحابية فورية '
+            'وإعدادات مؤسسة كاملة.';
+    final bullets = personal
+        ? const [
+            '• بياناتك محلية على هذا الجهاز — سرعة وبساطة بلا تعقيد.',
+            '• لا يمكن إنشاء مجموعات من الحساب الفردي إطلاقاً.',
+            '• يمكنك الانضمام لاحقاً إلى مؤسسة قائمة عبر رمز دعوة المدير.',
+            '• زر «حذف الحساب» في الإعدادات يمسح كل بياناتك نهائياً '
+                '(عدا بصمة الجهاز والاشتراك المدفوع).',
+          ]
+        : const [
+            '• أنشئ مجموعتك وكن مديرها الوحيد — لا مدير ثانياً أبداً.',
+            '• اربط أجهزة الكاشير والمحاسبين بدعوات QR أو رمز من 6 أرقام.',
+            '• مزامنة فورية للعمليات والأرصدة بين كل الأجهزة.',
+            '• إعدادات المؤسسة الكاملة: الأجهزة، الصلاحيات، الاشتراك، '
+                'والنسخ السحابي.',
+            '• هوية Google دائمة: مؤسستك تعود كاملة على أي جهاز بتسجيل واحد.',
+          ];
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: .14),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: color, size: 30),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                          fontSize: 19, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'إغلاق',
+                    onPressed:
+                        _busy ? null : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded, size: 20),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(lead,
+                  style: TextStyle(
+                      fontSize: 13.5,
+                      height: 1.6,
+                      color: AppColors.text2Of(context))),
+              const SizedBox(height: 10),
+              for (final b in bullets)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(b,
+                      style: const TextStyle(fontSize: 12.5, height: 1.55)),
+                ),
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _nameCtrl,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  labelText: 'اسم المتجر / النشاط',
+                  prefixIcon: Icon(Icons.store_outlined),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text('العملة الأساسية',
+                  style:
+                      TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final c in kDefaultCurrencies)
+                    ChoiceChip(
+                      label: Text('${c.symbol} ${c.code}'),
+                      selected: _currency == c.code,
+                      onSelected: (_) => setState(() => _currency = c.code),
+                    ),
+                ],
+              ),
+              if (!personal) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'بعد الإكمال سيفتح معالج المجموعة: أنشئ مجموعتك من هذا '
+                  'الجهاز أو اربط أجهزة فريقك.',
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      height: 1.5,
+                      color: AppColors.text3Of(context)),
+                ),
+              ],
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _submit(widget.onGoogle),
+                  icon: _busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.account_circle_outlined),
+                  label: const Text('ربط بحساب Google والمتابعة',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _submit(widget.onSkip),
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                  label: const Text('المتابعة بدون حساب (محلياً)',
+                      style: TextStyle(fontSize: 14)),
+                ),
+              ),
+            ],
           ),
         ),
       ),

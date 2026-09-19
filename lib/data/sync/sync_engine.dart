@@ -39,6 +39,10 @@ class SyncEngine {
   Timer? _rosterTimer;
   Timer? _cloudPullTimer;
   bool _cloudPulling = false;
+
+  /// (قانون 2026-09-19) عدّاد الفحوصات المتتالية لزوال عقدة المجموعة:
+  /// 3 ضربات (≈15 ثانية) قبل قلب العضو إلى حساب فردي — لا تحويل عابر.
+  int _dissolveMisses = 0;
   int _generation = 0;
   bool _running = false;
   bool _started = false;
@@ -483,6 +487,28 @@ class SyncEngine {
           try {
             onSyncActivity?.call();
           } catch (_) {}
+        }
+      } catch (_) {}
+      // (قانون 2026-09-19 — حل المجموعة) عضو زالت مجموعته من السحابة:
+      // بعد 3 فحوصات متتالية يعود حساباً فردياً مستقلاً وبياناته تبقى له.
+      try {
+        if (_started && await repo.workspaceMode() == 'member') {
+          final t = _cloudTransport!;
+          if (await CloudJoin.groupNodeGone(repo,
+              backendUrl: t.backendUrl, workspaceId: t.workspaceId)) {
+            _dissolveMisses++;
+          } else {
+            _dissolveMisses = 0;
+          }
+          if (_dissolveMisses >= 3) {
+            _dissolveMisses = 0;
+            await repo.becomeIndividualAfterDissolution();
+            try {
+              onSyncActivity?.call();
+            } catch (_) {}
+          }
+        } else {
+          _dissolveMisses = 0;
         }
       } catch (_) {}
     } catch (_) {

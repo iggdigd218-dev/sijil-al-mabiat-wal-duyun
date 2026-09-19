@@ -150,6 +150,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(fab, warnIfMissed: false);
       await _drain(tester);
+      // (قانون 2026-09-19) الزر العائم «إجراء سريع»: يفتح ورقة خيارات —
+      // نختار «تسجيل عملية مالية» منها فيفتح نموذج العملية.
+      final sheetAction = find.text('تسجيل عملية مالية');
+      await _waitFor(tester, sheetAction);
+      await tester.tap(sheetAction);
+      await _drain(tester);
       final debitTab = find.text('عليه');
       await _waitFor(tester, debitTab);
       await tester.tap(debitTab);

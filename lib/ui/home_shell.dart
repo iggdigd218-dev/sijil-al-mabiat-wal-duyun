@@ -980,11 +980,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
       );
     }
 
+    // (قانون 2026-09-19) الزر العائم «إجراء سريع» كما كان: يفتح ورقة
+    // الخيارات (عملية، سند، حساب، نقطة بيع) بدل نموذج مباشر.
     return _MarkedOperationFab(
-      onPressed: () {
-        Sfx.tap();
-        openTxForm(context, ref);
-      },
+      onPressed: _quickActionSheet,
     );
   }
 
