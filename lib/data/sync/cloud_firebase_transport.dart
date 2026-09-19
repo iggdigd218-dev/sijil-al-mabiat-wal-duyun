@@ -253,8 +253,7 @@ class CloudFirebaseTransport implements SyncTransport {
       // أبداً — أخطر عطل صامت). الحل: جلب كامل بلا orderBy والفرز/الترشيح
       // محلياً. يعمل على القواعد الافتراضية دون أي إعداد من المستخدم.
       var serverFiltered = true;
-      if (res.statusCode == 400 &&
-          res.body.contains('Index not defined')) {
+      if (res.statusCode == 400) {
         serverFiltered = false;
         final bareParams = <String, String>{if (tok != null) 'auth': tok};
         final bareUri = Uri.parse(_opsPath).replace(
@@ -573,8 +572,8 @@ class CloudFirebaseTransport implements SyncTransport {
       }
       if (!_listening) break;
       await Future<void>.delayed(Duration(seconds: _sseRetrySeconds));
-      // تراجع أسّي حتى دقيقتين كحد أقصى.
-      _sseRetrySeconds = (_sseRetrySeconds * 2).clamp(2, 120);
+      // تراجع سريع بين 2 إلى 15 ثانية كحد أقصى لسرعة التعافي وإعادة الاتصال.
+      _sseRetrySeconds = (_sseRetrySeconds * 2).clamp(2, 15);
     }
   }
 }

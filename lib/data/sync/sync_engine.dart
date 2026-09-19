@@ -382,7 +382,7 @@ class SyncEngine {
     } catch (_) {}
     if (!_started || generation != _generation) return;
     _timer ??= Timer.periodic(
-      const Duration(seconds: 8),
+      const Duration(seconds: 3),
       (_) async {
         await processQueue();
         await _checkDangerState();
@@ -445,13 +445,13 @@ class SyncEngine {
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو
     // تغيّر الأقران/الأدوار خلال ثوانٍ دون الحاجة للقطة كاملة.
     _rosterTimer ??= Timer.periodic(
-      const Duration(seconds: 10),
+      const Duration(seconds: 5),
       (_) => _reconcileRoster(),
     );
-    // سحب سحابي دوري: بدون هذا كان السحب يحدث مرة واحدة فقط عند الإقلاع،
-    // فلا تصل عمليات الأجهزة الأخرى عبر السحابة إلا بعد إعادة تشغيل التطبيق.
+    // سحب سحابي دوري عالي الاستجابة (كل 5 ثوانٍ): يضمن انعكاس عمليات
+    // الأجهزة الأخرى لحظياً حتى في حال انقطاع قناة SSE أو تبديل الشبكة.
     _cloudPullTimer ??= Timer.periodic(
-      const Duration(seconds: 45),
+      const Duration(seconds: 5),
       (_) => _periodicCloudPull(),
     );
   }

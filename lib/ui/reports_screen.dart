@@ -731,10 +731,10 @@ class _ReportView extends ConsumerWidget {
     bool stamp = false,
   }) async {
     final regular = pw.Font.ttf(
-      await rootBundle.load('assets/fonts/Tajawal-Regular.ttf'),
+      await rootBundle.load('assets/fonts/Cairo-Regular.ttf'),
     );
     final bold = pw.Font.ttf(
-      await rootBundle.load('assets/fonts/Tajawal-Bold.ttf'),
+      await rootBundle.load('assets/fonts/Cairo-Bold.ttf'),
     );
 
     final doc = pw.Document();

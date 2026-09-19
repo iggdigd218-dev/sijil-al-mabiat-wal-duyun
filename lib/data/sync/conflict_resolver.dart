@@ -71,7 +71,19 @@ class ConflictResolver {
       }
       return ConflictDecision.conflict(reason: 'same-version-no-local-latest');
     }
-    // incoming.version < localVersion -> قديم، نحتفظ بنسختنا.
+    // incoming.version < localVersion:
+    // إذا كان ختم العملية الواردة أحدث من نسختنا المحلية، فإن الجهاز الآخر
+    // أجرى التعديل حديثاً ولكن عداد نسخته المحلية كان متأخراً (أوفلاين أو جهاز جديد).
+    // تطبيق قاعدة Last-Write-Wins يضمن وصول تعديلات الأجهزة المتنوعة دون تجاهل غير مبرر.
+    if (localLatest != null) {
+      final tIn =
+          DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ?? 0;
+      final tLocal =
+          DateTime.tryParse(localLatest.timestamp)?.millisecondsSinceEpoch ?? 0;
+      if (tIn > tLocal) {
+        return ConflictDecision.apply();
+      }
+    }
     return ConflictDecision.ignore(reason: 'older-version');
   }
 }

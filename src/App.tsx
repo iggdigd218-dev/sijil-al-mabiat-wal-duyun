@@ -181,8 +181,23 @@ export function App() {
     } catch {
       setIsSseConnected(false);
     }
+
+    // نبض مزامنة دوري عالي الاستجابة (كل 5 ثوانٍ) كشبكة أمان في حال انقطاع SSE أو تغيّر الشبكة
+    const pollInterval = setInterval(() => {
+      loadAllData();
+    }, 5000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadAllData();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       es?.close();
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadAllData, showToast]);
 

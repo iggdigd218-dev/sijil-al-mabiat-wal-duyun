@@ -926,7 +926,7 @@ async function startServer() {
         }
       }
       data.exportedAt = new Date().toISOString();
-      data.version = '3.65.0';
+      data.version = '3.66.5';
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });

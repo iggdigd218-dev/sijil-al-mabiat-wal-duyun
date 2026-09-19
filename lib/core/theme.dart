@@ -178,24 +178,50 @@ class AppTheme {
           color: text,
         ),
       ),
-      textTheme: TextTheme(
-        titleLarge: TextStyle(
-          fontWeight: FontWeight.w700,
-          color: text,
-          fontSize: 18,
-        ),
-        titleMedium: TextStyle(
-          fontWeight: FontWeight.w700,
-          color: text,
-          fontSize: 15.5,
-        ),
-        bodyMedium: TextStyle(color: text, fontSize: 14.5),
-        bodySmall: TextStyle(color: text2, fontSize: 12.5),
-        labelLarge: const TextStyle(
-          fontWeight: FontWeight.w700,
-          fontSize: 14.5,
-        ),
-      ),
+      textTheme: (dark ? ThemeData.dark() : ThemeData.light())
+          .textTheme
+          .apply(
+            fontFamily: uiFontFamily,
+            bodyColor: text,
+            displayColor: text,
+          )
+          .copyWith(
+            titleLarge: TextStyle(
+              fontFamily: uiFontFamily,
+              fontWeight: FontWeight.w700,
+              color: text,
+              fontSize: 18,
+            ),
+            titleMedium: TextStyle(
+              fontFamily: uiFontFamily,
+              fontWeight: FontWeight.w700,
+              color: text,
+              fontSize: 15.5,
+            ),
+            bodyLarge: TextStyle(
+              fontFamily: uiFontFamily,
+              color: text,
+              fontSize: 16,
+            ),
+            bodyMedium: TextStyle(
+              fontFamily: uiFontFamily,
+              color: text,
+              fontSize: 14.5,
+            ),
+            bodySmall: TextStyle(
+              fontFamily: uiFontFamily,
+              color: text2,
+              fontSize: 12.5,
+            ),
+            labelLarge: TextStyle(
+              fontFamily: uiFontFamily,
+              fontWeight: FontWeight.w700,
+              fontSize: 14.5,
+            ),
+          ),
+      primaryTextTheme: (dark ? ThemeData.dark() : ThemeData.light())
+          .primaryTextTheme
+          .apply(fontFamily: uiFontFamily),
       cardTheme: CardThemeData(
         color: surface,
         surfaceTintColor: Colors.transparent,
