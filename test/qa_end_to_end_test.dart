@@ -119,7 +119,10 @@ void main() {
       engine = SyncEngine(repo: repo, dbProvider: () async => db);
     });
     tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(1000, 900);
+    // نبدأ بعرض هاتف حتى لا يُطبّق إقلاع سطح المكتب التلقائي على POS
+    // قبل أن نصل إلى لوحة التحكم. نختبر الشريط الجانبي لاحقاً بعد الحفظ
+    // بتغيير العرض إلى سطح المكتب داخل نفس الجلسة.
+    tester.view.physicalSize = const Size(800, 900);
     Sfx.setMuted(true);
     try {
       await tester.pumpWidget(ProviderScope(
@@ -186,8 +189,12 @@ void main() {
         expect(rows.single.accountId, accountId);
         expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
       });
-      // عرض 1000 > عتبة سطح المكتب (900): الشريط السفلي استُبدل بشريط
-      // جانبي (Rail) — ننقر عنوان «دفتر الحسابات والديون» فيه.
+      // بعد إتمام التدفق على عرض الهاتف، نوسّع النافذة الآن إلى 1000dp
+      // لاختبار التحول الحقيقي إلى شريط سطح المكتب الجانبي (Rail).
+      tester.view.physicalSize = const Size(1000, 900);
+      await tester.pump();
+      await _drain(tester);
+      await _waitFor(tester, find.text('دفتر الحسابات والديون'));
       await tester.tap(find.text('دفتر الحسابات والديون'));
       await _drain(tester);
       expect(find.textContaining('1,500'), findsWidgets);
