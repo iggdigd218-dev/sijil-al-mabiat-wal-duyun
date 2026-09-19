@@ -64,6 +64,39 @@ class CurrencyDef {
         (m['symbol'] ?? '') as String,
         (m['decimal'] ?? 0) as int,
       );
+
+  String get flag {
+    switch (code.toUpperCase()) {
+      case 'YER':
+        return '🇾🇪';
+      case 'SAR':
+        return '🇸🇦';
+      case 'USD':
+        return '🇺🇸';
+      case 'AED':
+        return '🇦🇪';
+      case 'OMR':
+        return '🇴🇲';
+      case 'QAR':
+        return '🇶🇦';
+      case 'KWD':
+        return '🇰🇼';
+      case 'BHD':
+        return '🇧🇭';
+      case 'EGP':
+        return '🇪🇬';
+      case 'JOD':
+        return '🇯🇴';
+      case 'EUR':
+        return '🇪🇺';
+      case 'TRY':
+        return '🇹🇷';
+      case 'GBP':
+        return '🇬🇧';
+      default:
+        return '💰';
+    }
+  }
 }
 
 const kDefaultCurrencies = <CurrencyDef>[

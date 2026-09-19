@@ -225,6 +225,20 @@ final accountTxProvider = FutureProvider.family<List<Tx>, int>((ref, id) async {
       .timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
+/// عدد عمليات كل حساب.
+final accountTxCountsProvider = FutureProvider<Map<int, int>>((ref) async {
+  ref.watch(refreshProvider);
+  final repo = ref.read(repoProvider);
+  final txs = await repo.transactions().timeout(const Duration(seconds: 8), onTimeout: () => []);
+  final map = <int, int>{};
+  for (final tx in txs) {
+    if (tx.accountId != null) {
+      map[tx.accountId!] = (map[tx.accountId!] ?? 0) + 1;
+    }
+  }
+  return map;
+});
+
 /// تنبيهات: تجاوز الحد الائتماني.
 final alertsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
   ref.watch(refreshProvider);

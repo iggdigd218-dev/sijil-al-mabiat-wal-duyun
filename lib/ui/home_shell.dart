@@ -832,12 +832,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  /// الشاشات الثلاث في الشريط السفلي؛ الوجهة الرابعة «المزيد» تفتح القائمة
-  /// الجانبية التي تضم كل الشاشات الأخرى (لا يُخفى أي قسم).
+  /// الشاشات الأساسية في شريط التنقل السفلي.
   static const _bottomTabs = [
-    AppScreen.dashboard,
-    AppScreen.pos,
     AppScreen.accounts,
+    AppScreen.transactions,
+    AppScreen.reports,
+    AppScreen.settings,
   ];
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -964,51 +964,28 @@ class _HomeShellState extends ConsumerState<HomeShell>
         AppScreen.settings => const SettingsScreen(),
       };
 
-  /// زر الإجراء الموحد (Omni): يتحول حسب السياق — إجراء سريع على
-  /// الرئيسية، درج الدفع المباشر على POS، سند جديد على الحسابات.
+  /// زر العملية العائم المميّز بالتدرج الدائري كما في هوية التطبيق
   Widget? _fab() {
     final me = ref.watch(currentUserProvider).valueOrNull;
     bool can(String p) => me == null || me.can(p);
     final add = can('add_tx');
-    return switch (_screen) {
-      AppScreen.dashboard => FloatingActionButton.extended(
-          heroTag: 'omni',
-          onPressed: add ? _quickActionSheet : null,
-          icon: const Icon(Icons.bolt_rounded),
-          label: const Text('إجراء سريع'),
-        ),
-      AppScreen.pos => FloatingActionButton.extended(
-          heroTag: 'omni',
-          onPressed: () => PosScreen.openCheckoutBridge?.call(),
-          icon: const Icon(Icons.shopping_cart_checkout_rounded),
-          label: const Text('الدفع'),
-        ),
-      AppScreen.accounts => FloatingActionButton.extended(
-          heroTag: 'omni',
-          onPressed: add ? () => openVoucherForm(context, ref) : null,
-          icon: const Icon(Icons.receipt_outlined),
-          label: const Text('سند جديد'),
-        ),
-      AppScreen.transactions => FloatingActionButton.extended(
-          onPressed: add
-              // زر «فتح شاشة المبيعات» داخل النموذج يفتحها بنفسه الآن.
-              ? () => openTxForm(context, ref)
-              : null,
-          icon: const Icon(Icons.add),
-          label: const Text('تسجيل عملية'),
-        ),
-      AppScreen.vouchers => FloatingActionButton.extended(
-          onPressed: add ? () => openVoucherForm(context, ref) : null,
-          icon: const Icon(Icons.add),
-          label: const Text('سند جديد'),
-        ),
-      AppScreen.inventory => FloatingActionButton.extended(
-          onPressed: add ? () => openItemCategoryForm(context, ref) : null,
-          icon: const Icon(Icons.create_new_folder_outlined),
-          label: const Text('فئة جديدة'),
-        ),
-      _ => null,
-    };
+    if (!add) return null;
+
+    if (_screen == AppScreen.pos) {
+      return FloatingActionButton.extended(
+        heroTag: 'omni',
+        onPressed: () => PosScreen.openCheckoutBridge?.call(),
+        icon: const Icon(Icons.shopping_cart_checkout_rounded),
+        label: const Text('الدفع'),
+      );
+    }
+
+    return _MarkedOperationFab(
+      onPressed: () {
+        Sfx.tap();
+        openTxForm(context, ref);
+      },
+    );
   }
 
   /// ورقة الإجراء السريع من زر Omni على الرئيسية: أكثر 4 مهام تكراراً
@@ -1353,38 +1330,400 @@ class _HomeShellState extends ConsumerState<HomeShell>
         floatingActionButton: _fab(),
         bottomNavigationBar: desktop
             ? null
-            : NavigationBar(
-          selectedIndex: tabIndex < 0 ? 0 : tabIndex,
-          onDestinationSelected: (i) {
-            if (i < _bottomTabs.length) {
-              _go(_bottomTabs[i]);
-            } else {
-              // وجهة «المزيد» — تفتح القائمة الجانبية بكل الأقسام.
-              _scaffoldKey.currentState?.openDrawer();
-            }
-          },
-          destinations: [
-            const NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home_rounded),
-              label: 'الرئيسية',
+            : _MarkedBottomBar(
+                currentScreen: _screen,
+                onSelect: (s) => _go(s),
+                onOpenNotifications: () => openNotifications(
+                  context,
+                  ref,
+                  onOpenEntity: openNotificationEntity,
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+/// شريط التنقل السفلي الحديث ذو الأيقونات المُعلّمة والمميّزة بصرياً
+/// كما في هوية التطبيق (العملاء، الحركات، التقارير، الإشعارات، الإعدادات).
+class _MarkedBottomBar extends ConsumerWidget {
+  final AppScreen currentScreen;
+  final ValueChanged<AppScreen> onSelect;
+  final VoidCallback onOpenNotifications;
+
+  const _MarkedBottomBar({
+    required this.currentScreen,
+    required this.onSelect,
+    required this.onOpenNotifications,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final unread = ref.watch(unreadCountProvider).valueOrNull ?? 0;
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.white,
+        border: Border(
+          top: BorderSide(
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: bottomPadding > 0 ? bottomPadding : 6,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _BottomItem(
+            label: 'العملاء',
+            selected: currentScreen == AppScreen.accounts,
+            icon: (sel) => Icon(
+              Icons.people_alt_rounded,
+              color: sel ? Colors.white : const Color(0xFF0284C7),
+              size: 22,
             ),
-            NavigationDestination(
-              icon: Icon(AppScreen.pos.icon),
-              selectedIcon: Icon(AppScreen.pos.activeIcon),
-              label: 'المبيعات',
+            onTap: () => onSelect(AppScreen.accounts),
+          ),
+          _BottomItem(
+            label: 'الحركات',
+            selected: currentScreen == AppScreen.transactions,
+            icon: (sel) => _MarkedReceiptIcon(selected: sel),
+            onTap: () => onSelect(AppScreen.transactions),
+          ),
+          _BottomItem(
+            label: 'التقارير',
+            selected: currentScreen == AppScreen.reports,
+            icon: (sel) => _MarkedBarChartIcon(selected: sel),
+            onTap: () => onSelect(AppScreen.reports),
+          ),
+          _BottomItem(
+            label: 'الإشعارات',
+            selected: false,
+            badgeCount: unread,
+            icon: (sel) => _MarkedBellIcon(selected: sel, unread: unread),
+            onTap: onOpenNotifications,
+          ),
+          _BottomItem(
+            label: 'الإعدادات',
+            selected: currentScreen == AppScreen.settings,
+            icon: (sel) => _MarkedGearIcon(selected: sel),
+            onTap: () => onSelect(AppScreen.settings),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BottomItem extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final int badgeCount;
+  final Widget Function(bool selected) icon;
+  final VoidCallback onTap;
+
+  const _BottomItem({
+    required this.label,
+    required this.selected,
+    this.badgeCount = 0,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return InkWell(
+      onTap: () {
+        Sfx.tap();
+        onTap();
+      },
+      borderRadius: BorderRadius.circular(16),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              width: selected ? 56 : 38,
+              height: 32,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: selected
+                    ? const LinearGradient(
+                        colors: [Color(0xFFFB923C), Color(0xFF0284C7)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      )
+                    : null,
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.35),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : null,
+              ),
+              alignment: Alignment.center,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  icon(selected),
+                  if (badgeCount > 0 && !selected)
+                    Positioned(
+                      top: -3,
+                      right: -5,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFEF4444),
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 15,
+                          minHeight: 15,
+                        ),
+                        child: Text(
+                          badgeCount > 99 ? '99+' : '$badgeCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-            NavigationDestination(
-              icon: Icon(AppScreen.accounts.icon),
-              selectedIcon: Icon(AppScreen.accounts.activeIcon),
-              label: 'الحسابات',
-            ),
-            const NavigationDestination(
-              icon: Icon(Icons.apps_rounded),
-              selectedIcon: Icon(Icons.grid_view_rounded),
-              label: 'المزيد',
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                color: selected
+                    ? (isDark ? Colors.white : const Color(0xFF0284C7))
+                    : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                fontFamily: 'Tajawal',
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// أيقونة الرسم البياني ثلاثية الأعمدة والملوّنة المميزة للتقارير (أخضر، أصفر، أزرق)
+class _MarkedBarChartIcon extends StatelessWidget {
+  final bool selected;
+  const _MarkedBarChartIcon({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return const Icon(Icons.bar_chart_rounded, color: Colors.white, size: 22);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Container(
+          width: 4,
+          height: 12,
+          decoration: BoxDecoration(
+            color: const Color(0xFF22C55E),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 2.5),
+        Container(
+          width: 4,
+          height: 20,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF59E0B),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 2.5),
+        Container(
+          width: 4,
+          height: 16,
+          decoration: BoxDecoration(
+            color: const Color(0xFF3B82F6),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// أيقونة الفاتورة / السند المميّزة بخطوط زرقاء للحركات
+class _MarkedReceiptIcon extends StatelessWidget {
+  final bool selected;
+  const _MarkedReceiptIcon({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 21);
+    }
+    return Container(
+      width: 20,
+      height: 22,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFF38BDF8), width: 1.4),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 2.5, vertical: 3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Container(
+            height: 2,
+            width: 14,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0284C7),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+          Container(
+            height: 2,
+            width: 9,
+            decoration: BoxDecoration(
+              color: const Color(0xFF38BDF8),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+          Container(
+            height: 2,
+            width: 12,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0284C7),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// أيقونة الجرس الذهبي المتوهّج للإشعارات
+class _MarkedBellIcon extends StatelessWidget {
+  final bool selected;
+  final int unread;
+  const _MarkedBellIcon({required this.selected, required this.unread});
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return const Icon(Icons.notifications_rounded, color: Colors.white, size: 22);
+    }
+    return const Icon(
+      Icons.notifications_rounded,
+      color: Color(0xFFF59E0B),
+      size: 22,
+    );
+  }
+}
+
+/// أيقونة الترس المعدني للإعدادات
+class _MarkedGearIcon extends StatelessWidget {
+  final bool selected;
+  const _MarkedGearIcon({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return const Icon(Icons.settings_rounded, color: Colors.white, size: 22);
+    }
+    return const Icon(
+      Icons.settings_rounded,
+      color: Color(0xFF64748B),
+      size: 22,
+    );
+  }
+}
+
+/// زر العملية العائم المميّز بالتدرج الدائري كما في الصورة
+class _MarkedOperationFab extends StatelessWidget {
+  final VoidCallback? onPressed;
+  const _MarkedOperationFab({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 58,
+      height: 58,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFB923C), Color(0xFF0284C7)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: const Color(0xFFFB923C).withValues(alpha: 0.25),
+            blurRadius: 8,
+            offset: const Offset(-2, -2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onPressed,
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_rounded, color: Colors.white, size: 22),
+              Text(
+                'عملية',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'Tajawal',
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1854,7 +2193,6 @@ class _DrawerItems {
     String workspaceMode = 'standalone',
   }) =>
       AppScreen.values
-          .where((s) => !_HomeShellState._bottomTabs.contains(s))
           .where((s) {
         final standalone = workspaceMode == 'standalone';
         // العزل الكامل للوضع المستقل: لا دردشة ولا إدارة مجموعة —

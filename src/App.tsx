@@ -16,6 +16,7 @@ import { BackupView } from './components/BackupView';
 import { LoginModal } from './components/LoginModal';
 import { AccountStatementModal } from './components/AccountStatementModal';
 import { WelcomeGuideModal } from './components/WelcomeGuideModal';
+import { MarkedBottomNav } from './components/MarkedBottomNav';
 import {
   AccountModal,
   TransactionModal,
@@ -75,6 +76,7 @@ export function App() {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [statementAccount, setStatementAccount] = useState<Account | null>(null);
   const [isWelcomeGuideOpen, setIsWelcomeGuideOpen] = useState(false);
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
 
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -285,11 +287,12 @@ export function App() {
             setIsAccountModalOpen(true);
           }}
           onOpenHelpGuide={() => setIsWelcomeGuideOpen(true)}
+          onOpenMobileMenu={() => setIsMobileDrawerOpen(true)}
           isLoading={isLoading}
           isSseConnected={isSseConnected}
         />
 
-        <main className="p-6 flex-1 max-w-7xl w-full mx-auto">
+        <main className="p-4 sm:p-6 pb-24 md:pb-6 flex-1 max-w-7xl w-full mx-auto">
           {currentScreen === 'dashboard' && (
             <DashboardView
               data={dashboardData}
@@ -425,6 +428,53 @@ export function App() {
             <BackupView onShowToast={showToast} />
           )}
         </main>
+
+        {/* الشريط السفلي المعلم للمعاملات والتنقل السريع في المعاينة الجانبية والأجهزة */}
+        <MarkedBottomNav
+          currentScreen={currentScreen}
+          onSelectScreen={setCurrentScreen}
+          onOpenTxModal={() => {
+            setTxInitialAccountId(undefined);
+            setIsTxModalOpen(true);
+          }}
+          unreadCount={joinRequests.filter((r) => r.status === 'pending').length}
+        />
+
+        {/* درج القائمة الجانبية للشاشات المحمولة والمعاينة الجانبية */}
+        {isMobileDrawerOpen && (
+          <div className="fixed inset-0 z-50 md:hidden flex justify-start">
+            <div
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
+              onClick={() => setIsMobileDrawerOpen(false)}
+            />
+            <div className="relative w-72 max-w-[85vw] bg-slate-900 text-white h-full z-10 shadow-2xl flex flex-col">
+              <div className="p-3.5 border-b border-slate-800 flex items-center justify-between">
+                <span className="font-bold text-sm text-sky-400">القائمة الرئيسية</span>
+                <button
+                  onClick={() => setIsMobileDrawerOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <Sidebar
+                  className="flex w-full bg-slate-900 text-slate-100 flex-col select-none h-full"
+                  currentScreen={currentScreen}
+                  onSelectScreen={(s) => {
+                    setCurrentScreen(s);
+                    setIsMobileDrawerOpen(false);
+                  }}
+                  accountsCount={accounts.length}
+                  devicesCount={devices.length}
+                  pendingJoinsCount={joinRequests.filter((r) => r.status === 'pending').length}
+                  userEmail={userEmail}
+                  onLogout={handleLogout}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modals */}

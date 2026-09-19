@@ -312,14 +312,17 @@ class _CurrencyCardState extends State<_CurrencyCard> {
                             child: Icon(Icons.account_balance_wallet_rounded,
                                 color: fg, size: 20),
                           ),
-                          const SizedBox(width: 9),
+                          const SizedBox(width: 8),
+                          Text(c.flag, style: const TextStyle(fontSize: 18)),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'ملخّص الحساب · ${c.name}',
+                              '${c.name} (${c.symbol})',
                               style: TextStyle(
                                 color: fg,
                                 fontWeight: FontWeight.w800,
-                                fontSize: 14,
+                                fontSize: 14.5,
+                                fontFamily: 'Tajawal',
                               ),
                             ),
                           ),

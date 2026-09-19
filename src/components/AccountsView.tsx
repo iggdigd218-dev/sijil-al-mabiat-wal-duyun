@@ -56,6 +56,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     }
   };
 
+  const getInitials = (name: string) => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '؟';
+    if (parts.length === 1) return parts[0].slice(0, 2);
+    return `${parts[0].charAt(0)}${parts[1].charAt(0)}`;
+  };
+
   const filtered = accounts.filter((acc) => {
     const matchesKind = kindFilter === 'all' || acc.kind === kindFilter;
     const matchesSearch =
@@ -180,8 +187,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         </div>
       </div>
 
-      {/* Accounts Table / Cards */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+      {/* Desktop Accounts Table */}
+      <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-right text-xs">
             <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold">
@@ -328,6 +335,105 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Mobile & Side-Preview Cards */}
+      <div className="md:hidden space-y-3">
+        {filtered.length === 0 ? (
+          <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-slate-200">
+            لم يتم العثور على حسابات مطابقة
+          </div>
+        ) : (
+          filtered.map((acc) => {
+            const bal = acc.balance || 0;
+            const isDebit = bal > 0;
+            const isCredit = bal < 0;
+            const initials = getInitials(acc.name);
+            return (
+              <div
+                key={acc.id}
+                className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs hover:border-sky-300 transition-all"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-11 h-11 rounded-full bg-sky-100 text-sky-700 font-extrabold text-sm flex items-center justify-center shrink-0 border border-sky-200">
+                      {initials}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-extrabold text-slate-900 text-sm truncate">{acc.name}</div>
+                      <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                        {acc.phone && <span dir="ltr">{acc.phone}</span>}
+                        {acc.phone && <span>•</span>}
+                        <span className="font-medium">
+                          {acc.kind === 'customer' ? 'عميل' : acc.kind === 'supplier' ? 'مورد' : 'صندوق'}
+                        </span>
+                        {acc.currency && <span className="text-[11px] text-slate-400">({acc.currency})</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-left shrink-0">
+                    <div
+                      className={`text-sm font-black ${
+                        isDebit ? 'text-rose-600' : isCredit ? 'text-emerald-600' : 'text-slate-600'
+                      }`}
+                    >
+                      {formatMoney(Math.abs(bal), acc.currency)} {isDebit ? '-' : isCredit ? '+' : ''}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      {isDebit ? 'عليكم (دين)' : isCredit ? 'لكم (رصيد)' : 'متزن'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => onOpenStatement(acc)}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center gap-1 text-xs transition-colors"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-sky-600" />
+                      <span>كشف حساب</span>
+                    </button>
+                    {(acc.whatsapp || acc.phone) && isDebit && (
+                      <button
+                        onClick={() => handleQuickWhatsAppReminder(acc)}
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold flex items-center gap-1 text-xs transition-colors"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>واتساب</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => onOpenTxModal(acc.id)}
+                      className="p-1.5 rounded-xl bg-sky-50 text-sky-600 hover:bg-sky-100 transition-colors"
+                      title="إضافة عملية"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => onOpenAccountModal(acc)}
+                      className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-100 transition-colors"
+                      title="تعديل"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteAccountTarget(acc)}
+                      className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                      title="حذف"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* In-App Delete Confirmation */}

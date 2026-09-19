@@ -1,5 +1,5 @@
-import React from 'react';
-import { Plus, RefreshCw, UserPlus, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, RefreshCw, UserPlus, HelpCircle, Type, Menu } from 'lucide-react';
 
 interface HeaderProps {
   title: string;
@@ -7,6 +7,7 @@ interface HeaderProps {
   onOpenTxModal: () => void;
   onOpenAccountModal: () => void;
   onOpenHelpGuide?: () => void;
+  onOpenMobileMenu?: () => void;
   isLoading?: boolean;
   isSseConnected?: boolean;
 }
@@ -17,35 +18,103 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTxModal,
   onOpenAccountModal,
   onOpenHelpGuide,
+  onOpenMobileMenu,
   isLoading,
   isSseConnected = true,
 }) => {
+  const [currentFont, setCurrentFont] = useState<string>(() => {
+    return localStorage.getItem('app-font') || 'naskh';
+  });
+
+  const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-font', currentFont);
+    localStorage.setItem('app-font', currentFont);
+  }, [currentFont]);
+
+  const fontOptions = [
+    { id: 'naskh', label: 'خط النسخ (الافتراضي)', sub: 'Noto Naskh' },
+    { id: 'amiri', label: 'خط النسخ الأميري', sub: 'Amiri' },
+    { id: 'tajawal', label: 'خط النسخ الحديث', sub: 'Tajawal' },
+  ];
+
   return (
-    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-10 shadow-xs">
-      <div>
-        <h2 className="text-lg font-black text-slate-800 tracking-tight">{title}</h2>
-        <div className="flex items-center gap-2 mt-0.5">
-          <p className="text-xs text-slate-600 font-medium">سجل المبيعات والديون • نظام المزامنة الفورية</p>
-          <span className="inline-block w-1 h-1 rounded-full bg-slate-300"></span>
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-            isSseConnected ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${isSseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-            <span>{isSseConnected ? 'المزامنة الفورية نشطة (SSE)' : 'المزامنة متوقفة'}</span>
-          </span>
+    <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-10 shadow-xs">
+      <div className="flex items-center gap-2.5">
+        {onOpenMobileMenu && (
+          <button
+            onClick={onOpenMobileMenu}
+            className="md:hidden p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors"
+            title="القائمة الجانبية"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        )}
+        <div>
+          <h2 className="text-lg font-black text-slate-800 tracking-tight">{title}</h2>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-slate-600 font-medium">سجل المبيعات والديون • خط النسخ</p>
+            <span className="hidden sm:inline-block w-1 h-1 rounded-full bg-slate-300"></span>
+            <span className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              isSseConnected ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isSseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+              <span>{isSseConnected ? 'المزامنة الفورية نشطة' : 'المزامنة متوقفة'}</span>
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2">
+        {/* زر تبديل نمط خط النسخ */}
+        <div className="relative">
+          <button
+            onClick={() => setIsFontMenuOpen(!isFontMenuOpen)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors border border-slate-200/60"
+            title="تخصيص خط النسخ"
+          >
+            <Type className="w-3.5 h-3.5 text-sky-600" />
+            <span className="text-[11px]">
+              {fontOptions.find((f) => f.id === currentFont)?.label.replace(' (الافتراضي)', '') || 'خط النسخ'}
+            </span>
+          </button>
+
+          {isFontMenuOpen && (
+            <div className="absolute left-0 mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-slate-150 py-1.5 z-50 text-right animate-in fade-in zoom-in-95">
+              <div className="px-3 py-1 text-[10.5px] font-bold text-slate-400 border-b border-slate-100">
+                اختيار خط النسخ للتطبيق:
+              </div>
+              {fontOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => {
+                    setCurrentFont(opt.id);
+                    setIsFontMenuOpen(false);
+                  }}
+                  className={`w-full text-right px-3 py-2 text-xs flex items-center justify-between transition-colors ${
+                    currentFont === opt.id
+                      ? 'bg-sky-50 text-sky-700 font-bold'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  {currentFont === opt.id && <span className="w-1.5 h-1.5 rounded-full bg-sky-600"></span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {onOpenHelpGuide && (
           <button
             id="btn-header-help-guide"
             onClick={onOpenHelpGuide}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-xl transition-colors border border-sky-100"
+            className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-xl transition-colors border border-sky-100"
             title="دليل الاستخدام والترحيب"
           >
             <HelpCircle className="w-4 h-4 text-sky-600" />
-            <span className="hidden sm:inline">دليل الاستخدام</span>
+            <span>دليل الاستخدام</span>
           </button>
         )}
 
@@ -62,7 +131,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           id="btn-header-add-account"
           onClick={onOpenAccountModal}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+          className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
         >
           <UserPlus className="w-4 h-4 text-slate-500" />
           <span>حساب جديد</span>
@@ -71,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           id="btn-header-add-tx"
           onClick={onOpenTxModal}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-98 rounded-xl shadow-sm shadow-sky-600/30 transition-all"
+          className="flex items-center gap-1.5 px-3.5 sm:px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-98 rounded-xl shadow-sm shadow-sky-600/30 transition-all"
         >
           <Plus className="w-4 h-4" />
           <span>عملية جديدة</span>

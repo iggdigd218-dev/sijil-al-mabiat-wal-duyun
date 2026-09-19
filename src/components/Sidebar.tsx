@@ -25,6 +25,7 @@ interface SidebarProps {
   pendingJoinsCount: number;
   userEmail: string;
   onLogout: () => void;
+  className?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -35,6 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   pendingJoinsCount,
   userEmail,
   onLogout,
+  className,
 }) => {
   const navSections = [
     {
@@ -78,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-72 bg-slate-900 text-slate-100 flex flex-col shrink-0 h-screen sticky top-0 border-l border-slate-800 shadow-xl select-none z-20">
+    <aside className={className || "hidden md:flex w-72 bg-slate-900 text-slate-100 flex-col shrink-0 h-screen sticky top-0 border-l border-slate-800 shadow-xl select-none z-20"}>
       {/* Header / Brand */}
       <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
