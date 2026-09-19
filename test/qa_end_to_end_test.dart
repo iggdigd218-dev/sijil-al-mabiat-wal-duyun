@@ -69,10 +69,11 @@ Future<void> _drain(WidgetTester tester) async {
 /// على آلات CI المحمّلة يتأخر تحميل الشاشة الأولى (قراءة القاعدة الحقيقية
 /// تتم خارج الزمن الافتراضي) عن الضخ الثابت، فيرمي ensureVisible/tap
 /// «No element» ويسقط الاختبار بلا عطل حقيقي — ويفشل بعده انتظار القرص
-/// كتابعة. نضخ إطارات مع فسحات حقيقية حتى يظهر العنصر (سقف ~6 ثوانٍ
-/// حقيقية) ثم تكمل التدفقات الحازمة كما هي.
+/// كتابعة. نضخ إطارات مع فسحات حقيقية حتى يظهر العنصر (سقف ~24 ثانية
+/// حقيقية، لأن قاعدة SQLite قد تكون مشغولة بإقلاع HomeShell على CI) ثم
+/// تكمل التدفقات الحازمة كما هي.
 Future<void> _waitFor(WidgetTester tester, Finder finder,
-    {int maxTries = 60}) async {
+    {int maxTries = 240}) async {
   for (var i = 0; i < maxTries && finder.evaluate().isEmpty; i++) {
     await tester
         .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
@@ -119,7 +120,10 @@ void main() {
       engine = SyncEngine(repo: repo, dbProvider: () async => db);
     });
     tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(1000, 900);
+    // نبدأ بعرض هاتف حتى لا يُطبّق إقلاع سطح المكتب التلقائي على POS
+    // قبل أن نصل إلى لوحة التحكم. نختبر الشريط الجانبي لاحقاً بعد الحفظ
+    // بتغيير العرض إلى سطح المكتب داخل نفس الجلسة.
+    tester.view.physicalSize = const Size(800, 900);
     Sfx.setMuted(true);
     try {
       await tester.pumpWidget(ProviderScope(
@@ -186,8 +190,12 @@ void main() {
         expect(rows.single.accountId, accountId);
         expect(await repo.balanceOf((await repo.account(accountId))!), 1500);
       });
-      // عرض 1000 > عتبة سطح المكتب (900): الشريط السفلي استُبدل بشريط
-      // جانبي (Rail) — ننقر عنوان «دفتر الحسابات والديون» فيه.
+      // بعد إتمام التدفق على عرض الهاتف، نوسّع النافذة الآن إلى 1000dp
+      // لاختبار التحول الحقيقي إلى شريط سطح المكتب الجانبي (Rail).
+      tester.view.physicalSize = const Size(1000, 900);
+      await tester.pump();
+      await _drain(tester);
+      await _waitFor(tester, find.text('دفتر الحسابات والديون'));
       await tester.tap(find.text('دفتر الحسابات والديون'));
       await _drain(tester);
       expect(find.textContaining('1,500'), findsWidgets);
