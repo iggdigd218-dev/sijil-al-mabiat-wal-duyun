@@ -99,7 +99,8 @@ class _State extends ConsumerState<GroupManagementScreen> {
       if (reqs.isEmpty || !mounted) return;
       _joinSheetOpen = true;
       final firstId = '${reqs.first['deviceId'] ?? ''}';
-      await showJoinApprovalSheet(context, ref, reqs.first, backendUrl: url);
+      await showJoinApprovalSheet(context, ref, reqs.first,
+          backendUrl: url, workspaceId: ws);
       // بعد إغلاق النافذة: إن تمت الموافقة، سجّل الجهاز كمُعالج
       // حتى لا يظهر مرة أخرى حتى لو بقيت عقدة approved في السحابة
       if (firstId.isNotEmpty) {
@@ -812,6 +813,7 @@ Future<void> showJoinApprovalSheet(
   WidgetRef ref,
   Map<String, Object?> request, {
   required String backendUrl,
+  String? workspaceId,
 }) async {
   final dialogKey = '${request['kind'] ?? 'join'}:${request['deviceId'] ?? ''}';
   if (!_activeJoinDialogKeys.add(dialogKey)) {
@@ -826,6 +828,9 @@ Future<void> showJoinApprovalSheet(
   }
   final repo = ref.read(repoProvider);
   final engine = ref.read(syncEngineProvider);
+  final ws = (workspaceId != null && workspaceId.trim().isNotEmpty)
+      ? workspaceId.trim()
+      : repo.requireWorkspaceId;
   final deviceId = '${request['deviceId'] ?? ''}';
   final deviceName = '${request['deviceName'] ?? 'جهاز جديد'}';
   final fp = '${request['fingerprint'] ?? ''}';
@@ -920,7 +925,9 @@ Future<void> showJoinApprovalSheet(
                       onPressed: () async {
                         try {
                           await CloudJoin.rejectJoinRequest(repo,
-                              backendUrl: backendUrl, deviceId: deviceId);
+                              backendUrl: backendUrl,
+                              deviceId: deviceId,
+                              workspaceId: ws);
                         } catch (_) {}
                         if (ctx.mounted) Navigator.pop(ctx);
                       },
@@ -951,7 +958,8 @@ Future<void> showJoinApprovalSheet(
                                         backendUrl: backendUrl,
                                         deviceId: deviceId,
                                         deviceName: deviceName,
-                                        roleCode: role.code)
+                                        roleCode: role.code,
+                                        workspaceId: ws)
                                     .timeout(kCloudOpTimeout);
                                 await engine.broadcastRosterChange();
                                 Sfx.pair();

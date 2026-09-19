@@ -704,7 +704,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // (الجلسة قد تُغلق أثناء الفجوة غير المتزامنة) حراسة السياق نفسه.
         if (!rootCtx.mounted) return;
         await showJoinApprovalSheet(rootCtx, ref, next,
-            backendUrl: url);
+            backendUrl: url, workspaceId: ws);
         // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب،
         // ولا بعد إعادة تشغيل التطبيق (السجل محفوظ مع مهلة 6 ساعات).
         _handledJoinRequests[key] = DateTime.now().millisecondsSinceEpoch;

@@ -1127,6 +1127,13 @@ class CloudJoin {
       } catch (_) {}
     }
 
+    // 🔒 تحديث فهرس الأجهزة السحابي فوراً: تسجيل هذا الجهاز كعضو في المساحة الجديدة
+    // حتى لا يعيده استرداد العتاد الصامت (WorkspaceRecovery) لمساحته الفردية القديمة.
+    try {
+      await DeviceRegistry.upsertBinding(repo,
+          backendUrl: url, force: true);
+    } catch (_) {}
+
     // الدعوة تُستخدم مرة واحدة (حُذفت مبكراً؛ هذا حذف احتياطي idempotent).
     try {
       await _delete('$root/invites/$tok.json');
