@@ -490,8 +490,11 @@ class SyncEngine {
           } catch (_) {}
         }
       } catch (_) {}
-      // (قانون 2026-09-19 — حل المجموعة) عضو زالت مجموعته من السحابة:
-      // بعد 3 فحوصات متتالية يعود حساباً فردياً مستقلاً وبياناته تبقى له.
+      // (قانون 2026-09-19 — حل المجموعة؛ تشديد 2026-09-19 — لا أعضاء
+      // عالقون) عضو ماتت مجموعته: زالت عقدة roster، أو بقي وحده فيها
+      // بلا مدير، أو مُزيل قيده بلا سجل طرد — بعد 6 فحوصات متتالية
+      // (~30 ثانية) يعود حساباً فردياً مستقلاً وبياناته تبقى له، ثم
+      // تُمسح كل بقاياه السحابية فلا يعود عالقا ولا يُسحب رجوعا أبدا.
       try {
         if (_started && await repo.workspaceMode() == 'member') {
           final t = _cloudTransport!;
@@ -504,6 +507,12 @@ class SyncEngine {
           if (_dissolveMisses >= 6) {
             _dissolveMisses = 0;
             await repo.becomeIndividualAfterDissolution();
+            // (2026-09-19 — لا أعضاء عالقون) مسح بقاياه هو من السحابة:
+            // قيد roster وطلب معلق وعضوية وبصمة وفهرس Google.
+            try {
+              await CloudJoin.releaseMemberBindings(repo,
+                  backendUrl: t.backendUrl, workspaceId: t.workspaceId);
+            } catch (_) {}
             try {
               onSyncActivity?.call();
             } catch (_) {}

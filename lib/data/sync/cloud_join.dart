@@ -1938,10 +1938,10 @@ class CloudJoin {
   ///  1) كتابة شاهدة طرد لكل جهاز عضو (غير المالك) في /evictions —
   ///     تصلهم لحظياً عبر قنواتهم المخصصة فيبطلون جلساتهم ويعودون مستقلين.
   ///  2) مهلة سماح قصيرة ليلتقط الأعضاء المتصلون الشواهد عبر SSE.
-  ///  3) حذف عقدة المجموعة بأكملها من السحابة:
-  ///     roster + operations + invites + joinRequests + joinSnapshot —
-  ///     تُترك /evictions وحدها مدة سماح ليلتقطها من كان مطفأً عند الحل
-  ///     (مصافحته عند الإقلاع تفحصها قبل أي شيء).
+  ///  3) (2026-09-19 — إلغاء كل الارتباطات فعلياً) حذف عقدة المجموعة
+  ///     بأكملها من السحابة — كل الأقسام عدا `subscription` المدفوع، مع
+  ///     كنس بصمات الدعوات من `invite_index` العام: لا يبقى أثر ميت
+  ///     يعلق به عضو ولا PIN قديم يعيد أحداً إلى مجموعة ميتة.
   /// يعيد عدد الأجهزة التي بُثّت لها شواهد.
   static Future<int> dissolveGroup(
     Repo repo, {
@@ -1981,7 +1981,29 @@ class CloudJoin {
       } catch (_) {}
     }
 
-    // 3) تفكيك عقدة المجموعة السحابية (كل قسم على حدة — أفضل جهد).
+    // 3) (2026-09-19 — إلغاء كل الارتباطات) كنس بصمات الدعوات من
+    //    الفهرس العام قبل حذف الدعوات نفسها.
+    try {
+      final invites = await _getJson('$root/invites.json');
+      if (invites != null && invites.isNotEmpty) {
+        final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+        for (final e in invites.entries) {
+          final pin =
+              e.value is Map ? '${(e.value as Map)['pin'] ?? ''}' : '';
+          for (final k in [
+            'tok_${Uri.encodeComponent(e.key)}',
+            if (pin.isNotEmpty) 'pin_${Uri.encodeComponent(pin)}',
+          ]) {
+            try {
+              await _delete('$base/invite_index/$k.json');
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 4) تفكيك عقدة المجموعة السحابية بالكامل — كل الأقسام عدا
+    //    الاشتراك المدفوع (كل قسم على حدة — أفضل جهد).
     for (final node in const [
       'roster',
       'operations',
@@ -1990,12 +2012,62 @@ class CloudJoin {
       'joinSnapshot',
       'members',
       'evictions', // تنظيف ما علّق من إصدارات سابقة
+      'chat',
+      'notifications',
+      'devices',
+      'backup',
+      'creator',
     ]) {
       try {
         await _delete('$root/$node.json');
       } catch (_) {}
     }
     return removed;
+  }
+
+  /// (2026-09-19 — لا أعضاء عالقون) بعد تحوّل العضو إلى حساب فردي إثر
+  /// موت مجموعته: يمسح بقاياه هو من السحابة — قيده في roster، طلبه
+  /// المعلّق في joinRequests، عضويته في members، ربط بصمته في
+  /// device_index، وفهرس حسابه في accounts_index — فلا يبقى أثر ميت
+  /// ولا يستطيع شيء سحبه إلى المجموعة مجدداً. أفضل جهد: فشل أي حذف
+  /// لا يمنع التحرر (المجموعة ميتة أصلاً).
+  static Future<void> releaseMemberBindings(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    try {
+      final ourId = ((await repo.settings())['sync.deviceId'] ?? '').toString();
+      if (ourId.isNotEmpty) {
+        for (final p in [
+          '$root/roster/${Uri.encodeComponent(ourId)}.json',
+          '$root/joinRequests/${Uri.encodeComponent(ourId)}.json',
+        ]) {
+          try {
+            await _delete(p);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    try {
+      final uid = FirebaseAuthRest.currentUid;
+      if (uid.isNotEmpty) {
+        try {
+          await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      final fp = await DeviceRegistry.fingerprintKey(repo);
+      if (fp.isNotEmpty) {
+        try {
+          await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
+        } catch (_) {}
+      }
+    } catch (_) {}
+    await forgetIndex(repo, backendUrl: backendUrl);
   }
 
   /// (قانون 2026-09-19 — حذف الحساب الفردي) يحذف كل عقد المساحة من
@@ -2105,9 +2177,14 @@ class CloudJoin {
     await forgetIndex(repo, backendUrl: backendUrl);
   }
 
-  /// (قانون 2026-09-19 — حل المجموعة) هل زالت عقدة المجموعة من السحابة؟
-  /// true فقط حين يرجع الخادم «لا شيء» صراحةً (العقدة محذوفة) — أخطاء
-  /// الشبكة تُرمى استثناءات فلا تُحسب زوالاً (لا تحويل بلا إنترنت).
+  /// (قانون 2026-09-19 — حل المجموعة؛ تشديد 2026-09-19 — لا أعضاء
+  /// عالقون) هل ماتت مجموعة هذا العضو؟ true في ثلاث حالات:
+  ///  أ) عقدة roster محذوفة أو فارغة تماماً؛
+  ///  ب) لا جهاز في roster غير جهاز العضو نفسه — مدير غائب = مجموعة
+  ///     ميتة (كارثة البقايا الحية: مدير رحل بلا حلٍّ فبقي العضو
+  ///     مقيداً للأبد وطلب مغادرته بلا من يجيبه)؛
+  ///  ج) قيد العضو نفسه مُزال من roster بلا سجل طرد — ارتباطه أُلغي.
+  /// أخطاء الشبكة تُرمى استثناءات فلا تُحسب زوالاً (لا تحويل بلا إنترنت).
   static Future<bool> groupNodeGone(
     Repo repo, {
     required String backendUrl,
@@ -2115,7 +2192,20 @@ class CloudJoin {
   }) async {
     final root = _root(backendUrl, workspaceId);
     final r = await _getJson('$root/roster.json');
-    return r == null;
+    if (r == null) return true;
+    final keys = r.keys.where((k) => k.isNotEmpty).toList();
+    if (keys.isEmpty) return true;
+    final ourId = ((await repo.settings())['sync.deviceId'] ?? '').toString();
+    if (ourId.isEmpty) return false;
+    // (ب) وحدي في roster — لا مدير معي: مجموعة ميتة.
+    if (keys.every((k) => k == ourId)) return true;
+    // (ج) قيدي مُزال — إن وُجد سجل طرد فمسار الطرد هو المعنيّ لا الحل.
+    if (!keys.contains(ourId)) {
+      final ev = await _getJson(
+          '$root/evictions/${Uri.encodeComponent(ourId)}.json');
+      if (ev == null) return true;
+    }
+    return false;
   }
 
   /// (المدير — دفعة 57) زوال اللقطة: يحذف الدعوات المنتهية من /invites،
