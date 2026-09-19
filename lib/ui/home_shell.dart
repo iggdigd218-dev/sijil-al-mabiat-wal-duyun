@@ -832,14 +832,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  /// الشاشات الأساسية في شريط التنقل السفلي.
-  static const _bottomTabs = [
-    AppScreen.accounts,
-    AppScreen.transactions,
-    AppScreen.reports,
-    AppScreen.settings,
-  ];
-
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   /// يعرض بانر الخطر بأزراره الثلاثة. يُعاد استدعاؤها لتحديث حالة السبينر
@@ -1149,7 +1141,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
   @override
   Widget build(BuildContext context) {
     final hidden = ref.watch(hideBalancesProvider);
-    final tabIndex = _bottomTabs.indexOf(_screen);
     final desktop = isDesktopLayout(context);
 
     return PopScope(

@@ -49,14 +49,6 @@ class JoinApprovalScreen extends ConsumerStatefulWidget {
 
 enum _JoinStep { naming, method, waiting, done, rejected }
 
-/// ممنوع إضافة وقت انتظار عند الموافقة: محاولة واحدة فقط، ثم رسالة صريحة.
-const int _maxHydrateRetries = 1;
-
-/// لا تباعد — فشل الربط يظهر فوراً برسالة واضحة، بلا انتظار 15/30/60 ثانية.
-const List<Duration> _backoffSteps = <Duration>[
-  Duration(seconds: 1),
-];
-
 /// (دفعة 65) فاصل الاستطلاع **الثابت** لحالة الموافقة. كان التباعد
 /// التصاعدي (15→30→60) يترك المدير ينتظر قراره دقيقة كاملة في أسوأ حال،
 /// والاستجابة هنا أهم من توفير الشبكة.
@@ -68,7 +60,6 @@ const Duration _pollInterval = Duration(seconds: 4);
 /// مدة انتظار موافقة المدير 2 دقائق بلا رد بينما الطلب ما زال عند المدير».
 /// السبب الحقيقي للطلبات المتكررة كان: انتهاء المؤقت يوقف polling عند العضو،
 /// فيبقى الطلب pending في Firebase، فيظهر مرة أخرى عند المدير كطلب جديد.
-const Duration _pollTimeout = Duration(minutes: 30); // احتياطي فقط للتنظيف، لا يُستخدم لإيقاف الانتظار
 
 class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   _JoinStep _step = _JoinStep.naming;
@@ -82,8 +73,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   JoinRequestWatcher? _decisionWatcher;
   /// (منع الاستنزاف) قفل يمنع فتح قناة SSE ثانية أثناء إنشاء الأولى.
   bool _sseStarting = false;
-  /// عدد محاولات الترطيب الفاشلة المتتالية.
-  int _hydrateAttempts = 0;
   /// (دفعة 65) لحظة بدء الاستطلاع — يُحسب منها سقف الدقيقتين.
   DateTime? _pollStartedAt;
   /// (دفعة 65) قفل إرسال الطلب: يُضبط بعد أول إرسال ناجح ويُحفظ محلياً،
@@ -94,8 +83,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
   /// (استرداد 2026-09-19) عدّات الاختفاء المتتالي: لا حكم نهائي من أول
   /// «missing» — كتابة الموافقة قد تكون ما زالت في الطريق.
   int _missingHits = 0;
-  /// هل التوقف بسبب انتهاء مهلة انتظار المدير (وليس فشل تنزيل)؟
-  bool _approvalTimeout = false;
   String _joinUrl = '';
   String _joinWs = 'default';
   String _joinToken = '';
@@ -207,9 +194,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         _step = _JoinStep.waiting;
         _busy = false;
         // (منع الاستنزاف) عدّاد نظيف مع كل طلب انضمام جديد.
-        _hydrateAttempts = 0;
         _gaveUp = false;
-        _approvalTimeout = false;
       });
       _startPolling();
     } on TimeoutException catch (_) {
@@ -262,33 +247,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     _pollTimer = Timer(delay ?? _pollInterval, _pollOnce);
   }
 
-  /// التباعد الحالي بحسب المحاولات الفاشلة: 15s → 30s → 60s.
-  Duration _nextPollDelay() =>
-      _backoffSteps[_hydrateAttempts.clamp(0, _backoffSteps.length - 1)];
-
-  /// (لا إعادة محاولة بلا أمل) أخطاء نهائية/أمنية: إعادة المحاولة عليها
-  /// استنزاف محض لأنها لن تنجح بتكرارها — الطرد، الإبطال، تجاوز المقاعد،
-  /// انتهاء الاشتراك أو الفترة التجريبية، أو رفض الصلاحية.
-  /// تُطابق النص بالعربية والإنجليزية لأن استثناءات المحرك عربية الصياغة
-  /// ومُعرّفاتها لاتينية.
-  static bool _isTerminalError(Object e) {
-    final s = e.toString().toLowerCase();
-    const latin = <String>[
-      'expelled', 'revoked', 'evicted', 'seat', 'subscription', 'trial',
-      'forbidden', 'unauthorized', 'not authorized', 'denied',
-    ];
-    const arabic = <String>[
-      'مطرود', 'طُرد', 'الطرد', 'مُلغى', 'أُلغي', 'مقاعد', 'المقاعد',
-      'اشتراك', 'التجربة', 'الفترة التجريبية', 'غير مسموح', 'صلاحية',
-    ];
-    for (final k in latin) {
-      if (s.contains(k)) return true;
-    }
-    for (final k in arabic) {
-      if (s.contains(k)) return true;
-    }
-    return false;
-  }
 
   Future<void> _startDecisionSse() async {
     // (منع الاستنزاف) لا قناة SSE ثانية أبداً: القفل `_sseStarting` يحمي
@@ -406,7 +364,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
         setState(() {
           _busy = false;
           _gaveUp = true;
-          _approvalTimeout = false;
           _step = _JoinStep.waiting;
           _error = '❌ انتهى طلب الانضمام أو حُذف من المدير — '
               'اطلب رمزاً جديداً من مدير المجموعة.\n'
@@ -492,7 +449,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
       setState(() {
         _busy = false;
         _gaveUp = true;
-        _approvalTimeout = false;
         _step = _JoinStep.waiting;
         _error = explicitError;
       });
@@ -522,8 +478,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     Sfx.click();
     setState(() {
       _gaveUp = false;
-      _approvalTimeout = false;
-      _hydrateAttempts = 0;
       _missingHits = 0;
       _error = '';
       _step = _JoinStep.waiting;
@@ -820,7 +774,6 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
           onPressed: () => setState(() {
             _error = '';
             _gaveUp = false;
-            _approvalTimeout = false;
             _step = _JoinStep.method;
             _sentOnce = false;
           }),

@@ -1503,6 +1503,11 @@ class CloudJoin {
       await DeviceRegistry.bindAsMember(repo,
           backendUrl: backendUrl, workspaceId: workspaceId);
     } catch (_) {}
+    // (كارثة الاختطاف 2026-09-19) إن كان للعضو حساب Google مفهرس على
+    // مساحة شخصية سابقة فاحذف القيد — وإلا أعاده أي تسجيل لاحق إليها
+    // فانسلخ عن المجموعة وماتت المزامنة (الأدلة الحية: عمليات العضو هبطت
+    // في مساحته الشخصية بعد دقائق من انضمامه).
+    await forgetIndex(repo, backendUrl: backendUrl);
     // تنظيف سياق الانتظار.
     final db = await repo.database;
     await db.delete('settings',
@@ -2013,11 +2018,91 @@ class CloudJoin {
       'chat',
       'notifications',
       'devices',
+      'backup',
+      'creator',
     ]) {
       try {
         await _delete('$root/$node.json');
       } catch (_) {}
     }
+  }
+
+  /// (كارثة الاختطاف 2026-09-19) حذف قيد الفهرس السحابي accounts_index
+  /// للحساب الحالي — حتى لا يسحب أي تسجيل Google لاحق هذا الجهاز من
+  /// مجموعته إلى مساحته الشخصية القديمة (حارس التبديل في linkAccountOnly
+  /// يبدّل المساحة حين يختلف الفهرس عن المحلي).
+  static Future<void> forgetIndex(
+      Repo repo, {required String backendUrl}) async {
+    try {
+      final uid = FirebaseAuthRest.currentUid;
+      if (uid.isEmpty) return;
+      final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+      await _delete('$base/accounts_index/${Uri.encodeComponent(uid)}.json');
+    } catch (_) {}
+  }
+
+  /// (طلب 2026-09-19 — الحذف الكامل من أول صفحة) مسح الجهاز من كل مكان
+  /// في السحابة: عضو → تُحذف قيوده هو فقط من مساحة المجموعة
+  /// (roster/members/joinRequests) ولا تُمس بيانات المجموعة نفسها؛
+  /// مستقل/مالك → تُحذف كل عقد مساحته عدا الاشتراك المدفوع. وفي الحالتين
+  /// تُحذف بصمة device_index وفهرس Google — فلا استرجاع بعده للبيانات
+  /// ولا لموقع الجهاز في مجموعته.
+  static Future<void> purgeDeviceEverywhere(
+      Repo repo, {required String backendUrl}) async {
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final ws = repo.requireWorkspaceId;
+    final root = _root(backendUrl, ws);
+    String mode = 'standalone';
+    try {
+      mode = await repo.workspaceMode();
+    } catch (_) {}
+    if (mode == 'member') {
+      final st = await repo.settings();
+      final ourId = (st['sync.deviceId'] ?? '').toString();
+      if (ourId.isNotEmpty) {
+        for (final p in [
+          '$root/roster/${Uri.encodeComponent(ourId)}.json',
+          '$root/joinRequests/${Uri.encodeComponent(ourId)}.json',
+        ]) {
+          try {
+            await _delete(p);
+          } catch (_) {}
+        }
+      }
+      try {
+        final uid = FirebaseAuthRest.currentUid;
+        if (uid.isNotEmpty) {
+          await _delete('$root/members/${Uri.encodeComponent(uid)}.json');
+        }
+      } catch (_) {}
+    } else {
+      for (final node in const [
+        'roster',
+        'operations',
+        'invites',
+        'joinRequests',
+        'joinSnapshot',
+        'members',
+        'evictions',
+        'chat',
+        'notifications',
+        'devices',
+        'backup',
+        'creator',
+      ]) {
+        try {
+          await _delete('$root/$node.json');
+        } catch (_) {}
+      }
+    }
+    // الفهرسان العامّان: بصمة العتاد (موقع المجموعة) وحساب Google.
+    try {
+      final fp = await DeviceRegistry.fingerprintKey(repo);
+      if (fp.isNotEmpty) {
+        await _delete('$base/device_index/${Uri.encodeComponent(fp)}.json');
+      }
+    } catch (_) {}
+    await forgetIndex(repo, backendUrl: backendUrl);
   }
 
   /// (قانون 2026-09-19 — حل المجموعة) هل زالت عقدة المجموعة من السحابة؟

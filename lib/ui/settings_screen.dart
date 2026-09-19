@@ -1746,6 +1746,8 @@ class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
         if (url.isNotEmpty) {
           await CloudJoin.deleteIndividualWorkspace(repo,
               backendUrl: url, workspaceId: ws);
+          // فهرس Google يُحذف أيضاً — الحساب المحذوف لا يُسترجع.
+          await CloudJoin.forgetIndex(repo, backendUrl: url);
         }
         // فك ربط Google إن وُجد (أفضل جهد — الجدول يُمحى محلياً على أي حال).
         try {

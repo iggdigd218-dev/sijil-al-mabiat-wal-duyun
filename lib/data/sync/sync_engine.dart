@@ -41,7 +41,8 @@ class SyncEngine {
   bool _cloudPulling = false;
 
   /// (قانون 2026-09-19) عدّاد الفحوصات المتتالية لزوال عقدة المجموعة:
-  /// 3 ضربات (≈15 ثانية) قبل قلب العضو إلى حساب فردي — لا تحويل عابر.
+  /// 6 ضربات (≈30 ثانية) قبل قلب العضو إلى حساب فردي — لا تحويل عابر
+  /// (تشديد 2026-09-19: قراءة فارغة عابرة لا يجوز أن تفصل عضواً).
   int _dissolveMisses = 0;
   int _generation = 0;
   bool _running = false;
@@ -500,7 +501,7 @@ class SyncEngine {
           } else {
             _dissolveMisses = 0;
           }
-          if (_dissolveMisses >= 3) {
+          if (_dissolveMisses >= 6) {
             _dissolveMisses = 0;
             await repo.becomeIndividualAfterDissolution();
             try {

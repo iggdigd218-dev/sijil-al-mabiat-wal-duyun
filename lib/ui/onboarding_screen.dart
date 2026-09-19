@@ -9,12 +9,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
+import '../core/factory_reset.dart';
+import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../core/cloud_config.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
+import '../data/sync/cloud_join.dart';
 import '../data/sync/firebase_auth_service.dart';
 import '../data/sync/google_auth_service.dart';
 import 'account_section.dart' show provisionCloudAfterSignIn;
@@ -188,7 +191,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           Sfx.pair();
           await repo.setSetting(kOnboardingDoneKey, '1');
           bump(ref);
-          unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          // (كارثة العقد المتنازعة 2026-09-19) التهيئة السحابية للمؤسسة
+          // فقط — الفردي لا يُنشأ له عقدة ولا فهرس شخصي ينازع مجموعته.
+          if (_choice == 'network') {
+            unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          }
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content:
@@ -201,7 +208,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
                   '✅ تم تسجيل الدخول وربط الحساب — مساحة عملك ثابتة كما هي')));
-          unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          // (كارثة العقد المتنازعة 2026-09-19) التهيئة السحابية للمؤسسة
+          // فقط — الفردي لا يُنشأ له عقدة ولا فهرس شخصي ينازع مجموعته.
+          if (_choice == 'network') {
+            unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          }
           // النمط مختار مسبقاً في التدفق التدريجي — نكمل الانتقال.
           await _finishAndNavigate();
           return;
@@ -214,7 +225,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('✅ تم تبديل مساحة العمل — حُفظت نسخة احتياطية '
                   'ونُزّلت بيانات المساحة الجديدة')));
-          unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          // (كارثة العقد المتنازعة 2026-09-19) التهيئة السحابية للمؤسسة
+          // فقط — الفردي لا يُنشأ له عقدة ولا فهرس شخصي ينازع مجموعته.
+          if (_choice == 'network') {
+            unawaited(provisionCloudAfterSignIn(repo, ref, url));
+          }
           await _finishAndNavigate();
           return;
         case AccountLinkOutcome.switchUnavailable:
@@ -298,7 +313,41 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   const SizedBox(height: 14),
                   _networkCard(),
                 ],
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
+                // (طلب 2026-09-19) استرجاع صريح من أول صفحة: تسجيل Google
+                // يعيد المؤسسة وبياناتها المرتبطة بالحساب تلقائياً.
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _restoreWithGoogle,
+                    icon: const Icon(Icons.settings_backup_restore_rounded,
+                        size: 19),
+                    label: const Text(
+                      'لديك حساب سابق؟ استرجع بياناتك عبر Google',
+                      style:
+                          TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                // (طلب 2026-09-19) حذف كامل من الجهاز والسحابة — من نفس
+                // الصفحة، وبعده لا استرجاع للبيانات ولا لموقع المجموعة.
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _purgeEverything,
+                    icon: const Icon(Icons.delete_forever_outlined,
+                        size: 17, color: Colors.red),
+                    label: const Text(
+                      'حذف كامل من الجهاز والسحابة',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: Colors.red,
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
                 // (قانون 2026-09-19) الإعداد يتم داخل نافذة الخيار نفسها —
                 // هنا مؤشر انشغال فقط ريثما يكتمل الحفظ أو تسجيل Google.
                 if (_busy)
@@ -337,6 +386,105 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             'ومدخل بيانات — مزامنة فورية تلقائية بين الجميع.',
         onTap: () => _openModeWindow('network'),
       );
+
+  /// (طلب 2026-09-19) «استرجاع بياناتي»: نفس مسار Google المصلَح —
+  /// recovered/switched تعيد البيانات والمؤسسة المرتبطة بالحساب، وبلا
+  /// تهيئة عقدة شخصية (الاسترجاع لا ينشئ مؤسسة جديدة).
+  Future<void> _restoreWithGoogle() async {
+    if (_busy) return;
+    setState(() => _choice = 'personal');
+    await _startWithGoogle();
+  }
+
+  /// (طلب 2026-09-19) «حذف كامل من كل مكان»: الجهاز + السحابة — لا يبقى
+  /// ما يُسترجع: لا البيانات ولا موقع الجهاز في مجموعته (تُحذف بصمة
+  /// device_index وفهرس Google وقيود العضوية). الاشتراك المدفوع وحده
+  /// يبقى أصلاً مالياً.
+  Future<void> _purgeEverything() async {
+    if (_busy) return;
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('⚠️ حذف كامل من الجهاز والسحابة'),
+        content: const Text(
+          'سيُحذف كل شيء نهائياً ومن كل مكان:\n\n'
+          '• كل البيانات المحلية على هذا الجهاز.\n'
+          '• كل بياناتك من السحابة (المساحة، النسخ، السجل).\n'
+          '• موقع جهازك في مجموعته (إن كان عضواً) وبصمة الجهاز وفهرس '
+          'حساب Google.\n\n'
+          'بعد هذا الحذف لا يمكن استرجاع بياناتك ولا موقعك في المجموعة '
+          'أبداً. يُستثنى الاشتراك المدفوع فقط.\n\n'
+          'هل أنت متأكد تماماً؟',
+          style: TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف كل شيء من كل مكان'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final authed = await Security.authenticate(
+      reason: 'أكّد هويتك للحذف الكامل من الجهاز والسحابة',
+    );
+    if (!authed) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('لم تكتمل المصادقة — أُلغي الحذف')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(repoProvider);
+      final engine = ref.read(syncEngineProvider);
+      try {
+        engine.stop();
+      } catch (_) {}
+      // 1) السحابة: قيود الجهاز تُ مسح من كل مكان (عضواً كان أو مالكاً).
+      try {
+        final st = await repo.settings();
+        final url = effectiveBackendUrl(st['cloudBackendUrl']);
+        if (url.isNotEmpty) {
+          await CloudJoin.purgeDeviceEverywhere(repo, backendUrl: url);
+        }
+        final db = await repo.database;
+        try {
+          await GoogleAuthService(db).signOut();
+        } catch (_) {}
+      } catch (_) {}
+      // 2) الجهاز: مسح كامل (القاعدة + الوسائط + ملفات الاقتران).
+      await FactoryReset.wipeAllLocalData();
+      Sfx.success();
+      // 3) إقلاع نظيف وبقاء في شاشة الترحيب — نظيفاً تماماً.
+      try {
+        await repo.initSyncInfra().timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      try {
+        await engine.start();
+      } catch (_) {}
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('✅ تم الحذف الكامل — الجهاز والسحابة نظيفان'),
+          backgroundColor: Color(0xFF16A34A)));
+      setState(() => _choice = null);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('تعذّر الحذف الكامل: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   /// (قانون 2026-09-19) الضغط على بطاقة النوع يفتح **نافذة جديدة** خاصة
   /// بالخيار — بلا أي قائمة منسدلة — فيها وصف كامل لنوع الحساب ثم الإعداد
