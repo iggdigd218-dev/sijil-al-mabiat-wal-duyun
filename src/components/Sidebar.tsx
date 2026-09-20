@@ -278,6 +278,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
+        {/* Logout Button at bottom of sidebar */}
+        <button
+          id="btn-sidebar-logout"
+          onClick={onLogout}
+          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/20 text-xs font-bold transition-all duration-150 active:scale-[0.98]"
+        >
+          <LogOut className="w-4 h-4 text-rose-400" />
+          <span>{isAdmin ? 'تسجيل خروج المدير المحمي' : 'طلب تسجيل خروج الموظف'}</span>
+        </button>
+
         {/* User-Facing Changelog & Version Trigger */}
         <div className="flex items-center justify-between text-[10px] text-slate-500 pt-0.5">
           <button

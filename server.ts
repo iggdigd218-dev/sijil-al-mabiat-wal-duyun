@@ -1143,22 +1143,7 @@ async function startServer() {
 
   app.delete('/api/devices/:id', (req, res) => {
     try {
-      const dev = db.prepare(`SELECT is_owner FROM devices WHERE id=?`).get(req.params.id) as any;
-      if (dev && dev.is_owner) return res.status(400).json({ error: 'لا يمكن حذف جهاز المالك' });
       db.prepare(`DELETE FROM devices WHERE id=?`).run(req.params.id);
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/devices/:id/transfer-ownership', (req, res) => {
-    try {
-      const targetId = req.params.id;
-      const now = new Date().toISOString();
-      db.prepare(`UPDATE devices SET is_owner=0`).run();
-      db.prepare(`UPDATE devices SET is_owner=1, last_seen_at=? WHERE id=?`).run(now, targetId);
-      db.prepare(`INSERT INTO activity (text, created_at) VALUES (?,?)`).run(`تم نقل الملكية إلى ${targetId}`, now);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
