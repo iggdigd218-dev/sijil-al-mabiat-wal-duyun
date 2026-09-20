@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   TrendingUp,
   ArrowDownLeft,
@@ -7,8 +7,14 @@ import {
   ArrowUpRight,
   Clock,
   Phone,
+  ShieldCheck,
+  Cloud,
+  CloudOff,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
-import { DashboardData, Transaction } from '../types';
+import { DashboardData, Transaction, SyncQueueStats } from '../types';
+import { subscribeSyncStatus, getWorkspaceMode, triggerImmediateSync } from '../services/syncQueueService';
 
 interface DashboardViewProps {
   data: DashboardData | null;
@@ -21,6 +27,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onSelectAccount,
   onOpenTxModal,
 }) => {
+  const [syncStats, setSyncStats] = useState<SyncQueueStats>({
+    total: 0,
+    pending: 0,
+    syncing: 0,
+    synced: 0,
+    failed: 0,
+    last_sync_timestamp: 0,
+  });
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const mode = getWorkspaceMode();
+
+  useEffect(() => {
+    const unsubscribe = subscribeSyncStatus((stats, online, syncing) => {
+      setSyncStats(stats);
+      setIsOnline(online);
+      setIsSyncing(syncing);
+    });
+    return () => unsubscribe();
+  }, []);
   const formatMoney = (num: number, cur = 'ر.ي') => {
     return `${new Intl.NumberFormat('ar-YE').format(Math.round(num || 0))} ${cur}`;
   };
@@ -46,6 +72,64 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* System Status & Sync Bar */}
+      <div className="bg-white rounded-2xl p-3 px-4 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center font-bold">
+            <ShieldCheck className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-slate-800">
+                {mode === 'individual' ? 'الحساب الفردي (تشغيل محلي 100%)' : 'لوحة إدارة المنشأة (مزامنة فورية)'}
+              </span>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                isOnline ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+              }`}>
+                {isOnline ? (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>متصل</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudOff className="w-3 h-3 text-amber-600" />
+                    <span>وضع عدم الاتصال (حفظ محلي SQLite)</span>
+                  </>
+                )}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              قاعدة البيانات المحلية تستجيب فورياً لجميع العمليات دون توقف
+            </p>
+          </div>
+        </div>
+
+        {mode === 'enterprise' && (
+          <div className="flex items-center gap-3">
+            {syncStats.pending > 0 ? (
+              <span className="inline-flex items-center gap-1.5 text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-xl text-[11px] font-bold">
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>طابور المزامنة: {syncStats.pending} معلقة</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl text-[11px] font-bold">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>كافة البيانات متزامنة</span>
+              </span>
+            )}
+            <button
+              onClick={() => triggerImmediateSync()}
+              disabled={isSyncing || !isOnline}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors disabled:opacity-40"
+              title="مزامنة فورية الآن"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Sales */}

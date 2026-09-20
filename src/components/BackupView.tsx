@@ -113,7 +113,7 @@ export const BackupView: React.FC<BackupViewProps> = ({ onShowToast, onRefreshAl
           <div>
             <h3 className="font-extrabold text-sm text-slate-800">قاعدة البيانات والنسخ الاحتياطي</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              قاعدة بيانات محلية سريعة بنظام SQLite تحفظ كافة الحسابات والعمليات والمخزون، مع دعم التصدير والاستعادة الفورية
+              قاعدة بيانات محلية تدعم التصدير والاستعادة الفورية للبيانات.
             </p>
           </div>
         </div>
@@ -125,7 +125,7 @@ export const BackupView: React.FC<BackupViewProps> = ({ onShowToast, onRefreshAl
             className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-xs transition-colors disabled:opacity-50"
           >
             <Upload className="w-4 h-4 text-slate-500" />
-            <span>استعادة نسخة احتياطية (JSON)</span>
+            <span>استعادة نسخة (JSON)</span>
           </button>
 
           <button
@@ -134,7 +134,7 @@ export const BackupView: React.FC<BackupViewProps> = ({ onShowToast, onRefreshAl
             className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold shadow-xs transition-colors disabled:opacity-50"
           >
             <Download className="w-4 h-4" />
-            <span>تصدير نسخة احتياطية (JSON)</span>
+            <span>تصدير نسخة (JSON)</span>
           </button>
         </div>
       </div>
@@ -147,27 +147,27 @@ export const BackupView: React.FC<BackupViewProps> = ({ onShowToast, onRefreshAl
             <span>سلامة البيانات</span>
           </div>
           <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-            محمية عبر عمليات ذرية (Atomic Transactions) تضمن عدم فقدان أي حركة مالية أثناء الحفظ أو الاسترجاع.
+            حفظ محلي آمن يضمن عدم فقدان أي حركة مالية.
           </p>
         </div>
 
         <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center gap-2 text-sky-600 font-bold text-xs">
             <RefreshCw className="w-4 h-4" />
-            <span>تحديث فوري وموثوق</span>
+            <span>تحديث فوري</span>
           </div>
           <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-            عند استعادة أي نسخة احتياطية، يتم تحديث واجهات التطبيق والجداول وقاعدة البيانات فوراً دون تأخير.
+            تحديث فوري للجداول والبيانات عند استعادة النسخة.
           </p>
         </div>
 
         <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center gap-2 text-purple-600 font-bold text-xs">
             <FileText className="w-4 h-4" />
-            <span>صيغة النسخ المفتوحة</span>
+            <span>أرشيف موحد</span>
           </div>
           <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-            ملفات النسخ الاحتياطي بصيغة JSON المقروءة، تتيح نقل السجلات بين الأجهزة أو الاحتفاظ بأرشيف سنوي.
+            ملف احتياطي قياسي لنقل البيانات بين الأجهزة بسهولة.
           </p>
         </div>
       </div>
