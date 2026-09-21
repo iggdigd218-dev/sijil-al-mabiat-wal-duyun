@@ -792,10 +792,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
       } catch (_) {}
       if (!mounted || !info.hasUpdate) return;
       if (!info.isMandatory) {
-        // كتم الحوار الاختياري 24 ساعة بعد آخر عرض/تأجيل.
+        // كتم الحوار الاختياري 24 ساعة بعد آخر عرض/تأجيل — **إلا** إذا
+        // نُشر بناء أحدث منذ الكتم: كل بناء جديد يستحق تنبيهاً فورياً
+        // مرة واحدة (كان الجهاز الذي حدّث اليوم لا يرى بناء الغد إلا
+        // بعد 24 ساعة).
         final st = await repo.settings();
         final last = DateTime.tryParse(st['lastUpdatePrompt'] ?? '');
+        final lastBuild = (st['lastUpdatePromptBuild'] ?? '').trim();
+        final latestKey = info.latest?.toString() ?? '';
         if (last != null &&
+            lastBuild == latestKey &&
             DateTime.now().difference(last) < const Duration(hours: 24)) {
           return;
         }
@@ -803,6 +809,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           'lastUpdatePrompt',
           DateTime.now().toIso8601String(),
         );
+        await repo.setSetting('lastUpdatePromptBuild', latestKey);
       }
       if (!mounted) return;
       await showUpdateDialog(context, ref, info);
