@@ -154,7 +154,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate mt-0.5 font-mono" title={userEmail || session?.user_email}>
-              {showOwnerCircle ? (userEmail || session?.user_email || 'moneerqaid950@gmail.com') : 'جلسة عمل نشطة'}
+              {showOwnerCircle ? (userEmail || session?.user_email || '') : 'جلسة عمل نشطة'}
             </p>
           </div>
         </div>

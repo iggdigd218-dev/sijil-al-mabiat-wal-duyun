@@ -10,7 +10,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     headers: {
       'Content-Type': 'application/json',
       'x-store-id': session?.store_id || 'store-main',
-      'x-user-email': session?.user_email || 'moneerqaid950@gmail.com',
+      'x-user-email': session?.user_email || '',
       'x-device-id': session?.device_id || 'DEV-LOCAL',
       ...(options?.headers || {}),
     },

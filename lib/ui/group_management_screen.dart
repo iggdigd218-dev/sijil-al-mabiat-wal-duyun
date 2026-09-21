@@ -15,6 +15,8 @@ import '../core/theme.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
 import '../data/sync/cloud_join.dart';
+import '../data/sync/firebase_auth_service.dart';
+import '../data/sync/google_auth_service.dart';
 import 'cloud_sync_section.dart';
 import 'devices_screen.dart' show DeviceCard;
 import 'trial_ui.dart' show SeatUsageBadge;
@@ -106,9 +108,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
       if (firstId.isNotEmpty) {
         // تحقق هل الجهاز أصبح مقترناً فعلاً؟
         final dev = await db.query('devices',
-            where: 'id = ? AND is_paired = 1',
-            whereArgs: [firstId],
-            limit: 1);
+            where: 'id = ? AND is_paired = 1', whereArgs: [firstId], limit: 1);
         if (dev.isNotEmpty) {
           _recentlyApproved.add(firstId);
           // (إصلاح حرج 2026-09-18 — سباق الموافقة/الاختفاء) الحذف الفوري
@@ -185,13 +185,23 @@ class _State extends ConsumerState<GroupManagementScreen> {
               IconButton(
                 tooltip: 'إضافة جهاز جديد',
                 icon: const Icon(Icons.add_link),
-                onPressed: () => _showPairHub(context),
+                // (3.70.0) بوابة الأمان: حساب Google موثق شرط للربط.
+                onPressed: () async {
+                  if (await _ensureGoogleLinked(context) && context.mounted) {
+                    _showPairHub(context);
+                  }
+                },
               ),
             ],
           ),
           body: const _DevicesTab(),
           floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showPairHub(context),
+            // (3.70.0) بوابة الأمان: حساب Google موثق شرط للربط.
+            onPressed: () async {
+              if (await _ensureGoogleLinked(context) && context.mounted) {
+                _showPairHub(context);
+              }
+            },
             icon: const Icon(Icons.qr_code_2),
             label: const Text('إضافة جهاز جديد'),
           ),
@@ -238,6 +248,72 @@ class _State extends ConsumerState<GroupManagementScreen> {
     if (context.mounted) {
       bump(ref);
       showSnack(context, '✅ حُذف $done من ${ids.length} جهاز مطرود نهائياً.');
+    }
+  }
+
+  /// (3.70.0 — بوابة الأمان) حظر توليد رموز الدعوة (QR/PIN) أو إضافة
+  /// أجهزة إلا إذا كان حساب Google موثقاً في جدول google_auth — مع مسار
+  /// تسجيل فوري من داخل البوابة نفسها.
+  Future<bool> _ensureGoogleLinked(BuildContext context) async {
+    try {
+      final db = await ref.read(repoProvider).database;
+      final r = await db.query('google_auth', where: 'id = 1', limit: 1);
+      if (r.isNotEmpty && '${r.first['google_id'] ?? ''}'.trim().isNotEmpty) {
+        return true;
+      }
+    } catch (_) {}
+    if (!context.mounted) return false;
+    final signIn = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('بوابة الأمان — حساب Google مطلوب'),
+        content: const Text(
+          'لحماية مجموعتك، إنشاء رموز الدعوة (QR/PIN) وربط الأجهزة متاح '
+          'فقط بعد توثيق حساب Google للمنشأة.\n\n'
+          'سجّل الدخول بحساب Google الآن للمتابعة.',
+          style: TextStyle(height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.login_rounded, size: 18),
+            label: const Text('تسجيل الدخول بـ Google'),
+          ),
+        ],
+      ),
+    );
+    if (signIn != true || !context.mounted) return false;
+    try {
+      final repo = ref.read(repoProvider);
+      final db = await repo.database;
+      final res = await GoogleAuthService(db).signIn();
+      final gu = res.user;
+      if (gu == null) {
+        if (context.mounted) {
+          showSnack(context, res.error ?? 'تعذّر تسجيل الدخول', error: true);
+        }
+        return false;
+      }
+      // تبادل التوكن مع Firebase لتثبيت الجلسة السحابية المعتمدة.
+      final tok = gu.idToken ?? '';
+      if (tok.isNotEmpty) {
+        final acc = await FirebaseAuthRest.signInWithGoogleIdToken(tok);
+        if (acc != null) {
+          await FirebaseAuthRest.saveSession(repo, acc);
+          await FirebaseAuthRest.initSilentAuth(repo);
+        }
+      }
+      bump(ref);
+      return true;
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر توثيق الحساب: $e', error: true);
+      }
+      return false;
     }
   }
 
@@ -346,20 +422,20 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                   const Text('الصلاحيات التفصيلية',
                       style: TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
-                    for (final p in kPerms)
-                      CheckboxListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        value: perms.contains(p.key),
-                        title: Text(p.label),
-                        onChanged: (v) => setDlg(() {
-                          if (v == true) {
-                            perms.add(p.key);
-                          } else {
-                            perms.remove(p.key);
-                          }
-                        }),
-                      ),
+                  for (final p in kPerms)
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: perms.contains(p.key),
+                      title: Text(p.label),
+                      onChanged: (v) => setDlg(() {
+                        if (v == true) {
+                          perms.add(p.key);
+                        } else {
+                          perms.remove(p.key);
+                        }
+                      }),
+                    ),
                 ],
               ),
             ),
@@ -447,200 +523,204 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                   // قائمة أجهزة المجموعة — القائمة لأجهزة الأعضاء فقط.
                   for (final d in list)
                     if (d['id'] != ownId)
-                    DeviceCard(
-                      data: d,
-                      users: (usersAsync.valueOrNull ?? const <AppUser>[])
-                          .cast<AppUser>(),
-                      isSelf: d['id'] == ownId,
-                      isOwnerDevice: d['id'] == hostId,
-                      amITheOwner: amITheOwner,
-                      onAssign: (uid) async {
-                        await repo.assignDeviceUser(d['id'] as String, uid);
-                        await engine.broadcastRosterChange();
-                        safeBump();
-                      },
-                      // (دفعة 51) تعديل الدور مباشرة من البطاقة: يضبط دور
-                      // مستخدم الجهاز وصلاحياته الافتراضية ويبثّها فوراً.
-                      onRoleChanged: amITheOwner
-                          ? (role) async {
-                              await repo.setDevicePermissions(
-                                d['id'] as String,
-                                role,
-                                defaultPerms(role)
-                                    .entries
-                                    .where((e) => e.value)
-                                    .map((e) => e.key)
-                                    .toSet(),
-                              );
-                              await engine.broadcastRosterChange();
-                              Sfx.success();
-                              safeBump();
-                            }
-                          : null,
-                      onPermissions: () async {
-                        await _editDevicePermissions(context, ref, d);
-                        safeBump();
-                      },
-                      // (دفعة 56) حذف نهائي من السجل لبطاقة مطرودة/محظورة.
-                      onPurge: () async {
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'حذف نهائي من السجل',
-                          message:
-                              'سيُمحى سجل "${d['name']}" نهائياً من قائمة '
-                              'الأجهزة هنا ومن السحابة (roster + شواهد الطرد). '
-                              'لا يمكن التراجع — إعادة ربط الجهاز لاحقاً تتم '
-                              'بدعوة جديدة كأي جهاز جديد.',
-                          confirmText: 'حذف نهائي',
-                          danger: true,
-                        );
-                        if (ok != true) return;
-                        try {
-                          await engine.purgeDeviceRecordEverywhere(
-                              d['id'] as String);
-                          Sfx.success();
-                          safeBump();
-                        } catch (e) {
-                          Sfx.error();
-                          if (context.mounted) {
-                            showSnack(context, 'تعذّر الحذف: $e', error: true);
-                          }
-                        }
-                      },
-                      onRename: () async {
-                        final name = await promptDialog(
-                          context,
-                          title: 'إعادة تسمية الجهاز',
-                          initial: (d['name'] ?? '') as String,
-                          label: 'اسم الجهاز',
-                        );
-                        if (name == null || name.trim().isEmpty) return;
-                        await repo.renameDevice(d['id'] as String, name.trim());
-                        safeBump();
-                      },
-                      onRevoke: () async {
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'حظر الجهاز',
-                          message:
-                              'سيُمنع "${d['name']}" من المزامنة حتى إعادة السماح.',
-                          confirmText: 'حظر',
-                          danger: true,
-                        );
-                        if (ok == true) {
-                          await repo.revokeDevice(d['id'] as String);
-                          // (دفعة 54) الحظر أيضاً يبث شاهدة الطرد: الجهاز
-                          // المحظور يُقصى لحظياً ويعود لوضع مستقل.
-                          await engine.broadcastEviction(d['id'] as String);
-                          try {
-                            await engine.broadcastRosterChange();
-                          } catch (_) {}
-                          safeBump();
-                        }
-                      },
-                      onRestore: () async {
-                        await repo.restoreDevice(d['id'] as String);
-                        // (دفعة 54) حذف شاهدة الطرد وإلا أقصى الجهازُ
-                        // المستعاد نفسَه عند فحصه القادم.
-                        await engine.clearEvictionBroadcast(d['id'] as String);
-                        try {
+                      DeviceCard(
+                        data: d,
+                        users: (usersAsync.valueOrNull ?? const <AppUser>[])
+                            .cast<AppUser>(),
+                        isSelf: d['id'] == ownId,
+                        isOwnerDevice: d['id'] == hostId,
+                        amITheOwner: amITheOwner,
+                        onAssign: (uid) async {
+                          await repo.assignDeviceUser(d['id'] as String, uid);
                           await engine.broadcastRosterChange();
-                        } catch (_) {}
-                        safeBump();
-                      },
-                      onExpel: () async {
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'طرد الجهاز',
-                          message:
-                              'سيُطرد "${d['name']}" من المجموعة ويمسح بياناته عند أول اتصال.',
-                          confirmText: 'طرد',
-                          danger: true,
-                        );
-                        if (ok == true) {
-                          await repo.expelDevice(d['id'] as String);
-                          // (دفعة 54) بروتوكول الطرد النشط: شاهدة صريحة في
-                          // /evictions + حذف عقدته من /roster — تصل
-                          // المستهدف لحظياً عبر قناته المخصصة.
-                          await engine.broadcastEviction(d['id'] as String,
-                              reason: 'expelled_by_manager');
-                          // بث تغيير السجل لبقية الأجهزة (LAN + roster).
+                          safeBump();
+                        },
+                        // (دفعة 51) تعديل الدور مباشرة من البطاقة: يضبط دور
+                        // مستخدم الجهاز وصلاحياته الافتراضية ويبثّها فوراً.
+                        onRoleChanged: amITheOwner
+                            ? (role) async {
+                                await repo.setDevicePermissions(
+                                  d['id'] as String,
+                                  role,
+                                  defaultPerms(role)
+                                      .entries
+                                      .where((e) => e.value)
+                                      .map((e) => e.key)
+                                      .toSet(),
+                                );
+                                await engine.broadcastRosterChange();
+                                Sfx.success();
+                                safeBump();
+                              }
+                            : null,
+                        onPermissions: () async {
+                          await _editDevicePermissions(context, ref, d);
+                          safeBump();
+                        },
+                        // (دفعة 56) حذف نهائي من السجل لبطاقة مطرودة/محظورة.
+                        onPurge: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'حذف نهائي من السجل',
+                            message:
+                                'سيُمحى سجل "${d['name']}" نهائياً من قائمة '
+                                'الأجهزة هنا ومن السحابة (roster + شواهد الطرد). '
+                                'لا يمكن التراجع — إعادة ربط الجهاز لاحقاً تتم '
+                                'بدعوة جديدة كأي جهاز جديد.',
+                            confirmText: 'حذف نهائي',
+                            danger: true,
+                          );
+                          if (ok != true) return;
+                          try {
+                            await engine
+                                .purgeDeviceRecordEverywhere(d['id'] as String);
+                            Sfx.success();
+                            safeBump();
+                          } catch (e) {
+                            Sfx.error();
+                            if (context.mounted) {
+                              showSnack(context, 'تعذّر الحذف: $e',
+                                  error: true);
+                            }
+                          }
+                        },
+                        onRename: () async {
+                          final name = await promptDialog(
+                            context,
+                            title: 'إعادة تسمية الجهاز',
+                            initial: (d['name'] ?? '') as String,
+                            label: 'اسم الجهاز',
+                          );
+                          if (name == null || name.trim().isEmpty) return;
+                          await repo.renameDevice(
+                              d['id'] as String, name.trim());
+                          safeBump();
+                        },
+                        onRevoke: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'حظر الجهاز',
+                            message:
+                                'سيُمنع "${d['name']}" من المزامنة حتى إعادة السماح.',
+                            confirmText: 'حظر',
+                            danger: true,
+                          );
+                          if (ok == true) {
+                            await repo.revokeDevice(d['id'] as String);
+                            // (دفعة 54) الحظر أيضاً يبث شاهدة الطرد: الجهاز
+                            // المحظور يُقصى لحظياً ويعود لوضع مستقل.
+                            await engine.broadcastEviction(d['id'] as String);
+                            try {
+                              await engine.broadcastRosterChange();
+                            } catch (_) {}
+                            safeBump();
+                          }
+                        },
+                        onRestore: () async {
+                          await repo.restoreDevice(d['id'] as String);
+                          // (دفعة 54) حذف شاهدة الطرد وإلا أقصى الجهازُ
+                          // المستعاد نفسَه عند فحصه القادم.
+                          await engine
+                              .clearEvictionBroadcast(d['id'] as String);
                           try {
                             await engine.broadcastRosterChange();
                           } catch (_) {}
                           safeBump();
-                        }
-                      },
-                      onTransferOwner: () async {
-                        // (صمام أمان) فحص جاهزية المستلم قبل التسليم —
-                        // جهاز قديم/غائب يُنبَّه عنه قبل نقل الملكية.
-                        final warnings = await repo
-                            .transferReadinessCheck(d['id'] as String);
-                        if (!context.mounted) return;
-                        final warnBlock = warnings.isEmpty
-                            ? ''
-                            : '⚠️ تحذيرات الجاهزية:\n'
-                                '${warnings.map((w) => '• $w').join('\n')}\n\n';
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'تسليم الإدارة',
-                          message: '$warnBlock'
-                              'سيصبح "${d['name']}" هو المدير وتصبح أنت عضوًا.',
-                          confirmText: 'تسليم',
-                          danger: true,
-                        );
-                        if (ok == true) {
-                          try {
-                            await repo.transferOwnership(d['id'] as String);
+                        },
+                        onExpel: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'طرد الجهاز',
+                            message:
+                                'سيُطرد "${d['name']}" من المجموعة ويمسح بياناته عند أول اتصال.',
+                            confirmText: 'طرد',
+                            danger: true,
+                          );
+                          if (ok == true) {
+                            await repo.expelDevice(d['id'] as String);
+                            // (دفعة 54) بروتوكول الطرد النشط: شاهدة صريحة في
+                            // /evictions + حذف عقدته من /roster — تصل
+                            // المستهدف لحظياً عبر قناته المخصصة.
+                            await engine.broadcastEviction(d['id'] as String,
+                                reason: 'expelled_by_manager');
+                            // بث تغيير السجل لبقية الأجهزة (LAN + roster).
+                            try {
+                              await engine.broadcastRosterChange();
+                            } catch (_) {}
+                            safeBump();
+                          }
+                        },
+                        onTransferOwner: () async {
+                          // (صمام أمان) فحص جاهزية المستلم قبل التسليم —
+                          // جهاز قديم/غائب يُنبَّه عنه قبل نقل الملكية.
+                          final warnings = await repo
+                              .transferReadinessCheck(d['id'] as String);
+                          if (!context.mounted) return;
+                          final warnBlock = warnings.isEmpty
+                              ? ''
+                              : '⚠️ تحذيرات الجاهزية:\n'
+                                  '${warnings.map((w) => '• $w').join('\n')}\n\n';
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'تسليم الإدارة',
+                            message: '$warnBlock'
+                                'سيصبح "${d['name']}" هو المدير وتصبح أنت عضوًا.',
+                            confirmText: 'تسليم',
+                            danger: true,
+                          );
+                          if (ok == true) {
+                            try {
+                              await repo.transferOwnership(d['id'] as String);
+                              safeBump();
+                              if (context.mounted) {
+                                showSnack(context, '✅ تم تسليم الإدارة.');
+                                Navigator.of(context)
+                                    .popUntil((r) => r.isFirst);
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                showSnack(context, 'تعذّر: $e', error: true);
+                              }
+                            }
+                          }
+                        },
+                        onResetSecret: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'إعادة تعيين مفتاح الجهاز',
+                            message: 'سيفقد الجهاز الاتصال حتى يعيد الاقتران.',
+                            confirmText: 'إعادة التعيين',
+                            danger: true,
+                          );
+                          if (ok == true) {
+                            final s =
+                                await repo.resetDeviceSecret(d['id'] as String);
                             safeBump();
                             if (context.mounted) {
-                              showSnack(context, '✅ تم تسليم الإدارة.');
-                              Navigator.of(context).popUntil((r) => r.isFirst);
-                            }
-                          } catch (e) {
-                            if (context.mounted) {
-                              showSnack(context, 'تعذّر: $e', error: true);
-                            }
-                          }
-                        }
-                      },
-                      onResetSecret: () async {
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'إعادة تعيين مفتاح الجهاز',
-                          message: 'سيفقد الجهاز الاتصال حتى يعيد الاقتران.',
-                          confirmText: 'إعادة التعيين',
-                          danger: true,
-                        );
-                        if (ok == true) {
-                          final s =
-                              await repo.resetDeviceSecret(d['id'] as String);
-                          safeBump();
-                          if (context.mounted) {
-                            showDialog(
-                              context: context,
-                              builder: (c) => AlertDialog(
-                                title: const Text('المفتاح الجديد'),
-                                content: SelectableText(
-                                  s,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 12,
+                              showDialog(
+                                context: context,
+                                builder: (c) => AlertDialog(
+                                  title: const Text('المفتاح الجديد'),
+                                  content: SelectableText(
+                                    s,
+                                    style: const TextStyle(
+                                      fontFamily: 'monospace',
+                                      fontSize: 12,
+                                    ),
                                   ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(c),
+                                      child: const Text('تم'),
+                                    ),
+                                  ],
                                 ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(c),
-                                    child: const Text('تم'),
-                                  ),
-                                ],
-                            ),
-                          );
+                              );
+                            }
                           }
-                        }
-                      },
-                      onCloudLink: () => showCloudInviteDialog(context, ref),
-                    ),
+                        },
+                        onCloudLink: () => showCloudInviteDialog(context, ref),
+                      ),
                 ],
               ),
             );
@@ -651,7 +731,6 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
   }
 }
 
-
 // ═══════════════════════════ نافذة الربط الموحدة ════════════════════════════
 class _PairHubSheet extends ConsumerStatefulWidget {
   const _PairHubSheet();
@@ -660,7 +739,6 @@ class _PairHubSheet extends ConsumerStatefulWidget {
 }
 
 class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
-
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
@@ -725,7 +803,6 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
       ),
     );
   }
-
 }
 
 class _HubTile extends StatelessWidget {
@@ -820,183 +897,185 @@ Future<void> showJoinApprovalSheet(
     return; // نافذة مفتوحة بالفعل لنفس الطلب — لا تكرار
   }
   try {
-  // (دفعة 58 — متطلب 11) طلب مغادرة عضو يمر من نفس القناة بوسم kind=leave
-  // — له حوار خاص (موافقة = طرد نظيف، رفض = بقاء العضو).
-  if ('${request['kind'] ?? ''}' == 'leave') {
-    return showLeaveApprovalDialog(context, ref, request,
-        backendUrl: backendUrl);
-  }
-  final repo = ref.read(repoProvider);
-  final engine = ref.read(syncEngineProvider);
-  final ws = (workspaceId != null && workspaceId.trim().isNotEmpty)
-      ? workspaceId.trim()
-      : repo.requireWorkspaceId;
-  final deviceId = '${request['deviceId'] ?? ''}';
-  final deviceName = '${request['deviceName'] ?? 'جهاز جديد'}';
-  final fp = '${request['fingerprint'] ?? ''}';
-  final platform = '${request['platform'] ?? ''}';
-  var role = UserRole.accountant;
-  // (دفعة 65) قفل الموافقة: يمنع النقر المتكرر ويُظهر تقدماً واضحاً.
-  var approving = false;
-  Sfx.notify();
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    isDismissible: false,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setSheet) => SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              18, 18, 18, 18 + MediaQuery.viewInsetsOf(ctx).bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0EA5E9).withValues(alpha: .14),
-                      borderRadius: BorderRadius.circular(12),
+    // (دفعة 58 — متطلب 11) طلب مغادرة عضو يمر من نفس القناة بوسم kind=leave
+    // — له حوار خاص (موافقة = طرد نظيف، رفض = بقاء العضو).
+    if ('${request['kind'] ?? ''}' == 'leave') {
+      return showLeaveApprovalDialog(context, ref, request,
+          backendUrl: backendUrl);
+    }
+    final repo = ref.read(repoProvider);
+    final engine = ref.read(syncEngineProvider);
+    final ws = (workspaceId != null && workspaceId.trim().isNotEmpty)
+        ? workspaceId.trim()
+        : repo.requireWorkspaceId;
+    final deviceId = '${request['deviceId'] ?? ''}';
+    final deviceName = '${request['deviceName'] ?? 'جهاز جديد'}';
+    final fp = '${request['fingerprint'] ?? ''}';
+    final platform = '${request['platform'] ?? ''}';
+    var role = UserRole.accountant;
+    // (دفعة 65) قفل الموافقة: يمنع النقر المتكرر ويُظهر تقدماً واضحاً.
+    var approving = false;
+    Sfx.notify();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                18, 18, 18, 18 + MediaQuery.viewInsetsOf(ctx).bottom),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0EA5E9).withValues(alpha: .14),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.devices_other,
+                          color: Color(0xFF0EA5E9)),
                     ),
-                    child: const Icon(Icons.devices_other,
-                        color: Color(0xFF0EA5E9)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('طلب انضمام جهاز جديد',
-                            style: TextStyle(
-                                fontSize: 15.5, fontWeight: FontWeight.w800)),
-                        Text(
-                          deviceName,
-                          style: const TextStyle(
-                              fontSize: 13.5, fontWeight: FontWeight.w700),
-                        ),
-                      ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('طلب انضمام جهاز جديد',
+                              style: TextStyle(
+                                  fontSize: 15.5, fontWeight: FontWeight.w800)),
+                          Text(
+                            deviceName,
+                            style: const TextStyle(
+                                fontSize: 13.5, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                // (دفعة 56) وسم منصة نظيف بدل القيمة الخام.
-                'الجهاز: ${switch (platform) {
-                  'android' => 'Android',
-                  'ios' => 'iPhone',
-                  'windows' => 'Windows',
-                  'linux' => 'Linux',
-                  'macos' => 'Mac',
-                  _ => 'جهاز',
-                }}${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
-                style: TextStyle(
-                    fontSize: 11.5, color: AppColors.text3Of(ctx)),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<UserRole>(
-                initialValue: role,
-                decoration: const InputDecoration(
-                  labelText: 'الدور والصلاحيات',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+                  ],
                 ),
-                items: [
-                  for (final r in UserRole.values)
-                    if (r != UserRole.admin)
-                      DropdownMenuItem(
-                          value: r, child: Text('${r.icon} ${r.label}')),
-                ],
-                onChanged: (v) =>
-                    setSheet(() => role = v ?? UserRole.accountant),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red),
-                      icon: const Icon(Icons.close),
-                      label: const Text('رفض'),
-                      onPressed: () async {
-                        try {
-                          await CloudJoin.rejectJoinRequest(repo,
-                              backendUrl: backendUrl,
-                              deviceId: deviceId,
-                              workspaceId: ws);
-                        } catch (_) {}
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      },
-                    ),
+                const SizedBox(height: 10),
+                Text(
+                  // (دفعة 56) وسم منصة نظيف بدل القيمة الخام.
+                  'الجهاز: ${switch (platform) {
+                    'android' => 'Android',
+                    'ios' => 'iPhone',
+                    'windows' => 'Windows',
+                    'linux' => 'Linux',
+                    'macos' => 'Mac',
+                    _ => 'جهاز',
+                  }}${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
+                  style:
+                      TextStyle(fontSize: 11.5, color: AppColors.text3Of(ctx)),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<UserRole>(
+                  initialValue: role,
+                  decoration: const InputDecoration(
+                    labelText: 'الدور والصلاحيات',
+                    border: OutlineInputBorder(),
+                    isDense: true,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton.icon(
-                      icon: approving
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.check_circle_outline),
-                      label: Text(approving ? 'جارٍ التفعيل…' : 'قبول وتفعيل'),
-                      // (دفعة 65) الزر كان بلا قفل وبلا مؤشر: الموافقة
-                      // سلسلة كتابات سحابية متتابعة، فبدا ميتاً فينقره
-                      // المدير مراراً فتتضاعف الموافقات. الآن: قفل +
-                      // مؤشر تقدم + مهلة قصوى + رسالة خطأ واضحة.
-                      onPressed: approving
-                          ? null
-                          : () async {
-                              setSheet(() => approving = true);
-                              try {
-                                await CloudJoin.approveJoinRequest(repo,
-                                        backendUrl: backendUrl,
-                                        deviceId: deviceId,
-                                        deviceName: deviceName,
-                                        roleCode: role.code,
-                                        workspaceId: ws)
-                                    .timeout(kCloudOpTimeout);
-                                await engine.broadcastRosterChange();
-                                Sfx.pair();
-                                if (ctx.mounted) Navigator.pop(ctx);
-                                return;
-                              } on TimeoutException catch (_) {
-                                if (ctx.mounted) {
-                                  showSnack(
-                                      ctx,
-                                      'انتهت مهلة الاتصال '
-                                      '(${kCloudOpTimeout.inSeconds} ثانية) — '
-                                      'تحقّق من الشبكة ثم أعد المحاولة.',
-                                      error: true);
-                                }
-                              } catch (e) {
-                                if (ctx.mounted) {
-                                  showSnack(ctx, 'تعذّر القبول: $e',
-                                      error: true);
-                                }
-                              }
-                              if (ctx.mounted) setSheet(() => approving = false);
-                            },
+                  items: [
+                    for (final r in UserRole.values)
+                      if (r != UserRole.admin)
+                        DropdownMenuItem(
+                            value: r, child: Text('${r.icon} ${r.label}')),
+                  ],
+                  onChanged: (v) =>
+                      setSheet(() => role = v ?? UserRole.accountant),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red),
+                        icon: const Icon(Icons.close),
+                        label: const Text('رفض'),
+                        onPressed: () async {
+                          try {
+                            await CloudJoin.rejectJoinRequest(repo,
+                                backendUrl: backendUrl,
+                                deviceId: deviceId,
+                                workspaceId: ws);
+                          } catch (_) {}
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        },
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: FilledButton.icon(
+                        icon: approving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : const Icon(Icons.check_circle_outline),
+                        label:
+                            Text(approving ? 'جارٍ التفعيل…' : 'قبول وتفعيل'),
+                        // (دفعة 65) الزر كان بلا قفل وبلا مؤشر: الموافقة
+                        // سلسلة كتابات سحابية متتابعة، فبدا ميتاً فينقره
+                        // المدير مراراً فتتضاعف الموافقات. الآن: قفل +
+                        // مؤشر تقدم + مهلة قصوى + رسالة خطأ واضحة.
+                        onPressed: approving
+                            ? null
+                            : () async {
+                                setSheet(() => approving = true);
+                                try {
+                                  await CloudJoin.approveJoinRequest(repo,
+                                          backendUrl: backendUrl,
+                                          deviceId: deviceId,
+                                          deviceName: deviceName,
+                                          roleCode: role.code,
+                                          workspaceId: ws)
+                                      .timeout(kCloudOpTimeout);
+                                  await engine.broadcastRosterChange();
+                                  Sfx.pair();
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                  return;
+                                } on TimeoutException catch (_) {
+                                  if (ctx.mounted) {
+                                    showSnack(
+                                        ctx,
+                                        'انتهت مهلة الاتصال '
+                                        '(${kCloudOpTimeout.inSeconds} ثانية) — '
+                                        'تحقّق من الشبكة ثم أعد المحاولة.',
+                                        error: true);
+                                  }
+                                } catch (e) {
+                                  if (ctx.mounted) {
+                                    showSnack(ctx, 'تعذّر القبول: $e',
+                                        error: true);
+                                  }
+                                }
+                                if (ctx.mounted) {
+                                  setSheet(() => approving = false);
+                                }
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
   } finally {
     _activeJoinDialogKeys.remove(dialogKey);
   }
 }
-
 
 /// (دفعة 58 — متطلب 11) حوار موافقة المدير على طلب مغادرة عضو:
 /// الموافقة تنفّذ فك ارتباط نظيفاً كاملاً (طرد محلي + بث شاهدة سحابية

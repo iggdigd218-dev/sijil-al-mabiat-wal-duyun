@@ -54,7 +54,8 @@ export function App() {
   const [isLoading, setIsLoading] = useState(false);
   const initialSession = getAuthSession();
   const [authSession, setAuthSessionState] = useState<AuthSession>(initialSession);
-  const [userEmail, setUserEmail] = useState<string>(initialSession.user_email || 'moneerqaid950@gmail.com');
+  // (3.70.0 — Security) لا بريد شخصي مثبّت: الهوية من الجلسة الفعلية فقط.
+  const [userEmail, setUserEmail] = useState<string>(initialSession.user_email || '');
 
   const { canViewReports, isAdmin, isActive } = usePermissions();
 
@@ -530,7 +531,7 @@ export function App() {
       <LogoutSecurityModal
         isOpen={isLogoutSecurityModalOpen}
         onClose={() => setIsLogoutSecurityModalOpen(false)}
-        isAdmin={isAdmin || authSession.role === 'admin' || userEmail === 'moneerqaid950@gmail.com'}
+        isAdmin={isAdmin || authSession.role === 'admin'}
         userEmail={userEmail}
         userName={authSession.user_name || 'المدير'}
         userRole={authSession.role || (isAdmin ? 'admin' : 'staff')}

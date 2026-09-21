@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,6 +11,7 @@ import '../core/accounting.dart';
 import '../core/desktop.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
+import '../core/media_paths.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/sync/device_registry.dart';
@@ -91,25 +94,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
   AppScreen _screen = AppScreen.dashboard;
 
-  /// سطح المكتب يقلع مباشرة على نقطة البيع (مركز القيادة الأساسي) —
-  /// يُحسم مرة واحدة عند أول قياس للشاشة.
-  bool _landingDecided = false;
+  // (3.70.0) لوحة التحكم مثبّتة كأول شاشة دائمة على كل المنصات —
+  // عند الإقلاع وبعد تجاوز شاشة القفل (أُلغي الإقلاع المباشر على POS).
 
   /// الشريط الجانبي المكتبي: مطوي (أيقونات) أو موسّع (أيقونات + عناوين).
   bool _railExtended = true;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_landingDecided) {
-      _landingDecided = true;
-      // منصة سطح مكتب حقيقية (خارج بيئة الاختبار): الإقلاع على POS.
-      if (isRealDesktop &&
-          MediaQuery.sizeOf(context).width > kDesktopBreakpoint) {
-        _screen = AppScreen.pos;
-      }
-    }
-  }
   Future<SyncStatusInfo>? _syncFuture;
   Timer? _syncTimer;
   bool _updatePrompted = false;
@@ -122,6 +112,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   // يظهر فوق كل شيء لحظة وصول الطلب، لا فقط داخل شاشة إدارة المجموعة.
   JoinRequestWatcher? _globalJoinWatcher;
   bool _joinSheetShowing = false;
+
   /// (منع تكرار الحوار) مفاتيح طلبات الانضمام التي عُرض حوارها واكتمل
   /// اتخاذ قرار فيها خلال هذه الجلسة — فلا يُعاد فتح نفس الحوار لنفس
   /// الجهاز عند كل نبضة SSE، ويبقى الطلب الجديد (بمفتاح مختلف) ظاهراً.
@@ -151,8 +142,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (raw.isEmpty) return;
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return;
-      final cutoff =
-          DateTime.now().millisecondsSinceEpoch - _handledJoinTtl.inMilliseconds;
+      final cutoff = DateTime.now().millisecondsSinceEpoch -
+          _handledJoinTtl.inMilliseconds;
       for (final e in decoded.entries) {
         final at = (e.value as num?)?.toInt() ?? 0;
         if (at >= cutoff) _handledJoinRequests['${e.key}'] = at;
@@ -311,24 +302,33 @@ class _HomeShellState extends ConsumerState<HomeShell>
           },
           child: Row(
             children: [
-              const Icon(Icons.notifications_active,
-                  color: Colors.white, size: 20),
+              const Icon(
+                Icons.notifications_active,
+                color: Colors.white,
+                size: 20,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 13)),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
                     if (body.isNotEmpty)
-                      Text(body,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11.5)),
+                      Text(
+                        body,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11.5),
+                      ),
                   ],
                 ),
               ),
@@ -367,8 +367,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
             : (tx.accountId == null ? null : await repo.account(tx.accountId!));
         final toAcc = tx.toId == null ? null : await repo.account(tx.toId!);
         if (!mounted) return true;
-        await showTxDetails(context, ref,
-            tx: tx, account: acc, toAccount: toAcc);
+        await showTxDetails(
+          context,
+          ref,
+          tx: tx,
+          account: acc,
+          toAccount: toAcc,
+        );
         return true;
       case 'account':
         _go(AppScreen.accounts);
@@ -459,11 +464,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(SnackBar(
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 3),
-          content: Text('تم اكتمال المزامنة مع $deviceName ✅'),
-        ));
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+            content: Text('تم اكتمال المزامنة مع $deviceName ✅'),
+          ),
+        );
     };
     // «نافذة الخطر»: تباين خطير محتمل في السجلات — بانر مثبّت أعلى
     // الشاشة يتكرر مع كل فحص حتى تُستعاد سلامة المزامنة، ثم يُزال.
@@ -597,8 +604,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // للمساحات المنفردة والمجموعات على حد سواء.
       try {
         if (await repo.isWorkspaceOwner()) {
-          await CloudJoin.ensureOwnerMembership(repo,
-              backendUrl: url, workspaceId: ws);
+          await CloudJoin.ensureOwnerMembership(
+            repo,
+            backendUrl: url,
+            workspaceId: ws,
+          );
         }
       } catch (_) {}
       // (الاسترداد السيادي) تسجيل منشئ المساحة بأثر رجعي عند الإقلاع:
@@ -607,15 +617,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
       try {
         if (await repo.isWorkspaceOwner() &&
             await repo.workspaceMode() != 'standalone') {
-          await CloudJoin.registerCreatorIfAbsent(repo,
-              backendUrl: url,
-              workspaceId: ws,
-              deviceId: repo.requireDeviceId);
+          await CloudJoin.registerCreatorIfAbsent(
+            repo,
+            backendUrl: url,
+            workspaceId: ws,
+            deviceId: repo.requireDeviceId,
+          );
         } else {
           // عضو: كاش سجل المنشئ محلياً (يلزم للتحقق من creator_recovery
           // ولإظهار خيار الاسترداد على جهاز المنشئ الذي فقد الملكية).
           final creator = await CloudJoin.fetchCreatorDeviceId(
-              backendUrl: url, workspaceId: ws);
+            backendUrl: url,
+            workspaceId: ws,
+          );
           if (creator.isNotEmpty) {
             await repo.setSetting('creatorDeviceId', creator);
           }
@@ -625,8 +639,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // المسجلة قبل نظام التجربة بلا عقدة subscription — الفحص القسري
       // ينشئها تلقائياً بختم خادم (created_at = لحظة هذا الفتح،
       // expires_at = +24h) مرة واحدة فقط، ثم لا تُعاد تهيئتها أبداً.
-      final sub = await SubscriptionGuard.check(repo,
-          backendUrl: url, workspaceId: ws, force: true);
+      final sub = await SubscriptionGuard.check(
+        repo,
+        backendUrl: url,
+        workspaceId: ws,
+        force: true,
+      );
       if (!mounted || sub.status == 'none') return;
       // (أ) الترحيب — مرة واحدة فقط.
       if (sub.status == 'trial' &&
@@ -687,8 +705,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
     try {
       final repo = ref.read(repoProvider);
       if (!await repo.isWorkspaceOwner()) return;
-      final reqs = await CloudJoin.fetchJoinRequests(repo,
-          backendUrl: url, workspaceId: ws);
+      final reqs = await CloudJoin.fetchJoinRequests(
+        repo,
+        backendUrl: url,
+        workspaceId: ws,
+      );
       if (reqs.isEmpty || !mounted || _joinSheetShowing) return;
       // (منع تكرار الحوار) تجاوز كل طلب سُوّي أمره في هذه الجلسة.
       final next = reqs.firstWhere(
@@ -700,12 +721,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
       _joinSheetShowing = true;
       try {
         // فوق أي شاشة: نستخدم سياق جذر الملاحة لا سياق الشاشة الحالية.
-        final rootCtx =
-            Navigator.of(context, rootNavigator: true).context;
+        final rootCtx = Navigator.of(context, rootNavigator: true).context;
         // (الجلسة قد تُغلق أثناء الفجوة غير المتزامنة) حراسة السياق نفسه.
         if (!rootCtx.mounted) return;
-        await showJoinApprovalSheet(rootCtx, ref, next,
-            backendUrl: url, workspaceId: ws);
+        await showJoinApprovalSheet(
+          rootCtx,
+          ref,
+          next,
+          backendUrl: url,
+          workspaceId: ws,
+        );
         // اكتمل الحوار (قبول أو رفض) — لا نعيد فتحه لهذا الطلب،
         // ولا بعد إعادة تشغيل التطبيق (السجل محفوظ مع مهلة 6 ساعات).
         _handledJoinRequests[key] = DateTime.now().millisecondsSinceEpoch;
@@ -738,8 +763,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // ملاحظات البيان تخص أحدث إصدار منشور — نعرضها فقط إن كانت نسختنا
     // هي ذاتها الأحدث (ترقية اكتملت للتو). وإلا نكتفي بالتسجيل.
     final latest = info.latest;
-    final isCurrentRelease =
-        latest != null && '${latest.major}.${latest.minor}.${latest.patch}' == kAppVersion;
+    final isCurrentRelease = latest != null &&
+        '${latest.major}.${latest.minor}.${latest.patch}' == kAppVersion;
     await repo.setSetting('whatsNewSeenVersion', kAppVersion);
     if (!isCurrentRelease || info.notes.trim().isEmpty) return;
     if (!mounted) return;
@@ -769,7 +794,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
           return;
         }
         await repo.setSetting(
-            'lastUpdatePrompt', DateTime.now().toIso8601String());
+          'lastUpdatePrompt',
+          DateTime.now().toIso8601String(),
+        );
       }
       if (!mounted) return;
       await showUpdateDialog(context, ref, info);
@@ -816,15 +843,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (!mounted) return;
       if (info.hasUpdate) {
         Sfx.notify();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 8),
-          content: Text(
-              '🚀 يتوفر إصدار أحدث: ${info.latest} — التحديث من الإعدادات'),
-          action: SnackBarAction(
-            label: 'فتح',
-            onPressed: () => _go(AppScreen.settings),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text(
+              '🚀 يتوفر إصدار أحدث: ${info.latest} — التحديث من الإعدادات',
+            ),
+            action: SnackBarAction(
+              label: 'فتح',
+              onPressed: () => _go(AppScreen.settings),
+            ),
           ),
-        ));
+        );
       }
     } catch (_) {
       // صامت — لا نزعج المستخدم بفشل فحص خلفي.
@@ -841,59 +871,64 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final syncing = _dangerSyncing;
     messenger
       ..hideCurrentMaterialBanner()
-      ..showMaterialBanner(MaterialBanner(
-        backgroundColor: AppColors.dangerOf(context).withValues(alpha: .1),
-        leading: syncing
-            ? SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.4,
+      ..showMaterialBanner(
+        MaterialBanner(
+          backgroundColor: AppColors.dangerOf(context).withValues(alpha: .1),
+          leading: syncing
+              ? SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    color: AppColors.dangerOf(context),
+                  ),
+                )
+              : Icon(
+                  Icons.warning_amber_rounded,
                   color: AppColors.dangerOf(context),
                 ),
-              )
-            : Icon(Icons.warning_amber_rounded,
-                color: AppColors.dangerOf(context)),
-        content: Text(
-          syncing ? 'جارٍ إعادة المحاولة ودفع العمليات المعلّقة…' : message,
-          style: TextStyle(
-            color: AppColors.dangerOf(context),
-            fontWeight: FontWeight.w700,
-            fontSize: 13,
-            height: 1.5,
+          content: Text(
+            syncing ? 'جارٍ إعادة المحاولة ودفع العمليات المعلّقة…' : message,
+            style: TextStyle(
+              color: AppColors.dangerOf(context),
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              height: 1.5,
+            ),
           ),
+          actions: [
+            // الحل المباشر: مزامنة فورية من قلب البانر مع سبينر أثناء العمل.
+            TextButton.icon(
+              onPressed: syncing ? null : () => _dangerRetryNow(messenger),
+              icon: const Icon(Icons.sync_rounded, size: 18),
+              label: const Text('إعادة المحاولة والمزامنة فوراً'),
+            ),
+            TextButton(
+              onPressed: syncing
+                  ? null
+                  : () {
+                      messenger.hideCurrentMaterialBanner();
+                      _dangerShown = false;
+                      _go(AppScreen.syncOps);
+                    },
+              child: const Text('فحص الحالة'),
+            ),
+            TextButton(
+              onPressed: syncing
+                  ? null
+                  : () {
+                      // غفوة 30 دقيقة: البانر يعود تلقائياً إن بقي الخطر قائماً.
+                      _dangerSnoozedUntil = DateTime.now().add(
+                        const Duration(minutes: 30),
+                      );
+                      messenger.hideCurrentMaterialBanner();
+                      _dangerShown = false;
+                    },
+              child: const Text('إخفاء'),
+            ),
+          ],
         ),
-        actions: [
-          // الحل المباشر: مزامنة فورية من قلب البانر مع سبينر أثناء العمل.
-          TextButton.icon(
-            onPressed: syncing ? null : () => _dangerRetryNow(messenger),
-            icon: const Icon(Icons.sync_rounded, size: 18),
-            label: const Text('إعادة المحاولة والمزامنة فوراً'),
-          ),
-          TextButton(
-            onPressed: syncing
-                ? null
-                : () {
-                    messenger.hideCurrentMaterialBanner();
-                    _dangerShown = false;
-                    _go(AppScreen.syncOps);
-                  },
-            child: const Text('فحص الحالة'),
-          ),
-          TextButton(
-            onPressed: syncing
-                ? null
-                : () {
-                    // غفوة 30 دقيقة: البانر يعود تلقائياً إن بقي الخطر قائماً.
-                    _dangerSnoozedUntil =
-                        DateTime.now().add(const Duration(minutes: 30));
-                    messenger.hideCurrentMaterialBanner();
-                    _dangerShown = false;
-                  },
-            child: const Text('إخفاء'),
-          ),
-        ],
-      ));
+      );
   }
 
   /// زر «إعادة المحاولة والمزامنة فوراً»: يصفّر backoff ويدفع كل المعلّق
@@ -909,9 +944,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       _showDangerBanner(messenger, '');
     }
     try {
-      await engine
-          .triggerImmediateSync()
-          .timeout(const Duration(seconds: 45));
+      await engine.triggerImmediateSync().timeout(const Duration(seconds: 45));
     } catch (_) {
       // فشل/مهلة: يبقى الخطر قائماً وسيُعاد بثه بالدورة التالية.
     } finally {
@@ -975,9 +1008,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
     // (قانون 2026-09-19) الزر العائم «إجراء سريع» كما كان: يفتح ورقة
     // الخيارات (عملية، سند، حساب، نقطة بيع) بدل نموذج مباشر.
-    return _MarkedOperationFab(
-      onPressed: _quickActionSheet,
-    );
+    return _MarkedOperationFab(onPressed: _quickActionSheet);
   }
 
   /// ورقة الإجراء السريع من زر Omni على الرئيسية: أكثر 4 مهام تكراراً
@@ -1051,10 +1082,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _lastBackTap = now;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(const SnackBar(
-        content: Text('اضغط رجوع مرة أخرى للخروج من التطبيق'),
-        duration: Duration(seconds: 2),
-      ));
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('اضغط رجوع مرة أخرى للخروج من التطبيق'),
+          duration: Duration(seconds: 2),
+        ),
+      );
   }
 
   /// الشريط الجانبي المكتبي (Navigation Rail) — يحل محل الشريط السفلي
@@ -1068,12 +1101,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final entries = <(AppScreen, IconData, String)>[
       (AppScreen.pos, Icons.point_of_sale_outlined, 'نقطة البيع'),
       (AppScreen.accounts, Icons.menu_book_outlined, 'دفتر الحسابات والديون'),
-      (AppScreen.transactions, Icons.receipt_long_outlined,
-          'سجل الفواتير اليومية'),
+      (
+        AppScreen.transactions,
+        Icons.receipt_long_outlined,
+        'سجل الفواتير اليومية',
+      ),
       (AppScreen.inventory, Icons.inventory_2_outlined, 'المخزون والأصناف'),
       if (!standalone)
-        (AppScreen.syncOps, Icons.cloud_sync_outlined,
-            'حالة المزامنة والأجهزة'),
+        (
+          AppScreen.syncOps,
+          Icons.cloud_sync_outlined,
+          'حالة المزامنة والأجهزة',
+        ),
       (AppScreen.settings, Icons.settings_outlined, 'الإعدادات'),
     ];
     final selectedIdx =
@@ -1100,9 +1139,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 alignment: AlignmentDirectional.centerStart,
                 child: IconButton(
                   tooltip: _railExtended ? 'طيّ الشريط' : 'توسيع الشريط',
-                  icon: Icon(_railExtended
-                      ? Icons.menu_open_rounded
-                      : Icons.menu_rounded),
+                  icon: Icon(
+                    _railExtended
+                        ? Icons.menu_open_rounded
+                        : Icons.menu_rounded,
+                  ),
                   onPressed: () =>
                       setState(() => _railExtended = !_railExtended),
                 ),
@@ -1186,7 +1227,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                   UserRole.accountant => (
                       'محاسب',
                       Colors.blue,
-                      Icons.calculate
+                      Icons.calculate,
                     ),
                   UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
                   UserRole.viewer => (
@@ -1468,7 +1509,9 @@ class _BottomItem extends StatelessWidget {
                 boxShadow: selected
                     ? [
                         BoxShadow(
-                          color: const Color(0xFF0284C7).withValues(alpha: 0.35),
+                          color: const Color(
+                            0xFF0284C7,
+                          ).withValues(alpha: 0.35),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
@@ -1518,7 +1561,9 @@ class _BottomItem extends StatelessWidget {
                 fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                 color: selected
                     ? (isDark ? Colors.white : const Color(0xFF0284C7))
-                    : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                    : (isDark
+                        ? const Color(0xFF94A3B8)
+                        : const Color(0xFF64748B)),
                 fontFamily: 'Tajawal',
               ),
             ),
@@ -1582,7 +1627,11 @@ class _MarkedReceiptIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (selected) {
-      return const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 21);
+      return const Icon(
+        Icons.receipt_long_rounded,
+        color: Colors.white,
+        size: 21,
+      );
     }
     return Container(
       width: 20,
@@ -1636,7 +1685,11 @@ class _MarkedBellIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (selected) {
-      return const Icon(Icons.notifications_rounded, color: Colors.white, size: 22);
+      return const Icon(
+        Icons.notifications_rounded,
+        color: Colors.white,
+        size: 22,
+      );
     }
     return const Icon(
       Icons.notifications_rounded,
@@ -1747,13 +1800,11 @@ class _RailTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         child: Container(
           decoration: BoxDecoration(
-            color: selected
-                ? primary.withValues(alpha: 0.1)
-                : Colors.transparent,
+            color:
+                selected ? primary.withValues(alpha: 0.1) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1767,8 +1818,7 @@ class _RailTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,
-                      fontWeight:
-                          selected ? FontWeight.w800 : FontWeight.w600,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                       color: color,
                     ),
                   ),
@@ -1790,10 +1840,14 @@ class _Drawer extends ConsumerWidget {
 
   /// المستخدم يحدد اسم جهازه بنفسه — يظهر أعلى القائمة الجانبية والرئيسية.
   Future<void> _renameSelf(
-      BuildContext context, WidgetRef ref, String currentName) async {
+    BuildContext context,
+    WidgetRef ref,
+    String currentName,
+  ) async {
     Sfx.click();
     final ctl = TextEditingController(
-        text: currentName == 'مدير الحسابات' ? '' : currentName);
+      text: currentName == 'مدير الحسابات' ? '' : currentName,
+    );
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1835,6 +1889,95 @@ class _Drawer extends ConsumerWidget {
     }
   }
 
+  /// (3.70.0) قسم في الدرج: عنوان صغير بارز + بلاطات الشاشات المسموحة
+  /// (تصفية الصلاحيات/الوضع من _DrawerItems + بوابة Google للمجموعة).
+  List<Widget> _drawerSection(
+    BuildContext context,
+    String title,
+    List<AppScreen> order,
+    List<AppScreen> items,
+    bool googleLinked,
+    AppScreen current,
+    bool dark,
+    void Function(AppScreen) onSelect,
+  ) {
+    final visible = order
+        .where(
+          (s) => items.contains(s) && !(s == AppScreen.group && !googleLinked),
+        )
+        .toList();
+    if (visible.isEmpty) return const [];
+    return [
+      Builder(
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: Text(
+            title,
+            style: TextStyle(
+              color: AppColors.text3Of(ctx),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: .2,
+            ),
+          ),
+        ),
+      ),
+      for (final s in visible)
+        _DrawerTile(
+          screen: s,
+          active: current == s,
+          color: _colorOf(s),
+          dark: dark,
+          onTap: () {
+            Navigator.pop(context);
+            scheduleMicrotask(() => onSelect(s));
+          },
+        ),
+    ];
+  }
+
+  /// (3.70.0) اختيار صورة الملف الشخصي من المعرض — تُحفظ محلياً داخل
+  /// مجلد التطبيق ويحدَّث photo_url في google_auth إن وُجد صف.
+  Future<void> _pickProfilePhoto(BuildContext context, WidgetRef ref) async {
+    Sfx.click();
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final repo = ref.read(repoProvider);
+      String dest = picked.path;
+      try {
+        final docs = await MediaPaths.ensureDocsDir();
+        if (docs != null) {
+          dest = '$docs/profile_photo.jpg';
+          await File(picked.path).copy(dest);
+        }
+      } catch (_) {}
+      await repo.setSetting('account.photoPath', dest);
+      try {
+        final db = await repo.database;
+        await db.update(
+            'google_auth',
+            {
+              'photo_url': dest,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            where: 'id = 1');
+      } catch (_) {}
+      ref.invalidate(drawerPhotoProvider);
+      bump(ref);
+      Sfx.pop();
+    } catch (e) {
+      if (context.mounted) {
+        showSnack(context, 'تعذّر تحديث الصورة: $e', error: true);
+      }
+    }
+  }
+
   /// لون مميز لكل قسم (كما في التصميم المرجعي).
   Color _colorOf(AppScreen s) => switch (s) {
         AppScreen.dashboard => const Color(0xFF2563EB),
@@ -1858,10 +2001,14 @@ class _Drawer extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider).valueOrNull;
     final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
-    final wsMode =
-        ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
-    final items =
-        _DrawerItems.of(user: user, isOwner: isOwner, workspaceMode: wsMode);
+    final wsMode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+    final items = _DrawerItems.of(
+      user: user,
+      isOwner: isOwner,
+      workspaceMode: wsMode,
+    );
+    // (3.70.0) «إدارة المجموعة» مشروطة بحساب Google موثّق (جدول google_auth).
+    final googleLinked = ref.watch(googleLinkedProvider).valueOrNull ?? false;
     final dark = Theme.of(context).brightness == Brightness.dark;
 
     return Drawer(
@@ -1889,16 +2036,53 @@ class _Drawer extends ConsumerWidget {
                 children: [
                   Row(
                     children: [
-                      Container(
-                        width: 54,
-                        height: 54,
-                        decoration: BoxDecoration(
-                          color: Colors.white24,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white38, width: 2),
-                        ),
-                        child: const Icon(Icons.person,
-                            color: Colors.white, size: 30),
+                      // (3.70.0) صورة الملف الشخصي: photo_url من google_auth
+                      // أو صورة مختارة محلياً — نقرة = تغيير من المعرض،
+                      // وأيقونة افتراضية عند غياب الصورة/الشبكة.
+                      Consumer(
+                        builder: (ctx, rref, _) {
+                          final photo =
+                              rref.watch(drawerPhotoProvider).valueOrNull ?? '';
+                          const fallback = Icon(
+                            Icons.person,
+                            color: Colors.white,
+                            size: 30,
+                          );
+                          final Widget face = photo.startsWith('http')
+                              ? Image.network(
+                                  photo,
+                                  width: 54,
+                                  height: 54,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => fallback,
+                                )
+                              : (photo.isNotEmpty
+                                  ? Image.file(
+                                      File(photo),
+                                      width: 54,
+                                      height: 54,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => fallback,
+                                    )
+                                  : fallback);
+                          return InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => _pickProfilePhoto(ctx, rref),
+                            child: Container(
+                              width: 54,
+                              height: 54,
+                              decoration: BoxDecoration(
+                                color: Colors.white24,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white38,
+                                  width: 2,
+                                ),
+                              ),
+                              child: ClipOval(child: face),
+                            ),
+                          );
+                        },
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1939,8 +2123,11 @@ class _Drawer extends ConsumerWidget {
                                           _renameSelf(ctx, rref, label),
                                       child: const Padding(
                                         padding: EdgeInsets.all(3),
-                                        child: Icon(Icons.edit_outlined,
-                                            size: 15, color: Colors.white70),
+                                        child: Icon(
+                                          Icons.edit_outlined,
+                                          size: 15,
+                                          color: Colors.white70,
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -1948,29 +2135,52 @@ class _Drawer extends ConsumerWidget {
                               },
                             ),
                             const SizedBox(height: 2),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: .18),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                user == null
-                                    ? 'المدير'
-                                    : '${user.role.icon} ${user.role.label}',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 11),
-                              ),
+                            // (3.70.0) الشارة الرسمية: «المدير العام» للمنشأة
+                            // و«متجر مستقل» للحساب الفردي.
+                            Consumer(
+                              builder: (ctx, rref, _) {
+                                final st =
+                                    rref.watch(settingsProvider).valueOrNull ??
+                                        const <String, String>{};
+                                final acctType =
+                                    (st['account.type'] ?? '').trim();
+                                final individual = acctType == 'individual' ||
+                                    (acctType.isEmpty &&
+                                        wsMode == 'standalone');
+                                final badge = individual
+                                    ? 'متجر مستقل'
+                                    : ((isOwner ||
+                                            user?.role == UserRole.admin ||
+                                            user?.role == UserRole.agent)
+                                        ? 'المدير العام'
+                                        : 'عضو في منشأة');
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: .18),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    badge,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                             // (3.70 — المرحلة 6) البريد وبيانات المنشأة داخل
                             // الترويسة العلوية — للمدير والحساب الفردي فقط.
                             Consumer(
                               builder: (ctx, rref, _) {
-                                final st = rref
-                                        .watch(settingsProvider)
-                                        .valueOrNull ??
-                                    const <String, String>{};
+                                final st =
+                                    rref.watch(settingsProvider).valueOrNull ??
+                                        const <String, String>{};
                                 final acctType =
                                     (st['account.type'] ?? '').trim();
                                 final individual = acctType == 'individual' ||
@@ -1979,10 +2189,9 @@ class _Drawer extends ConsumerWidget {
                                 if (!isOwner && !individual) {
                                   return const SizedBox.shrink();
                                 }
-                                final email = (st['account.email'] ??
-                                        user?.email ??
-                                        '')
-                                    .trim();
+                                final email =
+                                    (st['account.email'] ?? user?.email ?? '')
+                                        .trim();
                                 final biz = (st['businessName'] ?? '').trim();
                                 if (email.isEmpty && biz.isEmpty) {
                                   return const SizedBox.shrink();
@@ -2031,32 +2240,54 @@ class _Drawer extends ConsumerWidget {
             // ---------- عناصر القائمة ----------
             Expanded(
               child: ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 children: [
-                  // اختصار الرئيسية دائمًا في الأعلى (كما الصورة).
-                  if (!items.contains(AppScreen.dashboard))
-                    _DrawerTile(
-                      screen: AppScreen.dashboard,
-                      active: current == AppScreen.dashboard,
-                      color: _colorOf(AppScreen.dashboard),
-                      dark: dark,
-                      onTap: () {
-                        Navigator.pop(context);
-                        scheduleMicrotask(() => onSelect(AppScreen.dashboard));
-                      },
-                    ),
-                  for (final s in items)
-                    _DrawerTile(
-                      screen: s,
-                      active: current == s,
-                      color: _colorOf(s),
-                      dark: dark,
-                      onTap: () {
-                        Navigator.pop(context);
-                        scheduleMicrotask(() => onSelect(s));
-                      },
-                    ),
+                  // (3.70.0) أقسام مصنّفة — بلا لوحة تحكم (رئيسية ثابتة).
+                  ..._drawerSection(
+                    context,
+                    'العمليات اليومية',
+                    const [AppScreen.pos, AppScreen.transactions],
+                    items,
+                    googleLinked,
+                    current,
+                    dark,
+                    onSelect,
+                  ),
+                  ..._drawerSection(
+                    context,
+                    'السجلات والمالية',
+                    const [
+                      AppScreen.accounts,
+                      AppScreen.vouchers,
+                      AppScreen.inventory,
+                      AppScreen.reports,
+                    ],
+                    items,
+                    googleLinked,
+                    current,
+                    dark,
+                    onSelect,
+                  ),
+                  ..._drawerSection(
+                    context,
+                    'المنشأة والنظام',
+                    const [
+                      AppScreen.group,
+                      AppScreen.currencies,
+                      AppScreen.backup,
+                      AppScreen.trash,
+                      AppScreen.activity,
+                      AppScreen.settings,
+                    ],
+                    items,
+                    googleLinked,
+                    current,
+                    dark,
+                    onSelect,
+                  ),
                 ],
               ),
             ),
@@ -2075,13 +2306,17 @@ class _Drawer extends ConsumerWidget {
                     );
                     final ok = await canLaunchUrl(uri);
                     if (ok) {
-                      await launchUrl(uri,
-                          mode: LaunchMode.externalApplication);
+                      await launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      );
                     }
                   },
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
                     child: Row(
                       children: [
                         Container(
@@ -2091,8 +2326,11 @@ class _Drawer extends ConsumerWidget {
                             color: const Color(0xFF25D366),
                             borderRadius: BorderRadius.circular(11),
                           ),
-                          child: const Icon(Icons.support_agent_rounded,
-                              color: Colors.white, size: 22),
+                          child: const Icon(
+                            Icons.support_agent_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         const Expanded(
@@ -2105,8 +2343,11 @@ class _Drawer extends ConsumerWidget {
                             ),
                           ),
                         ),
-                        const Icon(Icons.chat_bubble_outline_rounded,
-                            color: Color(0xFF128C4B), size: 20),
+                        const Icon(
+                          Icons.chat_bubble_outline_rounded,
+                          color: Color(0xFF128C4B),
+                          size: 20,
+                        ),
                       ],
                     ),
                   ),
@@ -2117,8 +2358,10 @@ class _Drawer extends ConsumerWidget {
             if (wsMode != 'standalone' &&
                 (isOwner || user?.role == UserRole.agent))
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 3,
+                ),
                 child: Material(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(14),
@@ -2130,11 +2373,16 @@ class _Drawer extends ConsumerWidget {
                     },
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       child: Row(
                         children: [
-                          Icon(Icons.fact_check_outlined,
-                              color: AppColors.text2Of(context), size: 20),
+                          Icon(
+                            Icons.fact_check_outlined,
+                            color: AppColors.text2Of(context),
+                            size: 20,
+                          ),
                           const SizedBox(width: 12),
                           Text(
                             'طلبات خروج الموظفين',
@@ -2164,11 +2412,16 @@ class _Drawer extends ConsumerWidget {
                   },
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
                     child: Row(
                       children: [
-                        Icon(Icons.logout_rounded,
-                            color: AppColors.dangerOf(context), size: 22),
+                        Icon(
+                          Icons.logout_rounded,
+                          color: AppColors.dangerOf(context),
+                          size: 22,
+                        ),
                         const SizedBox(width: 12),
                         Text(
                           'تسجيل الخروج',
@@ -2186,9 +2439,13 @@ class _Drawer extends ConsumerWidget {
             ),
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Text(appVersionLabel,
-                  style: TextStyle(
-                      fontSize: 10.5, color: AppColors.text3Of(context))),
+              child: Text(
+                appVersionLabel,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: AppColors.text3Of(context),
+                ),
+              ),
             ),
           ],
         ),
@@ -2235,20 +2492,26 @@ class _DrawerTile extends StatelessWidget {
                 // أيقونة الدردشة تحمل شارة عدد الرسائل غير المقروءة —
                 // المكان الرسمي لإشعار الرسائل داخل التطبيق.
                 if (screen == AppScreen.chat)
-                  Consumer(builder: (ctx, rref, _) {
-                    final n = rref.watch(unreadChatProvider).valueOrNull ?? 0;
-                    return Badge(
-                      isLabelVisible: n > 0,
-                      label: Text('$n'),
-                      child: Icon(active ? screen.activeIcon : screen.icon,
+                  Consumer(
+                    builder: (ctx, rref, _) {
+                      final n = rref.watch(unreadChatProvider).valueOrNull ?? 0;
+                      return Badge(
+                        isLabelVisible: n > 0,
+                        label: Text('$n'),
+                        child: Icon(
+                          active ? screen.activeIcon : screen.icon,
                           color: active ? AppColors.infoOf(context) : color,
-                          size: 22),
-                    );
-                  })
+                          size: 22,
+                        ),
+                      );
+                    },
+                  )
                 else
-                  Icon(active ? screen.activeIcon : screen.icon,
-                      color: active ? AppColors.infoOf(context) : color,
-                      size: 22),
+                  Icon(
+                    active ? screen.activeIcon : screen.icon,
+                    color: active ? AppColors.infoOf(context) : color,
+                    size: 22,
+                  ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
@@ -2279,8 +2542,12 @@ class _DrawerItems {
     required bool isOwner,
     String workspaceMode = 'standalone',
   }) =>
-      AppScreen.values
-          .where((s) {
+      AppScreen.values.where((s) {
+        // (3.70.0) لوحة التحكم لم تعد عنصر قائمة — هي الشاشة الرئيسية
+        // الثابتة عند الإقلاع وبعد القفل (تُفتح من زر الرئيسية/الشعار).
+        if (s == AppScreen.dashboard) {
+          return false;
+        }
         final standalone = workspaceMode == 'standalone';
         // العزل الكامل للوضع المستقل: لا دردشة ولا إدارة مجموعة —
         // الجهاز الفردي لا يرى أي أثر للشبكات. الترقية من الإعدادات.

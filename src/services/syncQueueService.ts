@@ -4,13 +4,15 @@ import { SyncQueueItem, SyncQueueStats, AuthSession, SyncAction } from '../types
 const AUTH_STORAGE_KEY = 'nexora_auth_session';
 const DEVICE_STORAGE_KEY = 'nexora_device_id';
 
-// Default initial session
+// (3.70.0 — Security) Default session is fail-closed: no hardcoded personal
+// email and no implicit admin role. Admin rights come strictly from a real
+// login (users.role === 'admin') and the user_permissions table.
 const DEFAULT_SESSION: AuthSession = {
-  user_email: 'moneerqaid950@gmail.com',
+  user_email: '',
   store_id: 'store-main',
   device_id: 'DEV-WEB-MAIN',
-  user_name: 'المدير العام',
-  role: 'admin',
+  user_name: 'مستخدم الويب',
+  role: 'staff',
   logged_in_at: Date.now(),
 };
 
@@ -157,7 +159,7 @@ export async function enqueueSyncOperation(
   const queueItem: SyncQueueItem = {
     queue_id: uuidv4(),
     store_id: params.store_id || session.store_id || 'store-main',
-    user_email: params.user_email || session.user_email || 'moneerqaid950@gmail.com',
+    user_email: params.user_email || session.user_email || '',
     device_id: params.device_id || session.device_id || getDeviceId(),
     table_name: params.table_name,
     record_id: String(params.record_id),

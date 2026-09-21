@@ -109,8 +109,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// (استرداد طارئ — 1) المالك الحالي يعيد الإدارة للمالك السابق طواعية
   /// بنقرة واحدة — يعمل حتى لو كانت أزرار الإدارة الأخرى لا تظهر.
-  Future<void> _handbackOwnership(
-      BuildContext context, String prevName) async {
+  Future<void> _handbackOwnership(BuildContext context, String prevName) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -197,8 +196,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       bump(ref);
       Sfx.success();
       if (context.mounted) {
-        showSnack(context,
-            '✅ استُردت ملكية مساحة العمل — أنت المدير من جديد.');
+        showSnack(context, '✅ استُردت ملكية مساحة العمل — أنت المدير من جديد.');
       }
     } catch (e) {
       if (context.mounted) {
@@ -487,8 +485,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         final canEditOrg = wsMode == 'standalone' || wsOwner;
         // (دفعة 58 — متطلب 8) الإعدادات الحساسة (المزامنة/قاعدة البيانات)
         // للمالك أو من دوره «مدير» فقط — تُخفى تماماً عن بقية الأدوار.
-        final userRole =
-            ref.watch(deviceRoleProvider).valueOrNull?.role;
+        final userRole = ref.watch(deviceRoleProvider).valueOrNull?.role;
         final canSensitive = canEditOrg || userRole == UserRole.admin;
         // (دفعة 65) نوع الحساب: فردي أم مؤسسة. توافق خلفي — من لا يملك
         // المفتاح (مستخدم سابق) يُستنتج نوعه من نمط مساحة العمل بدل أن
@@ -498,720 +495,870 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ? storedType
             : (wsMode == 'standalone' ? 'individual' : 'enterprise');
         final isIndividual = accountType != 'enterprise';
-        return Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 120),
-              children: [
-                const SectionTitle('الإعدادات'),
-                const SizedBox(height: 6),
-                // (استرداد طارئ — 1) «إرجاع الإدارة للمالك السابق»: بطاقة
-                // بارزة أعلى الإعدادات على جهاز المالك الحالي (المستلم في
-                // تسليم سابق) — مقصودة خارج أقسام الإدارة حتى تظهر حتى لو
-                // تعطلت واجهات الإدارة على الأجهزة القديمة (أندرويد 7).
-                if (ref.watch(handbackTargetProvider).valueOrNull
-                    case final String prevName) ...[
-                  Card(
-                    color: const Color(0xFFB45309).withValues(alpha: .08),
-                    child: ListTile(
-                      leading: const Icon(Icons.assignment_return_outlined,
-                          color: Color(0xFFB45309)),
-                      title: const Text(
-                        'إرجاع إدارة مساحة العمل للمالك السابق',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+        // (3.70.0 — إعادة التصميم) تبويبات وبطاقات نقر مستقلة مصنّفة —
+        // بلا قوائم منسدلة متداخلة (ExpansionTile) إطلاقاً.
+        return DefaultTabController(
+          length: 6,
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  Material(
+                    color: AppColors.surfaceOf(context),
+                    child: SafeArea(
+                      bottom: false,
+                      child: TabBar(
+                        isScrollable: true,
+                        tabAlignment: TabAlignment.start,
+                        labelColor: AppColors.primaryOf(context),
+                        unselectedLabelColor: AppColors.text2Of(context),
+                        indicatorColor: AppColors.primaryOf(context),
+                        dividerColor: AppColors.borderOf(context),
+                        labelStyle: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 12.5),
+                        unselectedLabelStyle: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 12.5),
+                        tabs: const [
+                          Tab(
+                              icon: Icon(Icons.business_outlined, size: 19),
+                              text: 'المنشأة'),
+                          Tab(
+                              icon: Icon(Icons.palette_outlined, size: 19),
+                              text: 'المظهر والخطوط'),
+                          Tab(
+                              icon: Icon(Icons.receipt_long_outlined, size: 19),
+                              text: 'الفواتير والبيع'),
+                          Tab(
+                              icon: Icon(Icons.lock_outline, size: 19),
+                              text: 'الأمان والنسخ'),
+                          Tab(
+                              icon: Icon(Icons.hub_outlined, size: 19),
+                              text: 'النظام والمزامنة'),
+                          Tab(
+                              icon: Icon(Icons.warning_amber_rounded, size: 19),
+                              text: 'منطقة الخطر'),
+                        ],
                       ),
-                      subtitle: Text(
-                        'أنت المدير الحالي بعد تسليم سابق. بنقرة واحدة '
-                        'تعود الإدارة إلى «$prevName» ويصله إشعار فوري.',
-                        style:
-                            const TextStyle(fontSize: 11.5, height: 1.5),
-                      ),
-                      trailing: const Icon(Icons.chevron_left),
-                      onTap: () => _handbackOwnership(context, prevName),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                ],
-                if (canEditOrg)
-                _Collapsible(
-                  title: 'بيانات المؤسسة',
-                  icon: Icons.business_outlined,
-                  color: const Color(0xFF2563EB),
-                  children: [
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          children: [
-                            for (final f in _orgFields)
-                              _Field(
-                                controller: _ctrls[f.$1]!,
-                                label: f.$2,
-                                icon: f.$3,
-                                keyboard: f.$4,
-                                maxLines: f.$5,
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        // [بطاقة بيانات المنشأة]
+                        _tabPage([
+                          if (canEditOrg)
+                            _Collapsible(
+                              title: 'بيانات المؤسسة',
+                              icon: Icons.business_outlined,
+                              color: const Color(0xFF2563EB),
+                              children: [
+                                Card(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(14),
+                                    child: Column(
+                                      children: [
+                                        for (final f in _orgFields)
+                                          _Field(
+                                            controller: _ctrls[f.$1]!,
+                                            label: f.$2,
+                                            icon: f.$3,
+                                            keyboard: f.$4,
+                                            maxLines: f.$5,
+                                          ),
+                                        const Divider(height: 24),
+                                        Align(
+                                          alignment:
+                                              AlignmentDirectional.centerStart,
+                                          child: Text(
+                                            'شعار المؤسسة',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall,
+                                          ),
+                                        ),
+                                        if (_hasLogo) ...[
+                                          const SizedBox(height: 10),
+                                          Align(
+                                            alignment: AlignmentDirectional
+                                                .centerStart,
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              child: Image.file(
+                                                File(_logoPath),
+                                                width: 96,
+                                                height: 96,
+                                                fit: BoxFit.contain,
+                                                errorBuilder: (_, __, ___) =>
+                                                    Container(
+                                                  width: 96,
+                                                  height: 96,
+                                                  color: AppColors.surface2Of(
+                                                      context),
+                                                  alignment: Alignment.center,
+                                                  child: Icon(
+                                                    Icons.broken_image_outlined,
+                                                    color: AppColors.text3Of(
+                                                        context),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 10),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: OutlinedButton.icon(
+                                                onPressed: _logoBusy
+                                                    ? null
+                                                    : _pickLogo,
+                                                icon: _logoBusy
+                                                    ? const SizedBox(
+                                                        width: 16,
+                                                        height: 16,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                        ),
+                                                      )
+                                                    : const Icon(
+                                                        Icons.image_outlined),
+                                                label: Text(
+                                                  _hasLogo
+                                                      ? 'استبدال الشعار'
+                                                      : 'اختيار صورة',
+                                                ),
+                                              ),
+                                            ),
+                                            if (_hasLogo) ...[
+                                              const SizedBox(width: 8),
+                                              IconButton(
+                                                tooltip: 'حذف الشعار',
+                                                onPressed: _logoBusy
+                                                    ? null
+                                                    : _removeLogo,
+                                                icon: Icon(
+                                                  Icons.delete_outline,
+                                                  color: AppColors.dangerOf(
+                                                      context),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                        const SizedBox(height: 12),
+                                        SizedBox(
+                                          width: double.infinity,
+                                          child: FilledButton.icon(
+                                            onPressed:
+                                                _saving ? null : _saveAll,
+                                            icon: _saving
+                                                ? const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Colors.white,
+                                                    ),
+                                                  )
+                                                : const Icon(
+                                                    Icons.save_outlined),
+                                            label: Text(
+                                              _saving
+                                                  ? 'جارٍ الحفظ…'
+                                                  : 'حفظ البيانات',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          const SizedBox(height: 18),
+                          _Collapsible(
+                            title: 'العملة والترقيم',
+                            icon: Icons.currency_exchange,
+                            color: const Color(0xFF0D9488),
+                            children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.currency_exchange),
+                                title: const Text('العملة الافتراضية'),
+                                subtitle: Text(st['defaultCurrency'] ?? 'YER'),
+                                trailing: const Icon(Icons.chevron_left),
+                                onTap: () async {
+                                  final v = await showModalBottomSheet<String>(
+                                    context: context,
+                                    builder: (_) => SafeArea(
+                                      child: ListView(
+                                        shrinkWrap: true,
+                                        children: [
+                                          for (final c in currencies)
+                                            ListTile(
+                                              title: Text(
+                                                  '${c.symbol}  ${c.name}'),
+                                              onTap: () => Navigator.pop(
+                                                  context, c.code),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                  if (v != null) {
+                                    await ref
+                                        .read(repoProvider)
+                                        .setSetting('defaultCurrency', v);
+                                    bump(ref);
+                                  }
+                                },
                               ),
-                            const Divider(height: 24),
-                            Align(
-                              alignment: AlignmentDirectional.centerStart,
-                              child: Text(
-                                'شعار المؤسسة',
-                                style: Theme.of(context).textTheme.titleSmall,
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                        ]),
+                        // [بطاقة المظهر والخطوط]
+                        _tabPage([
+                          Card(
+                            child: ListTile(
+                              leading: const Icon(Icons.palette_outlined),
+                              title: const Text('المظهر والأصوات'),
+                              subtitle: const Text(
+                                  'السمة، إخفاء الأرصدة، حجم الخط، الأصوات والاهتزاز'),
+                              trailing: const Icon(Icons.chevron_left),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                    builder: (_) => const AppearanceScreen()),
                               ),
                             ),
-                            if (_hasLogo) ...[
-                              const SizedBox(height: 10),
-                              Align(
-                                alignment: AlignmentDirectional.centerStart,
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.file(
-                                    File(_logoPath),
-                                    width: 96,
-                                    height: 96,
-                                    fit: BoxFit.contain,
-                                    errorBuilder: (_, __, ___) => Container(
-                                      width: 96,
-                                      height: 96,
-                                      color: AppColors.surface2Of(context),
-                                      alignment: Alignment.center,
-                                      child: Icon(
-                                        Icons.broken_image_outlined,
-                                        color: AppColors.text3Of(context),
+                          ),
+                          const SizedBox(height: 18),
+                          const Card(
+                            child: ListTile(
+                              leading: Icon(Icons.font_download_outlined),
+                              title: Text('الخطوط'),
+                              subtitle: Text(
+                                'خط الواجهة والنسخ: Tajawal — مضمّن داخل التطبيق ويعمل بلا إنترنت',
+                              ),
+                              trailing: Icon(Icons.check_circle_outline,
+                                  color: AppColors.primary),
+                            ),
+                          ),
+                        ]),
+                        // [بطاقة الفواتير ونقطة البيع]
+                        _tabPage([
+                          _Collapsible(
+                            title: 'المبيعات والسندات',
+                            icon: Icons.receipt_long_outlined,
+                            color: const Color(0xFF0EA5E9),
+                            initiallyExpanded: true,
+                            children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.swap_horiz),
+                                title: const Text('نوع العملية الافتراضي'),
+                                subtitle: const Text(
+                                  'يُختار تلقائياً عند فتح شاشة إضافة عملية',
+                                ),
+                                trailing: DropdownButton<String>(
+                                  value: st['defaultOp'] ?? 'inflow',
+                                  underline: const SizedBox.shrink(),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 'inflow',
+                                      child: Text('قبض (مبيعة/دفعة)'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'debit',
+                                      child: Text('عليه (دين آجل)'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'outflow',
+                                      child: Text('صرف'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'credit',
+                                      child: Text('له (دائن)'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'revenue',
+                                      child: Text('إيراد'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'expense',
+                                      child: Text('مصروف'),
+                                    ),
+                                  ],
+                                  onChanged: (v) async {
+                                    if (v == null) return;
+                                    await ref
+                                        .read(repoProvider)
+                                        .setSetting('defaultOp', v);
+                                    bump(ref);
+                                  },
+                                ),
+                              ),
+                              const Divider(height: 1),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                secondary:
+                                    const Icon(Icons.inventory_2_outlined),
+                                title: const Text('تنبيه انخفاض المخزون'),
+                                subtitle: const Text(
+                                  'تحذير عند بيع صنف وصل لحد إعادة الطلب',
+                                ),
+                                value: (st['warnLowStock'] ?? '1') == '1',
+                                onChanged: (v) async {
+                                  await ref.read(repoProvider).setSetting(
+                                      'warnLowStock', v ? '1' : '0');
+                                  bump(ref);
+                                },
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                secondary:
+                                    const Icon(Icons.trending_down_rounded),
+                                title: const Text(
+                                    'السماح بالبيع عند نفاد الرصيد الدفتري'),
+                                subtitle: const Text(
+                                  'تفعيل: يسمح ببيع صنف نفد رصيده (حركة سالبة مع '
+                                  'تنبيه). تعطيل: نقطة البيع تمنع الإضافة عند النفاد.',
+                                ),
+                                value: (st['allowNegativeStock'] ?? '0') == '1',
+                                onChanged: (v) async {
+                                  await ref.read(repoProvider).setSetting(
+                                      'allowNegativeStock', v ? '1' : '0');
+                                  bump(ref);
+                                },
+                              ),
+                              // القفل التاريخي للتدقيق: منع غير المدير من تعديل/حذف
+                              // سجلات مالية أقدم من المدة المحددة (0 = معطل).
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.lock_clock_outlined),
+                                title:
+                                    const Text('قفل السجلات المالية القديمة'),
+                                subtitle: Text(
+                                  (int.tryParse(st['auditLockDays'] ?? '0') ??
+                                              0) <=
+                                          0
+                                      ? 'معطل — كل السجلات قابلة للتعديل حسب الصلاحيات'
+                                      : 'السجلات الأقدم من ${st['auditLockDays']} يوماً '
+                                          'مقفلة ضد التعديل والحذف لغير المدير',
+                                ),
+                                trailing: const Icon(Icons.chevron_left),
+                                onTap: () async {
+                                  final v = await showQuickAmountPad(
+                                    context,
+                                    title: 'مدة القفل بالأيام (0 = تعطيل)',
+                                    initial: double.tryParse(
+                                        st['auditLockDays'] ?? '0'),
+                                    hint: 'مثال: 30',
+                                  );
+                                  if (v == null) return;
+                                  await ref.read(repoProvider).setSetting(
+                                      'auditLockDays',
+                                      '${v.toInt().clamp(0, 3650)}');
+                                  bump(ref);
+                                },
+                              ),
+                            ],
+                          ),
+                        ]),
+                        // [بطاقة النسخ الاحتياطي والأمان]
+                        _tabPage([
+                          _Collapsible(
+                            title: 'الأمان والخصوصية',
+                            icon: Icons.lock_outline,
+                            color: const Color(0xFFE11D48),
+                            children: [
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                secondary: const Icon(Icons.fingerprint),
+                                title: const Text('فتح التطبيق بالبصمة'),
+                                subtitle: Text(
+                                  _bioSupported
+                                      ? 'الوسائل المتاحة: $_bioLabel'
+                                      : 'غير متاحة — فعّل بصمة في إعدادات الجهاز',
+                                ),
+                                value: _bioSupported &&
+                                    (st['biometric'] ?? '0') == '1',
+                                onChanged: !_bioSupported
+                                    ? null
+                                    : (v) async {
+                                        if (v) {
+                                          final ok =
+                                              await Security.authenticate(
+                                            reason: 'أكّد بصمتك لتفعيل القفل',
+                                          );
+                                          if (!ok) {
+                                            if (context.mounted) {
+                                              showSnack(
+                                                  context, 'لم يتم التحقق');
+                                            }
+                                            return;
+                                          }
+                                        }
+                                        await ref.read(repoProvider).setSetting(
+                                            'biometric', v ? '1' : '0');
+                                        bump(ref);
+                                      },
+                              ),
+                              const Divider(height: 1),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                secondary:
+                                    const Icon(Icons.lock_clock_outlined),
+                                title: const Text('القفل عند العودة للتطبيق'),
+                                subtitle:
+                                    const Text('يُطلب التحقق بعد كل تصغير'),
+                                value: (st['autoLock'] ?? '0') == '1',
+                                onChanged: (st['biometric'] ?? '0') != '1'
+                                    ? null
+                                    : (v) async {
+                                        await ref.read(repoProvider).setSetting(
+                                            'autoLock', v ? '1' : '0');
+                                        bump(ref);
+                                      },
+                              ),
+                            ],
+                          ),
+                          // (3.70 — المرحلة 3) النسخ الاحتياطي التلقائي المجدول:
+                          // [كل ساعتين / يومياً في وقت محدد] + لقطة محلية + Drive مجاني.
+                          if (canEditOrg || isIndividual) ...[
+                            const SizedBox(height: 18),
+                            const _AutoBackupSection(),
+                          ],
+                          if (!canEditOrg) ...[
+                            _Collapsible(
+                              title: 'نسخة احتياطية محلية',
+                              icon: Icons.save_outlined,
+                              color: const Color(0xFF0D9488),
+                              children: [
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.backup_outlined),
+                                  title: const Text(
+                                      'إنشاء نسخة احتياطية محلية الآن'),
+                                  subtitle: const Text(
+                                    'تُحفظ داخل مجلد التطبيق على هذا الجهاز فقط، '
+                                    'ولا يمكن استخدامها خارج مجموعتك.',
+                                    style:
+                                        TextStyle(fontSize: 11.5, height: 1.5),
+                                  ),
+                                  trailing: const Icon(Icons.chevron_left),
+                                  onTap: () => _createLocalBackup(context),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ]),
+                        // [بطاقة إدارة النظام والمزامنة]
+                        _tabPage([
+                          // (استرداد طارئ — 1) «إرجاع الإدارة للمالك السابق»: بطاقة
+                          // بارزة أعلى الإعدادات على جهاز المالك الحالي (المستلم في
+                          // تسليم سابق) — مقصودة خارج أقسام الإدارة حتى تظهر حتى لو
+                          // تعطلت واجهات الإدارة على الأجهزة القديمة (أندرويد 7).
+                          if (ref.watch(handbackTargetProvider).valueOrNull
+                              case final String prevName) ...[
+                            Card(
+                              color: const Color(0xFFB45309)
+                                  .withValues(alpha: .08),
+                              child: ListTile(
+                                leading: const Icon(
+                                    Icons.assignment_return_outlined,
+                                    color: Color(0xFFB45309)),
+                                title: const Text(
+                                  'إرجاع إدارة مساحة العمل للمالك السابق',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                                subtitle: Text(
+                                  'أنت المدير الحالي بعد تسليم سابق. بنقرة واحدة '
+                                  'تعود الإدارة إلى «$prevName» ويصله إشعار فوري.',
+                                  style: const TextStyle(
+                                      fontSize: 11.5, height: 1.5),
+                                ),
+                                trailing: const Icon(Icons.chevron_left),
+                                onTap: () =>
+                                    _handbackOwnership(context, prevName),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          // مسار الترقية من الوضع المستقل: تفعيل المزامنة وربط أجهزة —
+                          // يفتح معالج إنشاء المجموعة (يصبح هذا الجهاز مضيفاً) دون أي
+                          // فقدان للبيانات المحلية القائمة.
+                          // (قانون 2026-09-19) إنشاء المجموعات لحساب المؤسسة فقط —
+                          // إعدادات الفردي محصورة ولا يظهر له هذا المسار إطلاقاً.
+                          if (wsMode == 'standalone' && !isIndividual) ...[
+                            const SizedBox(height: 18),
+                            _Collapsible(
+                              title: 'المزامنة وربط الأجهزة',
+                              icon: Icons.hub_outlined,
+                              color: const Color(0xFF7C3AED),
+                              children: [
+                                Card(
+                                  child: ListTile(
+                                    leading: const Icon(Icons.sync_alt_rounded,
+                                        color: Color(0xFF7C3AED)),
+                                    title: const Text(
+                                        'تفعيل المزامنة وربط أجهزة أخرى'),
+                                    subtitle: const Text(
+                                      'حوّل هذا الجهاز إلى مضيف مجموعة واربط أجهزة '
+                                      'الكاشير والمحاسبين — كل بياناتك الحالية تبقى '
+                                      'كما هي وتُزامَن للأجهزة الجديدة.',
+                                      style: TextStyle(
+                                          fontSize: 11.5, height: 1.5),
+                                    ),
+                                    trailing: const Icon(Icons.chevron_left),
+                                    onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const GroupManagementScreen(),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
-                            const SizedBox(height: 10),
-                            Row(
+                              ],
+                            ),
+                          ],
+                          // (حساب Google) هوية المؤسسة الدائمة — للمدير/المستقل فقط.
+                          // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
+                          if ((wsOwner || wsMode == 'standalone') &&
+                              !isIndividual) ...[
+                            const SizedBox(height: 18),
+                            const _Collapsible(
+                              title: 'حساب المؤسسة (Google)',
+                              icon: Icons.account_circle_outlined,
+                              color: Color(0xFF059669),
+                              children: [AccountSection()],
+                            ),
+                          ],
+                          // (الاشتراك) تفاصيل الاشتراك: للمدير فقط — حالة الترخيص
+                          // وتاريخ الانتهاء والوقت المتبقي وزر التجديد/الترقية.
+                          // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
+                          if ((wsOwner || wsMode == 'standalone') &&
+                              !isIndividual) ...[
+                            const SizedBox(height: 18),
+                            const _Collapsible(
+                              title: 'تفاصيل الاشتراك',
+                              icon: Icons.workspace_premium_outlined,
+                              color: Color(0xFF7C3AED),
+                              children: [SubscriptionDetailsSection()],
+                            ),
+                          ],
+                          // (المعمارية الصامتة) بطاقة «المزامنة السحابية (Firebase)»
+                          // التقنية أُزيلت نهائياً: الرابط الرسمي مضمّن برمجياً
+                          // والمزامنة التلقائية مثبتة دائماً في الخلفية — بقي فقط
+                          // مدخل «إدارة المجموعة / ربط الأجهزة» البسيط.
+                          if (canSensitive && !isIndividual) ...[
+                            const SizedBox(height: 18),
+                            _Collapsible(
+                              title: 'المجموعة وربط الأجهزة',
+                              icon: Icons.devices_other_outlined,
+                              color: const Color(0xFF0EA5E9),
                               children: [
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: _logoBusy ? null : _pickLogo,
-                                    icon: _logoBusy
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Icon(Icons.image_outlined),
-                                    label: Text(
-                                      _hasLogo
-                                          ? 'استبدال الشعار'
-                                          : 'اختيار صورة',
+                                // مدير/مالك: دعوة جهاز جديد لنفس مساحة العمل عبر QR/PIN.
+                                if (canEditOrg && wsMode != 'standalone' ||
+                                    (wsMode == 'standalone'))
+                                  Card(
+                                    child: ListTile(
+                                      leading: const Icon(
+                                          Icons.qr_code_2_outlined,
+                                          color: Color(0xFF0EA5E9)),
+                                      title: const Text(
+                                          'ربط جهاز جديد عبر السحابة'),
+                                      subtitle: const Text(
+                                        'اعرض رمز QR أو رمز دعوة من 6 أرقام لضم '
+                                        'جهاز جديد إلى مساحة عملك.',
+                                        style: TextStyle(
+                                            fontSize: 11.5, height: 1.5),
+                                      ),
+                                      trailing: const Icon(Icons.chevron_left),
+                                      onTap: () =>
+                                          showCloudInviteDialog(context, ref),
                                     ),
                                   ),
+                                // (قانون 2026-09-19) «الانضمام إلى مجموعة» لا يظهر
+                                // لحساب المؤسسة إطلاقاً — الانضمام للفردي فقط.
+                              ],
+                            ),
+                          ],
+                          // (قانون 2026-09-19) شريط «الترقية إلى مؤسسة» أُزيل:
+                          // إعدادات الفردي محصورة — لا مسارات مؤسسة فيها.
+                          // (دفعة 65) الحساب الفردي: خيار «الانضمام إلى مؤسسة قائمة»
+                          // يبقى متاحاً ومستقلاً لمن يرغب بالعمل تحت إدارة متجر آخر.
+                          if (isIndividual) ...[
+                            const SizedBox(height: 18),
+                            _Collapsible(
+                              title: 'الانضمام إلى مؤسسة قائمة',
+                              icon: Icons.group_add_outlined,
+                              color: const Color(0xFF7C3AED),
+                              children: [
+                                Card(
+                                  child: ListTile(
+                                    leading: const Icon(
+                                        Icons.group_add_outlined,
+                                        color: Color(0xFF7C3AED)),
+                                    title: const Text(
+                                        'الانضمام إلى مجموعة عبر السحابة'),
+                                    subtitle: const Text(
+                                      'امسح رمز QR أو أدخل رمز الدعوة — يُفعَّل بعد '
+                                      'موافقة المدير.',
+                                      style: TextStyle(
+                                          fontSize: 11.5, height: 1.5),
+                                    ),
+                                    trailing: const Icon(Icons.chevron_left),
+                                    onTap: () =>
+                                        startJoinApprovalFlow(context, ref),
+                                  ),
                                 ),
-                                if (_hasLogo) ...[
-                                  const SizedBox(width: 8),
-                                  IconButton(
-                                    tooltip: 'حذف الشعار',
-                                    onPressed: _logoBusy ? null : _removeLogo,
-                                    icon: Icon(
-                                      Icons.delete_outline,
-                                      color: AppColors.dangerOf(context),
+                              ],
+                            ),
+                          ],
+                          if (!canEditOrg) ...[
+                            // (دفعة 58 — متطلب 11) «طلب مغادرة المجموعة»: يرسل طلباً
+                            // للمدير عبر السحابة، وبعد موافقته يُفَكّ ارتباط هذا الجهاز
+                            // نظيفاً ويعود مستقلاً.
+                            const SizedBox(height: 18),
+                            _Collapsible(
+                              title: 'مغادرة المجموعة',
+                              icon: Icons.logout,
+                              color: const Color(0xFFEA580C),
+                              children: [
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.logout,
+                                      color: Color(0xFFEA580C)),
+                                  title: const Text('طلب مغادرة المجموعة'),
+                                  subtitle: const Text(
+                                    'يُرسل طلبك إلى المدير، وبعد موافقته يُفصل جهازك '
+                                    'عن المجموعة وتُحذف بياناتها من جهازك ويعود مستقلاً.',
+                                    style:
+                                        TextStyle(fontSize: 11.5, height: 1.5),
+                                  ),
+                                  trailing: const Icon(Icons.chevron_left),
+                                  onTap: () => _requestLeaveGroup(context),
+                                ),
+                              ],
+                            ),
+                            // (استرداد طارئ — 2) الاسترداد السيادي للمنشئ: هذا
+                            // الجهاز أنشأ المساحة لكنه ليس المالك حالياً — خيار
+                            // أمان دائم لاسترداد الملكية دون تدخل يدوي في Firebase.
+                            if (ref
+                                    .watch(creatorRecoveryProvider)
+                                    .valueOrNull ==
+                                true) ...[
+                              const SizedBox(height: 18),
+                              _Collapsible(
+                                title: 'استرداد ملكية مساحة العمل',
+                                icon: Icons.workspace_premium_outlined,
+                                color: const Color(0xFF7C3AED),
+                                children: [
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: const Icon(Icons.workspace_premium,
+                                        color: Color(0xFF7C3AED)),
+                                    title:
+                                        const Text('استرداد ملكية مساحة العمل'),
+                                    subtitle: const Text(
+                                      'أنت منشئ هذه المساحة. إن فقدت الإدارة لأي '
+                                      'سبب يمكنك استردادها فوراً — يُحدَّث السجل '
+                                      'السحابي وتُبثّ الاستعادة لكل الأجهزة.',
+                                      style: TextStyle(
+                                          fontSize: 11.5, height: 1.5),
+                                    ),
+                                    trailing: const Icon(Icons.chevron_left),
+                                    onTap: () => _creatorRecover(context),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            // (صمام أمان) استرجاع الإدارة: يظهر للمدير السابق فقط
+                            // خلال 24 ساعة من التسليم — ينقذ الموقف إذا تعثر تفعيل
+                            // الإدارة على الجهاز المستلم (جهاز قديم/أندرويد 7).
+                            if (ref
+                                    .watch(reclaimOwnershipProvider)
+                                    .valueOrNull ==
+                                true) ...[
+                              const SizedBox(height: 18),
+                              _Collapsible(
+                                title: 'استرجاع الإدارة (صمام الأمان)',
+                                icon: Icons.settings_backup_restore_rounded,
+                                color: const Color(0xFFB45309),
+                                children: [
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: const Icon(
+                                        Icons.admin_panel_settings_outlined,
+                                        color: Color(0xFFB45309)),
+                                    title: const Text('استرجاع إدارة المجموعة'),
+                                    subtitle: const Text(
+                                      'سلّمت الإدارة مؤخراً ولم تُفعَّل على الجهاز '
+                                      'الجديد؟ يمكنك استعادتها من هنا خلال 24 ساعة '
+                                      'من التسليم — تُبثّ الاستعادة لكل الأجهزة.',
+                                      style: TextStyle(
+                                          fontSize: 11.5, height: 1.5),
+                                    ),
+                                    trailing: const Icon(Icons.chevron_left),
+                                    onTap: () => _reclaimOwnership(context),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                          const UpdateSection(),
+                          const SizedBox(height: 18),
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                children: [
+                                  Text(
+                                    'مدير الحسابات',
+                                    style:
+                                        Theme.of(context).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '$appVersionLabel — تطبيق أصلي بالكامل',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.text3Of(context),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'موجب (+) = مستحق لنا «عليه»  ·  سالب (−) = مستحق منا «له»',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      height: 1.6,
+                                      color: AppColors.text3Of(context),
                                     ),
                                   ),
                                 ],
+                              ),
+                            ),
+                          ),
+                        ]),
+                        // [منطقة الخطر — بطاقة حمراء مستقلة]
+                        _tabPage([
+                          // (قانون 2026-09-19) الحساب الفردي: منطقة الخطر — حذف
+                          // الحساب نهائياً (كل شيء عدا بصمة الجهاز والاشتراك المدفوع).
+                          if (isIndividual && wsMode == 'standalone') ...[
+                            const SizedBox(height: 18),
+                            const _Collapsible(
+                              title: 'منطقة الخطر — حذف الحساب',
+                              icon: Icons.warning_amber_rounded,
+                              color: Color(0xFFDC2626),
+                              children: [_DeleteAccountTile()],
+                            ),
+                          ],
+                          // تهيئة المجموعة من الصفر: على جهاز المدير (المالك) فقط —
+                          // لا تظهر إطلاقاً في إعدادات الأعضاء ولا الوكيل.
+                          if (canEditOrg) ...[
+                            const SizedBox(height: 18),
+                            _Collapsible(
+                              title: 'منطقة الخطر — تهيئة المجموعة',
+                              icon: Icons.warning_amber_rounded,
+                              color: const Color(0xFFDC2626),
+                              children: [
+                                _GroupWipeTile(),
+                                const SizedBox(height: 8),
+                                // (دفعة 55) حل المجموعة نهائياً: فك ارتباط كل
+                                // الأجهزة فوراً والعودة مستقلاً لإعادة الربط من جديد.
+                                const _DissolveGroupTile(),
                               ],
                             ),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: FilledButton.icon(
-                                onPressed: _saving ? null : _saveAll,
-                                icon: _saving
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Icon(Icons.save_outlined),
-                                label: Text(
-                                  _saving ? 'جارٍ الحفظ…' : 'حفظ البيانات',
+                          ],
+                          // (دفعة 52) نسخة الكمبيوتر: إعادة ضبط المصنع المحلية —
+                          // تحذف ملف قاعدة البيانات نفسه من القرص وتعيد التطبيق
+                          // لشاشة الترحيب (الحل الجذري للبيانات القديمة العالقة).
+                          if (isDesktop) ...[
+                            const SizedBox(height: 18),
+                            const _FactoryResetTile(),
+                          ],
+                          const SizedBox(height: 18),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              // شريط حفظ عائم يظهر فور أي تعديل غير محفوظ.
+              if (_dirty)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  child: Material(
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(16),
+                    color: AppColors.primaryOf(context),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: _saving ? null : _saveAll,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.save_outlined,
+                                color: Colors.white),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'لديك تعديلات غير محفوظة',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
                                 ),
+                              ),
+                            ),
+                            Text(
+                              _saving ? 'جارٍ الحفظ…' : 'حفظ الآن',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.palette_outlined),
-                    title: const Text('المظهر والأصوات'),
-                    subtitle: const Text('السمة، إخفاء الأرصدة، حجم الخط، الأصوات والاهتزاز'),
-                    trailing: const Icon(Icons.chevron_left),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const AppearanceScreen()),
-                    ),
                   ),
                 ),
-                const SizedBox(height: 18),
-                _Collapsible(
-                  title: 'العملة والترقيم',
-                  icon: Icons.currency_exchange,
-                  color: const Color(0xFF0D9488),
-                  children: [
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.currency_exchange),
-                      title: const Text('العملة الافتراضية'),
-                      subtitle: Text(st['defaultCurrency'] ?? 'YER'),
-                      trailing: const Icon(Icons.chevron_left),
-                      onTap: () async {
-                        final v = await showModalBottomSheet<String>(
-                          context: context,
-                          builder: (_) => SafeArea(
-                            child: ListView(
-                              shrinkWrap: true,
-                              children: [
-                                for (final c in currencies)
-                                  ListTile(
-                                    title: Text('${c.symbol}  ${c.name}'),
-                                    onTap: () => Navigator.pop(context, c.code),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        );
-                        if (v != null) {
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('defaultCurrency', v);
-                          bump(ref);
-                        }
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                _Collapsible(
-                  title: 'المبيعات والسندات',
-                  icon: Icons.receipt_long_outlined,
-                  color: const Color(0xFF0EA5E9),
-                  initiallyExpanded: true,
-                  children: [
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.swap_horiz),
-                      title: const Text('نوع العملية الافتراضي'),
-                      subtitle: const Text(
-                        'يُختار تلقائياً عند فتح شاشة إضافة عملية',
-                      ),
-                      trailing: DropdownButton<String>(
-                        value: st['defaultOp'] ?? 'inflow',
-                        underline: const SizedBox.shrink(),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'inflow',
-                            child: Text('قبض (مبيعة/دفعة)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'debit',
-                            child: Text('عليه (دين آجل)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'outflow',
-                            child: Text('صرف'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'credit',
-                            child: Text('له (دائن)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'revenue',
-                            child: Text('إيراد'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'expense',
-                            child: Text('مصروف'),
-                          ),
-                        ],
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          await ref
-                              .read(repoProvider)
-                              .setSetting('defaultOp', v);
-                          bump(ref);
-                        },
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.inventory_2_outlined),
-                      title: const Text('تنبيه انخفاض المخزون'),
-                      subtitle: const Text(
-                        'تحذير عند بيع صنف وصل لحد إعادة الطلب',
-                      ),
-                      value: (st['warnLowStock'] ?? '1') == '1',
-                      onChanged: (v) async {
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('warnLowStock', v ? '1' : '0');
-                        bump(ref);
-                      },
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.trending_down_rounded),
-                      title:
-                          const Text('السماح بالبيع عند نفاد الرصيد الدفتري'),
-                      subtitle: const Text(
-                        'تفعيل: يسمح ببيع صنف نفد رصيده (حركة سالبة مع '
-                        'تنبيه). تعطيل: نقطة البيع تمنع الإضافة عند النفاد.',
-                      ),
-                      value: (st['allowNegativeStock'] ?? '0') == '1',
-                      onChanged: (v) async {
-                        await ref
-                            .read(repoProvider)
-                            .setSetting('allowNegativeStock', v ? '1' : '0');
-                        bump(ref);
-                      },
-                    ),
-                    // القفل التاريخي للتدقيق: منع غير المدير من تعديل/حذف
-                    // سجلات مالية أقدم من المدة المحددة (0 = معطل).
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.lock_clock_outlined),
-                      title: const Text('قفل السجلات المالية القديمة'),
-                      subtitle: Text(
-                        (int.tryParse(st['auditLockDays'] ?? '0') ?? 0) <= 0
-                            ? 'معطل — كل السجلات قابلة للتعديل حسب الصلاحيات'
-                            : 'السجلات الأقدم من ${st['auditLockDays']} يوماً '
-                                'مقفلة ضد التعديل والحذف لغير المدير',
-                      ),
-                      trailing: const Icon(Icons.chevron_left),
-                      onTap: () async {
-                        final v = await showQuickAmountPad(
-                          context,
-                          title: 'مدة القفل بالأيام (0 = تعطيل)',
-                          initial: double.tryParse(
-                              st['auditLockDays'] ?? '0'),
-                          hint: 'مثال: 30',
-                        );
-                        if (v == null) return;
-                        await ref.read(repoProvider).setSetting(
-                            'auditLockDays', '${v.toInt().clamp(0, 3650)}');
-                        bump(ref);
-                      },
-                    ),
-                  ],
-                ),
-                _Collapsible(
-                  title: 'الأمان والخصوصية',
-                  icon: Icons.lock_outline,
-                  color: const Color(0xFFE11D48),
-                  children: [
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.fingerprint),
-                      title: const Text('فتح التطبيق بالبصمة'),
-                      subtitle: Text(
-                        _bioSupported
-                            ? 'الوسائل المتاحة: $_bioLabel'
-                            : 'غير متاحة — فعّل بصمة في إعدادات الجهاز',
-                      ),
-                      value: _bioSupported && (st['biometric'] ?? '0') == '1',
-                      onChanged: !_bioSupported
-                          ? null
-                          : (v) async {
-                              if (v) {
-                                final ok = await Security.authenticate(
-                                  reason: 'أكّد بصمتك لتفعيل القفل',
-                                );
-                                if (!ok) {
-                                  if (context.mounted) {
-                                    showSnack(context, 'لم يتم التحقق');
-                                  }
-                                  return;
-                                }
-                              }
-                              await ref
-                                  .read(repoProvider)
-                                  .setSetting('biometric', v ? '1' : '0');
-                              bump(ref);
-                            },
-                    ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.lock_clock_outlined),
-                      title: const Text('القفل عند العودة للتطبيق'),
-                      subtitle: const Text('يُطلب التحقق بعد كل تصغير'),
-                      value: (st['autoLock'] ?? '0') == '1',
-                      onChanged: (st['biometric'] ?? '0') != '1'
-                          ? null
-                          : (v) async {
-                              await ref
-                                  .read(repoProvider)
-                                  .setSetting('autoLock', v ? '1' : '0');
-                              bump(ref);
-                            },
-                    ),
-                  ],
-                ),
-                // مسار الترقية من الوضع المستقل: تفعيل المزامنة وربط أجهزة —
-                // يفتح معالج إنشاء المجموعة (يصبح هذا الجهاز مضيفاً) دون أي
-                // فقدان للبيانات المحلية القائمة.
-                // (قانون 2026-09-19) إنشاء المجموعات لحساب المؤسسة فقط —
-                // إعدادات الفردي محصورة ولا يظهر له هذا المسار إطلاقاً.
-                if (wsMode == 'standalone' && !isIndividual) ...[
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'المزامنة وربط الأجهزة',
-                    icon: Icons.hub_outlined,
-                    color: const Color(0xFF7C3AED),
-                    children: [
-                      Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.sync_alt_rounded,
-                              color: Color(0xFF7C3AED)),
-                          title: const Text(
-                              'تفعيل المزامنة وربط أجهزة أخرى'),
-                          subtitle: const Text(
-                            'حوّل هذا الجهاز إلى مضيف مجموعة واربط أجهزة '
-                            'الكاشير والمحاسبين — كل بياناتك الحالية تبقى '
-                            'كما هي وتُزامَن للأجهزة الجديدة.',
-                            style: TextStyle(fontSize: 11.5, height: 1.5),
-                          ),
-                          trailing: const Icon(Icons.chevron_left),
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const GroupManagementScreen(),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-                // (حساب Google) هوية المؤسسة الدائمة — للمدير/المستقل فقط.
-                // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
-                if ((wsOwner || wsMode == 'standalone') && !isIndividual) ...[
-                  const SizedBox(height: 18),
-                  const _Collapsible(
-                    title: 'حساب المؤسسة (Google)',
-                    icon: Icons.account_circle_outlined,
-                    color: Color(0xFF059669),
-                    children: [AccountSection()],
-                  ),
-                ],
-                // (الاشتراك) تفاصيل الاشتراك: للمدير فقط — حالة الترخيص
-                // وتاريخ الانتهاء والوقت المتبقي وزر التجديد/الترقية.
-                // (قانون 2026-09-19) إعدادات المؤسسة لا تظهر للفردي.
-                if ((wsOwner || wsMode == 'standalone') && !isIndividual) ...[
-                  const SizedBox(height: 18),
-                  const _Collapsible(
-                    title: 'تفاصيل الاشتراك',
-                    icon: Icons.workspace_premium_outlined,
-                    color: Color(0xFF7C3AED),
-                    children: [SubscriptionDetailsSection()],
-                  ),
-                ],
-                // (المعمارية الصامتة) بطاقة «المزامنة السحابية (Firebase)»
-                // التقنية أُزيلت نهائياً: الرابط الرسمي مضمّن برمجياً
-                // والمزامنة التلقائية مثبتة دائماً في الخلفية — بقي فقط
-                // مدخل «إدارة المجموعة / ربط الأجهزة» البسيط.
-                if (canSensitive && !isIndividual) ...[
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'المجموعة وربط الأجهزة',
-                    icon: Icons.devices_other_outlined,
-                    color: const Color(0xFF0EA5E9),
-                    children: [
-                      // مدير/مالك: دعوة جهاز جديد لنفس مساحة العمل عبر QR/PIN.
-                      if (canEditOrg && wsMode != 'standalone' ||
-                          (wsMode == 'standalone'))
-                        Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.qr_code_2_outlined,
-                                color: Color(0xFF0EA5E9)),
-                            title: const Text('ربط جهاز جديد عبر السحابة'),
-                            subtitle: const Text(
-                              'اعرض رمز QR أو رمز دعوة من 6 أرقام لضم '
-                              'جهاز جديد إلى مساحة عملك.',
-                              style: TextStyle(fontSize: 11.5, height: 1.5),
-                            ),
-                            trailing: const Icon(Icons.chevron_left),
-                            onTap: () => showCloudInviteDialog(context, ref),
-                          ),
-                        ),
-                      // (قانون 2026-09-19) «الانضمام إلى مجموعة» لا يظهر
-                      // لحساب المؤسسة إطلاقاً — الانضمام للفردي فقط.
-                    ],
-                  ),
-                ],
-                // (قانون 2026-09-19) شريط «الترقية إلى مؤسسة» أُزيل:
-                // إعدادات الفردي محصورة — لا مسارات مؤسسة فيها.
-                // (دفعة 65) الحساب الفردي: خيار «الانضمام إلى مؤسسة قائمة»
-                // يبقى متاحاً ومستقلاً لمن يرغب بالعمل تحت إدارة متجر آخر.
-                if (isIndividual) ...[
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'الانضمام إلى مؤسسة قائمة',
-                    icon: Icons.group_add_outlined,
-                    color: const Color(0xFF7C3AED),
-                    children: [
-                      Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.group_add_outlined,
-                              color: Color(0xFF7C3AED)),
-                          title:
-                              const Text('الانضمام إلى مجموعة عبر السحابة'),
-                          subtitle: const Text(
-                            'امسح رمز QR أو أدخل رمز الدعوة — يُفعَّل بعد '
-                            'موافقة المدير.',
-                            style: TextStyle(fontSize: 11.5, height: 1.5),
-                          ),
-                          trailing: const Icon(Icons.chevron_left),
-                          onTap: () => startJoinApprovalFlow(context, ref),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-                // (3.70 — المرحلة 3) النسخ الاحتياطي التلقائي المجدول:
-                // [كل ساعتين / يومياً في وقت محدد] + لقطة محلية + Drive مجاني.
-                if (canEditOrg || isIndividual) ...[
-                  const SizedBox(height: 18),
-                  const _AutoBackupSection(),
-                ],
-                // (قانون 2026-09-19) الحساب الفردي: منطقة الخطر — حذف
-                // الحساب نهائياً (كل شيء عدا بصمة الجهاز والاشتراك المدفوع).
-                if (isIndividual && wsMode == 'standalone') ...[
-                  const SizedBox(height: 18),
-                  const _Collapsible(
-                    title: 'منطقة الخطر — حذف الحساب',
-                    icon: Icons.warning_amber_rounded,
-                    color: Color(0xFFDC2626),
-                    children: [_DeleteAccountTile()],
-                  ),
-                ],
-                // جهاز العضو: قسم النسخ الاحتياطي محذوف من القائمة الجانبية،
-                // ويظهر هنا فقط خيار إنشاء نسخة محلية (بلا Google ولا سحابة).
-                if (!canEditOrg) ...[
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'نسخة احتياطية محلية',
-                    icon: Icons.save_outlined,
-                    color: const Color(0xFF0D9488),
-                    children: [
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.backup_outlined),
-                        title: const Text('إنشاء نسخة احتياطية محلية الآن'),
-                        subtitle: const Text(
-                          'تُحفظ داخل مجلد التطبيق على هذا الجهاز فقط، '
-                          'ولا يمكن استخدامها خارج مجموعتك.',
-                          style: TextStyle(fontSize: 11.5, height: 1.5),
-                        ),
-                        trailing: const Icon(Icons.chevron_left),
-                        onTap: () => _createLocalBackup(context),
-                      ),
-                    ],
-                  ),
-                  // (دفعة 58 — متطلب 11) «طلب مغادرة المجموعة»: يرسل طلباً
-                  // للمدير عبر السحابة، وبعد موافقته يُفَكّ ارتباط هذا الجهاز
-                  // نظيفاً ويعود مستقلاً.
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'مغادرة المجموعة',
-                    icon: Icons.logout,
-                    color: const Color(0xFFEA580C),
-                    children: [
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.logout,
-                            color: Color(0xFFEA580C)),
-                        title: const Text('طلب مغادرة المجموعة'),
-                        subtitle: const Text(
-                          'يُرسل طلبك إلى المدير، وبعد موافقته يُفصل جهازك '
-                          'عن المجموعة وتُحذف بياناتها من جهازك ويعود مستقلاً.',
-                          style: TextStyle(fontSize: 11.5, height: 1.5),
-                        ),
-                        trailing: const Icon(Icons.chevron_left),
-                        onTap: () => _requestLeaveGroup(context),
-                      ),
-                    ],
-                  ),
-                  // (استرداد طارئ — 2) الاسترداد السيادي للمنشئ: هذا
-                  // الجهاز أنشأ المساحة لكنه ليس المالك حالياً — خيار
-                  // أمان دائم لاسترداد الملكية دون تدخل يدوي في Firebase.
-                  if (ref.watch(creatorRecoveryProvider).valueOrNull ==
-                      true) ...[
-                    const SizedBox(height: 18),
-                    _Collapsible(
-                      title: 'استرداد ملكية مساحة العمل',
-                      icon: Icons.workspace_premium_outlined,
-                      color: const Color(0xFF7C3AED),
-                      children: [
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.workspace_premium,
-                              color: Color(0xFF7C3AED)),
-                          title: const Text('استرداد ملكية مساحة العمل'),
-                          subtitle: const Text(
-                            'أنت منشئ هذه المساحة. إن فقدت الإدارة لأي '
-                            'سبب يمكنك استردادها فوراً — يُحدَّث السجل '
-                            'السحابي وتُبثّ الاستعادة لكل الأجهزة.',
-                            style: TextStyle(fontSize: 11.5, height: 1.5),
-                          ),
-                          trailing: const Icon(Icons.chevron_left),
-                          onTap: () => _creatorRecover(context),
-                        ),
-                      ],
-                    ),
-                  ],
-                  // (صمام أمان) استرجاع الإدارة: يظهر للمدير السابق فقط
-                  // خلال 24 ساعة من التسليم — ينقذ الموقف إذا تعثر تفعيل
-                  // الإدارة على الجهاز المستلم (جهاز قديم/أندرويد 7).
-                  if (ref.watch(reclaimOwnershipProvider).valueOrNull ==
-                      true) ...[
-                    const SizedBox(height: 18),
-                    _Collapsible(
-                      title: 'استرجاع الإدارة (صمام الأمان)',
-                      icon: Icons.settings_backup_restore_rounded,
-                      color: const Color(0xFFB45309),
-                      children: [
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(
-                              Icons.admin_panel_settings_outlined,
-                              color: Color(0xFFB45309)),
-                          title: const Text('استرجاع إدارة المجموعة'),
-                          subtitle: const Text(
-                            'سلّمت الإدارة مؤخراً ولم تُفعَّل على الجهاز '
-                            'الجديد؟ يمكنك استعادتها من هنا خلال 24 ساعة '
-                            'من التسليم — تُبثّ الاستعادة لكل الأجهزة.',
-                            style: TextStyle(fontSize: 11.5, height: 1.5),
-                          ),
-                          trailing: const Icon(Icons.chevron_left),
-                          onTap: () => _reclaimOwnership(context),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-                // تهيئة المجموعة من الصفر: على جهاز المدير (المالك) فقط —
-                // لا تظهر إطلاقاً في إعدادات الأعضاء ولا الوكيل.
-                if (canEditOrg) ...[
-                  const SizedBox(height: 18),
-                  _Collapsible(
-                    title: 'منطقة الخطر — تهيئة المجموعة',
-                    icon: Icons.warning_amber_rounded,
-                    color: const Color(0xFFDC2626),
-                    children: [
-                      _GroupWipeTile(),
-                      const SizedBox(height: 8),
-                      // (دفعة 55) حل المجموعة نهائياً: فك ارتباط كل
-                      // الأجهزة فوراً والعودة مستقلاً لإعادة الربط من جديد.
-                      const _DissolveGroupTile(),
-                    ],
-                  ),
-                ],
-                // (دفعة 52) نسخة الكمبيوتر: إعادة ضبط المصنع المحلية —
-                // تحذف ملف قاعدة البيانات نفسه من القرص وتعيد التطبيق
-                // لشاشة الترحيب (الحل الجذري للبيانات القديمة العالقة).
-                if (isDesktop) ...[
-                  const SizedBox(height: 18),
-                  const _FactoryResetTile(),
-                ],
-                const SizedBox(height: 18),
-                const UpdateSection(),
-                const SizedBox(height: 18),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Text(
-                          'مدير الحسابات',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '$appVersionLabel — تطبيق أصلي بالكامل',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.text3Of(context),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'موجب (+) = مستحق لنا «عليه»  ·  سالب (−) = مستحق منا «له»',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            height: 1.6,
-                            color: AppColors.text3Of(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            // شريط حفظ عائم يظهر فور أي تعديل غير محفوظ.
-            if (_dirty)
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: 12,
-                child: Material(
-                  elevation: 6,
-                  borderRadius: BorderRadius.circular(16),
-                  color: AppColors.primaryOf(context),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: _saving ? null : _saveAll,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.save_outlined, color: Colors.white),
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Text(
-                              'لديك تعديلات غير محفوظة',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            _saving ? 'جارٍ الحفظ…' : 'حفظ الآن',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         );
       },
+    );
+  }
+
+  /// (3.70.0) صفحة تبويب: بطاقات مستقلة دائمة الظهور — وإن حجبت
+  /// البطاقات حسب نوع الحساب/الدور تظهر حالة فارغة مهذبة.
+  Widget _tabPage(List<Widget> children) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 120),
+      children: children.isEmpty
+          ? [
+              const Padding(
+                padding: EdgeInsets.only(top: 48),
+                child: EmptyState(
+                  icon: Icons.tune_rounded,
+                  title: 'لا خيارات متاحة هنا',
+                  message: 'هذا القسم غير متاح لنوع حسابك أو دورك الحالي.',
+                ),
+              ),
+            ]
+          : children,
     );
   }
 }
@@ -1251,12 +1398,15 @@ class _Field extends StatelessWidget {
 }
 
 /// قسم إعدادات قابل للطيّ برمز يميّزه — يقابل «الطي في أيقونات حسب النوع».
+/// (3.70.0 — إعادة التصميم) بطاقة قسم مستقلة: أيقونة ملونة + عنوان +
+/// وصف سطر واحد + المحتوى **دائم الظهور** — لا ExpansionTile ولا قوائم
+/// منسدلة متداخلة إطلاقاً. (الاسم التاريخي محفوظ لتقليل اللمسات.)
 class _Collapsible extends StatelessWidget {
   final String title;
   final IconData icon;
   final Color? color;
   final List<Widget> children;
-  final bool initiallyExpanded;
+  final bool initiallyExpanded; // لم تعد ذات أثر — البطاقات مفتوحة دائماً
   const _Collapsible({
     required this.title,
     required this.icon,
@@ -1265,9 +1415,30 @@ class _Collapsible extends StatelessWidget {
     this.initiallyExpanded = false,
   });
 
+  /// وصف سطر واحد لكل بطاقة — تصنيف واضح بلا حشو.
+  static const Map<String, String> _subs = {
+    'بيانات المؤسسة': 'اسم النشاط والشعار وبيانات المنشأة',
+    'العملة والترقيم': 'العملة الافتراضية لكل العمليات والفواتير',
+    'المبيعات والسندات': 'خيارات الفواتير والبيع والسندات والتنبيهات',
+    'الأمان والخصوصية': 'قفل الشاشة والبصمة وحماية التطبيق',
+    'المزامنة وربط الأجهزة': 'حوّل الجهاز إلى مضيف مجموعة واربط الأجهزة',
+    'حساب المؤسسة (Google)': 'الهوية الدائمة للمنشأة وربط حساب Google',
+    'تفاصيل الاشتراك': 'حالة الترخيص والمقاعد وتاريخ الانتهاء',
+    'المجموعة وربط الأجهزة': 'دعوة الأجهزة وإدارة أعضاء المجموعة',
+    'الانضمام إلى مؤسسة قائمة': 'انضم عبر QR أو رمز دعوة بموافقة المدير',
+    'منطقة الخطر — حذف الحساب': 'حذف نهائي لكل البيانات محلياً وسحابياً',
+    'نسخة احتياطية محلية': 'نسخة داخل مجلد التطبيق على هذا الجهاز فقط',
+    'مغادرة المجموعة': 'طلب مغادرة بموافقة المدير وفك ارتباط نظيف',
+    'استرداد ملكية مساحة العمل': 'استرجاع ملكية منشأتك فوراً وبثّها للأجهزة',
+    'استرجاع الإدارة (صمام الأمان)': 'استعادة الإدارة خلال 24 ساعة من التسليم',
+    'منطقة الخطر — تهيئة المجموعة': 'حذف بيانات المجموعة أو حلّها نهائياً',
+    'النسخ الاحتياطي التلقائي': 'جدولة النسخ (كل ساعتين/يومياً) ووجهة Drive',
+  };
+
   @override
   Widget build(BuildContext context) {
     final c = color ?? AppColors.primaryOf(context);
+    final sub = _subs[title];
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -1282,28 +1453,52 @@ class _Collapsible extends StatelessWidget {
           ),
         ],
       ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: initiallyExpanded,
-          shape: const RoundedRectangleBorder(),
-          collapsedShape: const RoundedRectangleBorder(),
-          leading: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: c.withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 2),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: c, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 15),
+                      ),
+                      if (sub != null)
+                        Text(
+                          sub,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            height: 1.4,
+                            color: AppColors.text3Of(context),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            child: Icon(icon, color: c, size: 22),
           ),
-          title: Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+            child: Column(children: children),
           ),
-          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          children: children,
-        ),
+        ],
       ),
     );
   }
@@ -1539,8 +1734,7 @@ class _DissolveGroupTile extends ConsumerStatefulWidget {
   const _DissolveGroupTile();
 
   @override
-  ConsumerState<_DissolveGroupTile> createState() =>
-      _DissolveGroupTileState();
+  ConsumerState<_DissolveGroupTile> createState() => _DissolveGroupTileState();
 }
 
 class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
@@ -1678,7 +1872,6 @@ class _DissolveGroupTileState extends ConsumerState<_DissolveGroupTile> {
   }
 }
 
-
 // ═══════════ (قانون 2026-09-19) حذف الحساب الفردي نهائياً ═══════════
 
 /// زر حذف الحساب الفردي: يحذف كل شيء محلياً ومن قاعدة البيانات السحابية
@@ -1688,8 +1881,7 @@ class _DeleteAccountTile extends ConsumerStatefulWidget {
   const _DeleteAccountTile();
 
   @override
-  ConsumerState<_DeleteAccountTile> createState() =>
-      _DeleteAccountTileState();
+  ConsumerState<_DeleteAccountTile> createState() => _DeleteAccountTileState();
 }
 
 class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
@@ -1801,11 +1993,9 @@ class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
                 height: 22,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Icon(Icons.person_remove_alt_1_outlined,
-                color: Colors.red),
+            : const Icon(Icons.person_remove_alt_1_outlined, color: Colors.red),
         title: const Text('حذف الحساب نهائياً',
-            style:
-                TextStyle(fontWeight: FontWeight.w800, color: Colors.red)),
+            style: TextStyle(fontWeight: FontWeight.w800, color: Colors.red)),
         subtitle: const Text(
           'يحذف كل بياناتك محلياً ومن قاعدة البيانات — عدا بصمة الجهاز '
           'والاشتراك المدفوع.',
@@ -1901,8 +2091,7 @@ class _AutoBackupControlsState extends ConsumerState<_AutoBackupControls> {
           items: const [
             DropdownMenuItem(value: 'off', child: Text('إيقاف')),
             DropdownMenuItem(value: 'every2h', child: Text('كل ساعتين')),
-            DropdownMenuItem(
-                value: 'daily', child: Text('يومياً في وقت محدد')),
+            DropdownMenuItem(value: 'daily', child: Text('يومياً في وقت محدد')),
           ],
           onChanged: (v) {
             if (v == null) return;
@@ -1919,8 +2108,7 @@ class _AutoBackupControlsState extends ConsumerState<_AutoBackupControls> {
               isDense: true,
             ),
             keyboardType: TextInputType.datetime,
-            onSubmitted: (v) =>
-                _set(AutoBackupService.kTimeKey, v.trim()),
+            onSubmitted: (v) => _set(AutoBackupService.kTimeKey, v.trim()),
           ),
         ],
         SwitchListTile(

@@ -55,7 +55,8 @@ export const UsersView: React.FC<UsersViewProps> = ({
   const [formIsActive, setFormIsActive] = useState(true);
 
   const session = getAuthSession();
-  const currentEmail = (session?.user_email || 'moneerqaid950@gmail.com').toLowerCase();
+  // (3.70.0 — Security) بلا بريد مثبّت: الهوية من الجلسة الفعلية فقط.
+  const currentEmail = (session?.user_email || '').toLowerCase();
 
   const loadPermissions = useCallback(async () => {
     setLoading(true);

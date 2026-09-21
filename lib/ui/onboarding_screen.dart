@@ -4,9 +4,13 @@
 //   2) ربط شبكي / متجر متعدد الأجهزة → معالج إنشاء/انضمام مجموعة الموجود.
 // بعد اختيار البطاقة يظهر إعداد مصغّر: اسم المتجر + العملة الأساسية.
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../core/accounting.dart';
 import '../core/factory_reset.dart';
@@ -14,6 +18,8 @@ import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../core/cloud_config.dart';
+import '../core/media_paths.dart';
+import '../data/google_drive_service.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
@@ -74,6 +80,10 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   /// نمط الحساب المختار — يُضبط لحظة فتح نافذة الخيار ('personal'/'network').
   String? _choice;
+
+  /// (3.70.0) نية الاسترجاع: تُرفع من زر «استرجع بياناتك عبر Google» فقط —
+  /// بعدها (وبعد نجاح التسجيل حصراً) يفحص التطبيق Drive/الملفات المحلية.
+  bool _restoreIntent = false;
   String _name = 'متجري';
   String _currency = 'YER';
   bool _busy = false;
@@ -158,6 +168,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       final r = await auth.signIn();
       final gu = r.user;
       if (gu == null) {
+        _restoreIntent = false;
         Sfx.error();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -200,6 +211,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content:
                   Text('✅ تم استرجاع مؤسستك وبياناتك كاملة — أهلاً بعودتك')));
+          // (3.70.0) فحص النسخ الاحتياطية بعد نجاح تسجيل Google — قبل الانتقال.
+          await _postSignInBackupScan();
+          if (!mounted) return;
           Navigator.of(context).pushReplacement(MaterialPageRoute(
               builder: (_) => const LockGate(child: HomeShell())));
           return;
@@ -213,10 +227,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           if (_choice == 'network') {
             unawaited(provisionCloudAfterSignIn(repo, ref, url));
           }
+          // (3.70.0) فحص النسخ الاحتياطية بعد نجاح تسجيل Google.
+          await _postSignInBackupScan();
+          if (!mounted) return;
           // النمط مختار مسبقاً في التدفق التدريجي — نكمل الانتقال.
           await _finishAndNavigate();
           return;
         case AccountLinkOutcome.memberUntouched:
+          _restoreIntent = false;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('هذا الجهاز عضو في مجموعة — لا حاجة للربط هنا')));
           return;
@@ -230,6 +248,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           if (_choice == 'network') {
             unawaited(provisionCloudAfterSignIn(repo, ref, url));
           }
+          await _postSignInBackupScan();
+          if (!mounted) return;
           await _finishAndNavigate();
           return;
         case AccountLinkOutcome.switchUnavailable:
@@ -256,8 +276,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         case AccountLinkOutcome.failed:
           Sfx.error();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content:
-                  Text('تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة')));
+              content: Text('تعذّر الربط — تحقق من اتصالك ثم أعد المحاولة')));
           return;
       }
     } finally {
@@ -325,8 +344,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         size: 19),
                     label: const Text(
                       'لديك حساب سابق؟ استرجع بياناتك عبر Google',
-                      style:
-                          TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          fontSize: 13.5, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ),
@@ -387,13 +406,170 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         onTap: () => _openModeWindow('network'),
       );
 
-  /// (طلب 2026-09-19) «استرجاع بياناتي»: نفس مسار Google المصلَح —
-  /// recovered/switched تعيد البيانات والمؤسسة المرتبطة بالحساب، وبلا
-  /// تهيئة عقدة شخصية (الاسترجاع لا ينشئ مؤسسة جديدة).
+  /// (3.70.0 — بوابة الاسترجاع) يُمنع منعاً باتاً استرجاع أي بيانات سابقة
+  /// أو فحص ملفات النسخ الاحتياطي (هاتف/سحابة) قبل تسجيل دخول Google ناجح:
+  /// التحقق من ملكية البيانات أولاً، ثم البحث التلقائي عن النسخة.
   Future<void> _restoreWithGoogle() async {
     if (_busy) return;
+    Sfx.click();
+    // هل يوجد حساب Google موثق مسبقاً (جدول google_auth)؟
+    GoogleUser? linked;
+    try {
+      final db = await ref.read(repoProvider).database;
+      linked = await GoogleAuthService(db).currentUserFromDb();
+    } catch (_) {}
+    if (linked == null) {
+      if (!mounted) return;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تسجيل الدخول مطلوب للاسترجاع'),
+          content: const Text(
+            'لتأمين وحماية بياناتك المالية، يجب تسجيل الدخول بحساب Google '
+            'أولاً للتحقق من ملكية البيانات قبل الاسترجاع.',
+            style: TextStyle(height: 1.7),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('لاحقاً'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.login_rounded, size: 18),
+              label: const Text('المتابعة باستخدام Google'),
+            ),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+    }
+    _restoreIntent = true;
     setState(() => _choice = 'personal');
     await _startWithGoogle();
+    // فشل التسجيل أو مسار لا يسترجع: تُنزل النية حتى لا تتسرب لمسار آخر.
+    _restoreIntent = false;
+  }
+
+  /// (3.70.0) بعد اكتمال تسجيل Google في مسار الاسترجاع: بحث تلقائي عن
+  /// nexora-backup-latest.nexora في Google Drive، أو السماح باختيار ملف
+  /// نسخة محلية واستعادتها بسلاسة (استعادة ذرّية عبر importAll).
+  Future<void> _postSignInBackupScan() async {
+    if (!_restoreIntent) return;
+    _restoreIntent = false;
+    try {
+      final repo = ref.read(repoProvider);
+      GoogleDriveBackupInfo? info;
+      try {
+        info = await GoogleDriveService.instance.latestBackup();
+      } catch (_) {}
+      String? raw;
+      var source = '';
+      final driveInfo = info;
+      if (driveInfo != null && mounted) {
+        final when = driveInfo.modifiedTime != null
+            ? DateFormat('yyyy-MM-dd HH:mm')
+                .format(driveInfo.modifiedTime!.toLocal())
+            : '';
+        final act = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('نسخة احتياطية على Google Drive'),
+            content: Text(
+              'وُجد الملف ${GoogleDriveService.backupFileName}'
+              '${when.isEmpty ? '' : '\nآخر تعديل: $when'}'
+              '${driveInfo.sizeLabel.isEmpty ? '' : '\nالحجم: ${driveInfo.sizeLabel}'}\n\n'
+              'استعادتها الآن؟ تُستبدل البيانات الحالية بالكامل (استعادة ذرّية).',
+              style: const TextStyle(height: 1.6),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'skip'),
+                child: const Text('تخطي'),
+              ),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(ctx, 'local'),
+                child: const Text('ملف محلي بدلاً منها'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, 'drive'),
+                child: const Text('استعادة من Drive'),
+              ),
+            ],
+          ),
+        );
+        if (act == 'drive') {
+          final docs = await MediaPaths.ensureDocsDir();
+          final tmp =
+              File('${docs ?? Directory.systemTemp.path}/drive_restore.nexora');
+          await GoogleDriveService.instance.downloadLatestTo(tmp);
+          raw = await tmp.readAsString();
+          source = 'Google Drive';
+          try {
+            await tmp.delete();
+          } catch (_) {}
+        } else if (act != 'local') {
+          return;
+        }
+      }
+      if (raw == null) {
+        if (!mounted) return;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('استرجاع نسخة محلية'),
+            content: Text(
+              info == null
+                  ? 'لم يُعثر على نسخة احتياطية في Google Drive.\n\n'
+                      'يمكنك اختيار ملف نسخة محلية (‎.nexora‎ أو JSON) '
+                      'واستعادته الآن.'
+                  : 'اختر ملف النسخة المحلية (‎.nexora‎ أو JSON) لاستعادته.',
+              style: const TextStyle(height: 1.6),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('تخطي'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(ctx, true),
+                icon: const Icon(Icons.folder_open_rounded, size: 18),
+                label: const Text('اختيار ملف'),
+              ),
+            ],
+          ),
+        );
+        if (go != true || !mounted) return;
+        final res = await FilePicker.platform
+            .pickFiles(type: FileType.any, withData: true);
+        if (res == null) return;
+        final f = res.files.single;
+        if (f.path != null) {
+          raw = await File(f.path!).readAsString();
+        } else if (f.bytes != null) {
+          raw = utf8.decode(f.bytes!);
+        }
+        source = 'ملف محلي';
+      }
+      if (raw == null) return;
+      final cleaned = raw.startsWith('\uFEFF') ? raw.substring(1) : raw;
+      final decoded = jsonDecode(cleaned);
+      if (decoded is! Map) throw const FormatException('ملف غير صالح');
+      final n = await repo.importAll(Map<String, Object?>.from(decoded));
+      try {
+        final queued = await repo.resyncAllToGroup();
+        if (queued > 0) ref.read(syncEngineProvider).notifyNewOperation();
+      } catch (_) {}
+      bump(ref);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ تمت الاستعادة من $source ($n سجلًا)')));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('تعذّرت استعادة النسخة: $e')));
+      }
+    }
   }
 
   /// (طلب 2026-09-19) «حذف كامل من كل مكان»: الجهاز + السحابة — لا يبقى
@@ -436,8 +612,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
     if (!authed) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('لم تكتمل المصادقة — أُلغي الحذف')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('لم تكتمل المصادقة — أُلغي الحذف')));
       }
       return;
     }
@@ -478,8 +654,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       setState(() => _choice = null);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('تعذّر الحذف الكامل: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('تعذّر الحذف الكامل: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -652,7 +828,6 @@ class _ModeCardState extends State<_ModeCard> {
   }
 }
 
-
 /// (قانون 2026-09-19) نافذة خيار نوع الحساب: وصف موسّع للنوع + إعداد
 /// سريع (اسم النشاط + العملة بشرائح اختيار — بلا قوائم منسدلة) + زرّا
 /// «ربط بحساب Google» و«المتابعة بدون حساب».
@@ -697,11 +872,9 @@ class _ModeWindowState extends State<_ModeWindow> {
   @override
   Widget build(BuildContext context) {
     final personal = widget.mode == 'personal';
-    final color =
-        personal ? const Color(0xFF16A34A) : const Color(0xFF0EA5E9);
+    final color = personal ? const Color(0xFF16A34A) : const Color(0xFF0EA5E9);
     final title = personal ? 'حساب فردي' : 'حساب مؤسسة';
-    final icon =
-        personal ? Icons.storefront_rounded : Icons.hub_rounded;
+    final icon = personal ? Icons.storefront_rounded : Icons.hub_rounded;
     final lead = personal
         ? 'مناسب للمتجر الواحد ودفتر الديون الشخصي — كل بياناتك على هذا '
             'الجهاز، وإعداداتك محصورة وبسيطة.'
@@ -753,8 +926,7 @@ class _ModeWindowState extends State<_ModeWindow> {
                   ),
                   IconButton(
                     tooltip: 'إغلاق',
-                    onPressed:
-                        _busy ? null : () => Navigator.of(context).pop(),
+                    onPressed: _busy ? null : () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close_rounded, size: 20),
                   ),
                 ],
@@ -786,8 +958,7 @@ class _ModeWindowState extends State<_ModeWindow> {
               ),
               const SizedBox(height: 14),
               const Text('العملة الأساسية',
-                  style:
-                      TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -825,8 +996,8 @@ class _ModeWindowState extends State<_ModeWindow> {
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.account_circle_outlined),
                   label: const Text('ربط بحساب Google والمتابعة',
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w800)),
+                      style:
+                          TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
               ),
               const SizedBox(height: 8),

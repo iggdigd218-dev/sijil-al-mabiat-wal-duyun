@@ -89,13 +89,12 @@ class AccountFilter {
     String? currency,
     bool clearCurrency = false,
     bool? showArchived,
-  }) =>
-      AccountFilter(
-        query: query ?? this.query,
-        kind: clearKind ? null : (kind ?? this.kind),
-        currency: clearCurrency ? null : (currency ?? this.currency),
-        showArchived: showArchived ?? this.showArchived,
-      );
+  }) => AccountFilter(
+    query: query ?? this.query,
+    kind: clearKind ? null : (kind ?? this.kind),
+    currency: clearCurrency ? null : (currency ?? this.currency),
+    showArchived: showArchived ?? this.showArchived,
+  );
 }
 
 final accountFilterProvider = StateProvider<AccountFilter>(
@@ -123,9 +122,9 @@ final accountsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
       // بتطبيع عربي (تجاهل التشكيل، أ/إ/آ→ا، ة→ه، ى→ي).
       final hay = numericQ
           ? '${a.phone} ${a.whatsapp} '
-              '${balances[a.id]?.abs().toStringAsFixed(0) ?? ''}'
+                '${balances[a.id]?.abs().toStringAsFixed(0) ?? ''}'
           : '${a.name} ${a.phone} ${a.whatsapp} ${a.notes} '
-              '${a.tags.join(' ')}';
+                '${a.tags.join(' ')}';
       if (!Fmt.smartContains(hay, q)) continue;
     }
     out.add(AccountWithBalance(a, balances[a.id] ?? a.openingBalance));
@@ -175,8 +174,9 @@ final summaryProvider = FutureProvider<Summary>((ref) async {
   Map<int, double> balances = const {};
   try {
     accounts = await repo.accounts().timeout(const Duration(seconds: 6));
-    balances =
-        await repo.allBalances(accounts).timeout(const Duration(seconds: 6));
+    balances = await repo
+        .allBalances(accounts)
+        .timeout(const Duration(seconds: 6));
     txs = await repo.transactions().timeout(const Duration(seconds: 6));
   } catch (_) {}
 
@@ -233,7 +233,10 @@ final accountTxProvider = FutureProvider.family<List<Tx>, int>((ref, id) async {
 final accountTxCountsProvider = FutureProvider<Map<int, int>>((ref) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
-  final txs = await repo.transactions().timeout(const Duration(seconds: 8), onTimeout: () => []);
+  final txs = await repo.transactions().timeout(
+    const Duration(seconds: 8),
+    onTimeout: () => [],
+  );
   final map = <int, int>{};
   for (final tx in txs) {
     if (tx.accountId != null) {
@@ -256,8 +259,9 @@ final alertsProvider = FutureProvider<List<AccountWithBalance>>((ref) async {
 });
 
 /// الإشعارات الداخلية (الأحدث أولًا).
-final notificationsProvider =
-    FutureProvider<List<Map<String, Object?>>>((ref) async {
+final notificationsProvider = FutureProvider<List<Map<String, Object?>>>((
+  ref,
+) async {
   ref.watch(refreshProvider);
   return ref
       .read(repoProvider)
@@ -330,16 +334,15 @@ class TxFilter {
     bool clearCurrency = false,
     bool clearFrom = false,
     bool clearTo = false,
-  }) =>
-      TxFilter(
-        query: query ?? this.query,
-        type: clearType ? null : (type ?? this.type),
-        accountId: clearAccount ? null : (accountId ?? this.accountId),
-        currency: clearCurrency ? null : (currency ?? this.currency),
-        from: clearFrom ? null : (from ?? this.from),
-        to: clearTo ? null : (to ?? this.to),
-        sort: sort ?? this.sort,
-      );
+  }) => TxFilter(
+    query: query ?? this.query,
+    type: clearType ? null : (type ?? this.type),
+    accountId: clearAccount ? null : (accountId ?? this.accountId),
+    currency: clearCurrency ? null : (currency ?? this.currency),
+    from: clearFrom ? null : (from ?? this.from),
+    to: clearTo ? null : (to ?? this.to),
+    sort: sort ?? this.sort,
+  );
 
   /// هل هناك أي مرشّح فعّال غير الترتيب؟
   bool get isActive =>
@@ -396,8 +399,9 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
   var list = all.where((t) {
     if (f.currency != null && t.currency != f.currency) return false;
     if (q.isEmpty) return true;
-    final accName =
-        t.type == OpType.transfer ? 'تحويل' : (byId[t.accountId]?.name ?? '');
+    final accName = t.type == OpType.transfer
+        ? 'تحويل'
+        : (byId[t.accountId]?.name ?? '');
     // الاستعلام الرقمي يبحث في المرجع والمبلغ أيضاً؛ النصي بتطبيع عربي.
     final hay = numericQ
         ? '${t.reference} ${t.amount.toStringAsFixed(0)} ${t.description}'
@@ -452,12 +456,11 @@ class VoucherFilter {
     String? status,
     bool clearKind = false,
     bool clearStatus = false,
-  }) =>
-      VoucherFilter(
-        query: query ?? this.query,
-        kind: clearKind ? null : (kind ?? this.kind),
-        status: clearStatus ? null : (status ?? this.status),
-      );
+  }) => VoucherFilter(
+    query: query ?? this.query,
+    kind: clearKind ? null : (kind ?? this.kind),
+    status: clearStatus ? null : (status ?? this.status),
+  );
 }
 
 final voucherFilterProvider = StateProvider<VoucherFilter>(
@@ -520,13 +523,12 @@ class ReportScope {
     int? accountId,
     bool clearCurrency = false,
     bool clearAccount = false,
-  }) =>
-      ReportScope(
-        from: from ?? this.from,
-        to: to ?? this.to,
-        currency: clearCurrency ? null : (currency ?? this.currency),
-        accountId: clearAccount ? null : (accountId ?? this.accountId),
-      );
+  }) => ReportScope(
+    from: from ?? this.from,
+    to: to ?? this.to,
+    currency: clearCurrency ? null : (currency ?? this.currency),
+    accountId: clearAccount ? null : (accountId ?? this.accountId),
+  );
 }
 
 final reportScopeProvider = StateProvider<ReportScope>((ref) {
@@ -561,9 +563,7 @@ final reportDataProvider = FutureProvider<ReportData>((ref) async {
     from: s.from,
     to: s.to,
     accountId: s.accountId,
-  ))
-      .where((t) => s.currency == null || t.currency == s.currency)
-      .toList();
+  )).where((t) => s.currency == null || t.currency == s.currency).toList();
 
   final accounts = await repo.accounts(includeArchived: true);
 
@@ -625,7 +625,10 @@ final conversationsProvider = FutureProvider<List<Map<String, Object?>>>((
   ref,
 ) async {
   ref.watch(refreshProvider);
-  return ref.watch(repoProvider).conversations().timeout(
+  return ref
+      .watch(repoProvider)
+      .conversations()
+      .timeout(
         const Duration(seconds: 8),
         onTimeout: () => <Map<String, Object?>>[],
       );
@@ -715,12 +718,44 @@ final isOwnerProvider = FutureProvider<bool>((ref) async {
     return await repo.isWorkspaceOwner().timeout(const Duration(seconds: 8));
   } catch (_) {
     try {
-      return (await repo.workspaceMode()
-              .timeout(const Duration(seconds: 4))) ==
+      return (await repo.workspaceMode().timeout(const Duration(seconds: 4))) ==
           'host';
     } catch (_) {
       return false;
     }
+  }
+});
+
+/// (3.70.0 — التجديد البصري) هل يوجد حساب Google موثق (جدول google_auth)؟
+/// بوابة أمان: ربط الأعضاء/رموز الدعوة وعرض «إدارة المجموعة» في الدرج.
+final googleLinkedProvider = FutureProvider<bool>((ref) async {
+  ref.watch(refreshProvider);
+  try {
+    final db = await ref.read(repoProvider).database;
+    final r = await db.query('google_auth', where: 'id = 1', limit: 1);
+    return r.isNotEmpty && '${r.first['google_id'] ?? ''}'.trim().isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+});
+
+/// (3.70.0 — التجديد البصري) صورة أفاتار الدرج.
+/// الأولوية: صورة مختارة محلياً (account.photoPath) ← photo_url المخزن في
+/// google_auth (رابط شبكة أو مسار محلي بعد اختيار صورة) ← لا صورة (أيقونة).
+final drawerPhotoProvider = FutureProvider<String?>((ref) async {
+  ref.watch(refreshProvider);
+  try {
+    final repo = ref.read(repoProvider);
+    final st = await repo.settings();
+    final local = (st['account.photoPath'] ?? '').trim();
+    if (local.isNotEmpty) return local;
+    final db = await repo.database;
+    final r = await db.query('google_auth', where: 'id = 1', limit: 1);
+    if (r.isEmpty) return null;
+    final p = '${r.first['photo_url'] ?? ''}'.trim();
+    return p.isEmpty ? null : p;
+  } catch (_) {
+    return null;
   }
 });
 
@@ -754,18 +789,24 @@ final handbackTargetProvider = FutureProvider<String?>((ref) async {
     if (await repo.workspaceMode() == 'standalone') return null;
     final db = await repo.database;
     // المدير السابق المعروف من آخر نقل ملكية وصلنا.
-    final mem = await db.query('sync_meta',
-        where: "key = 'prevOwnerDeviceId'", limit: 1);
+    final mem = await db.query(
+      'sync_meta',
+      where: "key = 'prevOwnerDeviceId'",
+      limit: 1,
+    );
     String prev = mem.isNotEmpty ? '${mem.first['value']}' : '';
     if (prev.isEmpty) {
-      final ops = await db.query('operations',
-          where: "entity_id = 'ownershipTransfer'",
-          orderBy: 'timestamp DESC',
-          limit: 5);
+      final ops = await db.query(
+        'operations',
+        where: "entity_id = 'ownershipTransfer'",
+        orderBy: 'timestamp DESC',
+        limit: 5,
+      );
       for (final o in ops) {
         try {
           final v = jsonDecode(
-              '${(jsonDecode('${o['payload']}') as Map)['value']}');
+            '${(jsonDecode('${o['payload']}') as Map)['value']}',
+          );
           final cand = '${v['previous_owner_device_id'] ?? ''}';
           if (cand.isNotEmpty) {
             prev = cand;
@@ -775,8 +816,12 @@ final handbackTargetProvider = FutureProvider<String?>((ref) async {
       }
     }
     if (prev.isEmpty) return null;
-    final rows = await db.query('devices',
-        where: 'id = ?', whereArgs: [prev], limit: 1);
+    final rows = await db.query(
+      'devices',
+      where: 'id = ?',
+      whereArgs: [prev],
+      limit: 1,
+    );
     if (rows.isEmpty) return null;
     // لا نعرض الخيار إن كان «السابق» هو جهازنا نفسه.
     try {
@@ -873,8 +918,7 @@ String syncOpSummary(String payloadJson) {
 }
 
 /// كل صفوف المزامنة النشطة (غير المكتملة) منضمةً إلى نوع العملية.
-final syncOpsProvider =
-    FutureProvider<List<SyncOpRow>>((ref) async {
+final syncOpsProvider = FutureProvider<List<SyncOpRow>>((ref) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
   final db = await repo.database;
@@ -904,8 +948,9 @@ final syncOpsProvider =
       opIds,
     );
     for (final d in dRows) {
-      deliveries[d['id'] as String] =
-          ((d['synced'] as int?) ?? 0) == 1 ? 1 << 20 : 0;
+      deliveries[d['id'] as String] = ((d['synced'] as int?) ?? 0) == 1
+          ? 1 << 20
+          : 0;
     }
   }
   // إجمالي الأقران المقترنين (المطلوب الوصول إليهم).
@@ -950,8 +995,9 @@ class TxDeliveryBadge {
   bool get all => total > 0 && delivered >= total;
 }
 
-final txDeliveryBadgesProvider =
-    FutureProvider<Map<String, TxDeliveryBadge>>((ref) async {
+final txDeliveryBadgesProvider = FutureProvider<Map<String, TxDeliveryBadge>>((
+  ref,
+) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
   final db = await repo.database;
@@ -966,7 +1012,8 @@ final txDeliveryBadgesProvider =
   if (total <= 0) return const {};
   // أحدث عملية محلية لكل معاملة + عدد الأجهزة التي استلمتها.
   // (دفعة 58) شارة التسليم سحابية: synced=1 = وصلت السحابة = وصلت الجميع.
-  final rows = await db.rawQuery('''
+  final rows = await db.rawQuery(
+    '''
     SELECT o.entity_id AS eid,
            CASE WHEN o.synced = 1 THEN $total ELSE 0 END AS delivered
     FROM operations o
@@ -976,11 +1023,15 @@ final txDeliveryBadgesProvider =
         WHERE v.entity_type = 'tx' AND v.entity_id = o.entity_id
           AND v.device_id = o.device_id
       )
-  ''', [ourId]);
+  ''',
+    [ourId],
+  );
   final out = <String, TxDeliveryBadge>{};
   for (final r in rows) {
-    out[(r['eid'] as String?) ?? ''] =
-        TxDeliveryBadge((r['delivered'] as int?) ?? 0, total);
+    out[(r['eid'] as String?) ?? ''] = TxDeliveryBadge(
+      (r['delivered'] as int?) ?? 0,
+      total,
+    );
   }
   return out;
 });
@@ -1015,8 +1066,7 @@ final ownDeviceNameProvider = FutureProvider<String?>((ref) async {
 
 /// أسماء كل الأجهزة بما فيها المطرودة — لعرض اسم المرسل على رسائله
 /// وعملياته حتى بعد مغادرته المجموعة (العمليات تبقى منسوبة لصاحبها).
-final allDeviceNamesProvider =
-    FutureProvider<Map<String, String>>((ref) async {
+final allDeviceNamesProvider = FutureProvider<Map<String, String>>((ref) async {
   ref.watch(refreshProvider);
   final db = await ref.read(repoProvider).database;
   final rows = await db.query('devices', columns: ['id', 'name']);
@@ -1070,22 +1120,27 @@ final groupPeersProvider = FutureProvider<List<GroupPeer>>((ref) async {
     if (!isSelf) {
       final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
       final ls = DateTime.tryParse((d['last_sync_at'] as String?) ?? '');
-      final freshest =
-          (ls != null && (seen == null || ls.isAfter(seen))) ? ls : seen;
-      online = freshest != null &&
+      final freshest = (ls != null && (seen == null || ls.isAfter(seen)))
+          ? ls
+          : seen;
+      online =
+          freshest != null &&
           DateTime.now().difference(freshest) < const Duration(minutes: 5);
     }
-    out.add(GroupPeer(
-      deviceId: id,
-      name: (d['name'] as String?) ?? 'جهاز',
-      isOwner: (d['is_owner'] as int? ?? 0) == 1,
-      isSelf: isSelf,
-      online: online,
-      suspended: revoked,
-      pendingUser: !revoked &&
-          (d['is_owner'] as int? ?? 0) != 1 &&
-          d['user_id'] == null,
-    ));
+    out.add(
+      GroupPeer(
+        deviceId: id,
+        name: (d['name'] as String?) ?? 'جهاز',
+        isOwner: (d['is_owner'] as int? ?? 0) == 1,
+        isSelf: isSelf,
+        online: online,
+        suspended: revoked,
+        pendingUser:
+            !revoked &&
+            (d['is_owner'] as int? ?? 0) != 1 &&
+            d['user_id'] == null,
+      ),
+    );
   }
   return out;
 });
@@ -1120,8 +1175,8 @@ class DeviceSyncStatus {
 
   /// اللقب الموحد بحسب الدور: «المدير (اسم الجهاز)» وهكذا — يُستخدم في
   /// كل واجهات المزامنة والتنبيهات.
-  String get displayName => roleDisplayName(
-      roleCode: roleCode, isOwner: isOwner, deviceName: name);
+  String get displayName =>
+      roleDisplayName(roleCode: roleCode, isOwner: isOwner, deviceName: name);
 }
 
 /// يبني الاسم المعروض الموحّد «اللقب (اسم الجهاز)» بحسب دور الجهاز.
@@ -1144,29 +1199,34 @@ String roleDisplayName({
   return label.isEmpty ? name : '$label ($name)';
 }
 
-final deviceSyncStatusProvider =
-    FutureProvider<List<DeviceSyncStatus>>((ref) async {
+final deviceSyncStatusProvider = FutureProvider<List<DeviceSyncStatus>>((
+  ref,
+) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
   final db = await repo.database;
   final ourId = (await repo.settings())['sync.deviceId'] ?? '';
   if (ourId.isEmpty) return const [];
   // نضمّ دور المستخدم المرتبط بالجهاز لعرض اللقب «المدير (اسم الجهاز)».
-  final peers = await db.rawQuery('''
+  final peers = await db.rawQuery(
+    '''
     SELECT d.*, COALESCE(u.role, '') AS peer_role
     FROM devices d
     LEFT JOIN users u ON u.id = d.user_id
     WHERE d.is_paired = 1 AND COALESCE(d.revoked_at,'') = ''
       AND COALESCE(d.expelled_at,'') = '' AND d.id <> ?
     ORDER BY d.is_owner DESC, d.name ASC
-  ''', [ourId]);
+  ''',
+    [ourId],
+  );
   if (peers.isEmpty) return const [];
   final out = <DeviceSyncStatus>[];
   for (final d in peers) {
     final id = d['id'] as String;
     // (دفعة 58) «الناقص» سحابياً = عملياتنا التي لم تُدفع للسحابة بعد —
     // ما إن تصل السحابة يسحبها كل قرين لحظياً عبر SSE.
-    final missing = await db.rawQuery('''
+    final missing = await db.rawQuery(
+      '''
       SELECT COUNT(*) c FROM operations o
       WHERE o.device_id = ?
         AND o.entity_type NOT IN ${SyncQueueOps.silentEntities}
@@ -1176,27 +1236,32 @@ final deviceSyncStatusProvider =
           SELECT 1 FROM sync_queue cq
           WHERE cq.operation_id = o.id AND cq.status = 'cancelled'
         )
-    ''', [ourId]);
+    ''',
+      [ourId],
+    );
     // حالة الاتصال: آخر ظهور/مزامنة سحابية خلال 5 دقائق = متصل.
     final seen = DateTime.tryParse((d['last_seen_at'] as String?) ?? '');
     final lastSyncAt = DateTime.tryParse((d['last_sync_at'] as String?) ?? '');
-    final freshest = (lastSyncAt != null &&
-            (seen == null || lastSyncAt.isAfter(seen)))
+    final freshest =
+        (lastSyncAt != null && (seen == null || lastSyncAt.isAfter(seen)))
         ? lastSyncAt
         : seen;
-    final online = freshest != null &&
+    final online =
+        freshest != null &&
         DateTime.now().difference(freshest) < const Duration(minutes: 5);
     // «آخر مزامنة» = آخر دفع سحابي معروف لهذا الجهاز.
     final lastSync = (d['last_sync_at'] as String?) ?? '';
-    out.add(DeviceSyncStatus(
-      deviceId: id,
-      name: (d['name'] as String?) ?? 'جهاز',
-      isOwner: (d['is_owner'] as int? ?? 0) == 1,
-      online: online,
-      missingOps: (missing.first['c'] as int?) ?? 0,
-      roleCode: (d['peer_role'] as String?) ?? '',
-      lastSyncAt: lastSync,
-    ));
+    out.add(
+      DeviceSyncStatus(
+        deviceId: id,
+        name: (d['name'] as String?) ?? 'جهاز',
+        isOwner: (d['is_owner'] as int? ?? 0) == 1,
+        online: online,
+        missingOps: (missing.first['c'] as int?) ?? 0,
+        roleCode: (d['peer_role'] as String?) ?? '',
+        lastSyncAt: lastSync,
+      ),
+    );
   }
   return out;
 });
@@ -1216,11 +1281,7 @@ final syncCountsProvider = FutureProvider<Map<String, int>>((ref) async {
     ['synced'],
   );
   final syncedToday = (syncedR.first['c'] as int?) ?? 0;
-  return {
-    'pending': pending,
-    'withError': withError,
-    'synced': syncedToday,
-  };
+  return {'pending': pending, 'withError': withError, 'synced': syncedToday};
 });
 
 // ---------- 🔒 الفترة التجريبية (Trial Engine) ----------
@@ -1239,9 +1300,14 @@ final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
   final db = await repo.database;
   final wsRows = await db.query('workspaces', limit: 1);
   final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
-  return SubscriptionGuard.check(repo, backendUrl: url, workspaceId: ws)
-      .timeout(const Duration(seconds: 10),
-          onTimeout: () => SubscriptionGuard.lastState);
+  return SubscriptionGuard.check(
+    repo,
+    backendUrl: url,
+    workspaceId: ws,
+  ).timeout(
+    const Duration(seconds: 10),
+    onTimeout: () => SubscriptionGuard.lastState,
+  );
 });
 
 /// (الخطط المزدوجة) بوابة ميزة مدفوعة للواجهة: true = الميزة مفتوحة.
@@ -1249,20 +1315,24 @@ final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
 /// المزايا المدفوعة (تبقى ظاهرة بمؤشر 🔒 وتحوّل لشاشة الشراء).
 /// المفاتيح: categories | notifications | cloud_backup | restore |
 /// advanced_search | multi_device | roles | audit.
-final featureUnlockedProvider =
-    FutureProvider.family<bool, String>((ref, key) async {
+final featureUnlockedProvider = FutureProvider.family<bool, String>((
+  ref,
+  key,
+) async {
   final sub = await ref.watch(subscriptionProvider.future);
-  return sub.featureUnlocked((f) => switch (key) {
-        'categories' => f.canUseCategories,
-        'notifications' => f.canSendNotifications,
-        'cloud_backup' => f.canCloudBackup,
-        'restore' => f.canRestoreData,
-        'advanced_search' => f.canAdvancedSearch,
-        'multi_device' => f.multiDeviceSync,
-        'roles' => f.rolePermissions,
-        'audit' => f.auditLog,
-        _ => true,
-      });
+  return sub.featureUnlocked(
+    (f) => switch (key) {
+      'categories' => f.canUseCategories,
+      'notifications' => f.canSendNotifications,
+      'cloud_backup' => f.canCloudBackup,
+      'restore' => f.canRestoreData,
+      'advanced_search' => f.canAdvancedSearch,
+      'multi_device' => f.multiDeviceSync,
+      'roles' => f.rolePermissions,
+      'audit' => f.auditLog,
+      _ => true,
+    },
+  );
 });
 
 /// (باقة المؤسسات) عدّاد المقاعد: (المتصلة حالياً، الحد الأقصى).
@@ -1272,8 +1342,9 @@ final seatUsageProvider = FutureProvider<(int, int)?>((ref) async {
   try {
     final sub = await ref.watch(subscriptionProvider.future);
     if (sub.status == 'none' || sub.planType != 'enterprise') return null;
-    final connected =
-        await CloudJoin.connectedDevicesCount(ref.read(repoProvider));
+    final connected = await CloudJoin.connectedDevicesCount(
+      ref.read(repoProvider),
+    );
     return (connected, sub.maxDevices);
   } catch (_) {
     return null;

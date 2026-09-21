@@ -31,8 +31,11 @@ export function usePermissions(): UsePermissionsReturn {
   const [loading, setLoading] = useState<boolean>(true);
 
   const session = getAuthSession();
-  const currentEmail = (session?.user_email || 'moneerqaid950@gmail.com').toLowerCase();
-  const isSuperAdmin = currentEmail === 'moneerqaid950@gmail.com' || session?.role === 'admin';
+  const currentEmail = (session?.user_email || '').toLowerCase();
+  // (3.70.0 — Security) No hardcoded personal email anywhere: admin rights
+  // derive strictly from the session role and the local SQLite
+  // user_permissions table (served via /api), never from a literal address.
+  const isSuperAdmin = session?.role === 'admin';
 
   const fetchPermissions = useCallback(async () => {
     try {

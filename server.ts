@@ -279,7 +279,7 @@ function queueLocalMutation(
   try {
     const qid = uuidv4();
     const storeId = (req?.headers['x-store-id'] as string) || (req?.body?.store_id as string) || 'store-main';
-    const userEmail = (req?.headers['x-user-email'] as string) || (req?.body?.user_email as string) || 'moneerqaid950@gmail.com';
+    const userEmail = (req?.headers['x-user-email'] as string) || (req?.body?.user_email as string) || '';
     const deviceId = (req?.headers['x-device-id'] as string) || (req?.body?.device_id as string) || 'DEV-LOCAL';
     const ts = Date.now();
     const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
@@ -461,7 +461,7 @@ async function startServer() {
       for (const item of items) {
         const qid = item.queue_id || uuidv4();
         const storeId = item.store_id || (req.headers['x-store-id'] as string) || 'store-main';
-        const userEmail = item.user_email || (req.headers['x-user-email'] as string) || 'moneerqaid950@gmail.com';
+        const userEmail = item.user_email || (req.headers['x-user-email'] as string) || '';
         const deviceId = item.device_id || (req.headers['x-device-id'] as string) || 'DEV-LOCAL';
         const tableName = item.table_name || 'unknown';
         const recordId = String(item.record_id || '');
@@ -782,11 +782,12 @@ async function startServer() {
 
   app.get('/api/user-permissions/me', (req, res) => {
     try {
-      const userEmail = ((req.headers['x-user-email'] as string) || 'moneerqaid950@gmail.com').trim().toLowerCase();
+      const userEmail = ((req.headers['x-user-email'] as string) || '').trim().toLowerCase();
       let row = db.prepare(`SELECT * FROM user_permissions WHERE LOWER(user_email) = ?`).get(userEmail) as any;
       if (!row) {
         const u = db.prepare(`SELECT * FROM users WHERE LOWER(email) = ?`).get(userEmail) as any;
-        const isAdmin = u?.role === 'admin' || userEmail === 'moneerqaid950@gmail.com';
+        // (3.70.0 — Security) الإدارة من الدور الفعلي حصراً — لا بريد مثبّت نصياً.
+        const isAdmin = u?.role === 'admin';
         row = {
           user_email: userEmail,
           store_id: (req.headers['x-store-id'] as string) || 'store-main',
@@ -926,7 +927,12 @@ async function startServer() {
   app.delete('/api/user-permissions/:email', (req, res) => {
     try {
       const email = req.params.email.trim().toLowerCase();
-      if (email === 'moneerqaid950@gmail.com') {
+      // (3.70.0 — Security) حماية أي مدير فعلي (دوره admin في الجدول)
+      // بدل بريد شخصي مثبّت نصياً.
+      const protectedRow = db
+        .prepare(`SELECT role FROM user_permissions WHERE LOWER(user_email) = ?`)
+        .get(email) as any;
+      if (protectedRow?.role === 'admin') {
         return res.status(400).json({ error: 'لا يمكن حذف صلاحيات مدير النظام الرئيسي' });
       }
       db.prepare(`DELETE FROM user_permissions WHERE LOWER(user_email) = ?`).run(email);
