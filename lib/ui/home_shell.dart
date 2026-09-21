@@ -38,6 +38,7 @@ import 'tx_form.dart';
 import 'vouchers_screen.dart';
 import 'pos_screen.dart';
 import 'sync_status_indicator.dart';
+import 'widgets/sync_arrows_indicator.dart';
 import 'sync_ops_screen.dart';
 import '../data/sync/sync_service.dart';
 
@@ -1346,6 +1347,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
+            // (3.71.0) مؤشرا المزامنة اللحظيان (↑↓) — بجوار الجرس
+            // مباشرة؛ يختفيان في الوضع الفردي، والنقر يفتح ورقة التشخيص.
+            const SyncArrowsIndicator(),
             // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
             Consumer(
               builder: (ctx, rref, _) {

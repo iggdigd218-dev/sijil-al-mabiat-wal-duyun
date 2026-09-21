@@ -21,6 +21,7 @@ import 'recorder.dart';
 import 'subscription_guard.dart';
 import 'sync_activity.dart';
 import 'sync_queue.dart';
+import 'sync_diagnostics.dart';
 import 'workspace_service.dart';
 import '../../core/cloud_config.dart';
 
@@ -332,14 +333,27 @@ class SyncEngine {
     _cloudTransport!.onCloudChanged = () {
       Future(() async {
         try {
+          // (3.71.0) تشخيص: دفعة SSE تُطلق دورة سحب مسجَّلة بدورها.
+          SyncDiagnostics.instance.pullStarted();
           final applied =
               await _cloudTransport?.pull(resolver: ConflictResolver()) ?? 0;
+          SyncDiagnostics.instance.pullFinished(
+            ok: true,
+            applied: applied,
+            context: 'SSE → transport.pull',
+          );
           if (applied > 0) {
             try {
               onSyncActivity?.call();
             } catch (_) {}
           }
-        } catch (_) {}
+        } catch (e) {
+          SyncDiagnostics.instance.pullFinished(
+            ok: false,
+            error: e,
+            context: 'SSE → transport.pull',
+          );
+        }
       });
     };
     unawaited(_cloudTransport!.startListening());
@@ -496,7 +510,14 @@ class SyncEngine {
     if (await _trialBlocked()) return;
     _cloudPulling = true;
     try {
+      // (3.71.0) تشخيص: سهم الاستقبال يومض أثناء الدورة وتُسجَّل نتيجتها.
+      SyncDiagnostics.instance.pullStarted();
       final applied = await _cloudTransport!.pull(resolver: ConflictResolver());
+      SyncDiagnostics.instance.pullFinished(
+        ok: true,
+        applied: applied,
+        context: '_periodicCloudPull → transport.pull',
+      );
       if (applied > 0) {
         try {
           onSyncActivity?.call();
@@ -521,10 +542,17 @@ class SyncEngine {
           } catch (_) {}
         }
       } catch (_) {}
-    } catch (_) {
+    } catch (e) {
       // شبكة غائبة/خادم بعيد — المحاولة القادمة بعد الدورة التالية.
+      // (3.71.0) تشخيص: استثناء السحب يُصنَّف (كود/سحابة/شبكة) ويُعرض.
+      SyncDiagnostics.instance.pullFinished(
+        ok: false,
+        error: e,
+        context: '_periodicCloudPull → transport.pull',
+      );
     } finally {
       _cloudPulling = false;
+      SyncDiagnostics.instance.pullIdle();
     }
   }
 
@@ -716,6 +744,9 @@ class SyncEngine {
     final q = _queue ??= SyncQueueOps(await _db);
     await q.retryFailed();
     await processQueue();
+    // (3.71.0) «إعادة المحاولة والفحص الآن» = دفع + سحب معاً: دورة سحب
+    // فورية تحدّث سهم الاستقبال وورقة التشخيص في نفس اللحظة.
+    await _periodicCloudPull();
     // إعادة تقييم «نافذة الخطر» فوراً: إن نجح الدفع يُبث null فيختفي
     // البانر في نفس اللحظة دون انتظار الدورة (8 ثوانٍ).
     await _checkDangerState();
@@ -929,6 +960,8 @@ class SyncEngine {
   Future<void> processQueue() async {
     if (_running) return;
     _running = true;
+    // (3.71.0) تشخيص: سهم الإرسال يومض أثناء الدفعة النشطة.
+    SyncDiagnostics.instance.pushStarted();
     try {
       // 🔒 انتهاء التجربة يجمّد الدفع السحابي كلياً (العمل المحلي يستمر).
       if (await _trialBlocked()) return;
@@ -1025,6 +1058,13 @@ class SyncEngine {
               } catch (_) {}
             }
           } catch (e) {
+            // (3.71.0) تشخيص: الاستثناء يُسجَّل بمصدره المصنَّف وسياقه
+            // (الدالة/الجدول المتأثر) — يُعرض صراحة في ورقة التشخيص.
+            SyncDiagnostics.instance.recordPushError(
+              e,
+              context:
+                  'processQueue → transport.push${entityTable == null ? '' : ' ← جدول $entityTable'}',
+            );
             try {
               await q.markFailed(qid, e).timeout(const Duration(seconds: 3));
             } catch (_) {}
@@ -1045,6 +1085,11 @@ class SyncEngine {
       }
     } finally {
       _running = false;
+      // (3.71.0) تشخيص: عدّادات صادقة من sync_queue ثم نتيجة الدفعة.
+      try {
+        await SyncDiagnostics.instance.refreshQueue(await _db);
+      } catch (_) {}
+      SyncDiagnostics.instance.pushFinished();
       try {
         onSyncActivity?.call();
       } catch (_) {}
