@@ -90,6 +90,13 @@ class DeviceRegistry {
       final mode = await repo.workspaceMode();
       final isOwner = await repo.isWorkspaceOwner();
       final role = (mode == 'member' && !isOwner) ? 'member' : 'owner';
+      // (3.71.0 — نظام صارم) ربط المالك في الفهرس السحابي يشترط التسجيل
+      // بالبريد (حساب Google): هوية مجهولة لا تُسجَّل مالكة لمساحة —
+      // يمنع اختلاق مساحات أشباح. ربط العضو غير مشروط (حق الاسترداد).
+      if (role == 'owner') {
+        final stEmail = await repo.settings();
+        if ((stEmail['account.email'] ?? '').trim().isEmpty) return;
+      }
       if (!force) {
         final existing =
             await lookup(backendUrl: backendUrl, fingerprint: fp);

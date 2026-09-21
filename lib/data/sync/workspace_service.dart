@@ -37,7 +37,29 @@ bool isLegacyWorkspaceId(String? id) {
 
 Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
   // تحقق إن كان Workspace موجود في جدول workspaces.
-  final rows = await db.query('workspaces', limit: 1);
+  // (3.71.0 — ربط حتمي) «أول صف بلا ترتيب» كان يسمح لمساحة شخصية ميتة
+  // بتظليل مساحة المجموعة على جهاز العضو: النقل السحابي ومراقب الطلبات
+  // يرتبطان بمسار خاطئ فتموت المزامنة ويضل طلب المغادرة بلا مدير يراه.
+  // الربط الصريح في الإعدادات يفوز إن كان صفه موجوداً، وإلا أحدث صف مُدرج.
+  String? preferredId;
+  try {
+    if (repo != null) {
+      final stPref = await repo.settings();
+      final p = (stPref[_workspaceIdSetting] ?? '').trim();
+      if (p.isNotEmpty) {
+        final hit = await db.query('workspaces',
+            columns: ['id'], where: 'id = ?', whereArgs: [p], limit: 1);
+        if (hit.isNotEmpty) preferredId = p;
+      }
+    }
+  } catch (_) {}
+  final rows = await db.query(
+    'workspaces',
+    where: preferredId != null ? 'id = ?' : null,
+    whereArgs: preferredId != null ? [preferredId] : null,
+    orderBy: 'rowid DESC',
+    limit: 1,
+  );
   if (rows.isNotEmpty) {
     var id = rows.first['id'] as String;
     // (عزل المساحات) معرف قديم مشترك؟ رحّله لمعرف فريد — لكن فقط لجهاز

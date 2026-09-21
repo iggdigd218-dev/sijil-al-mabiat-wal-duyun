@@ -285,6 +285,11 @@ class CloudJoin {
     await FirebaseAuthRest.cloudIdToken();
     final uid = FirebaseAuthRest.currentUid;
     if (uid.isEmpty || backendUrl.trim().isEmpty) return;
+    // (3.71.0 — نظام صارم) المساحة السحابية تُنشأ وتُطالب بالتسجيل بالبريد
+    // الإلكتروني (حساب Google) فقط: هوية مجهولة بلا بريد لا تكتب عضوية
+    // مالك في السحابة — لا مساحات أشباح بعد اليوم.
+    final stGate = await repo.settings();
+    if ((stGate[FirebaseAuthRest.emailKey] ?? '').trim().isEmpty) return;
     final ws = workspaceId ?? repo.requireWorkspaceId;
     final path =
         '${_root(backendUrl, ws)}/members/${Uri.encodeComponent(uid)}.json';

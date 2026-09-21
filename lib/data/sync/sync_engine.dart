@@ -78,6 +78,11 @@ class SyncEngine {
 
   /// يُستدعى أي نشاط مزامنة (وصول عملية/تغيّر صلاحيات) لتنبيه الواجهة للتحديث.
   static void Function()? onSyncActivity = SyncActivityBus.instance.ping;
+
+  /// (3.71.0 — إخطار الصلاحيات) يُستدعى على جهاز العضو لحظة تطبيق سحب
+  /// غيّر دوره/صلاحياته المنتدبة — بدور العضو الجديد («محاسب»...) لتعرض
+  /// الواجهة إشعاراً فورياً بلا إعادة تشغيل ولا إغلاق للتطبيق.
+  static void Function(String roleLabel)? onPermissionsChanged;
   String? _cloudUrl;
   CloudFirebaseTransport? _cloudTransport;
 
@@ -283,9 +288,9 @@ class SyncEngine {
     // Workspace الحالي — يُقرأ من الجدول في كل استدعاء: الربط يستبدل
     // الجدول بلقطة المجموعة، ونقلٌ بُني بالمعرّف القديم يظل يدفع ويسحب من
     // مسار خاطئ فتموت المزامنة بصمت.
-    final wsRow = await db.query('workspaces', limit: 1);
-    final wsId =
-        wsRow.isNotEmpty ? (wsRow.first['id'] as String) : defaultWorkspaceId;
+    // (3.71.0 — ربط حتمي) نفس حلّ المستودع: الربط الصريح في الإعدادات
+    // أولاً ثم أحدث صف — النقل لا يرتبط أبداً بمساحة شخصية ميتة.
+    final wsId = await ensureWorkspace(db, repo: repo);
     if (url == _cloudUrl &&
         _cloudTransport != null &&
         _cloudTransport!.workspaceId == wsId) {
@@ -453,6 +458,37 @@ class SyncEngine {
     );
   }
 
+  /// (3.71.0) بصمة صلاحيات العضو المنتدب — أي تغيّر فيها يُخطر فوراً.
+  String? _memberPermsSig;
+
+  Future<void> _checkMemberPermissions() async {
+    try {
+      final mode = await repo.workspaceMode();
+      if (mode != 'member') {
+        _memberPermsSig = null;
+        return;
+      }
+      final me = await repo.deviceAssignedUser();
+      final sig = me == null
+          ? ''
+          : '${me.role.code}|'
+              '${me.permissions.entries.where((e) => e.value).map((e) => e.key).join(',')}|'
+              '${me.active}';
+      if (_memberPermsSig == null) {
+        _memberPermsSig = sig; // خط أساس عند الإقلاع — لا إخطار بأثر رجعي.
+        return;
+      }
+      if (sig == _memberPermsSig || sig.isEmpty) {
+        _memberPermsSig = sig;
+        return;
+      }
+      _memberPermsSig = sig;
+      try {
+        onPermissionsChanged?.call(me?.role.label ?? '');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
   Future<void> _periodicCloudPull() async {
     if (_cloudPulling || !_started) return;
     if (_cloudTransport == null) return;
@@ -466,6 +502,9 @@ class SyncEngine {
           onSyncActivity?.call();
         } catch (_) {}
       }
+      // (3.71.0) الصلاحيات المنتدبة تُفحص كل دورة (5 ثوانٍ): تعديل المدير
+      // يُنفذ على جهاز العضو فوراً ويُخطر به بدون إغلاق التطبيق وفتحه.
+      await _checkMemberPermissions();
       // سجل الأجهزة السحابي: يرى المدير أجهزة الأعضاء البعيدة (المنضمة عبر
       // السحابة) ويعيّن لها مستخدمين، وتصل التعيينات/الحظر/الطرد للأعضاء.
       try {

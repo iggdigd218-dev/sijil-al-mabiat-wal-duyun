@@ -38,6 +38,8 @@ void main() {
     await AppDatabase.createSchema(db);
     repo = Repo(databaseProvider: () async => db);
     await repo.initSyncInfra();
+    // (3.71.0) ربط المالك السحابي مشروط بالتسجيل بالبريد — العقد الجديد.
+    await repo.setSetting('account.email', 'boss@firm.test');
   });
 
   tearDown(() async {
@@ -76,6 +78,17 @@ void main() {
     expect(rec, isNotNull);
     expect(rec!['workspaceId'], repo.requireWorkspaceId);
     expect(rec['role'], 'owner');
+  });
+
+  test('REG-01b (3.71.0) هوية بلا بريد مسجل لا تُربط مالكة في السحابة',
+      () async {
+    await repo.setSetting('account.email', '');
+    final store = <String, Object?>{};
+    await http.runWithClient(
+        () => DeviceRegistry.upsertBinding(repo, backendUrl: url),
+        () => fakeCloud(store));
+    final fp = await DeviceRegistry.fingerprintKey(repo);
+    expect(store['/workspaces/_registry/device_index/$fp.json'], isNull);
   });
 
   test('REG-02 سجل owner قائم لا يُخفَّض لمساحة أخرى بلا force', () async {

@@ -154,6 +154,37 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     }
   }
 
+  /// (3.71.0) حوار التحذير الصريح قبل الانضمام — موافقة أو إلغاء.
+  Future<bool> _confirmDestructiveJoin() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded,
+            color: Colors.orange, size: 40),
+        title: const Text('تحذير: الانضمام للمجموعة'),
+        content: const Text(
+          'سيتم حذف جميع بياناتك الحالية نهائياً — الحسابات والسندات '
+          'والأصناف والمحادثات — ولا يمكن التراجع.\n\n'
+          'ستدخل المجموعة نظيفاً تماماً ببيانات المجموعة فقط، وصلاحياتك '
+          'يحددها مدير المجموعة.\n\nهل توافق على المتابعة؟',
+          style: TextStyle(height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('أوافق — انضم'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   // ---------- خطوة 3: دفع الطلب والانتظار ----------
   Future<void> _sendRequest({
     required String url,
@@ -166,6 +197,10 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     // فإعادة الإرسال كانت تستبدل الطلب نفسه لا تُنشئ آخر — لكن منع
     // التكرار من الأساس أوفر للشبكة وأوضح للمدير في قائمة الانتظار.
     if (_busy || _sentOnce) return;
+    // (3.71.0 — انضمام صارم) تحذير صريح وموافقة صريحة قبل الإرسال:
+    // الانضمام يحذف كل بيانات الجهاز الحالية نهائياً ويدخل ببيانات
+    // المجموعة فقط — لا انضمام صامت بعد اليوم.
+    if (!await _confirmDestructiveJoin()) return;
     _sentOnce = true;
     setState(() {
       _busy = true;

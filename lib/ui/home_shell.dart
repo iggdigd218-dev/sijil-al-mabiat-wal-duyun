@@ -50,6 +50,7 @@ import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/sync_activity.dart';
 import '../data/sync/subscription_guard.dart';
+import '../data/sync/workspace_service.dart';
 import '../data/sync/chat_hooks.dart';
 import 'trial_ui.dart';
 import 'widgets.dart' show showSnack;
@@ -455,6 +456,25 @@ class _HomeShellState extends ConsumerState<HomeShell>
         entityType: 'sync',
       );
     };
+    // (3.71.0) المدير عدّل صلاحيات هذا العضو — التنفيذ فوري عبر السحب
+    // اللحظي (SSE + دورة 5 ثوانٍ)، والإخطار فوري على جهاز العضو:
+    // إشعار نظام قابل للنقر + جرس داخل التطبيق، بلا إعادة تشغيل.
+    SyncEngine.onPermissionsChanged = (roleLabel) {
+      Sfx.pair();
+      try {
+        ref.read(repoProvider).notify(
+              title: 'تم تعديل صلاحياتك',
+              body: 'دورك في المجموعة الآن: «$roleLabel» — التعديل نافذ فوراً',
+              kind: 'success',
+              entityType: 'sync',
+            );
+      } catch (_) {}
+      _showTappableNotice(
+        'تم تعديل صلاحياتك',
+        'دورك في المجموعة الآن: «$roleLabel» — نافذ فوراً',
+        entityType: 'sync',
+      );
+    };
     // اكتمال المزامنة مع جهاز: حدث تشغيلي عابر — توست سفلي خفيف يختفي
     // وحده، لا يُخزَّن أبداً في جدول notifications الداخلي (قاعدة صارمة).
     SyncEngine.onDeviceSyncComplete = (deviceName0) {
@@ -593,8 +613,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
       final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (3.71.0 — ربط حتمي) المساحة الصريحة/الأحدث — لا اختيار عشوائياً.
+      final ws = await ensureWorkspace(db, repo: repo);
       // (الفهرس السحابي) تثبيت ربط بصمة الجهاز بمساحته ودوره الحاليين.
       try {
         await DeviceRegistry.upsertBinding(repo, backendUrl: url);
@@ -686,8 +706,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty || !mounted) return;
       final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (3.71.0 — ربط حتمي) المراقب يستمع لمساحة المجموعة الفعلية:
+      // طلبات المغادرة كانت تُكتب لمساحة ميتة فلا يصل المدير شيء.
+      final ws = await ensureWorkspace(db, repo: repo);
       _globalJoinWatcher = JoinRequestWatcher(
         backendUrl: url,
         workspaceId: ws,
@@ -828,6 +849,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _activityDebounce?.cancel();
     if (SyncEngine.onOpDelivered != null) SyncEngine.onOpDelivered = null;
     if (SyncEngine.onPeerJoined != null) SyncEngine.onPeerJoined = null;
+    if (SyncEngine.onPermissionsChanged != null) {
+      SyncEngine.onPermissionsChanged = null;
+    }
     SyncEngine.onDeviceSyncComplete = null;
     SyncEngine.onSyncDanger = null;
     ChatHooks.onChatMessage = null;

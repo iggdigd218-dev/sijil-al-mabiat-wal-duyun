@@ -18,6 +18,7 @@ import '../data/providers.dart';
 import '../data/sync/auto_backup.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/sync/google_auth_service.dart';
+import '../data/sync/workspace_service.dart';
 import 'splash.dart' show SplashScreen;
 import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
@@ -292,9 +293,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         }
         return;
       }
+      // (3.71.0 — طلب لا يضل) المساحة الحتمية نفسها التي يرتبط بها محرك
+      // المزامنة: الطلب كان يُكتب لمساحة شخصية ميتة فلا يراه المدير أبداً.
+      // والمدير لا يرسل طلب مغادرة لنفسه — معلّق إلى الأبد بلا مُعتمِد.
+      if (await repo.isWorkspaceOwner()) {
+        if (context.mounted) {
+          showSnack(context,
+              'أنت مدير المجموعة — لا يوجد مدير أعلى ليوافق على مغادرتك. '
+              'استخدم «تسليم الإدارة» أو «حل المجموعة» من إدارة المجموعة.');
+        }
+        return;
+      }
       final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final ws = await ensureWorkspace(db, repo: repo);
       await CloudJoin.requestLeave(repo, backendUrl: url, workspaceId: ws);
       Sfx.success();
       if (context.mounted) {
@@ -1940,8 +1951,8 @@ class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
         final st = await repo.settings();
         final url = effectiveBackendUrl(st['cloudBackendUrl']);
         final db = await repo.database;
-        final wsRows = await db.query('workspaces', limit: 1);
-        final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+        // (3.71.0) مساحة حتمية — الحذف السحابي لا يصيب مساحة بالاختيار العشوائي.
+        final ws = await ensureWorkspace(db, repo: repo);
         if (url.isNotEmpty) {
           await CloudJoin.deleteIndividualWorkspace(repo,
               backendUrl: url, workspaceId: ws);

@@ -98,6 +98,26 @@ class SnapshotApply {
       }
 
       await insertAll('workspaces');
+      // (3.71.0 — دخول نظيف) العضو يبقى في مساحة المجموعة وحدها: كل صف
+      // محلي خارج اللقطة (مساحة شخصية ميتة) يُحذف — كان يظلل مسار
+      // المزامنة ويبتلع طلبات المغادرة فلا تصل المدير.
+      try {
+        final snapWs = snap['workspaces'];
+        if (snapWs is List && snapWs.isNotEmpty) {
+          final keep = <String>[
+            for (final r in snapWs)
+              if (r is Map) '${r['id'] ?? ''}'
+          ]..removeWhere((e) => e.isEmpty);
+          if (keep.isNotEmpty) {
+            await txn.delete(
+              'workspaces',
+              where:
+                  'id NOT IN (${List.filled(keep.length, '?').join(',')})',
+              whereArgs: keep,
+            );
+          }
+        }
+      } catch (_) {}
       await insertAll('users');
       await insertAll('devices');
       await insertAll('accounts');
