@@ -50,6 +50,7 @@ import '../data/sync/device_id.dart';
 import '../data/sync/sync_engine.dart';
 import '../data/sync/sync_activity.dart';
 import '../data/sync/subscription_guard.dart';
+import '../data/repository.dart';
 import '../data/sync/workspace_service.dart';
 import '../data/sync/chat_hooks.dart';
 import 'trial_ui.dart';
@@ -864,8 +865,24 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final engine = ref.read(syncEngineProvider);
     if (!engine.hasStarted) engine.start();
     setState(() {
-      _syncFuture = SyncService(repo: repo, engine: engine).status();
+      _syncFuture = _safeSyncStatus(repo, engine);
     });
+  }
+
+  /// (3.71.0+136) درع سباق الإغلاق: تحديث دوري قيد الطيران قد يكتمل بعد
+  /// التفكيك وإغلاق القاعدة — database_closed يُبتلع ويعاد وضع خامد صامت
+  /// بدل خطأ غير معالج خارج النطاق غير المتزامن (أسقط شارد CI رغم خضرة محلية).
+  Future<SyncStatusInfo> _safeSyncStatus(Repo repo, SyncEngine engine) async {
+    try {
+      return await SyncService(repo: repo, engine: engine).status();
+    } catch (_) {
+      return const SyncStatusInfo(
+        state: SyncState.offline,
+        pending: 0,
+        failed: 0,
+        cloudConfigured: false,
+      );
+    }
   }
 
   /// فحص تحديث التطبيق يدوياً (زر التحديث بسطح المكتب): يجري بالخلفية
