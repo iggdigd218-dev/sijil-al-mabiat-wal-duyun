@@ -608,6 +608,9 @@ Map<String, bool> defaultPerms(UserRole role) {
 class AppUser {
   final int? id;
   final String name;
+
+  /// (3.70) البريد — مفتاح RBAC في user_permissions (فارغ لصفوف قديمة).
+  final String email;
   final UserRole role;
   final String pin;
 
@@ -622,6 +625,7 @@ class AppUser {
   const AppUser({
     this.id,
     required this.name,
+    this.email = '',
     this.role = UserRole.viewer,
     this.pin = '',
     this.password = '',
@@ -697,6 +701,7 @@ class AppUser {
     return AppUser(
       id: m['id'] as int?,
       name: (m['name'] ?? '') as String,
+      email: '${m['email'] ?? ''}',
       role: UserRole.fromCode((m['role'] ?? 'viewer') as String),
       pin: (m['pin'] ?? '') as String,
       password: (m['password'] ?? '') as String,

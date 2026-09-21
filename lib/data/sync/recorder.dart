@@ -103,18 +103,23 @@ class SyncRecorder {
     // للمستخدم كمزامنات عالقة وتزاحم الطابور.
     final st = await db.query('settings',
         columns: ['key', 'value'],
-        where: 'key IN (?, ?)',
-        whereArgs: ['cloudBackendUrl', 'cloudAutoSync']);
+        where: 'key IN (?, ?, ?)',
+        whereArgs: ['cloudBackendUrl', 'cloudAutoSync', 'account.type']);
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
     final cloudOn =
         effectiveBackendUrl(map['cloudBackendUrl']).isNotEmpty &&
             kCloudAutoSyncAlways; // مثبتة دائماً (المعمارية الصامتة).
     // (دفعة 58) «السحابة حصرياً»: Firebase RTDB هو الناقل الوحيد —
     // اجتُثت طبقة LAN نهائياً، لا هدف lan في الطابور بعد اليوم.
-    final targets = <String>{
-      if (cloudOn) SyncTarget.cloud,
-      ...extraTargets,
-    };
+    // (3.70) الحساب الفردي: محلي بالكامل — لا تُستدعى sync_queue إطلاقاً
+    // (لا أهداف، لا شبكة). العمليات تبقى في سجل operations المحلي فقط.
+    final individual = (map['account.type'] ?? '') == 'individual';
+    final targets = individual
+        ? <String>{}
+        : <String>{
+            if (cloudOn) SyncTarget.cloud,
+            ...extraTargets,
+          };
     for (final t in targets) {
       await db.insert(
           'sync_queue',

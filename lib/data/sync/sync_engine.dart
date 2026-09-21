@@ -11,7 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/token_cipher.dart';
-import '../cloud_sync.dart';
+import 'auto_backup.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
@@ -342,6 +342,12 @@ class SyncEngine {
 
   Future<void> start() async {
     if (_started) return;
+    // (3.70) الحساب الفردي يعمل محلياً بالكامل: لا محرك ولا شبكة ولا طابور.
+    // التبديل لاحقاً إلى «مؤسسة» يسمح باستدعاء start() مجدداً (_started لم يُرفع).
+    try {
+      final st0 = await repo.settings();
+      if ((st0['account.type'] ?? '') == 'individual') return;
+    } catch (_) {}
     _started = true;
     final generation = ++_generation;
     _queue ??= SyncQueueOps(await _db);
@@ -409,21 +415,17 @@ class SyncEngine {
         try {
           await repo.purgeExpiredChatMessages();
         } catch (_) {}
-        // (المعمارية الصامتة) نسخة سحابية صامتة كل 24 ساعة كحد أقصى —
-        // بلا أي تدخل من المستخدم؛ فشلها الصامت يعاد في الدورة القادمة.
+        // (3.70) النسخ الاحتياطي التلقائي الموحّد: المجدول (محلي/Drive/سحابي)
+        // أو الصامت القديم — فشل أي مسار يُبتلع ويُعاد في الدورة القادمة.
         try {
-          if (await CloudSync.silentBackupDue(repo)) {
-            await CloudSync.silentWorkspaceBackup(repo);
-          }
+          await AutoBackupService.maybeRun(repo);
         } catch (_) {}
       },
     );
-    // نسخة صامتة عند الإقلاع إن كانت مستحقة (خلفية، لا تعطل الواجهة).
+    // دورة نسخ عند الإقلاع إن كانت مستحقة (خلفية، لا تعطل الواجهة).
     Future(() async {
       try {
-        if (await CloudSync.silentBackupDue(repo)) {
-          await CloudSync.silentWorkspaceBackup(repo);
-        }
+        await AutoBackupService.maybeRun(repo);
       } catch (_) {}
     });
     // تقليم فوري عند الإقلاع (خلفية، لا يعطل الواجهة) + جلب المرفقات
@@ -951,6 +953,7 @@ class SyncEngine {
               EntityKind.category => 'categories',
               EntityKind.conversation => 'conversations',
               EntityKind.message => 'messages',
+              EntityKind.userPermission => 'user_permissions',
             };
             entityId = op.entityId;
             if (entityTable == 'transactions') {

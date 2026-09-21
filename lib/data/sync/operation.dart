@@ -19,7 +19,8 @@ enum EntityKind {
   setting,
   category, // تصنيفات الحسابات (جدول categories)
   conversation, // محادثات الدردشة
-  message; // رسائل الدردشة (دردشة المجموعة بين الأجهزة)
+  message, // رسائل الدردشة (دردشة المجموعة بين الأجهزة)
+  userPermission; // (3.70) صفوف الصلاحيات المحلية user_permissions
 
   static EntityKind from(String s) => EntityKind.values.firstWhere(
         (e) => e.name == s,

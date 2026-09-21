@@ -18,6 +18,10 @@ import '../core/cloud_config.dart';
 
 /// Repo واحدة ومُهيّأة مسبقًا تُحقن عبر ProviderScope.override في main.
 /// لا ننشئ نسخة جديدة هنا لضمان أن initSyncInfra() استُدعيت مرة واحدة.
+/// (3.70) مفتاح الملاحة العام — مسارات الخروج المؤمَّن وطلبات الخروج
+/// تعمل عبره حتى بعد إغلاق الدرج الجانبي.
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final repoProvider = Provider<Repo>(
   (ref) => throw StateError('repoProvider must be overridden in ProviderScope'),
 );

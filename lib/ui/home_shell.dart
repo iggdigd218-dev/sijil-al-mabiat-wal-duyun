@@ -15,6 +15,7 @@ import '../data/sync/device_registry.dart';
 import '../data/sync/workspace_recovery.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
+import 'logout_flow.dart';
 import 'update_section.dart';
 import 'account_form.dart';
 import 'accounts_screen.dart';
@@ -1962,6 +1963,62 @@ class _Drawer extends ConsumerWidget {
                                     color: Colors.white, fontSize: 11),
                               ),
                             ),
+                            // (3.70 — المرحلة 6) البريد وبيانات المنشأة داخل
+                            // الترويسة العلوية — للمدير والحساب الفردي فقط.
+                            Consumer(
+                              builder: (ctx, rref, _) {
+                                final st = rref
+                                        .watch(settingsProvider)
+                                        .valueOrNull ??
+                                    const <String, String>{};
+                                final acctType =
+                                    (st['account.type'] ?? '').trim();
+                                final individual = acctType == 'individual' ||
+                                    (acctType.isEmpty &&
+                                        wsMode == 'standalone');
+                                if (!isOwner && !individual) {
+                                  return const SizedBox.shrink();
+                                }
+                                final email = (st['account.email'] ??
+                                        user?.email ??
+                                        '')
+                                    .trim();
+                                final biz = (st['businessName'] ?? '').trim();
+                                if (email.isEmpty && biz.isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 7),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (biz.isNotEmpty)
+                                        Text(
+                                          biz,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      if (email.isNotEmpty)
+                                        Text(
+                                          email,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 10.5,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -2056,6 +2113,43 @@ class _Drawer extends ConsumerWidget {
                 ),
               ),
             ),
+            // ---------- (3.70) طلبات خروج الموظفين — مدير/وكيل ----------
+            if (wsMode != 'standalone' &&
+                (isOwner || user?.role == UserRole.agent))
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                child: Material(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      Navigator.pop(context);
+                      showLogoutRequestsSheet(ref);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(Icons.fact_check_outlined,
+                              color: AppColors.text2Of(context), size: 20),
+                          const SizedBox(width: 12),
+                          Text(
+                            'طلبات خروج الموظفين',
+                            style: TextStyle(
+                              color: AppColors.text2Of(context),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             // ---------- تسجيل الخروج ----------
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -2064,7 +2158,10 @@ class _Drawer extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(14),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(14),
-                  onTap: () => Navigator.pop(context),
+                  onTap: () {
+                    Navigator.pop(context);
+                    showSecuredLogout(ref);
+                  },
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 12),
@@ -2203,6 +2300,9 @@ class _DrawerItems {
         if (s == AppScreen.syncOps) return false;
         // التقارير تتطلب صلاحية عرض التقارير.
         if (s == AppScreen.reports) return can('view_reports');
+        // (3.70) الأصناف: إدارة المخزون للمدير/الوكيل/المحاسب/الإدخال —
+        // تُحجب عن الكاشير (بلا صلاحية تعديل) فوراً ودون شبكة.
+        if (s == AppScreen.inventory) return can('edit_tx');
         // النسخ الاحتياطي يُحذف من القائمة الجانبية للأعضاء بلا صلاحية
         // إدارة النسخ — يبقى لهم خيار النسخة المحلية في الإعدادات فقط.
         if (s == AppScreen.backup) return can('manage_backup');

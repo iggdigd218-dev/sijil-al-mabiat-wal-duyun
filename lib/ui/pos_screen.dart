@@ -75,6 +75,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
   late final TextEditingController _discountCtrl;
   late final TextEditingController _notesCtrl;
 
+  /// (3.70) صلاحية الخصم المحلية — تُحجب عن الكاشير فوراً (بلا شبكة).
+  bool _canDiscount = true;
+
   @override
   void initState() {
     super.initState();
@@ -83,6 +86,13 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _discountCtrl = TextEditingController(text: d.discountText);
     _notesCtrl = TextEditingController(text: d.notesText);
     _tabController = TabController(length: 2, vsync: this);
+    // (3.70 — المرحلة 4) RBAC محلي Offline-Ready: حقل الخصم يظهر فقط
+    // لصاحب صلاحية can_discount.
+    ref.read(repoProvider).effectivePermissions().then((p) {
+      if (mounted && p.canDiscount != _canDiscount) {
+        setState(() => _canDiscount = p.canDiscount);
+      }
+    });
     // ربط الزر المركزي الموحد: على شاشة POS يفتح درج الدفع مباشرة.
     PosScreen.openCheckoutBridge = () {
       if (!mounted) return;
@@ -1288,8 +1298,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
                     const SizedBox(height: 12),
 
-                    // الخصم المزدوج: نسبة % أو مبلغ مقطوع.
-                    Row(
+                    // الخصم المزدوج: نسبة % أو مبلغ مقطوع — (3.70) محجوب
+                    // عن الكاشير بلا صلاحية خصم (فحص RBAC محلي فوري).
+                    if (_canDiscount)
+                      Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(

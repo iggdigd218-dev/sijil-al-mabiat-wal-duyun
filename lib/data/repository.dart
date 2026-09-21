@@ -14,6 +14,7 @@ import '../core/format.dart';
 import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
+import '../core/rbac.dart';
 import '../core/workspace_mode.dart';
 import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
@@ -121,6 +122,10 @@ class Repo {
     // المستخدم الحالي.
     final me = await currentUser();
     _currentUserId = me?.id;
+
+    // (3.70) املأ بريد حساب السحابة في صف المستخدم المحلي — مفتاح RBAC
+    // (user_email) يصبح معروفاً ويُزامَن لبقية الأجهزة.
+    await ensureSelfUserEmail();
 
     // تأكد من أن جهازنا مرتبط بالمستخدم الحالي (في الوضع المستقل/المضيف).
     if (_deviceId != null && _currentUserId != null) {
@@ -1205,6 +1210,169 @@ class Repo {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  // ============ (3.70) نمط الحساب: فردي / مؤسسة (المرحلة 3) ============
+
+  static const accountModeKey = 'account.type';
+  static const accountEmailKey = 'account.email';
+
+  /// الحساب الفردي يعمل محلياً بالكامل على SQLite: بلا شبكة، بلا طابور
+  /// مزامنة — مع نسخ احتياطي تلقائي مجدول ووجهة Drive مجانية دائمة.
+  Future<bool> isIndividualAccount() async =>
+      ((await settings())[accountModeKey] ?? '') == 'individual';
+
+  Future<void> setAccountMode({required bool individual}) async {
+    await setSetting(
+        accountModeKey, individual ? 'individual' : 'enterprise');
+  }
+
+  // ============ (3.70) الصلاحيات المحلية RBAC — user_permissions ============
+  // الملكية والصلاحيات تُنسب حصراً إلى store_id + user_email — لا بصمة
+  // جهاز ولا معرّف عتاد. الفحص محلي فوري، والتعديل يُصعد عبر sync_queue.
+
+  Future<List<Map<String, Object?>>> userPermissions() async {
+    final db = await _db;
+    return db.query('user_permissions', orderBy: 'user_email');
+  }
+
+  /// إنشاء/تحديث صف صلاحيات بمفتاح البريد + تصعيده للطابور تلقائياً.
+  Future<void> upsertUserPermission({
+    required String email,
+    String role = '',
+    bool canDiscount = false,
+    bool canDeleteTx = false,
+    bool canViewReports = false,
+    bool canManageItems = false,
+    bool isActive = true,
+    bool sync = true,
+  }) async {
+    final em = email.trim().toLowerCase();
+    if (em.isEmpty) return;
+    final db = await _db;
+    final row = <String, Object?>{
+      'user_email': em,
+      'store_id': requireWorkspaceId,
+      'role': role,
+      'can_discount': canDiscount ? 1 : 0,
+      'can_delete_tx': canDeleteTx ? 1 : 0,
+      'can_view_reports': canViewReports ? 1 : 0,
+      'can_manage_items': canManageItems ? 1 : 0,
+      'is_active': isActive ? 1 : 0,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    };
+    await db.insert('user_permissions', row,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    if (sync) {
+      try {
+        await queueOperation(
+          entityType: EntityKind.userPermission,
+          entityId: em,
+          opType: OpKind.update,
+          payload: row,
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// الصلاحيات النافذة للمستخدم الحالي — محلياً دون أي شبكة:
+  /// فردي/مالك ⇒ كاملة؛ صف user_permissions ⇒ أعلامه؛ دور وصلاحيات
+  /// قديمة ⇒ اشتقاق جسري؛ غير معروف في مؤسسة ⇒ أصفار (fail-closed).
+  Future<EffectivePermissions> effectivePermissions() async {
+    try {
+      final st = await settings();
+      final email = (st[accountEmailKey] ?? '').trim().toLowerCase();
+      if ((st[accountModeKey] ?? '') == 'individual') {
+        return EffectivePermissions.full(email);
+      }
+      if (await isWorkspaceOwner()) return EffectivePermissions.full(email);
+      if (email.isNotEmpty) {
+        final db = await _db;
+        final rows = await db.query('user_permissions',
+            where: 'user_email = ?', whereArgs: [email], limit: 1);
+        if (rows.isNotEmpty) return EffectivePermissions.fromRow(rows.first);
+      }
+      final me = await currentUser();
+      if (me != null && me.active) {
+        if (me.role == UserRole.admin || me.role == UserRole.agent) {
+          return EffectivePermissions.full(email);
+        }
+        final csv = me.permissions.entries
+            .where((e) => e.value)
+            .map((e) => e.key)
+            .join(',');
+        return deriveFromRolePerms(email, me.role.code, csv);
+      }
+      return EffectivePermissions.none(email);
+    } catch (_) {
+      return EffectivePermissions.none('');
+    }
+  }
+
+  /// يملأ بريد الحساب السحابي في صف المستخدم الحالي ويبثّه للأجهزة.
+  Future<void> ensureSelfUserEmail() async {
+    try {
+      final st = await settings();
+      final em = (st[accountEmailKey] ?? '').trim();
+      if (em.isEmpty) return;
+      final uid = _currentUserId;
+      if (uid == null) return;
+      final db = await _db;
+      final rows =
+          await db.query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
+      if (rows.isEmpty) return;
+      if ('${rows.first['email'] ?? ''}'.trim().isNotEmpty) return;
+      final now = DateTime.now().toIso8601String();
+      await db.update('users', {'email': em, 'updated_at': now},
+          where: 'id = ?', whereArgs: [uid]);
+      final urow =
+          await db.query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
+      await queueOperation(
+        entityType: EntityKind.user,
+        entityId: '$uid',
+        opType: OpKind.update,
+        payload: Map<String, Object?>.from(urow.first),
+      );
+    } catch (_) {}
+  }
+
+  /// ترقية عضو إلى «وكيل المدير» (Deputy) — أعلى دور يُمنح لعضو، يقوم
+  /// بعمل المدير أثناء غيابه ويعتمد طلبات خروج الموظفين (المرحلة 5).
+  Future<void> promoteToDeputy(String email) async {
+    final em = email.trim().toLowerCase();
+    if (em.isEmpty) return;
+    final db = await _db;
+    final rows = await db.query('users',
+        where: 'LOWER(email) = ?', whereArgs: [em], limit: 1);
+    if (rows.isNotEmpty) {
+      final uid = rows.first['id'];
+      final full = kPerms.map((p) => p.key).join(',');
+      await db.update(
+          'users',
+          {
+            'role': UserRole.agent.code,
+            'permissions': full,
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [uid]);
+      final urow =
+          await db.query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
+      await queueOperation(
+        entityType: EntityKind.user,
+        entityId: '$uid',
+        opType: OpKind.update,
+        payload: Map<String, Object?>.from(urow.first),
+      );
+    }
+    await upsertUserPermission(
+      email: em,
+      role: UserRole.agent.code,
+      canDiscount: true,
+      canDeleteTx: true,
+      canViewReports: true,
+      canManageItems: true,
+    );
+  }
+
   // ==================== سجل النشاط ====================
 
   Future<void> logActivity(String text, String refType, String refId) async {
@@ -1815,6 +1983,19 @@ class Repo {
         opType: OpKind.update,
         payload: Map<String, Object?>.from(urow.first),
       );
+      // (3.70) جسر RBAC: املأ صف user_permissions بمفتاح البريد فور
+      // معرفته — الجدول المحلي هو المرجع، والبريد يصل من جهاز العضو.
+      final em = '${urow.first['email'] ?? ''}'.trim().toLowerCase();
+      if (em.isNotEmpty) {
+        await upsertUserPermission(
+          email: em,
+          role: role.code,
+          canDiscount: roleGrantsAdvanced(role),
+          canDeleteTx: effectivePerms.contains('delete_tx'),
+          canViewReports: effectivePerms.contains('view_reports'),
+          canManageItems: roleGrantsAdvanced(role),
+        );
+      }
     }
   }
 

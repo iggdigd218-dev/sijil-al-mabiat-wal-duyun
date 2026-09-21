@@ -121,6 +121,7 @@ class NexoraApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'مدير الحسابات',
       debugShowCheckedModeBanner: false,
       // سطح المكتب: تمرير طبيعي بعجلة الفأرة وبالسحب بالماوس معاً

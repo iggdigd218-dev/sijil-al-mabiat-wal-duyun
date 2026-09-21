@@ -7,7 +7,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/cloud_config.dart';
-import '../cloud_sync.dart';
+import 'auto_backup.dart';
 import '../repository.dart';
 import 'device_registry.dart';
 
@@ -74,7 +74,7 @@ class WorkspaceRecovery {
     required String workspaceId,
   }) async {
     if (backendUrl.isEmpty || workspaceId.isEmpty) return false;
-    final pulled = await CloudSync.pullWorkspaceBackup(repo,
+    final pulled = await AutoBackupService.pullWorkspaceBackup(repo,
         backendUrl: backendUrl, workspaceId: workspaceId);
     if (pulled == null) return false;
     final db = await repo.database;
@@ -124,7 +124,7 @@ class WorkspaceRecovery {
     }
     // 3) مالك: استرجاع بيانات المؤسسة من النسخة الصامتة إن وُجدت.
     try {
-      final pulled = await CloudSync.pullWorkspaceBackup(repo,
+      final pulled = await AutoBackupService.pullWorkspaceBackup(repo,
           backendUrl: backendUrl, workspaceId: targetWs);
       if (pulled != null) {
         await repo.importAll(pulled);

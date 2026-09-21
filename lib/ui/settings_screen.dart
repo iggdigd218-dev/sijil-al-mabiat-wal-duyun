@@ -15,6 +15,7 @@ import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/auto_backup.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/sync/google_auth_service.dart';
 import 'splash.dart' show SplashScreen;
@@ -971,8 +972,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           title:
                               const Text('الانضمام إلى مجموعة عبر السحابة'),
                           subtitle: const Text(
-                            'سمِّ جهازك ثم امسح رمز QR أو أدخل رمزاً من 6 '
-                            'أرقام — يُفعَّل الجهاز بعد موافقة المدير.',
+                            'امسح رمز QR أو أدخل رمز الدعوة — يُفعَّل بعد '
+                            'موافقة المدير.',
                             style: TextStyle(fontSize: 11.5, height: 1.5),
                           ),
                           trailing: const Icon(Icons.chevron_left),
@@ -981,6 +982,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                     ],
                   ),
+                ],
+                // (3.70 — المرحلة 3) النسخ الاحتياطي التلقائي المجدول:
+                // [كل ساعتين / يومياً في وقت محدد] + لقطة محلية + Drive مجاني.
+                if (canEditOrg || isIndividual) ...[
+                  const SizedBox(height: 18),
+                  const _AutoBackupSection(),
                 ],
                 // (قانون 2026-09-19) الحساب الفردي: منطقة الخطر — حذف
                 // الحساب نهائياً (كل شيء عدا بصمة الجهاز والاشتراك المدفوع).
@@ -1807,6 +1814,147 @@ class _DeleteAccountTileState extends ConsumerState<_DeleteAccountTile> {
         trailing: const Icon(Icons.chevron_left),
         onTap: _busy ? null : _delete,
       ),
+    );
+  }
+}
+
+// ==================== (3.70) النسخ الاحتياطي التلقائي ====================
+
+/// جدولة [كل ساعتين / يومياً في وقت محدد] + لقطة SQLite محلية باسم
+/// backup_{store_id}_{timestamp}.db + وجهة Google Drive مجانية ودائمة
+/// للجميع (لا تُحجب بانتهاء التجربة — السحابة الخاصة وحدها المقيدة).
+class _AutoBackupSection extends StatelessWidget {
+  const _AutoBackupSection();
+
+  @override
+  Widget build(BuildContext context) => const _Collapsible(
+        title: 'النسخ الاحتياطي التلقائي',
+        icon: Icons.autorenew_rounded,
+        color: Color(0xFF0D9488),
+        children: [_AutoBackupControls()],
+      );
+}
+
+class _AutoBackupControls extends ConsumerStatefulWidget {
+  const _AutoBackupControls();
+
+  @override
+  ConsumerState<_AutoBackupControls> createState() =>
+      _AutoBackupControlsState();
+}
+
+class _AutoBackupControlsState extends ConsumerState<_AutoBackupControls> {
+  String _mode = 'off';
+  final _timeCtl = TextEditingController(text: '02:00');
+  bool _drive = true;
+  bool _busy = false;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _timeCtl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final st = await ref.read(repoProvider).settings();
+    if (!mounted) return;
+    setState(() {
+      _mode = st[AutoBackupService.kModeKey] ?? 'off';
+      _timeCtl.text = st[AutoBackupService.kTimeKey] ?? '02:00';
+      _drive = (st[AutoBackupService.kDriveKey] ?? '1') == '1';
+      _loaded = true;
+    });
+  }
+
+  Future<void> _set(String key, String value) =>
+      ref.read(repoProvider).setSetting(key, value);
+
+  Future<void> _runNow() async {
+    setState(() => _busy = true);
+    try {
+      await AutoBackupService.runScheduled(ref.read(repoProvider));
+      if (mounted) showSnack(context, 'أُنشئت نسخة احتياطية تلقائية');
+    } catch (e) {
+      if (mounted) showSnack(context, 'تعذّر النسخ: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox(height: 40);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String>(
+          initialValue: _mode,
+          decoration:
+              const InputDecoration(labelText: 'الجدولة', isDense: true),
+          items: const [
+            DropdownMenuItem(value: 'off', child: Text('إيقاف')),
+            DropdownMenuItem(value: 'every2h', child: Text('كل ساعتين')),
+            DropdownMenuItem(
+                value: 'daily', child: Text('يومياً في وقت محدد')),
+          ],
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() => _mode = v);
+            _set(AutoBackupService.kModeKey, v);
+          },
+        ),
+        if (_mode == 'daily') ...[
+          const SizedBox(height: 10),
+          TextField(
+            controller: _timeCtl,
+            decoration: const InputDecoration(
+              labelText: 'الوقت يومياً (HH:MM — 24 ساعة)',
+              isDense: true,
+            ),
+            keyboardType: TextInputType.datetime,
+            onSubmitted: (v) =>
+                _set(AutoBackupService.kTimeKey, v.trim()),
+          ),
+        ],
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Google Drive — مجاني ودائم',
+              style: TextStyle(fontSize: 13)),
+          subtitle: const Text(
+            'يتطلب تسجيل دخول Google. لا يتأثر بانتهاء التجربة.',
+            style: TextStyle(fontSize: 11),
+          ),
+          value: _drive,
+          onChanged: (v) {
+            setState(() => _drive = v);
+            _set(AutoBackupService.kDriveKey, v ? '1' : '0');
+          },
+        ),
+        const SizedBox(height: 4),
+        FilledButton.icon(
+          onPressed: _busy ? null : _runNow,
+          icon: _busy
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.backup_rounded, size: 17),
+          label: const Text('نسخ الآن'),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'تُحفظ اللقطة المحلية باسم backup_{store_id}_{timestamp}.db — '
+          'والنسخ إلى السحابة الخاصة متاح أثناء التجربة أو الاشتراك فقط.',
+          style: TextStyle(fontSize: 10.5, height: 1.5),
+        ),
+      ],
     );
   }
 }

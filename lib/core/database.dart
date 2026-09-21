@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 22;
+  static const int _version = 23;
 
   static int get schemaVersion => _version;
 
@@ -293,6 +293,28 @@ class AppDatabase {
         value TEXT NOT NULL
       )''');
 
+    // ====== (3.70) الصلاحيات المحلية RBAC + بريد المستخدم ======
+    // تُنشأ هنا أيضاً (وليس فقط في _ensureCoreSyncTables) لأن مسار
+    // createSchema المباشر هو ما تستخدمه الاختبارات والقواعد الجديدة.
+    await _tryCreateTable(db, 'user_permissions', '''
+        CREATE TABLE IF NOT EXISTS user_permissions (
+          user_email TEXT PRIMARY KEY,
+          store_id TEXT,
+          role TEXT,
+          can_discount INTEGER DEFAULT 0,
+          can_delete_tx INTEGER DEFAULT 0,
+          can_view_reports INTEGER DEFAULT 0,
+          can_manage_items INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          updated_at INTEGER
+        )''');
+    await _tryCreateIndex(
+      db,
+      'idx_user_perms_store',
+      'CREATE INDEX IF NOT EXISTS idx_user_perms_store ON user_permissions(store_id)',
+    );
+    await _addColumn(db, 'users', 'email', "TEXT DEFAULT ''");
+
     await _seed(db);
   }
 
@@ -527,6 +549,26 @@ class AppDatabase {
           email TEXT DEFAULT '', display_name TEXT DEFAULT '', photo_url TEXT DEFAULT '',
           id_token TEXT DEFAULT '', signed_in_at TEXT DEFAULT '', updated_at TEXT DEFAULT ''
         )''');
+    // ====== (3.70) الصلاحيات المحلية RBAC — المرجع user_email لا الجهاز ======
+    await _tryCreateTable(db, 'user_permissions', '''
+        CREATE TABLE IF NOT EXISTS user_permissions (
+          user_email TEXT PRIMARY KEY,
+          store_id TEXT,
+          role TEXT,
+          can_discount INTEGER DEFAULT 0,
+          can_delete_tx INTEGER DEFAULT 0,
+          can_view_reports INTEGER DEFAULT 0,
+          can_manage_items INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          updated_at INTEGER
+        )''');
+    await _tryCreateIndex(
+      db,
+      'idx_user_perms_store',
+      'CREATE INDEX IF NOT EXISTS idx_user_perms_store ON user_permissions(store_id)',
+    );
+    // بريد المستخدم لصفوف users — مفتاح الربط مع user_permissions.
+    await _addColumn(db, 'users', 'email', "TEXT DEFAULT ''");
     // تأكد من وجود Workspace افتراضي.
     final wsExists = await db.rawQuery(
       'SELECT id FROM workspaces WHERE id = ?',

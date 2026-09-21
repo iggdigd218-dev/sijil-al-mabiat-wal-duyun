@@ -9,7 +9,7 @@ import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/core/cloud_config.dart';
-import 'package:nexora_app/data/cloud_sync.dart';
+import 'package:nexora_app/data/sync/auto_backup.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -67,9 +67,9 @@ void main() {
       }
       return http.Response.bytes(utf8.encode('null'), 200);
     });
-    expect(await CloudSync.silentBackupDue(repo), isTrue);
+    expect(await AutoBackupService.silentBackupDue(repo), isTrue);
     final ok = await http.runWithClient(
-        () => CloudSync.silentWorkspaceBackup(repo), () => client);
+        () => AutoBackupService.silentWorkspaceBackup(repo), () => client);
     expect(ok, isTrue);
     // الرفع تم على مسار المساحة المعزولة.
     final backupPath = puts.keys.firstWhere(
@@ -80,7 +80,7 @@ void main() {
     final rec = puts[backupPath] as Map;
     expect((rec['payload'] as Map)['data'], isA<Map>());
     // الاستحقاق انطفأ بعد النجاح.
-    expect(await CloudSync.silentBackupDue(repo), isFalse);
+    expect(await AutoBackupService.silentBackupDue(repo), isFalse);
   });
 
   test('SILENT-03 بعد الطرد: مساحة جديدة معزولة تختلف عن القديمة', () async {

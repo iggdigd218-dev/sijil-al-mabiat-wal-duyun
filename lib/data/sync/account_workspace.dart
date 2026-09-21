@@ -12,7 +12,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/factory_reset.dart';
-import '../cloud_sync.dart';
+import 'auto_backup.dart';
 import '../repository.dart';
 import 'cloud_join.dart';
 import 'workspace_recovery.dart';
@@ -179,7 +179,7 @@ class AccountWorkspace {
     // 1) تحقّق مسبق — لا تفريغ قبل ضمان وجود ما يُنزَّل.
     Map<String, Object?>? pulled;
     try {
-      pulled = await CloudSync.pullWorkspaceBackup(repo,
+      pulled = await AutoBackupService.pullWorkspaceBackup(repo,
           backendUrl: backendUrl, workspaceId: toWorkspaceId);
     } catch (_) {
       pulled = null;

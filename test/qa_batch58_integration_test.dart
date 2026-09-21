@@ -11,7 +11,7 @@ import 'package:http/testing.dart';
 import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
-import 'package:nexora_app/data/cloud_sync.dart';
+import 'package:nexora_app/data/sync/auto_backup.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_firebase_transport.dart';
 import 'package:nexora_app/data/sync/conflict_resolver.dart';
@@ -160,11 +160,11 @@ void main() {
     expect(again, 0);
   });
 
-  test('B58-E2E-02 backup: local export/import + cloud code push/pull',
+  test('B58-E2E-02 backup: local export/import + silent workspace backup',
       () async {
-    final cloud = _FakeCloud();
+    // (3.70) مسار النسخ الوحيد: AutoBackupService (النسخة الصامتة لمسار
+    // المساحة) — بديل خدمة cloud_sync الرمزية القديمة المجتثة.
     await repoA.setSetting('cloudBackendUrl', url);
-    await CloudSync.setCode(repoA, 'B58QA');
     await repoA.saveAccount(Account(
       name: 'حساب النسخة 58',
       kind: AccountKind.supplier,
@@ -175,18 +175,30 @@ void main() {
     // نسخة محلية.
     final local = await repoA.exportForLocalBackup();
     expect(local['app'], 'nexora');
-    // نسخة كاملة إلى السحابة برمز ثم سحبها.
-    final payload = await repoA.exportAll(withImages: false);
-    final r = await http.runWithClient(
-        () => CloudSync.push(repoA, payload), cloud.client);
-    expect(r['ok'], true);
-    final pulled =
-        await http.runWithClient(() => CloudSync.pull(repoA), cloud.client);
-    expect(pulled['ok'], true);
-    expect(pulled['exists'], true);
+    // نسخة كاملة إلى السحابة الخاصة (مسار المساحة) ثم سحبها.
+    final store = <String, Object?>{};
+    http.Response js(Object? v) => http.Response.bytes(
+        utf8.encode(v == null ? 'null' : jsonEncode(v)), 200,
+        headers: {'content-type': 'application/json; charset=utf-8'});
+    final client = MockClient((req) async {
+      if (req.method == 'PUT') {
+        store[req.url.path] = jsonDecode(req.body);
+        return js(store[req.url.path]);
+      }
+      return js(store[req.url.path]);
+    });
+    final ok = await http.runWithClient(
+        () => AutoBackupService.silentWorkspaceBackup(repoA), () => client);
+    expect(ok, isTrue);
+    final pulled = await http.runWithClient(
+        () => AutoBackupService.pullWorkspaceBackup(repoA,
+            backendUrl: url, workspaceId: repoA.requireWorkspaceId),
+        () => client);
+    expect(pulled, isNotNull);
     // الاسترجاع في نفس المجموعة يُقبل ويعيد البيانات.
-    final restored = await repoA
-        .importAll(Map<String, Object?>.from(pulled['payload'] as Map));
+    // pullWorkspaceBackup يعيد حمولة exportAll نفسها (بلا غلاف).
+    final restored =
+        await repoA.importAll(Map<String, Object?>.from(pulled!));
     expect(restored, greaterThan(0));
     final accs = await repoA.accounts();
     expect(accs.map((x) => x.name), contains('حساب النسخة 58'));

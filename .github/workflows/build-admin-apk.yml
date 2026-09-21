@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Admin APK (arm64)
+    name: Build Admin APK (Universal)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,9 +39,9 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Build APK (arm64)
+      - name: Build APK (Universal)
         run: |
-          flutter build apk --release --target-platform android-arm64
+          flutter build apk --release
           cp build/app/outputs/flutter-apk/app-release.apk ../license-admin.apk
           ls -lh ../license-admin.apk
 

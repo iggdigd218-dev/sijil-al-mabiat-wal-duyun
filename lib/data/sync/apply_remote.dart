@@ -23,6 +23,7 @@ extension ApplyRemoteOp on Repo {
     final primaryKey = switch (op.entityType) {
       EntityKind.setting => 'key',
       EntityKind.currency => 'code',
+      EntityKind.userPermission => 'user_email',
       _ => 'id',
     };
     if (op.opType == OpKind.settings && op.entityType != EntityKind.setting) {
@@ -470,5 +471,6 @@ extension ApplyRemoteOp on Repo {
         EntityKind.category => 'categories',
         EntityKind.conversation => 'conversations',
         EntityKind.message => 'messages',
+        EntityKind.userPermission => 'user_permissions',
       };
 }
