@@ -753,19 +753,25 @@ class _HomeShellState extends ConsumerState<HomeShell>
   Future<void> _maybeShowWhatsNew(UpdateInfo info) async {
     final repo = ref.read(repoProvider);
     final st = await repo.settings();
+    // (3.70.0+133) المفتاح مربوط برقم البناء: إعادة نشر نفس الإصدار
+    // ببناء أحدث (+132 ← +133) تستحق تنبيه «ما الجديد» أيضاً — لا فقط
+    // عند تغيير الإصدار التسويقي (كانت الأجهزة المثبَّت لها نفس الرقم
+    // لا ترى أي إشعار رغم تغيّر محتوى الحزمة).
+    const buildKey = '$kAppVersion+$kAppBuild';
     final seen = (st['whatsNewSeenVersion'] ?? '').trim();
-    if (seen == kAppVersion) return; // عُرض لهذا الإصدار من قبل.
+    if (seen == buildKey) return; // عُرض لهذا البناء من قبل.
     // أول تثبيت (لا قيمة سابقة): سجّل بصمت بلا حوار.
     if (seen.isEmpty) {
-      await repo.setSetting('whatsNewSeenVersion', kAppVersion);
+      await repo.setSetting('whatsNewSeenVersion', buildKey);
       return;
     }
     // ملاحظات البيان تخص أحدث إصدار منشور — نعرضها فقط إن كانت نسختنا
-    // هي ذاتها الأحدث (ترقية اكتملت للتو). وإلا نكتفي بالتسجيل.
+    // (إصداراً وبناءً) هي ذاتها الأحدث (ترقية اكتملت للتو).
     final latest = info.latest;
     final isCurrentRelease = latest != null &&
-        '${latest.major}.${latest.minor}.${latest.patch}' == kAppVersion;
-    await repo.setSetting('whatsNewSeenVersion', kAppVersion);
+        '${latest.major}.${latest.minor}.${latest.patch}' == kAppVersion &&
+        latest.build == kAppBuild;
+    await repo.setSetting('whatsNewSeenVersion', buildKey);
     if (!isCurrentRelease || info.notes.trim().isEmpty) return;
     if (!mounted) return;
     await showWhatsNewDialog(context, kAppVersion, info.notes);
