@@ -183,6 +183,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
             onRoot: _selectRoot,
             onSub: _selectSub,
             onAddCategory: () => openItemCategoryForm(context, ref),
+            onManage: () => openCategoryManager(context, ref, roots),
           ),
         ),
         Expanded(
@@ -245,15 +246,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       );
     }
     const pad = EdgeInsets.fromLTRB(12, 4, 12, 96);
+    // عدد الأعمدة حسب العرض: هاتف 2 · لوحي 3 · حاسوب 4.
+    final w = MediaQuery.sizeOf(context).width;
+    final cols = w >= 900 ? 4 : (w >= 600 ? 3 : 2);
     final child = _mode == 'grid'
         ? GridView.builder(
             padding: pad,
             itemCount: visible.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols,
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
-              childAspectRatio: .82,
+              childAspectRatio: cols >= 4 ? .95 : .82,
             ),
             itemBuilder: (_, i) => _ItemGridCard(item: visible[i]),
           )
@@ -489,6 +493,173 @@ class _ViewModeToggle extends StatelessWidget {
       );
 }
 
+/// (2026-09-22) لوح إدارة الفئات: تعديل الاسم، إضافة فئة فرعية، والحذف
+/// مع ترقية الأبناء — كان الوصول إليها من بطاقة الفئة القديمة فقط.
+Future<void> openCategoryManager(
+  BuildContext context,
+  WidgetRef ref,
+  List<ItemCategory> roots,
+) =>
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        // ارتفاع صريح (70٪ من الشاشة) بدل DraggableScrollableSheet داخل
+        // صحيفة سفلية — الأخير ينهار إلى صفر حين يقيس نفسه بلا قيد.
+        final h = MediaQuery.sizeOf(ctx).height * .70;
+        return SizedBox(
+          height: h,
+          child: _CategoryManager(roots: roots),
+        );
+      },
+    ).whenComplete(() => bump(ref));
+
+class _CategoryManager extends ConsumerWidget {
+  final List<ItemCategory> roots;
+
+  const _CategoryManager({required this.roots});
+
+  Future<void> _delete(BuildContext context, WidgetRef ref, ItemCategory c) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'حذف الفئة',
+      message: c.hasChildren
+          ? 'سيتم حذف «${c.name}» وترقية ${c.children.length} فئة فرعية '
+              'إلى فئات رئيسية (لا تُحذف).'
+          : 'سيتم حذف الفئة «${c.name}» وفك ربط أصنافها بها — '
+              'الأصناف نفسها لن تُحذف.',
+      confirmText: 'حذف الفئة',
+      danger: true,
+    );
+    if (ok != true || c.id == null) return;
+    await ref.read(repoProvider).deleteItemCategory(c.id!);
+    bump(ref);
+    if (context.mounted) {
+      Navigator.pop(context); // أغلق اللوح بعد الحذف لتحديث الشجرة.
+      showSnack(context, 'حُذفت الفئة وبقيت الأصناف محفوظة');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (roots.isEmpty) {
+      return const EmptyState(
+        icon: Icons.folder_off_outlined,
+        title: 'لا توجد فئات بعد',
+        message: 'أضف فئة رئيسية أولاً ثم نظّم تحتها الفئات الفرعية.',
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 18),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Row(
+            children: [
+              const Icon(Icons.account_tree_outlined),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'إدارة الفئات',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => openItemCategoryForm(context, ref),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('فئة رئيسية'),
+              ),
+            ],
+          ),
+        ),
+        for (final root in roots) ...[
+          _CategoryManagerTile(
+            category: root,
+            level: 0,
+            onEdit: () => openItemCategoryForm(context, ref, category: root),
+            onAddSub: () =>
+                openItemCategoryForm(context, ref, parentId: root.id),
+            onDelete: () => _delete(context, ref, root),
+          ),
+          for (final sub in root.children)
+            _CategoryManagerTile(
+              category: sub,
+              level: 1,
+              onEdit: () => openItemCategoryForm(context, ref, category: sub),
+              onAddSub: () => openItemCategoryForm(context, ref, parentId: sub.id),
+              onDelete: () => _delete(context, ref, sub),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _CategoryManagerTile extends StatelessWidget {
+  final ItemCategory category;
+  final int level;
+  final VoidCallback onEdit;
+  final VoidCallback onAddSub;
+  final VoidCallback onDelete;
+
+  const _CategoryManagerTile({
+    required this.category,
+    required this.level,
+    required this.onEdit,
+    required this.onAddSub,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final indent = level * 22.0;
+    return Padding(
+      padding: EdgeInsetsDirectional.only(start: indent, bottom: 6),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          contentPadding: const EdgeInsetsDirectional.only(
+              start: 10, end: 4, top: 2, bottom: 2),
+          leading: Icon(
+            level == 0 ? Icons.folder_outlined : Icons.subdirectory_arrow_left,
+            color: AppColors.primaryOf(context),
+          ),
+          title: Text(
+            category.name,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: category.hasChildren
+              ? Text('${category.children.length} فئة فرعية')
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'إضافة فئة فرعية',
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+                onPressed: onAddSub,
+              ),
+              IconButton(
+                tooltip: 'تعديل الاسم',
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                onPressed: onEdit,
+              ),
+              IconButton(
+                tooltip: 'حذف الفئة',
+                icon: Icon(Icons.delete_outline,
+                    size: 20, color: AppColors.dangerOf(context)),
+                onPressed: onDelete,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// شريط الفئات الأفقي (رئيسية + فرعية للفئة المختارة).
 class _CategoryChipBar extends StatelessWidget {
   final List<ItemCategory> roots;
@@ -497,6 +668,7 @@ class _CategoryChipBar extends StatelessWidget {
   final ValueChanged<int?> onRoot;
   final ValueChanged<int?> onSub;
   final VoidCallback onAddCategory;
+  final VoidCallback onManage;
 
   const _CategoryChipBar({
     required this.roots,
@@ -505,6 +677,7 @@ class _CategoryChipBar extends StatelessWidget {
     required this.onRoot,
     required this.onSub,
     required this.onAddCategory,
+    required this.onManage,
   });
 
   @override
@@ -531,14 +704,18 @@ class _CategoryChipBar extends StatelessWidget {
                 onTap: () => onRoot(null),
               ),
               for (final r in roots)
-                _Chip(
-                  label: r.name,
-                  icon: r.hasChildren
-                      ? Icons.account_tree_outlined
-                      : Icons.folder_outlined,
-                  selected: rootId == r.id,
-                  badge: r.children.length,
-                  onTap: () => onRoot(r.id),
+                GestureDetector(
+                  // ضغطة مطوّلة = إدارة الفئة (تعديل/حذف/إضافة فرعية).
+                  onLongPress: onManage,
+                  child: _Chip(
+                    label: r.name,
+                    icon: r.hasChildren
+                        ? Icons.account_tree_outlined
+                        : Icons.folder_outlined,
+                    selected: rootId == r.id,
+                    badge: r.children.length,
+                    onTap: () => onRoot(r.id),
+                  ),
                 ),
               // زر مدمج لإضافة فئة جديدة.
               Padding(
@@ -547,6 +724,15 @@ class _CategoryChipBar extends StatelessWidget {
                   avatar: const Icon(Icons.add, size: 17),
                   label: const Text('فئة جديدة'),
                   onPressed: onAddCategory,
+                ),
+              ),
+              // زر مدمج لإدارة الفئات (تعديل/حذف/إضافة فرعية).
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.tune_rounded, size: 17),
+                  label: const Text('إدارة'),
+                  onPressed: onManage,
                 ),
               ),
             ],
