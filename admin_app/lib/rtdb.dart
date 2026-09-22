@@ -72,6 +72,28 @@ const String kFirebaseApiKey = String.fromEnvironment(
   defaultValue: 'AIzaSyBHmi_0Oj58JKi2kNLR8gqQHhRN3grRg3U',
 );
 
+/// أقصى عدد مساحات تُمسح في البحث عن جهاز/سجل — سقف يمنع اختناق اللوحة
+/// على قاعدة فيها مئات المساحات (كان المسح المتسلسل بلا سقف يستغرق عشرات
+/// الثواني فيبدو التفعيل «لا يعمل»).
+const int kMaxWorkspaceScan = 40;
+
+/// أقصى عدد مساحات تُعرض/تُحصى في السجل الأخير.
+const int kMaxSubscriberScan = 40;
+
+/// تحويل آمن لأي قيمة سحابية إلى عدد صحيح (القواعد قد تُخزّن رقماً أو نصاً).
+int asInt(Object? v, [int dflt = 0]) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v.trim()) ?? dflt;
+  return dflt;
+}
+
+/// تحويل آمن لختم زمني (مللي ثانية) — يقبل نصاً أو رقماً.
+int asMs(Object? v) => asInt(v, 0);
+
+/// تحويل آمن إلى نص.
+String asStr(Object? v) => v == null ? '' : '$v';
+
 class Rtdb {
   Rtdb._();
   static final Rtdb instance = Rtdb._();
@@ -103,6 +125,21 @@ class Rtdb {
   /// آخر خطأ مصادقة — للعرض في الواجهة بدل رسالة HTTP مبهمة.
   String lastAuthError = '';
 
+  /// (إصلاح الأداء) كاش ساعة الخادم: قياس واحد يكفي لبرهة قصيرة، والإسناد
+  /// بين القراءات بساعة **أحادية** (Stopwatch) لا بساعة الهاتف — فتبقى كل
+  /// الحسابات بختم الخادم دون طلبين إضافيين لكل عملية.
+  static const Duration _clockTtl = Duration(seconds: 45);
+  final Stopwatch _clockAge = Stopwatch();
+  int _clockMs = 0;
+
+  /// (للاختبارات) تصفير كاش الساعة بين الحالات.
+  void resetClockCache() {
+    _clockMs = 0;
+    _clockAge
+      ..stop()
+      ..reset();
+  }
+
   Future<void> load() async {
     final sp = await SharedPreferences.getInstance();
     baseUrl = (sp.getString(_kUrl) ?? '').trim();
@@ -130,27 +167,34 @@ class Rtdb {
   /// هوية صالحة لكل طلب: توكن يدوي (إن أدخله المالك) وإلا هوية مجهولة
   /// تُنشأ/تُجدَّد تلقائياً. إخفاقها لا يمنع المحاولة — رسالة الخطأ
   /// توضّح السبب (401 ⇒ القاعدة ترفض بلا هوية).
-  Future<String> _ensureAuth({bool force = false}) async {
+  Future<String> _ensureAuth({bool force = false, bool retried = false}) async {
     if (authToken.trim().isNotEmpty) return authToken.trim();
     if (!force && _tokenAlive) return _idToken;
+    final refresh = force && _refreshToken.isNotEmpty;
     try {
-      final body = force && _refreshToken.isNotEmpty
-          ? {
-              'grant_type': 'refresh_token',
-              'refresh_token': _refreshToken,
-            }
+      final body = refresh
+          ? {'grant_type': 'refresh_token', 'refresh_token': _refreshToken}
           : {'returnSecureToken': true};
-      final uri = force && _refreshToken.isNotEmpty
+      final uri = refresh
           ? Uri.https('securetoken.googleapis.com', '/v1/token',
               {'key': kFirebaseApiKey})
-          : Uri.https('identitytoolkit.googleapis.com',
-              '/v1/accounts:signUp', {'key': kFirebaseApiKey});
+          : Uri.https('identitytoolkit.googleapis.com', '/v1/accounts:signUp',
+              {'key': kFirebaseApiKey});
       final res = await _http
           .post(uri,
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode(body))
           .timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
+        // (إصلاح 2026-09-23) رمز تحديث منتهٍ/ملغى كان يدور في حلقة:
+        // المحاولة تفشل ⇒ نُعيد بلا هوية ⇒ 401 ⇒ نُحاول التحديث نفسه.
+        // الآن: نسقط الرمز التالف وننشئ هوية مجهولة جديدة فوراً (مرة واحدة).
+        if (refresh && !retried) {
+          _refreshToken = '';
+          _idToken = '';
+          _expiryMs = 0;
+          return await _ensureAuth(force: true, retried: true);
+        }
         lastAuthError =
             'تعذّر إنشاء هوية الدخول (${res.statusCode}) — تحقق من '
             'الاتصال ومن تفعيل Anonymous Auth في Firebase Console.';
@@ -185,6 +229,8 @@ class Rtdb {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kUrl, baseUrl);
     await sp.setString(_kAuth, authToken);
+    // (إصلاح) تغيّر الرابط يعني قاعدة أخرى — كاش الساعة القديم لا يصلح لها.
+    resetClockCache();
   }
 
   bool get configured => baseUrl.isNotEmpty;
@@ -261,16 +307,101 @@ class Rtdb {
 
   /// وقت خادم فيربيس الحقيقي — نكتب {".sv":"timestamp"} ونقرأ الناتج.
   /// كل الحسابات الزمنية بساعة الخادم حصراً، لا ساعة الهاتف.
-  Future<int> serverNowMs() async {
+  ///
+  /// (إصلاح أداء) القراءة مُخزّنة مؤقتاً [kClockTtl] وتُسند بينها بساعة
+  /// أحادية: التفعيل والتمديد والإحصائيات في جلسة واحدة تستهلك قياساً
+  /// واحداً بدل طلبين لكل عملية.
+  static const Duration kClockTtl = _clockTtl;
+
+  Future<int> serverNowMs({bool force = false}) async {
+    if (!force && _clockMs > 0 && _clockAge.elapsed < _clockTtl) {
+      return _clockMs + _clockAge.elapsedMilliseconds;
+    }
     await _put('server_clock', {'.sv': 'timestamp'});
     final v = await _get('server_clock');
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    throw Exception('تعذّر قراءة ساعة الخادم');
+    final ms = asMs(v);
+    if (ms <= 0) throw Exception('تعذّر قراءة ساعة الخادم');
+    _clockMs = ms;
+    _clockAge
+      ..reset()
+      ..start();
+    return ms;
   }
 
+  /// تنفيذ مهام غير متزامنة بتوازٍ محدود، مع حفظ ترتيب النتائج.
+  ///
+  /// المسح المتسلسل لعشرات المساحات (طلب HTTP لكل واحدة) كان يستغرق عشرات
+  /// الثواني على الجوال فيبدو التفعيل معلّقاً. ست مهام متزامنة تحسم البحث
+  /// في أقل من ثانيتين بلا إغراق القاعدة.
+  Future<List<T>> _gather<T>(List<Future<T?> Function()> tasks,
+      {int limit = 6}) async {
+    if (tasks.isEmpty) return const [];
+    final out = List<T?>.filled(tasks.length, null);
+    var cursor = 0;
+    Future<void> worker() async {
+      while (true) {
+        final i = cursor++;
+        if (i >= tasks.length) return;
+        try {
+          out[i] = await tasks[i]();
+        } catch (_) {
+          // مساحة بلا صلاحية/محذوفة — نتجاوزها ولا نُسقط البحث كله.
+        }
+      }
+    }
+
+    final workers = limit < tasks.length ? limit : tasks.length;
+    await Future.wait([for (var i = 0; i < workers; i++) worker()]);
+    return out.whereType<T>().toList();
+  }
+
+  /// يحسم مرشح الجهاز داخل مساحة واحدة: (1) سجل التفعيلات الإداري،
+  /// (2) roster الأجهزة. يعيد null إن لم يظهر المعرف في هذه المساحة.
+  Future<_DevHit?> _scanWorkspaceForDevice(String ws, String devId) async {
+    final enc = Uri.encodeComponent(ws);
+    // (1) سجل إداري سابق بنفس المعرف.
+    try {
+      final logs = await _get('workspaces/$enc/admin_log');
+      if (logs is Map) {
+        for (final v in logs.values) {
+          if (v is Map && asStr(v['device_ref']).trim().toUpperCase() == devId) {
+            return _DevHit(ws: ws, planned: 1, viaLog: true);
+          }
+        }
+      }
+    } catch (_) {}
+
+    // (2) roster أجهزة المساحة.
+    try {
+      final roster = await _get('workspaces/$enc/roster');
+      if (roster is Map) {
+        for (final e in roster.entries) {
+          if ('${e.key}'.toUpperCase() != devId) continue;
+          final row = e.value is Map ? e.value as Map : const {};
+          Map? sub;
+          try {
+            final s = await _get('workspaces/$enc/subscription');
+            if (s is Map) sub = s;
+          } catch (_) {}
+          return _DevHit(
+            ws: ws,
+            sync: _msOf(row['last_sync_at']),
+            seen: _msOf(row['last_seen_at']),
+            upd: _msOf(row['updated_at']),
+            owner: asInt(row['is_owner']),
+            planned: (sub != null && asStr(sub['plan_type']).isNotEmpty) ? 1 : 0,
+          );
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static int _msOf(Object? v) =>
+      DateTime.tryParse(asStr(v))?.millisecondsSinceEpoch ?? asMs(v);
+
   /// تحويل المدخل إلى معرف مساحة عمل — يقبل ثلاثة أشكال تلقائياً:
-  ///  1) بصمة التفعيل (32 خانة hex من رسالة واتساب) ⇒ فهرس /trials/<fp>.
+  ///  1) بصمة التفعيل (32 خانة hex) ⇒ فهرس trials/(fp).
   ///  2) معرف الجهاز (DEVICE-XXXXXXXX) ⇒ بحث في roster كل المساحات.
   ///  3) معرف مساحة العمل مباشرة ⇒ تحقق من وجود العقدة.
   Future<String> resolveWorkspaceId(String input) async {
@@ -280,16 +411,16 @@ class Rtdb {
     // (1) بصمة تفعيل 32-hex.
     if (RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(id)) {
       final t = await _get('trials/${Uri.encodeComponent(id)}');
-      if (t is Map && '${t['workspace_id'] ?? ''}'.isNotEmpty) {
-        return '${t['workspace_id']}';
+      if (t is Map && asStr(t['workspace_id']).isNotEmpty) {
+        return asStr(t['workspace_id']);
       }
       throw Exception('لم يُعثر على مساحة عمل مرتبطة بهذه البصمة.\n'
           'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
     }
 
     // (2) معرف جهاز DEVICE-… ⇒ بحث متعدد الطبقات + ربط تلقائي:
-    //     (أ) فهرس /trials (device_id)، (ب) سجل التفعيلات الإداري،
-    //     (ج) roster كل المساحات، (د) الربط التلقائي عند مرشح وحيد.
+    //     (أ) فهرس /trials (device_id)، (ب) مسح متوازٍ محدود لسجلات
+    //     التفعيل وroster كل مساحة، (ج) الربط التلقائي عند مرشح وحيد.
     //     عند العثور عبر مسار غير مفهرس نكتب device_id في /trials
     //     ليكون البحث القادم فورياً.
     if (RegExp(r'^DEVICE-', caseSensitive: false).hasMatch(id)) {
@@ -301,114 +432,52 @@ class Rtdb {
       if (trials is Map) {
         for (final v in trials.values) {
           if (v is! Map) continue;
-          final ws = '${v['workspace_id'] ?? ''}';
-          if ('${v['device_id'] ?? ''}'.toUpperCase() == devId) {
-            if (ws.isNotEmpty) return ws;
+          final ws = asStr(v['workspace_id']);
+          if (asStr(v['device_id']).toUpperCase() == devId && ws.isNotEmpty) {
+            return ws;
           }
-          if (ws.isNotEmpty && '${v['device_id'] ?? ''}'.isEmpty) {
+          if (ws.isNotEmpty && asStr(v['device_id']).isEmpty) {
             unlabeled.add(ws);
           }
         }
       }
 
-      // (ب) السجل الإداري داخل المساحات: تفعيل سابق بنفس المعرف.
-      try {
-        final wsKeys0 = await _get('workspaces', {'shallow': 'true'});
-        if (wsKeys0 is Map) {
-          for (final k in wsKeys0.keys.take(40)) {
-            final logs = await _get(
-                'workspaces/${Uri.encodeComponent('$k')}/admin_log');
-            if (logs is! Map) continue;
-            for (final v in logs.values) {
-              if (v is Map &&
-                  '${v['device_ref'] ?? ''}'.trim().toUpperCase() == devId) {
-                return '$k';
-              }
-            }
-          }
-        }
-      } catch (_) {}
-
-      // (ج) مسح roster لكل مساحة عمل (أجهزة المجموعات).
+      // (ب) مسح المساحات — **طلب واحد** لمفاتيح المساحات (كان يُطلق مرتين
+      // في الشكل القديم) ثم مسح متوازٍ بسقف [kMaxWorkspaceScan].
       final keys = await _get('workspaces', {'shallow': 'true'});
-      final wsKeys =
-          keys is Map ? keys.keys.map((k) => '$k').toList() : <String>[];
-      // (إصلاح 2026-09-22) الجهاز قد يظهر في عدة مساحات (مساحات قديمة
-      // مكرّرة من تثبيتات سابقة). الحل القديم كان يردّ أول مطابقة —
-      // فتُفعَّل مساحة ميتة ويبقى الترخيص «لا يعمل» عند العميل. القاعدة
-      // الآن: نجمع كل المرشحين ونرجّح **الأحدث نشاطاً** (last_sync_at ثم
-      // last_seen_at/updated_at ثم وجود خطة مكتملة)، فإن تعذّر الحسم
-      // نُبلغ المدير بالمرشحين ليختار بدل التخمين الصامت.
-      final hits = <Map<String, dynamic>>[];
-      for (final ws in wsKeys) {
-        Map? roster;
-        try {
-          final r =
-              await _get('workspaces/${Uri.encodeComponent(ws)}/roster');
-          if (r is Map) roster = r;
-        } catch (_) {}
-        if (roster == null) continue;
-        for (final e in roster.entries) {
-          if ('${e.key}'.toUpperCase() != devId) continue;
-          final v = e.value;
-          final row = v is Map ? v : const <String, Object?>{};
-          Map? sub;
-          try {
-            final s2 = await _get(
-                'workspaces/${Uri.encodeComponent(ws)}/subscription');
-            if (s2 is Map) sub = s2;
-          } catch (_) {}
-          int msOf(Object? v2) =>
-              DateTime.tryParse('${v2 ?? ''}')?.millisecondsSinceEpoch ?? 0;
-          hits.add({
-            'ws': ws,
-            'sync': msOf(row['last_sync_at']),
-            'seen': msOf(row['last_seen_at']),
-            'upd': msOf(row['updated_at']),
-            'owner': (row['is_owner'] is num)
-                ? (row['is_owner'] as num).toInt()
-                : 0,
-            'planned': (sub != null && '${sub['plan_type'] ?? ''}'.isNotEmpty)
-                ? 1
-                : 0,
-          });
-          break;
-        }
-      }
+      final wsKeys = keys is Map
+          ? keys.keys.map((k) => '$k').take(kMaxWorkspaceScan).toList()
+          : <String>[];
+
+      final hits = await _gather<_DevHit>(
+        [for (final ws in wsKeys) () => _scanWorkspaceForDevice(ws, devId)],
+      );
+
       if (hits.length == 1) {
-        final ws = '${hits.first['ws']}';
+        final ws = hits.first.ws;
         await _linkDeviceToWorkspace(deviceId: devId, workspaceId: ws);
         return ws;
       }
       if (hits.length > 1) {
-        hits.sort((a, b) {
-          final c = (b['sync'] as int).compareTo(a['sync'] as int);
-          if (c != 0) return c;
-          final c2 = (b['seen'] as int).compareTo(a['seen'] as int);
-          if (c2 != 0) return c2;
-          final c3 = (b['upd'] as int).compareTo(a['upd'] as int);
-          if (c3 != 0) return c3;
-          final c4 = (b['owner'] as int).compareTo(a['owner'] as int);
-          if (c4 != 0) return c4;
-          return (b['planned'] as int).compareTo(a['planned'] as int);
-        });
+        hits.sort(_DevHit.rank);
         final best = hits.first;
         final runnerUp = hits[1];
-        final decided = (best['sync'] as int) > (runnerUp['sync'] as int) ||
-            (best['planned'] as int) > (runnerUp['planned'] as int);
-        final ws = '${best['ws']}';
+        final decided = best.sync > runnerUp.sync ||
+            best.seen > runnerUp.seen ||
+            best.planned > runnerUp.planned;
+        final ws = best.ws;
         if (decided) {
           await _linkDeviceToWorkspace(deviceId: devId, workspaceId: ws);
           return ws;
         }
         throw Exception(
             'هذا الجهاز موجود في أكثر من مساحة عمل ولا يمكن الحسم تلقائياً:\n'
-            '${hits.map((h) => '• ${h['ws']}').join('\n')}\n'
+            '${hits.map((h) => '• ${h.ws}').join('\n')}\n'
             'ألصق معرف المساحة الصحيح مباشرة، أو بصمة التفعيل (32 خانة) من '
             'رسالة العميل.');
       }
 
-      // (د) الربط التلقائي — الجهاز الفردي لا يظهر في أي roster وسجله
+      // (ج) الربط التلقائي — الجهاز الفردي لا يظهر في أي roster وسجله
       // القديم في /trials بلا device_id بعد:
       //   • مساحة وحيدة في القاعدة كلها ⇒ هي مساحة العميل حتماً.
       //   • أو مرشح وحيد غير موسوم في الفهرس ⇒ نربطه به فوراً.
@@ -435,8 +504,8 @@ class Rtdb {
     // (3) معرف مساحة مباشر — نتحقق من وجود عقدة الاشتراك أو المساحة.
     final sub = await _get('workspaces/${Uri.encodeComponent(id)}/subscription');
     if (sub != null) return id;
-    final ws = await _get('workspaces/${Uri.encodeComponent(id)}',
-        {'shallow': 'true'});
+    final ws =
+        await _get('workspaces/${Uri.encodeComponent(id)}', {'shallow': 'true'});
     if (ws != null) return id;
     throw Exception('لا توجد مساحة عمل بهذا المعرف في قاعدة البيانات.');
   }
@@ -453,8 +522,8 @@ class Rtdb {
       if (trials is! Map) return;
       for (final e in trials.entries) {
         final v = e.value;
-        if (v is Map && '${v['workspace_id'] ?? ''}' == workspaceId) {
-          if ('${v['device_id'] ?? ''}'.isEmpty) {
+        if (v is Map && asStr(v['workspace_id']) == workspaceId) {
+          if (asStr(v['device_id']).isEmpty) {
             await _patch('trials/${Uri.encodeComponent('${e.key}')}',
                 {'device_id': deviceId});
           }
@@ -473,28 +542,31 @@ class Rtdb {
     required int maxDevices,
     bool extend = false, // تمديد: يضيف المدة فوق expires_at الحالي إن كان أبعد.
   }) async {
+    final plan = planType == 'enterprise' ? 'enterprise' : 'individual';
+    final seats = plan == 'enterprise' ? (maxDevices < 2 ? 2 : maxDevices) : 1;
     final ws = await resolveWorkspaceId(rawInput);
     final now = await serverNowMs();
     final lifetime = duration == PlanDuration.lifetime;
+    final enc = Uri.encodeComponent(ws);
 
     int base = now;
     if (extend) {
-      final cur = await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
+      final cur = await _get('workspaces/$enc/subscription');
       if (cur is Map) {
-        final e = cur['expires_at'];
-        final curExp = e is num ? e.toInt() : 0;
+        final curExp = asMs(cur['expires_at']);
         if (curExp > now) base = curExp; // التمديد يبني على المتبقي.
       }
     }
     final expires = base + duration.span.inMilliseconds;
 
-    await _patch('workspaces/${Uri.encodeComponent(ws)}/subscription', {
+    await _patch('workspaces/$enc/subscription', {
       'status': 'active',
       'is_active': true,
-      'plan_type': planType,
-      'max_devices': planType == 'enterprise' ? maxDevices : 1,
+      'plan_type': plan,
+      'max_devices': seats,
       'expires_at': expires,
       'activated_at': now,
+      'updated_at': now,
       'activated_by': 'license_admin',
       'features': {
         'can_use_categories': true,
@@ -511,9 +583,8 @@ class Rtdb {
     // مزامنة فهرس /trials (مصدر العدادات المجمعة): التفعيل يقلب حالة
     // المساحة فيه أيضاً حتى تعكس بطاقة «مشتركون مدفوعون» الحقيقة فوراً.
     try {
-      final cur =
-          await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
-      final fp = cur is Map ? '${cur['device_fingerprint'] ?? ''}' : '';
+      final cur = await _get('workspaces/$enc/subscription');
+      final fp = cur is Map ? asStr(cur['device_fingerprint']) : '';
       if (fp.isNotEmpty) {
         await _patch('trials/${Uri.encodeComponent(fp)}', {
           'status': 'active',
@@ -528,15 +599,16 @@ class Rtdb {
     // السجل تُسقط التفعيل كله بعد نجاح تحديث الاشتراك. المسار الجديد
     // مسموح بقاعدة workspaces القائمة — بلا تعديل يدوي للقواعد.
     try {
-      await _put(
-          'workspaces/${Uri.encodeComponent(ws)}/admin_log/$now', {
+      await _put('workspaces/$enc/admin_log/$now', {
         'workspace_id': ws,
         'device_ref': rawInput.trim(),
-        'plan_type': planType,
-        'max_devices': planType == 'enterprise' ? maxDevices : 1,
+        'plan_type': plan,
+        'max_devices': seats,
         'expires_at': expires,
         'activated_at': now,
+        'updated_at': now,
         'lifetime': lifetime,
+        if (extend) 'extended': true,
       });
     } catch (_) {
       // السجل تحسيني: لا يُفسد نجاح التفعيل.
@@ -544,8 +616,8 @@ class Rtdb {
 
     return ActivationResult(
       workspaceId: ws,
-      planType: planType,
-      maxDevices: planType == 'enterprise' ? maxDevices : 1,
+      planType: plan,
+      maxDevices: seats,
       expiresAtMs: expires,
       lifetime: lifetime,
     );
@@ -555,67 +627,125 @@ class Rtdb {
   ///
   /// (إصلاح 2026-09-22) السجل الإداري صار داخل كل مساحة
   /// (`workspaces/<ws>/admin_log`) لأن العقدة العامة `/admin` محجوبة
-  /// بالقواعد؛ نقرأ مفاتيح المساحات (طلب واحد) ثم سجل كل مساحة —
-  /// بحد أقصى 40 مساحة حتى لا نختنق، ونرتب تنازلياً بالتاريخ.
+  /// بالقواعد؛ نقرأ مفاتيح المساحات (طلب واحد) ثم سجل كل مساحة — بحد
+  /// أقصى [kMaxSubscriberScan] حتى لا نختنق، ونرتب تنازلياً بالتاريخ.
+  ///
+  /// (إصلاح 2026-09-23) القراءة أصبحت متوازية محدودة بدل مسح متسلسل،
+  /// وتحويل الحقول الرقمية موحّد عبر asInt/asMs — كان تعبير maxDevices
+  /// القديم يقرأ أولوية العوامل خطأ فيُظهر «1 جهاز» لمشترك مؤسسة.
   Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) return const [];
-    final out = <SubscriberEntry>[];
-    for (final k in keys.keys.take(40)) {
-      final ws = '$k';
-      final enc = Uri.encodeComponent(ws);
-      Map? live;
-      try {
-        final sub = await _get('workspaces/$enc/subscription');
-        if (sub is Map) live = sub;
-      } catch (_) {}
-      try {
-        final logs = await _get('workspaces/$enc/admin_log');
-        if (logs is Map) {
-          for (final e in logs.entries) {
-            final v = e.value;
-            if (v is! Map) continue;
-            out.add(SubscriberEntry(
-              workspaceId: ws,
-              planType: '${(live?['plan_type']) ?? v['plan_type'] ?? 'individual'}',
-              status: '${(live?['status']) ?? 'active'}',
-              maxDevices: ((live?['max_devices']) ?? v['max_devices'] is num
-                      ? ((live?['max_devices']) ?? (v['max_devices'] as num))
-                      : 1) is num
-                  ? (((live?['max_devices']) ?? v['max_devices']) as num).toInt()
-                  : 1,
-              expiresAtMs: (((live?['expires_at']) ?? v['expires_at']) is num)
-                  ? (((live?['expires_at']) ?? v['expires_at']) as num).toInt()
-                  : 0,
-              activatedAtMs: (v['activated_at'] is num)
-                  ? (v['activated_at'] as num).toInt()
-                  : (int.tryParse('${e.key}') ?? 0),
-              deviceRef: '${v['device_ref'] ?? ''}',
-            ));
-          }
-          continue; // هذه المساحة موثّقة — لا حاجة للفرع التالي.
-        }
-      } catch (_) {}
-      // مساحة بلا سجل إداري لكن لها اشتراك: تُعرض بحالتها الحية.
-      if (live != null) {
-        out.add(SubscriberEntry(
-          workspaceId: ws,
-          planType: '${live['plan_type'] ?? 'individual'}',
-          status: '${live['status'] ?? ''}',
-          maxDevices: (live['max_devices'] is num)
-              ? (live['max_devices'] as num).toInt()
-              : 1,
-          expiresAtMs:
-              (live['expires_at'] is num) ? (live['expires_at'] as num).toInt() : 0,
-          activatedAtMs: (live['activated_at'] is num)
-              ? (live['activated_at'] as num).toInt()
-              : 0,
-          deviceRef: '${live['device_fingerprint'] ?? ''}',
-        ));
-      }
-    }
+    final wsKeys =
+        keys.keys.map((k) => '$k').take(kMaxSubscriberScan).toList();
+
+    final rows = await _gather<List<SubscriberEntry>>(
+      [for (final ws in wsKeys) () => _readWorkspaceEntries(ws)],
+    );
+    final out = rows.expand((r) => r).toList();
     out.sort((a, b) => b.activatedAtMs.compareTo(a.activatedAtMs));
     return out.take(limit).toList();
+  }
+
+  /// يقرأ مساحة واحدة: سجلها الإداري (إن وُجد) وإلا حالتها الحية.
+  Future<List<SubscriberEntry>> _readWorkspaceEntries(String ws) async {
+    final enc = Uri.encodeComponent(ws);
+    Map? live;
+    try {
+      final sub = await _get('workspaces/$enc/subscription');
+      if (sub is Map) live = sub;
+    } catch (_) {}
+    try {
+      final logs = await _get('workspaces/$enc/admin_log');
+      if (logs is Map) {
+        final out = <SubscriberEntry>[];
+        for (final e in logs.entries) {
+          final v = e.value;
+          if (v is! Map) continue;
+          out.add(SubscriberEntry(
+            workspaceId: ws,
+            planType: _pick(live?['plan_type'], v['plan_type'], 'individual'),
+            status: _pick(live?['status'], null, 'active'),
+            maxDevices: asInt(_firstNum(live?['max_devices'], v['max_devices']), 1),
+            expiresAtMs: asMs(_firstNum(live?['expires_at'], v['expires_at'])),
+            activatedAtMs: asMs(v['activated_at']) > 0
+                ? asMs(v['activated_at'])
+                : asMs(e.key),
+            deviceRef: asStr(v['device_ref']),
+          ));
+        }
+        return out; // هذه المساحة موثّقة — لا حاجة للفرع التالي.
+      }
+    } catch (_) {}
+    // مساحة بلا سجل إداري لكن لها اشتراك: تُعرض بحالتها الحية.
+    if (live != null) {
+      return [
+        SubscriberEntry(
+          workspaceId: ws,
+          planType: asStr(live['plan_type']).isEmpty
+              ? 'individual'
+              : asStr(live['plan_type']),
+          status: asStr(live['status']),
+          maxDevices: asInt(live['max_devices'], 1),
+          expiresAtMs: asMs(live['expires_at']),
+          activatedAtMs: asMs(live['activated_at']),
+          deviceRef: asStr(live['device_fingerprint']),
+        ),
+      ];
+    }
+    return const [];
+  }
+
+  /// أول قيمة رقمية صالحة من مرشحين (الحالة الحية تسبق السجل).
+  static Object? _firstNum(Object? a, Object? b) {
+    if (a is num) return a;
+    if (b is num) return b;
+    final pa = int.tryParse(asStr(a));
+    if (pa != null) return pa;
+    final pb = int.tryParse(asStr(b));
+    if (pb != null) return pb;
+    return null;
+  }
+
+  static String _pick(Object? a, Object? b, String dflt) {
+    final va = asStr(a).trim();
+    if (va.isNotEmpty) return va;
+    final vb = asStr(b).trim();
+    return vb.isEmpty ? dflt : vb;
+  }
+}
+
+/// مرشح مساحة عمل ظهر فيها معرف الجهاز — يُرتَّب بالأحدث نشاطاً.
+class _DevHit {
+  final String ws;
+  final int sync;
+  final int seen;
+  final int upd;
+  final int owner;
+  final int planned;
+  final bool viaLog;
+
+  const _DevHit({
+    required this.ws,
+    this.sync = 0,
+    this.seen = 0,
+    this.upd = 0,
+    this.owner = 0,
+    this.planned = 0,
+    this.viaLog = false,
+  });
+
+  /// الأحدث نشاطاً أولاً: مزامنة ⇐ ظهور ⇐ تحديث ⇐ مالك ⇐ خطة مكتملة.
+  static int rank(_DevHit a, _DevHit b) {
+    var c = b.sync.compareTo(a.sync);
+    if (c != 0) return c;
+    c = b.seen.compareTo(a.seen);
+    if (c != 0) return c;
+    c = b.upd.compareTo(a.upd);
+    if (c != 0) return c;
+    c = b.owner.compareTo(a.owner);
+    if (c != 0) return c;
+    return b.planned.compareTo(a.planned);
   }
 }
 
@@ -625,11 +755,15 @@ class AdminMetrics {
   final int activePaid; // مشتركون مدفوعون فعّالون.
   final int activeTrials; // في الفترة التجريبية (سارية).
   final int expired; // منتهية (تجربة أو اشتراك) = الفئة المجانية.
+
+  /// مساحات بلا عقدة اشتراك أصلاً (لم تُفعّل تجربة بعد).
+  final int noPlan;
   const AdminMetrics({
     required this.totalWorkspaces,
     required this.activePaid,
     required this.activeTrials,
     required this.expired,
+    this.noPlan = 0,
   });
 }
 
@@ -638,6 +772,10 @@ extension RtdbMetrics on Rtdb {
   /// لكل مساحة (N+1). الآن قراءة مجمعة واحدة لفهرس /trials (يحمل
   /// status/expires_at لكل مساحة مفعّلة) + مفاتيح المساحات السطحية —
   /// طلبان اثنان مهما بلغ عدد العملاء، عبر عميل keep-alive موحد.
+  ///
+  /// (إصلاح 2026-09-23) المساحات غير المفهرسة تُقرأ بتوازٍ محدود بدل
+  /// مسح متسلسل، والفئة الرابعة (بلا خطة) تُحصى صراحةً فلا يظهر الفرق
+  /// بين «إجمالي المساحات» ومجموع البطاقات كأنه خطأ في الأرقام.
   Future<AdminMetrics> metrics() async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) {
@@ -645,7 +783,6 @@ extension RtdbMetrics on Rtdb {
           totalWorkspaces: 0, activePaid: 0, activeTrials: 0, expired: 0);
     }
     final now = await serverNowMs();
-    int paid = 0, trials = 0, expired = 0;
 
     // القراءة المجمعة: فهرس التجارب يحمل حالة كل مساحة مفعّلة.
     final trialIdx = await _get('trials');
@@ -653,7 +790,7 @@ extension RtdbMetrics on Rtdb {
     if (trialIdx is Map) {
       for (final v in trialIdx.values) {
         if (v is Map) {
-          final ws = '${v['workspace_id'] ?? ''}';
+          final ws = asStr(v['workspace_id']);
           if (ws.isNotEmpty) byWs[ws] = v;
         }
       }
@@ -662,20 +799,32 @@ extension RtdbMetrics on Rtdb {
     // كاحتياط، بحد أقصى 25 حتى لا نعود للاختناق.
     final missing =
         keys.keys.map((k) => '$k').where((w) => !byWs.containsKey(w)).toList();
-    for (final ws in missing.take(25)) {
-      try {
-        final sub =
-            await _get('workspaces/${Uri.encodeComponent(ws)}/subscription');
-        if (sub is Map) byWs[ws] = sub;
-      } catch (_) {}
+    if (missing.isNotEmpty) {
+      await _gather<Map?>(
+        [
+          for (final ws in missing.take(25))
+            () async {
+              final enc = Uri.encodeComponent(ws);
+              final sub = await _get('workspaces/$enc/subscription');
+              if (sub is Map) {
+                byWs[ws] = sub;
+                return sub;
+              }
+              return null;
+            }
+        ],
+      );
     }
 
+    int paid = 0, trials = 0, expired = 0, noPlan = 0;
     for (final ws in keys.keys) {
       final sub = byWs['$ws'];
-      if (sub == null) continue; // مساحة بلا عقدة اشتراك بعد.
-      final status = '${sub['status'] ?? ''}';
-      final e = sub['expires_at'];
-      final exp = e is num ? e.toInt() : 0;
+      if (sub == null) {
+        noPlan++; // مساحة بلا عقدة اشتراك بعد.
+        continue;
+      }
+      final status = asStr(sub['status']);
+      final exp = asMs(sub['expires_at']);
       final alive = exp > now;
       if (status == 'active' && alive) {
         paid++;
@@ -690,6 +839,7 @@ extension RtdbMetrics on Rtdb {
       activePaid: paid,
       activeTrials: trials,
       expired: expired,
+      noPlan: noPlan,
     );
   }
 }

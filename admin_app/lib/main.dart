@@ -1,5 +1,6 @@
 // تطبيق المدير المستقل — لوحة تفعيل تراخيص Nexora (مالك النظام فقط).
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
@@ -11,6 +12,11 @@ Future<void> main() async {
   await Rtdb.instance.load();
   runApp(const AdminApp());
 }
+
+/// (إصلاح 2026-09-23) نبضة تحديث عامة: كل تفعيل/تمديد يُبلغ شاشة
+/// «سجل المشتركين» فتُعيد التحميل — كانت الشاشة تُبنى مرة واحدة عند الإقلاع
+/// فتظل قائمتها قديمة بعد كل تفعيل جديد (يبدو كأن التفعيل لم يُسجَّل).
+final ValueNotifier<int> adminRefreshTick = ValueNotifier<int>(0);
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key});
@@ -44,6 +50,17 @@ String fmtDate(int ms, {bool lifetime = false}) {
       .format(DateTime.fromMillisecondsSinceEpoch(ms));
 }
 
+/// نسخ نص إلى الحافظة مع إشعار خفيف — يُستخدم لمعرفات المساحات والأجهزة
+/// (المالك ينسخها من رسائل الواتساب ويبحث بها).
+Future<void> copyText(BuildContext context, String label, String value) async {
+  if (value.isEmpty) return;
+  await Clipboard.setData(ClipboardData(text: value));
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('نُسخ $label ✓'), behavior: SnackBarBehavior.floating),
+  );
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -66,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () async {
               await showDialog<void>(
                   context: context, builder: (_) => const _ConfigDialog());
-              setState(() {});
+              if (mounted) setState(() {});
             },
           ),
         ],
@@ -105,6 +122,14 @@ class _ConfigDialogState extends State<_ConfigDialog> {
   late final _url = TextEditingController(text: Rtdb.instance.baseUrl);
   late final _auth = TextEditingController(text: Rtdb.instance.authToken);
   bool _busy = false;
+
+  @override
+  void dispose() {
+    // (إصلاح) إفلات المتحكمات — كانت تُترك معلّقة بعد كل فتح للحوار.
+    _url.dispose();
+    _auth.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,7 +173,8 @@ class _ConfigDialogState extends State<_ConfigDialog> {
               : () async {
                   setState(() => _busy = true);
                   await Rtdb.instance.save(_url.text, _auth.text);
-                  if (mounted) Navigator.pop(context);
+                  if (!context.mounted) return;
+                  Navigator.pop(context);
                 },
           child: const Text('حفظ'),
         ),
@@ -174,10 +200,19 @@ class _MetricsBoardState extends State<MetricsBoard> {
   void initState() {
     super.initState();
     _load(); // تلقائياً فور فتح التطبيق.
+    // (إصلاح) تحديث الأرقام بعد كل تفعيل/تمديد بدل انتظار إعادة الفتح.
+    adminRefreshTick.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    adminRefreshTick.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
     if (!Rtdb.instance.configured || _busy) return;
+    if (!mounted) return;
     setState(() {
       _busy = true;
       _err = '';
@@ -230,6 +265,7 @@ class _MetricsBoardState extends State<MetricsBoard> {
   @override
   Widget build(BuildContext context) {
     if (!Rtdb.instance.configured) return const SizedBox.shrink();
+    final m = _m;
     return Column(
       children: [
         Row(
@@ -253,19 +289,29 @@ class _MetricsBoardState extends State<MetricsBoard> {
         const SizedBox(height: 4),
         Row(
           children: [
-            _card('إجمالي المساحات', '📱', _m?.totalWorkspaces,
+            _card('إجمالي المساحات', '📱', m?.totalWorkspaces,
                 const Color(0xFF2563EB)),
             const SizedBox(width: 7),
-            _card('مشتركون مدفوعون', '💎', _m?.activePaid,
+            _card('مشتركون مدفوعون', '💎', m?.activePaid,
                 const Color(0xFF16A34A)),
             const SizedBox(width: 7),
-            _card('فترة تجريبية', '⏳', _m?.activeTrials,
+            _card('فترة تجريبية', '⏳', m?.activeTrials,
                 const Color(0xFFEA580C)),
             const SizedBox(width: 7),
-            _card('منتهية / مجانية', '🔒', _m?.expired,
+            _card('منتهية / مجانية', '🔒', m?.expired,
                 const Color(0xFFDC2626)),
           ],
         ),
+        // الفرق بين الإجمالي ومجموع البطاقات كان يبدو كخطأ في الأرقام:
+        // نوضّح صراحةً أن باقي المساحات لم تبدأ تجربة أصلاً.
+        if (m != null && m.noPlan > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'منها ${m.noPlan} مساحة بلا اشتراك بعد (لم تُفعّل تجربة).',
+              style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+            ),
+          ),
         if (_err.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -293,10 +339,23 @@ class _ActivationScreenState extends State<ActivationScreen> {
   final _seats = TextEditingController(text: '5');
   bool _busy = false;
 
+  @override
+  void dispose() {
+    // (إصلاح) إفلات المتحكمات عند تدمير الشاشة.
+    _id.dispose();
+    _seats.dispose();
+    super.dispose();
+  }
+
   Future<void> _activate() async {
     final rtdb = Rtdb.instance;
     if (!rtdb.configured) {
       _snack('اضبط رابط قاعدة البيانات أولاً من ⚙️ الإعدادات', error: true);
+      return;
+    }
+    final input = _id.text.trim();
+    if (input.isEmpty) {
+      _snack('ألصق معرف الجهاز أو بصمة التفعيل أولاً', error: true);
       return;
     }
     final seats = int.tryParse(_seats.text.trim()) ?? 0;
@@ -307,12 +366,14 @@ class _ActivationScreenState extends State<ActivationScreen> {
     setState(() => _busy = true);
     try {
       final r = await rtdb.activate(
-        rawInput: _id.text,
+        rawInput: input,
         planType: _plan,
         duration: _duration,
         maxDevices: seats,
       );
       if (!mounted) return;
+      // السجل والإحصائيات يتجددان فوراً بعد التفعيل.
+      adminRefreshTick.value++;
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -339,11 +400,16 @@ class _ActivationScreenState extends State<ActivationScreen> {
             ],
           ),
           actions: [
+            TextButton(
+              onPressed: () => copyText(context, 'معرف المساحة', r.workspaceId),
+              child: const Text('نسخ المعرف'),
+            ),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx), child: const Text('تم')),
           ],
         ),
       );
+      if (!mounted) return;
       _id.clear();
     } catch (e) {
       _snack('$e', error: true);
@@ -361,6 +427,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
       );
 
   void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: error ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
@@ -427,23 +494,36 @@ class _ActivationScreenState extends State<ActivationScreen> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
               labelText: 'سعة الأجهزة (max_devices)',
-              hintText: 'مثال: 5',
+              hintText: 'مثال: 5 — الحد الأدنى 2',
               prefixIcon: Icon(Icons.devices_other),
             ),
           ),
+        ] else ...[
+          const SizedBox(height: 8),
+          const Text('👤 الخطة الفردية: جهاز واحد (بلا ربط أجهزة).',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey)),
         ],
         const SizedBox(height: 18),
         const Text('3️⃣ المدة الزمنية',
             style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
-        ...PlanDuration.values.map((d) => RadioListTile<PlanDuration>(
-              value: d,
-              groupValue: _duration,
-              onChanged: (v) => setState(() => _duration = v!),
-              title: Text(d.label, style: const TextStyle(fontSize: 14)),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-            )),
+        RadioGroup<PlanDuration>(
+          groupValue: _duration,
+          onChanged: (v) {
+            if (v != null) setState(() => _duration = v);
+          },
+          child: Column(
+            children: [
+              for (final d in PlanDuration.values)
+                RadioListTile<PlanDuration>(
+                  value: d,
+                  title: Text(d.label, style: const TextStyle(fontSize: 14)),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+            ],
+          ),
+        ),
         const SizedBox(height: 22),
         SizedBox(
           height: 58,
@@ -486,14 +566,51 @@ class SubscribersScreen extends StatefulWidget {
 }
 
 class _SubscribersScreenState extends State<SubscribersScreen> {
+  final _search = TextEditingController();
   late Future<List<SubscriberEntry>> _future = _load();
+  int _serverNow = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    adminRefreshTick.addListener(_onTick);
+    _loadServerClock();
+  }
+
+  @override
+  void dispose() {
+    adminRefreshTick.removeListener(_onTick);
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _onTick() => _refresh();
+
+  /// (إصلاح) حالة الانتهاء تُحسب بساعة الخادم لا ساعة الهاتف — ساعة
+  /// الهاتف المتقدّمة/المتأخرة كانت تُظهر مشتركاً منتهياً فعّالاً والعكس.
+  Future<void> _loadServerClock() async {
+    try {
+      final now = await Rtdb.instance.serverNowMs();
+      if (mounted) setState(() => _serverNow = now);
+    } catch (_) {
+      // بلا شبكة: الساعة المحلية احتياط مقبول للعرض فقط.
+      if (mounted) {
+        setState(
+            () => _serverNow = DateTime.now().millisecondsSinceEpoch);
+      }
+    }
+  }
 
   Future<List<SubscriberEntry>> _load() =>
       Rtdb.instance.configured
           ? Rtdb.instance.recentSubscribers()
           : Future.value(const []);
 
-  Future<void> _refresh() async => setState(() => _future = _load());
+  Future<void> _refresh() async {
+    await _loadServerClock();
+    if (!mounted) return;
+    setState(() => _future = _load());
+  }
 
   Future<void> _extend(SubscriberEntry s) async {
     final d = await showModalBottomSheet<PlanDuration>(
@@ -528,8 +645,11 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         backgroundColor: const Color(0xFF16A34A),
-        content: Text('✅ مُدِّد حتى ${fmtDate(r.expiresAtMs, lifetime: r.lifetime)}'),
+        content: Text(
+            '✅ مُدِّد حتى ${fmtDate(r.expiresAtMs, lifetime: r.lifetime)}'),
       ));
+      // السجل والإحصائيات يتجددان فوراً.
+      adminRefreshTick.value++;
       await _refresh();
     } catch (e) {
       if (!mounted) return;
@@ -557,119 +677,170 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
               ),
             ]);
           }
-          final list = snap.data ?? const [];
-          if (list.isEmpty) {
-            return ListView(children: const [
+          final all = snap.data ?? const [];
+          final q = _search.text.trim().toLowerCase();
+          final list = q.isEmpty
+              ? all
+              : all
+                  .where((s) =>
+                      s.workspaceId.toLowerCase().contains(q) ||
+                      s.deviceRef.toLowerCase().contains(q))
+                  .toList();
+          final nowMs =
+              _serverNow > 0 ? _serverNow : DateTime.now().millisecondsSinceEpoch;
+          return Column(
+            children: [
               Padding(
-                padding: EdgeInsets.all(40),
-                child: Column(children: [
-                  Icon(Icons.inbox_outlined, size: 56, color: Colors.grey),
-                  SizedBox(height: 10),
-                  Text('لا توجد تفعيلات مسجلة بعد',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.w700)),
-                  Text('كل تفعيل من الشاشة الأولى سيظهر هنا.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: Colors.grey)),
-                ]),
-              ),
-            ]);
-          }
-          final nowMs = DateTime.now().millisecondsSinceEpoch;
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: list.length,
-            separatorBuilder: (_, i) => const SizedBox(height: 8),
-            itemBuilder: (context, i) {
-              final s = list[i];
-              final lifetime =
-                  s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch;
-              final expired = !lifetime && s.expiresAtMs <= nowMs;
-              final color = expired
-                  ? const Color(0xFFDC2626)
-                  : (lifetime
-                      ? const Color(0xFF7C3AED)
-                      : const Color(0xFF16A34A));
-              return Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: BorderSide(color: color.withValues(alpha: .3)),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                child: TextField(
+                  controller: _search,
+                  decoration: InputDecoration(
+                    labelText: 'بحث بالمعرف أو الجهاز',
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'مسح البحث',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              _search.clear();
+                              setState(() {});
+                            },
+                          ),
+                  ),
+                  onChanged: (_) => setState(() {}),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+              Expanded(child: _buildList(list, nowMs)),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildList(List<SubscriberEntry> list, int nowMs) {
+    if (list.isEmpty) {
+      return ListView(children: const [
+        Padding(
+          padding: EdgeInsets.all(40),
+          child: Column(children: [
+            Icon(Icons.inbox_outlined, size: 56, color: Colors.grey),
+            SizedBox(height: 10),
+            Text('لا توجد تفعيلات مسجلة بعد',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w700)),
+            Text('كل تفعيل من الشاشة الأولى سيظهر هنا.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ]),
+        ),
+      ]);
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: list.length,
+      separatorBuilder: (_, i) => const SizedBox(height: 8),
+      itemBuilder: (context, i) {
+        final s = list[i];
+        final lifetime = s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch;
+        final expired = !lifetime && s.expiresAtMs <= nowMs;
+        final color = expired
+            ? const Color(0xFFDC2626)
+            : (lifetime ? const Color(0xFF7C3AED) : const Color(0xFF16A34A));
+        return Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: color.withValues(alpha: .3)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(
+                      s.planType == 'enterprise' ? Icons.business : Icons.person,
+                      size: 18,
+                      color: color),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      s.workspaceId,
+                      textDirection: TextDirection.ltr,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'نسخ معرف المساحة',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.copy_all_outlined, size: 16),
+                    onPressed: () =>
+                        copyText(context, 'المعرف', s.workspaceId),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      expired
+                          ? 'منتهٍ'
+                          : (lifetime ? 'دائم ∞' : 'فعّال'),
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: color),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                Text(
+                  '${s.planType == 'enterprise' ? '🏢 مؤسسة — ${s.maxDevices} أجهزة' : '👤 فردي'}'
+                  '   •   ينتهي: ${fmtDate(s.expiresAtMs, lifetime: lifetime)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                if (s.deviceRef.isNotEmpty && s.deviceRef != s.workspaceId)
+                  Row(
                     children: [
-                      Row(children: [
-                        Icon(
-                            s.planType == 'enterprise'
-                                ? Icons.business
-                                : Icons.person,
-                            size: 18,
-                            color: color),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            s.workspaceId,
-                            textDirection: TextDirection.ltr,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800, fontSize: 13),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: .12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            expired
-                                ? 'منتهٍ'
-                                : (lifetime ? 'دائم ∞' : 'فعّال'),
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                color: color),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${s.planType == 'enterprise' ? '🏢 مؤسسة — ${s.maxDevices} أجهزة' : '👤 فردي'}'
-                        '   •   ينتهي: ${fmtDate(s.expiresAtMs, lifetime: lifetime)}',
-                        style:
-                            const TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                      if (s.deviceRef.isNotEmpty &&
-                          s.deviceRef != s.workspaceId)
-                        Text('الجهاز: ${s.deviceRef}',
+                      Expanded(
+                        child: Text('الجهاز: ${s.deviceRef}',
                             textDirection: TextDirection.ltr,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 11, color: Colors.grey)),
-                      const SizedBox(height: 6),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                              visualDensity: VisualDensity.compact),
-                          onPressed: () => _extend(s),
-                          icon: const Icon(Icons.more_time, size: 16),
-                          label: const Text('تمديد بنقرة',
-                              style: TextStyle(fontSize: 12)),
-                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'نسخ معرف الجهاز',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.copy, size: 14),
+                        onPressed: () =>
+                            copyText(context, 'معرف الجهاز', s.deviceRef),
                       ),
                     ],
                   ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                    onPressed: () => _extend(s),
+                    icon: const Icon(Icons.more_time, size: 16),
+                    label: const Text('تمديد بنقرة',
+                        style: TextStyle(fontSize: 12)),
+                  ),
                 ),
-              );
-            },
-          );
-        },
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
