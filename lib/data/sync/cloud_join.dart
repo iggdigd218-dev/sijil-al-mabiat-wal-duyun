@@ -1915,21 +1915,28 @@ class CloudJoin {
   /// كتب الجهاز عملياته في مسار لا يقرأه أحد — «الأسهم خضراء ولا شيء
   /// ينتقل» — وهو بالضبط العطل المُبلَّغ عنه. تُستدعى قبل بناء النقل
   /// السحابي في كل دورة، وعند ربط الحساب.
-  static Future<String> findWorkspaceOfDevice(
+  /// نتيجة المسح: [workspaceId] المساحة التي يحمل سجلها هذا الجهاز
+  /// (أو فارغاً)، و[scanned] هل نجح المسح أصلاً — فتعذّر الوصول
+  /// للسحابة **ليس** معناه «لا عضوية»، والخلط بينهما يجعلنا نسترجع
+  /// مساحة من الفهرس ثم نُهيّئها فنمحو بيانات مجموعة غيرنا.
+  static Future<({String workspaceId, bool scanned})> scanWorkspaceOfDevice(
     String backendUrl,
     String deviceId, {
     int maxScan = 40,
   }) async {
-    if (deviceId.isEmpty) return '';
+    if (deviceId.isEmpty) return (workspaceId: '', scanned: false);
     final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
     // مفاتيح المساحات فقط (shallow) — قراءة الشجرة كاملة تحمل كل
     // العمليات فتثقل الشبكة بلا داع.
     Map<String, dynamic>? wsMap;
+    var scanned = false;
     try {
       final res = await http
           .get(Uri.parse('$base/workspaces.json?shallow=true'))
           .timeout(const Duration(seconds: 20));
+      // وصلنا السحابة فعلاً (حتى لو أجابت بلا مساحات) ⇒ المسح ناجح.
       if (res.statusCode >= 200 && res.statusCode < 300) {
+        scanned = true;
         final body = utf8.decode(res.bodyBytes).trim();
         if (body.isNotEmpty && body != 'null') {
           final d = jsonDecode(body);
@@ -1944,7 +1951,7 @@ class CloudJoin {
       if (k.isEmpty || k == '_registry') return;
       if (ids.length < maxScan) ids.add(k);
     });
-    if (ids.isEmpty) return '';
+    if (ids.isEmpty) return (workspaceId: '', scanned: scanned);
     String best = '';
     int bestTs = -1;
     for (final ws in ids) {
@@ -1968,7 +1975,40 @@ class CloudJoin {
         best = ws;
       }
     }
-    return best;
+    return (workspaceId: best, scanned: true);
+  }
+
+  /// (2026-09-22) مسح سجلات المساحات للبحث عن سجل هذا الجهاز —
+  /// تُعيد فارغاً إن لم يوجد له سجل في أي مساحة.
+  static Future<String> findWorkspaceOfDevice(
+    String backendUrl,
+    String deviceId, {
+    int maxScan = 40,
+  }) async =>
+      (await scanWorkspaceOfDevice(backendUrl, deviceId, maxScan: maxScan))
+          .workspaceId;
+
+  /// هل هذه المساحة لجهازنا وحده؟ (لا سجل لعضو آخر فيها) — حارس يمنع
+  /// تهيئة مساحة ما زال فيها أعضاء: لا تُمحى بيانات غيرنا ولو بدا
+  /// الجهاز «جديداً» (تثبيت جديد أو بعد مسح بياناته).
+  static Future<bool> _workspaceHasOnlyOurDevice(
+    String backendUrl,
+    String workspaceId,
+    String deviceId,
+  ) async {
+    try {
+      final raw = await _getJson(
+          '${_root(backendUrl, workspaceId)}/roster.json?shallow=true');
+      if (raw == null || raw is! Map) return false; // غير متأكدين: لا نمحو
+      final roster = Map<dynamic, dynamic>.from(raw);
+      if (roster.isEmpty) return true;
+      for (final k in roster.keys) {
+        if ('$k' != deviceId) return false;
+      }
+      return true;
+    } catch (_) {
+      return false; // إن تعذّر التحقق لا نُقدم على محو شيء
+    }
   }
 
   /// ══ (2026-09-22 — مساحة واحدة لكل جهاز) ══
@@ -2070,14 +2110,19 @@ class CloudJoin {
   }) async {
     try {
       final devId = await ensureDeviceId(repo);
-      var cloud = await findWorkspaceOfDevice(backendUrl, devId);
+      final scan = await scanWorkspaceOfDevice(backendUrl, devId);
+      // تعذّر الوصول للسحابة: لا نُغيّر الربط ولا ننظّف شيئاً —
+      // المسح الفاشل ليس «بلا عضوية».
+      if (!scan.scanned) return '';
+      var cloud = scan.workspaceId;
       var freshStart = false;
       if (cloud.isEmpty) {
         // بلا عضوية في أي سجل (تثبيت جديد/بيانات ممسوحة) ⇒ نردّ الجهاز
         // إلى مساحته المخصصة من فهرس الأجهزة (بصمته) ولو اختلف البريد.
         cloud = await workspaceOfDeviceIndex(repo, backendUrl);
         if (cloud.isEmpty) return '';
-        freshStart = await _hasNoBusinessData(repo);
+        freshStart = await _hasNoBusinessData(repo) &&
+            await _workspaceHasOnlyOurDevice(backendUrl, cloud, devId);
       }
       final current = (await repo.settings())['sync.workspaceId'] ?? '';
       if (freshStart) {

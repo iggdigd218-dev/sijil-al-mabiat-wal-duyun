@@ -14,6 +14,7 @@ import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
+import 'package:nexora_app/data/sync/device_registry.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية: تخزّن PUT حسب المسار وتعيد GET من المخزن (مع تجميع
@@ -447,6 +448,69 @@ void main() {
     await repo.refreshWorkspaceId();
     expect(repo.requireWorkspaceId, _ws);
     expect((await repo.settings())['sync.workspaceId'], _ws);
+  });
+
+  test('ROUTE-03 تعذّر المسح ≠ بلا عضوية: لا ربط ولا تنظيف', () async {
+    final c = _FakeCloud();
+    final me = (await repo.settings())['sync.deviceId'] ?? '';
+    // السحابة تضعنا في مساحة أخرى (فلو نجح المسح لتغيّر الربط إليها).
+    c.put('/workspaces/WS-REAL/roster/$me.json', {
+      'id': me,
+      'last_sync_at': DateTime.now().toIso8601String(),
+    });
+    c.put('/workspaces/WS-REAL/operations/op1.json', {'id': 'op1'});
+    await db.insert('workspaces', {
+      'id': 'WS-CURRENT',
+      'name': 'حالي',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+    await repo.setSetting('sync.workspaceId', 'WS-CURRENT');
+    await repo.refreshWorkspaceId();
+
+    // شبكة مقطوعة: مسح قائمة المساحات يفشل.
+    http.Client flaky() => MockClient((req) async {
+          if (req.url.path.endsWith('/workspaces.json')) {
+            throw Exception('لا شبكة');
+          }
+          return http.Response.fromStream(await c.client().send(req));
+        });
+
+    final bound = await http.runWithClient(
+      () => CloudJoin.reconcileWorkspaceBinding(repo, backendUrl: _url),
+      flaky,
+    );
+    expect(bound, '', reason: 'لا قرار بلا مسح ناجح');
+    await repo.refreshWorkspaceId();
+    expect(repo.requireWorkspaceId, 'WS-CURRENT',
+        reason: 'الربط القائم لا يُستبدل بسبب خطأ شبكة');
+    expect(c.has('/workspaces/WS-REAL/operations/op1.json'), isTrue,
+        reason: 'لا تُمحى بيانات بسبب خطأ شبكة');
+  });
+
+  test('ROUTE-04 التهيئة لا تمسح بيانات أعضاء آخرين', () async {
+    final c = _FakeCloud();
+    final me = (await repo.settings())['sync.deviceId'] ?? '';
+    // لا سجل لنا في أي مساحة (تثبيت جديد) + فهرس الجهاز يشير للمساحة.
+    final fp = await DeviceRegistry.fingerprintKey(repo);
+    c.put('/workspaces/_registry/device_index/$fp.json', {
+      'device_id': me,
+      'workspaceId': _ws,
+    });
+    // المساحة تضم جهازاً آخر وعملياته — ليست مساحتنا وحدنا.
+    c.put('$_root/roster/DEVICE-OTHER.json', {'id': 'DEVICE-OTHER'});
+    c.put('$_root/operations/op-keep.json', {'id': 'op-keep'});
+    c.put('$_root/subscription.json', {'plan': 'pro', 'max_seats': 5});
+
+    final bound = await http.runWithClient(
+      () => CloudJoin.reconcileWorkspaceBinding(repo, backendUrl: _url),
+      c.client,
+    );
+    expect(bound, _ws, reason: 'يُعاد إلى مساحته المعروفة ببصمته');
+    expect(c.has('$_root/operations/op-keep.json'), isTrue,
+        reason: 'عمليات بقية الأعضاء لا تُمحى');
+    expect(c.has('$_root/roster/DEVICE-OTHER.json'), isTrue,
+        reason: 'سجل بقية الأعضاء لا يُمحى');
   });
 
   test('ROUTE-02 findWorkspaceOfDevice يرجّح المساحة الأحدث نشاطاً', () async {
