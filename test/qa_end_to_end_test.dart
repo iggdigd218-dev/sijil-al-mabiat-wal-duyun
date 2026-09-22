@@ -193,6 +193,14 @@ void main() {
           i++) {
         await tester.pump(const Duration(milliseconds: 200));
       }
+      // (إصلاح CI 2026-09-22 — تذبذب) قد تظهر البطاقة في القائمة والنموذج
+      // لا يزال يخرج بحركة الإغلاق، فيُسقط التأكيد أدناه بلا عطل حقيقي.
+      // ننتظر اختفاءه بإطارات مقيّدة (سقف 2.5 ثانية) قبل التأكيد نفسه.
+      for (var i = 0;
+          i < 25 && find.byType(TxForm).evaluate().isNotEmpty;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(find.byType(TxForm), findsNothing);
       // (دفعة 58 — متطلب 10) البطاقة تعرض «الوصف · HH:MM» — نطابق جزئياً.
       expect(find.textContaining('QA UI SAVE'), findsOneWidget);
