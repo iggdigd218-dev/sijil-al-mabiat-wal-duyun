@@ -141,6 +141,8 @@ void main() {
   test('QA-BACKFILL-01 عمليات قديمة بلا صف cloud تُدرج عند الإقلاع', () async {
     final ourId = await ensureDeviceId(repo);
     await repo.setSetting('cloudBackendUrl', 'https://qa.firebaseio.com');
+    // (2026-09-22) المزامنة السحابية عبر جوجل فقط — بريد مربوط للمدير.
+    await repo.setSetting('account.email', 'boss@nexora.test');
     // قرين نشط (بعد ضمان صف مساحة العمل ليتحقق قيد FK).
     await db.insert(
         'workspaces',

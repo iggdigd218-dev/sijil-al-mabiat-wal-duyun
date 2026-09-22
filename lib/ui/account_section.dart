@@ -250,4 +250,17 @@ Future<void> provisionCloudAfterSignIn(
   } catch (_) {
     // خلفية صامتة.
   }
+  // ══ (2026-09-22) الجلب التلقائي الكامل بعد تسجيل جوجل ══
+  // فور اكتمال الدخول: تُعاد تهيئة محرك المزامنة بالجلسة الجديدة وتُجلب
+  // كل بيانات الجهاز والمؤسسة مباشرة (دفع الطابور + سحب سحابي كامل) —
+  // لا انتظار للدورة الدورية ولا استرجاع بصمة مجهول بعد اليوم.
+  try {
+    final engine = ref.read(syncEngineProvider);
+    engine.stop();
+    await engine.start();
+    ref.invalidate(workspaceModeProvider);
+    unawaited(engine.forceSyncNow());
+  } catch (_) {
+    // خلفية صامتة — الدورة الدورية تكمل لاحقاً.
+  }
 }

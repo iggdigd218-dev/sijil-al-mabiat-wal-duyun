@@ -50,6 +50,12 @@ class AutoBackupService {
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return false;
+      // ══ (2026-09-22) النسخ الاحتياطي عبر حساب جوجل فقط ══
+      // بلا بريد حساب جوجل مربوط لا تُكتب أي نسخة سحابية، وجهاز العضو
+      // لا ينسخ إطلاقاً — نسخة المجموعة يكتبها جهاز المدير وحده.
+      final mode = await repo.workspaceMode();
+      if (mode == 'member') return false;
+      if ((st['account.email'] ?? '').trim().isEmpty) return false;
       final db = await repo.database;
       final wsRows = await db.query('workspaces', limit: 1);
       final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';

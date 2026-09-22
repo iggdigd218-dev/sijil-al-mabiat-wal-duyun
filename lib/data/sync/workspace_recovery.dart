@@ -1,142 +1,24 @@
-// (استرداد بصمة العتاد) الاسترداد الذاتي عند الإقلاع.
+// (2026-09-22 — قاعدة جوجل فقط)
 //
-// تثبيت جديد نظيف (بعد حذف التطبيق/مسح بياناته) يفحص /device_index
-// ببصمة عتاده: وُجد سجل سابق؟ تُستعاد مساحته ودوره وبياناته (من النسخة
-// الصامتة /workspaces/{ws}/backup.json) تلقائياً وبصمت — المدير يعود
-// مديراً لمؤسسته نفسها، والعضو يعود عضواً في مجموعته.
+// حُذف «الاسترداد الصامت ببصمة العتاد» و«الاسترداد اليدوي برمز المساحة»
+// حذفاً نهائياً: بعد مسح بيانات التطبيق لا يجوز استرجاع أي بيانات إلا
+// بتسجيل الدخول بحساب جوجل — المسار الوحيد هو
+// AccountWorkspace.linkAccountOnly الذي يفهرس الحساب (accounts_index)
+// ويجلب مساحة المؤسسة ونسختها الاحتياطية تلقائياً فور الدخول.
+//
+// تبقى هنا أداة ترحيل معرف المساحة (swapWorkspaceId) التي يستخدمها مسار
+// التبديل الآمن عبر جوجل — وهي لا تسترجع بيانات بذاتها.
 import 'package:sqflite/sqflite.dart';
-
-import '../../core/cloud_config.dart';
-import 'auto_backup.dart';
-import '../repository.dart';
-import 'device_registry.dart';
 
 class WorkspaceRecovery {
   WorkspaceRecovery._();
 
-  /// مفتاح علم «جرى فحص الاسترداد» — يمنع تكرار الفحص في كل إقلاع.
-  static const _checkedKey = 'recovery.checked';
-
-  /// (اختبارات) إعادة ضبط.
+  /// (اختبارات) إعادة ضبط — لم يعد هناك علم فحص صامت.
   static void debugReset() {}
 
-  /// الفحص الصامت عند الإقلاع. يعيد true إن جرى استرداد فعلي.
-  ///
-  /// شروط التشغيل: تثبيت نظيف فقط — مستقل، بلا حسابات، ولم يُفحص سابقاً.
-  /// أي فشل شبكة = تجاهل صامت (يُعاد الفحص في الإقلاع التالي لأن العلم
-  /// لا يُكتب إلا بعد فحص ناجح فعلاً).
-  static Future<bool> attemptSilentRecovery(Repo repo) async {
-    try {
-      final st = await repo.settings();
-      if ((st[_checkedKey] ?? '') == '1') return false;
-      final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      if (url.isEmpty) return false;
-      final mode = await repo.workspaceMode();
-      if (mode != 'standalone') {
-        await repo.setSetting(_checkedKey, '1');
-        return false;
-      }
-      final accounts =
-          await repo.accounts(includeArchived: true, includeDeleted: true);
-      if (accounts.isNotEmpty) {
-        // بيانات قائمة = ليس تثبيتاً نظيفاً؛ نسجل الربط الحالي فقط.
-        await repo.setSetting(_checkedKey, '1');
-        await DeviceRegistry.upsertBinding(repo, backendUrl: url);
-        return false;
-      }
-      // 1) بصمة العتاد → الفهرس.
-      final fp = await DeviceRegistry.fingerprintKey(repo);
-      final rec = await DeviceRegistry.lookup(
-          backendUrl: url, fingerprint: fp);
-      if (rec == null) {
-        // جهاز جديد كلياً: سجّل ربطه بمساحته المولدة (owner).
-        await repo.setSetting(_checkedKey, '1');
-        await DeviceRegistry.upsertBinding(repo, backendUrl: url);
-        return false;
-      }
-      // 2) سجل سابق: استعادة المساحة والدور.
-      final restored = await _restoreWorkspace(repo,
-          backendUrl: url, record: rec);
-      await repo.setSetting(_checkedKey, '1');
-      return restored;
-    } catch (_) {
-      return false; // شبكة غائبة — يُعاد الفحص في الإقلاع القادم.
-    }
-  }
-
-  /// (هاتف بديل — استرداد يدوي) المدير يُدخل رمز مساحته القديمة:
-  /// تُسحب النسخة الصامتة وتُستعاد، وتُبدَّل المساحة المحلية إليها،
-  /// ويُسجَّل الجهاز مالكاً لها في الفهرس (force — قرار صريح منه).
-  /// يعيد false إن لم توجد نسخة للمساحة المدخلة.
-  static Future<bool> manualRestore(
-    Repo repo, {
-    required String backendUrl,
-    required String workspaceId,
-  }) async {
-    if (backendUrl.isEmpty || workspaceId.isEmpty) return false;
-    final pulled = await AutoBackupService.pullWorkspaceBackup(repo,
-        backendUrl: backendUrl, workspaceId: workspaceId);
-    if (pulled == null) return false;
-    final db = await repo.database;
-    final current = repo.requireWorkspaceId;
-    if (current != workspaceId) {
-      await swapWorkspaceId(db, from: current, to: workspaceId);
-      await repo.setSetting('sync.workspaceId', workspaceId);
-      repo.debugSetWorkspaceId(workspaceId);
-    }
-    await repo.importAll(pulled);
-    await repo.setSetting(_checkedKey, '1');
-    try {
-      await DeviceRegistry.upsertBinding(repo,
-          backendUrl: backendUrl, force: true);
-    } catch (_) {}
-    return true;
-  }
-
-  /// تبديل المساحة المحلية إلى المساحة المستعادة + استرجاع البيانات.
-  static Future<bool> _restoreWorkspace(
-    Repo repo, {
-    required String backendUrl,
-    required DeviceRegistryRecord record,
-  }) async {
-    final db = await repo.database;
-    final targetWs = record.workspaceId;
-    final current = repo.requireWorkspaceId;
-    // 1) ترحيل المعرف المحلي إلى المساحة المسجلة.
-    if (current != targetWs) {
-      await swapWorkspaceId(db, from: current, to: targetWs);
-      await repo.setSetting('sync.workspaceId', targetWs);
-      repo.debugSetWorkspaceId(targetWs);
-    }
-    // 2) الدور: المالك يبقى مالكاً (is_owner=1 افتراضاً في المستقل)؛
-    //    العضو يُوسم member — واسترجاع بياناته يتم عبر أول مزامنة
-    //    (السجل والعمليات تصله من المجموعة نفسها).
-    if (!record.isOwner) {
-      await db.insert(
-          'sync_meta', {'key': 'workspaceMode', 'value': 'member'},
-          conflictAlgorithm: ConflictAlgorithm.replace);
-      final devId = repo.requireDeviceId;
-      await db.update('devices', {'is_owner': 0},
-          where: 'id = ?', whereArgs: [devId]);
-      // (دفعة 66) لا شواهد طرد بعد اليوم — الاسترداد يعيد العضوية دون
-      // أي أثر تدميري على الجهاز (سلوك ما قبل 3.55).
-      return true;
-    }
-    // 3) مالك: استرجاع بيانات المؤسسة من النسخة الصامتة إن وُجدت.
-    try {
-      final pulled = await AutoBackupService.pullWorkspaceBackup(repo,
-          backendUrl: backendUrl, workspaceId: targetWs);
-      if (pulled != null) {
-        await repo.importAll(pulled);
-      }
-    } catch (_) {
-      // نسخة غائبة/تالفة — المساحة استُعيدت على الأقل، والعمليات
-      // السحابية القادمة عبر المزامنة تكمل الباقي.
-    }
-    return true;
-  }
-
   /// تبديل معرف المساحة عبر كل الجداول (نفس منطق ترحيل default الآمن).
+  /// يُستدعى فقط من مسار التبديل المرتبط بحساب جوجل
+  /// (AccountWorkspace._switchWorkspace).
   static Future<void> swapWorkspaceId(Database db,
       {required String from, required String to}) async {
     await db.transaction((txn) async {

@@ -1,11 +1,13 @@
-// QA — استرداد بصمة العتاد (Hardware-Bound Workspace Recovery).
+// QA — فهرس الأجهزة + قاعدة «جوجل فقط» (2026-09-22).
 //
 // device_index: بصمة الجهاز ← {workspaceId, role}. العقود:
-//  - lookup يقرأ السجل؛ upsertBinding يسجل owner للمستقل.
+//  - lookup يقرأ السجل؛ upsertBinding يسجل owner للمستقل (ببريد جوجل).
 //  - سجل owner قائم لا يُخفَّض ولا تُبدَّل مساحته إلا بـ force (تنازل صريح).
 //  - bindAsMember لا يسجل مدير مؤسسة أخرى عضواً في مجموعة غريبة.
-//  - الاسترداد الصامت: تثبيت نظيف + سجل owner ⇒ استعادة المساحة والنسخة.
-//  - manualRestore: رمز مساحة صحيح ⇒ استعادة كاملة؛ خاطئ ⇒ false.
+//  - حُذف الاسترداد الصامت ببصمة العتاد: الاسترجاع عبر جوجل فقط —
+//    ودور المدير يلتئم ذاتياً (حساب مؤسسة + جهاز مالك ⇒ host).
+//  - العضو المطرود (عضويته السحابية منتهية) لا يمنعه وضعه المحلي
+//    `member` من قبول دعوة جديدة.
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,8 +17,8 @@ import 'package:http/testing.dart';
 import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/data/repository.dart';
+import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/device_registry.dart';
-import 'package:nexora_app/data/sync/workspace_recovery.dart';
 import 'package:nexora_app/data/sync/workspace_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -133,100 +135,66 @@ void main() {
     expect(rec['workspaceId'], 'WS-OLDFIRM1');
   });
 
-  test('REG-04 الاسترداد الصامت: تثبيت نظيف يستعيد مساحة المالك ونسخته',
+  test('REG-04 (2026-09-22) التئام ذاتي: حساب مؤسسة + جهاز مالك ⇒ host',
       () async {
-    final fp = await DeviceRegistry.fingerprintKey(repo);
-    const oldWs = 'WS-MYFIRM99';
-    final backupPayload = {
-      'app': 'nexora',
-      'format': 'nexora-backup',
-      'db_version': 1,
-      'created_at': DateTime.now().toIso8601String(),
-      'group_fingerprint': '',
-      'workspace_mode': 'standalone',
-      'data': {
-        'accounts': [
-          {
-            'id': 77,
-            'workspace_id': oldWs,
-            'name': 'عميل المؤسسة المستعادة',
-            'kind': 'customer',
-            'phone': '',
-            'notify_channel': 'none',
-            'archived': 0,
-            'deleted_at': '',
-            'created_at': DateTime.now().toIso8601String(),
-            'updated_at': DateTime.now().toIso8601String(),
-          }
-        ],
-      },
-    };
-    final store = <String, Object?>{
-      '/workspaces/_registry/device_index/$fp.json': {
-        'workspaceId': oldWs,
-        'role': 'owner',
-        'device_id': 'OLD-DEV',
-      },
-      '/workspaces/$oldWs/backup.json': {
-        'payload': backupPayload,
-      },
-    };
-    final recovered = await http.runWithClient(
-        () => WorkspaceRecovery.attemptSilentRecovery(repo),
-        () => fakeCloud(store));
-    expect(recovered, isTrue);
-    expect(repo.requireWorkspaceId, oldWs);
-    final accounts = await repo.accounts();
-    expect(accounts.any((a) => a.name == 'عميل المؤسسة المستعادة'), isTrue);
-    // الفحص لا يتكرر في الإقلاع التالي.
-    final again = await http.runWithClient(
-        () => WorkspaceRecovery.attemptSilentRecovery(repo),
-        () => fakeCloud(store));
-    expect(again, isFalse);
+    // تثبيت نظيف: الوضع standalone حتى مع بريد جوجل مربوط.
+    expect(await repo.workspaceMode(), 'standalone');
+    // الاسترجاع بجوجل يثبّت هوية المؤسسة — الدور يلتئم ذاتياً لأن
+    // sync_meta ليس ضمن جداول النسخة الاحتياطية.
+    await repo.setSetting('account.type', 'enterprise');
+    expect(await repo.workspaceMode(), 'host',
+        reason: 'جهاز المالك بحساب مؤسسة يجب أن يعود host تلقائياً');
+    // الحساب الفردي لا يتحول host.
+    await db.update('sync_meta', {'value': 'standalone'},
+        where: "key = 'workspaceMode'");
+    await repo.setSetting('account.type', 'individual');
+    expect(await repo.workspaceMode(), 'standalone');
+    // الطرد يصفّي الهوية: الجهاز المطرود لا يلتئم host أبداً.
+    await repo.setSetting('account.type', 'enterprise');
+    await repo.resetToStandaloneAfterExpulsion();
+    expect(await repo.workspaceMode(), 'standalone');
+    expect((await repo.settings())['account.type'] ?? '', isEmpty);
   });
 
-  test('REG-05 manualRestore: رمز صحيح يستعيد، خاطئ يعيد false', () async {
-    const oldWs = 'WS-MANUAL77';
-    final store = <String, Object?>{
-      '/workspaces/$oldWs/backup.json': {
-        'payload': {
-          'app': 'nexora',
-          'format': 'nexora-backup',
-          'db_version': 1,
-          'created_at': DateTime.now().toIso8601String(),
-          'group_fingerprint': '',
-          'workspace_mode': 'standalone',
-          'data': {
-            'accounts': [
-              {
-                'id': 5,
-                'workspace_id': oldWs,
-                'name': 'حساب يدوي مستعاد',
-                'kind': 'customer',
-                'phone': '',
-                'notify_channel': 'none',
-                'archived': 0,
-                'deleted_at': '',
-                'created_at': DateTime.now().toIso8601String(),
-                'updated_at': DateTime.now().toIso8601String(),
-              }
-            ],
-          },
-        },
-      },
-    };
-    final bad = await http.runWithClient(
-        () => WorkspaceRecovery.manualRestore(repo,
-            backendUrl: url, workspaceId: 'WS-WRONG123'),
-        () => fakeCloud(store));
-    expect(bad, isFalse);
-    final ok = await http.runWithClient(
-        () => WorkspaceRecovery.manualRestore(repo,
-            backendUrl: url, workspaceId: oldWs),
-        () => fakeCloud(store));
-    expect(ok, isTrue);
-    expect(repo.requireWorkspaceId, oldWs);
-    final accounts = await repo.accounts();
-    expect(accounts.any((a) => a.name == 'حساب يدوي مستعاد'), isTrue);
+  test('REG-05 (2026-09-22) المطرود لا يمنعه وضع member المحلي من دعوة جديدة',
+      () async {
+    final devId = repo.requireDeviceId;
+    await repo.setSetting('sync.deviceId', devId);
+    await db.insert(
+        'sync_meta', {'key': 'workspaceMode', 'value': 'member'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    final curWs = repo.requireWorkspaceId;
+    // سحابة بلا سجل roster للجهاز — طُرد (removePeerFromCloud حذف سجله).
+    final store = <String, Object?>{};
+    await expectLater(
+      http.runWithClient(
+          () => CloudJoin.requestJoin(repo,
+              backendUrl: url,
+              tokenOrPin: 'TOK-EXPIRED1',
+              deviceName: 'جهاز حمود',
+              workspaceId: curWs),
+          () => fakeCloud(store)),
+      throwsA(predicate((e) => '$e'.contains('رمز الاقتران'))),
+      reason: 'تجاوز فحص العضوية المنتهية ووصل لمطابقة الدعوة',
+    );
+    // الوضع المحلي صُفّي أثناء المرور.
+    expect(await repo.workspaceMode(), 'standalone');
+
+    // عضو فعّال (سجله قائم بلا طرد) يحاول مجموعة أخرى ⇒ يبقى الرفض.
+    await db.insert(
+        'sync_meta', {'key': 'workspaceMode', 'value': 'member'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    store['/workspaces/$curWs/roster/$devId.json'] = {'device_id': devId};
+    await expectLater(
+      http.runWithClient(
+          () => CloudJoin.requestJoin(repo,
+              backendUrl: url,
+              tokenOrPin: 'TOK-EXPIRED1',
+              deviceName: 'جهاز حمود',
+              workspaceId: 'WS-OTHERGRP'),
+          () => fakeCloud(store)),
+      throwsA(isA<CloudJoinException>()),
+      reason: 'العضو الفعّال يُمنع من الانضمام لمجموعة أخرى',
+    );
   });
 }

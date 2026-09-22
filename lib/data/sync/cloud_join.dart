@@ -1397,8 +1397,37 @@ class CloudJoin {
     }
     final mode = await repo.workspaceMode();
     if (mode == 'member') {
-      throw const CloudJoinException(
-          'هذا الجهاز عضو في مجموعة قائمة بالفعل.');
+      // ══ (2026-09-22) لا تحبس العضو المطرود خلف وضع محلي منتهٍ ══
+      // طرد المدير (removePeerFromCloud) يحذف سجل الجهاز من /roster، فإن
+      // كان جهاز العضو مغلقاً/بلا شبكة وقت الطرد فلم يعالجه، يبقى محلياً
+      // `member` للأبد — والرفض الأعمى هنا كان يمنع إعادة دعوته نهائياً
+      // («عضو في مجموعة قائمة بالفعل»). الفحص الصحيح: هل عضويته ما زالت
+      // فعّالة في السحابة فعلاً؟
+      final curWs = repo.requireWorkspaceId;
+      final stillActive = await _isActiveCloudMember(
+        repo,
+        backendUrl: url,
+        workspaceId: curWs,
+      );
+      final sameWs = workspaceId.isNotEmpty && workspaceId == curWs;
+      if (stillActive && !sameWs) {
+        throw const CloudJoinException(
+            'هذا الجهاز عضو فعّال في مجموعة قائمة بالفعل — لا يمكن '
+            'الانضمام لمجموعة أخرى.');
+      }
+      if (!stillActive) {
+        // عضو صوري (مطرود/سجله محذوف): صفّي الوضع المحلي المنتهي ثم
+        // اكمل الانضمام — الموافقة والترطيب سيعيدان الربط الصحيح.
+        try {
+          final db = await repo.database;
+          await db.insert(
+            'sync_meta',
+            {'key': 'workspaceMode', 'value': 'standalone'},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        } catch (_) {}
+      }
+      // sameWs && stillActive: ترميم مشروع لعضوية المجموعة نفسها — نكمل.
     }
     final root = _root(url, workspaceId);
     // مطابقة الدعوة: توكن كامل، أو PIN من 6 أرقام (نمسح كل الدعوات الحية).

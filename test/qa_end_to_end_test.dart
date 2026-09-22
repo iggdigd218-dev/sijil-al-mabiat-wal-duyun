@@ -135,15 +135,9 @@ void main() {
             home: const HomeShell(),
           )));
       await _drain(tester);
-      // (تحديث الواجهة 2026-09-19) شاشة العمليات تُفتح من الشريط الجانبي
-      // ببلاطة «سجل الفواتير اليومية» (بدل بلاطة «المعاملات» القديمة).
-      final txTile = find.text('سجل الفواتير اليومية');
-      await _waitFor(tester, txTile);
-      await tester.ensureVisible(txTile);
-      await tester.pumpAndSettle();
-      await tester.tap(txTile, warnIfMissed: false);
-      await _drain(tester);
-      // الزر العائم الجديد دائري بعلامة «عملية» (بدل «تسجيل عملية»).
+      // (2026-09-22) زر الإضافة السريعة (+) يظهر في الشاشة الرئيسية فقط:
+      // نفتح ورقة الإجراء السريع من لوحة التحكم مباشرة، ثم ننتقل لقسم
+      // العمليات بعد الحفظ للتحقق من القائمة.
       final fab = find.text('عملية');
       await _waitFor(tester, fab);
       await tester.ensureVisible(fab);
@@ -172,6 +166,14 @@ void main() {
           .tap(save); // Same frame: there must still be exactly one write.
       await tester.pump(const Duration(milliseconds: 70));
       await _drain(tester);
+      await _drain(tester);
+      // (تحديث الواجهة 2026-09-19) شاشة العمليات تُفتح من الشريط الجانبي
+      // ببلاطة «سجل الفواتير اليومية» — بعد الحفظ من الرئيسية.
+      final txTile = find.text('سجل الفواتير اليومية');
+      await _waitFor(tester, txTile);
+      await tester.ensureVisible(txTile);
+      await tester.pumpAndSettle();
+      await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
       // (إصلاح CI 2026-09-19 — تذبذب QA-E2E) انتظار مقيّد بدل pump ثابت:
       // على آلات CI البطيئة قد يتأخر انعكاس البطاقة في القائمة عن المهلة

@@ -241,6 +241,9 @@ class MainActivity : FlutterFragmentActivity() {
                         val id = (call.argument<Number>("id") ?: -1L).toLong()
                         result.success(queryUpdateDownload(id))
                     }
+                    // (2026-09-22) يفتح مجلد التنزيلات العام (Download/Nexora)
+                    // في مستندات النظام — نقرة إشعار اكتمال التحديث.
+                    "openDownloadsFolder" -> result.success(openDownloadsFolder())
                     else -> result.notImplemented()
                 }
             }
@@ -448,26 +451,70 @@ class MainActivity : FlutterFragmentActivity() {
      * - أسرع من تنزيل داخل عملية التطبيق لأنه لا يتأثر بخمول/كبح التطبيق.
      * يعيد معرّف التنزيل، أو -1 عند الفشل.
      */
+    /** (2026-09-22) مجلد التحديثات العام في الهاتف: Download/Nexora. */
+    private fun publicUpdateDir(): File = File(
+        android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS
+        ),
+        "Nexora"
+    )
+
     private fun startUpdateDownload(url: String): Long = try {
         val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE)
             as android.app.DownloadManager
-        // نظّف ملفات تحديث قديمة حتى لا تتراكم.
+        // نظّف ملفات تحديث قديمة حتى لا تتراكم (المجلد العام + الخاص القديم).
+        try {
+            publicUpdateDir().mkdirs()
+            publicUpdateDir().listFiles()?.forEach { it.delete() }
+        } catch (_: Exception) {}
         getExternalFilesDir("updates")?.listFiles()?.forEach { it.delete() }
         val req = android.app.DownloadManager.Request(Uri.parse(url)).apply {
             setTitle("تحديث مدير الحسابات")
             setDescription("جارٍ تنزيل التحديث…")
             setMimeType("application/vnd.android.package-archive")
+            // إشعار النظام يظهر اكتمال التنزيل أيضاً (خدمة النظام نفسها).
             setNotificationVisibility(
-                android.app.DownloadManager.Request.VISIBILITY_VISIBLE
+                android.app.DownloadManager.Request
+                    .VISIBILITY_VISIBLE_NOTIFY_COMPLETED
             )
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
-            setDestinationInExternalFilesDir(
-                this@MainActivity, "updates", "nexora-update.apk"
+            // (2026-09-22) الحفظ في مجلد عام مخصص Download/Nexora — مرئي
+            // للمستخدم في مدير الملفات ولا يضخّم تخزين التطبيق الخاص.
+            setDestinationInExternalPublicDir(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+                "Nexora/nexora-update.apk"
             )
         }
         dm.enqueue(req)
     } catch (e: Exception) { -1L }
+
+    /**
+     * (2026-09-22) يفتح مجلد التنزيلات في مستندات النظام — سلسلة محاولات:
+     * مجلد Nexora مباشرة، ثم Downloads، ثم إعدادات التخزين كحل أخير.
+     */
+    private fun openDownloadsFolder(): Boolean {
+        val attempts = listOf(
+            "content://com.android.externalstorage.documents/document/primary%3ADownload%2FNexora",
+            "content://com.android.externalstorage.documents/tree/primary%3ADownload",
+        )
+        for (uri in attempts) {
+            try {
+                val i = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(Uri.parse(uri), "vnd.android.document/directory")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (launch(i)) return true
+            } catch (_: Exception) {}
+        }
+        return try {
+            launch(
+                Intent(android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) { false }
+    }
 
     /** حالة تنزيل جارٍ: خريطة {status, bytes, total, path, reason}. */
     private fun queryUpdateDownload(id: Long): Map<String, Any> {
@@ -505,7 +552,11 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> "running"
                 }
                 if (status == android.app.DownloadManager.STATUS_SUCCESSFUL) {
-                    val f = File(getExternalFilesDir("updates"), "nexora-update.apk")
+                    // (2026-09-22) المجلد العام أولاً؛ ملف الإصدار القديم
+                    // (التخزين الخاص) يبقى مدعوماً لاستئنافات ما قبل الترقية.
+                    val pub = File(publicUpdateDir(), "nexora-update.apk")
+                    val legacy = File(getExternalFilesDir("updates"), "nexora-update.apk")
+                    val f = if (pub.exists()) pub else legacy
                     if (f.exists()) out["path"] = f.absolutePath
                 }
             }

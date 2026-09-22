@@ -51,6 +51,8 @@ void main() {
   });
 
   test('SILENT-02 النسخة الصامتة تُرفع لمسار المساحة وتحدّث الطابع', () async {
+    // (2026-09-22) النسخ السحابي عبر حساب جوجل فقط — بريد مربوط.
+    await repo.setSetting('account.email', 'boss@nexora.test');
     await repo.saveAccount(Account(
       name: 'عميل صامت',
       kind: AccountKind.customer,
@@ -94,5 +96,29 @@ void main() {
     final rows = await db.query('workspaces');
     expect(rows.length, 1);
     expect(rows.first['id'], after);
+  });
+
+  test('SILENT-04 (2026-09-22) بوابة جوجل: لا نسخة سحابية بلا بريد، '
+      'وجهاز العضو لا ينسخ إطلاقاً', () async {
+    final puts = <String>[];
+    final client = MockClient((req) async {
+      if (req.method == 'PUT') puts.add(req.url.path);
+      return http.Response.bytes(utf8.encode('null'), 200);
+    });
+    // 1) بلا حساب جوجل: لا تُكتب أي نسخة.
+    await repo.setSetting('account.email', '');
+    final noGoogle = await http.runWithClient(
+        () => AutoBackupService.silentWorkspaceBackup(repo), () => client);
+    expect(noGoogle, isFalse);
+    expect(puts, isEmpty, reason: 'لا رفع سحابي دون حساب جوجل');
+    // 2) جهاز عضو (تحت مظلة المؤسسة): لا ينسخ ولو ببريد مربوط.
+    await repo.setSetting('account.email', 'member@nexora.test');
+    await db.insert(
+        'sync_meta', {'key': 'workspaceMode', 'value': 'member'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    final asMember = await http.runWithClient(
+        () => AutoBackupService.silentWorkspaceBackup(repo), () => client);
+    expect(asMember, isFalse);
+    expect(puts, isEmpty, reason: 'نسخة المجموعة يكتبها جهاز المدير وحده');
   });
 }

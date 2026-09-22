@@ -165,6 +165,8 @@ void main() {
     // (3.70) مسار النسخ الوحيد: AutoBackupService (النسخة الصامتة لمسار
     // المساحة) — بديل خدمة cloud_sync الرمزية القديمة المجتثة.
     await repoA.setSetting('cloudBackendUrl', url);
+    // (2026-09-22) بوابة جوجل: النسخ السحابي يتطلب حساباً مربوطاً.
+    await repoA.setSetting('account.email', 'boss58@nexora.test');
     await repoA.saveAccount(Account(
       name: 'حساب النسخة 58',
       kind: AccountKind.supplier,

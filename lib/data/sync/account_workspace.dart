@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:sqflite/sqflite.dart';
 
 import '../../core/factory_reset.dart';
 import 'auto_backup.dart';
@@ -226,6 +227,17 @@ class AccountWorkspace {
       // بعد تدوير الهوية: ابدأ جلسة مجهولة جديدة تُصدر uid المستقل.
       await FirebaseAuthRest.initSilentAuth(repo);
       await repo.setSetting('account.type', 'enterprise');
+      // (2026-09-22) استعادة الدور السحابي صراحةً: sync_meta ليس ضمن
+      // جداول النسخة، فبدون هذه الكتابة يعود جهاز المدير `standalone`
+      // بعد الاسترجاع بجوجل (تختفي أسهم المزامنة وتتعطل بوابات المدير).
+      try {
+        final role = await repo.isWorkspaceOwner() ? 'host' : 'member';
+        await db.insert(
+          'sync_meta',
+          {'key': 'workspaceMode', 'value': role},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      } catch (_) {}
       return AccountLinkOutcome.switched;
     } catch (e) {
       debugPrint('AccountWorkspace: فشل التبديل بعد التفريغ: $e');

@@ -221,10 +221,35 @@ class Repo {
       whereArgs: ['workspaceMode'],
       limit: 1,
     );
-    if (r.isEmpty) return 'standalone';
     // تطبيع القيم القديمة: 'managed' كانت تُستخدم قديماً بمعنى 'host'.
-    final mode =
-        WorkspaceMode.parse(r.first['value'] as String?).storageValue;
+    final mode = r.isEmpty
+        ? 'standalone'
+        : WorkspaceMode.parse(r.first['value'] as String?).storageValue;
+    // ══ (2026-09-22) التئام ذاتي لدور المدير بعد الاسترجاع بجوجل ══
+    // sync_meta ليس ضمن جداول النسخة الاحتياطية — جهاز المدير الذي يمسح
+    // بياناته ويسترجع مؤسسته عبر حساب جوجل كان يعود `standalone` فتختفي
+    // أسهم المزامنة وتتعطل بوابات المدير. القاعدة: حساب مؤسسة + هذا
+    // الجهاز مالك ⇒ host. (استعلام مباشر بلا isWorkspaceOwner لتفادي
+    // أي تعاود استدعاء بين الطريقتين.)
+    if (mode == 'standalone') {
+      try {
+        final st = await settings();
+        if ((st['account.type'] ?? '') == 'enterprise' && _deviceId != null) {
+          final dev = await db.query('devices',
+              where: 'id = ?', whereArgs: [_deviceId], limit: 1);
+          final ownerFlag = dev.isEmpty ||
+              ((dev.first['is_owner'] ?? 0) as int) == 1;
+          if (ownerFlag) {
+            await db.insert(
+              'sync_meta',
+              {'key': 'workspaceMode', 'value': 'host'},
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+            return 'host';
+          }
+        }
+      } catch (_) {}
+    }
     return mode;
   }
 
@@ -376,6 +401,20 @@ class Repo {
   /// ملاحظة: لا يستطيع العضو طلب الخروج بنفسه — الطرد بيد المدير فقط.
   Future<void> _resetToStandalone() async {
     final db = await _db;
+    // (2026-09-22) إبطال الجلسة أولاً: تُصفّى هوية الحساب ورابط السحابة
+    // قبل أي خطوة أخرى — حتى لا يلتقط التئام دور المدير (حساب مؤسسة +
+    // standalone ⇒ host) أي قراءة عابرة لـ workspaceMode أثناء التصفير
+    // فيعيد الجهاز المطرود host من جديد.
+    try {
+      await db.delete('settings',
+          where: 'key IN (?, ?, ?, ?)',
+          whereArgs: [
+            'has_completed_onboarding',
+            'cloudBackendUrl',
+            'cloudCode',
+            accountModeKey,
+          ]);
+    } catch (_) {}
     final devName = await deviceName(this);
     final adminPerms = defaultPerms(UserRole.admin);
     final permStr =
@@ -463,18 +502,6 @@ class Repo {
     _currentUserId = null;
     final me = await currentUser();
     _currentUserId = me?.id;
-    // إبطال الجلسة بالكامل: الجهاز المطرود يعود لشاشة الإعداد الأول
-    // (onboarding) عند التشغيل التالي — قاعدة نظيفة وهوية جديدة.
-    try {
-      final db2 = await _db;
-      await db2.delete('settings',
-          where: 'key IN (?, ?, ?)',
-          whereArgs: [
-            'has_completed_onboarding',
-            'cloudBackendUrl',
-            'cloudCode',
-          ]);
-    } catch (_) {}
   }
 
   /// مسح كل البيانات المحلية على العضو الجديد ليستبدلها بنسخة المضيف.

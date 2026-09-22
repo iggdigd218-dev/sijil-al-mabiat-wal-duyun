@@ -15,7 +15,7 @@ import '../core/media_paths.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/sync/device_registry.dart';
-import '../data/sync/workspace_recovery.dart';
+import '../data/update_installer.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
 import 'logout_flow.dart';
@@ -396,6 +396,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
       case 'user':
         _go(AppScreen.group);
         return true;
+      case 'update_download':
+        // (2026-09-22) إشعار اكتمال تنزيل التحديث: نقرة تفتح مجلد
+        // التنزيلات العام (Download/Nexora) ليصل المستخدم للملف مباشرة.
+        await UpdateInstaller.openDownloadsFolder(id);
+        return true;
     }
     // نوع بلا وجهة معروفة: نافذة توضيحية بدل تجاهل النقرة.
     if (mounted) {
@@ -600,17 +605,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
       final repo = ref.read(repoProvider);
-      // (استرداد بصمة العتاد) أول خطوة: تثبيت نظيف لجهاز معروف سابقاً؟
-      // تُستعاد مساحته ودوره وبياناته بصمت قبل أي تهيئة تجربة/مزامنة.
-      try {
-        final recovered = await WorkspaceRecovery.attemptSilentRecovery(repo);
-        if (recovered) {
-          final engine = ref.read(syncEngineProvider);
-          engine.stop();
-          await engine.start();
-          ref.read(refreshProvider.notifier).state++;
-        }
-      } catch (_) {}
+      // (2026-09-22 — جوجل فقط) حُذف الاسترداد الصامت ببصمة العتاد:
+      // بعد مسح بيانات التطبيق لا يُسترجع أي شيء إلا بتسجيل الدخول
+      // بحساب جوجل (AccountWorkspace.linkAccountOnly يجلب المساحة
+      // والبيانات تلقائياً فور الدخول). لا استرجاع مجهول بعد اليوم.
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return; // لا سحابة = لا تجربة بعد.
@@ -1060,6 +1058,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
         label: const Text('الدفع'),
       );
     }
+
+    // (2026-09-22) زر الإضافة السريعة (+) يظهر في الشاشة الرئيسية فقط —
+    // بقية الشاشات بلا زر عائم إطلاقاً.
+    if (_screen != AppScreen.dashboard) return null;
 
     // (قانون 2026-09-19) الزر العائم «إجراء سريع» كما كان: يفتح ورقة
     // الخيارات (عملية، سند، حساب، نقطة بيع) بدل نموذج مباشر.

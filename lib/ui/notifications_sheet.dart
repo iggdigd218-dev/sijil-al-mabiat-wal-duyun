@@ -26,8 +26,18 @@ Future<void> openNotifications(
   await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
+    // (2026-09-22) الصحيفة لا تغطي شريط التنقل السفلي: تُحجز مسافة
+    // بارتفاع الشريط فيبقى الظاهر والأسفل ظاهرين معاً أثناء العرض.
+    useRootNavigator: true,
+    barrierColor: Colors.black26,
     backgroundColor: Colors.transparent,
-    builder: (_) => _NotificationsSheet(onOpenEntity: onOpenEntity),
+    builder: (ctx) {
+      final reserve = MediaQuery.paddingOf(ctx).bottom + 66;
+      return Padding(
+        padding: EdgeInsets.only(bottom: reserve),
+        child: _NotificationsSheet(onOpenEntity: onOpenEntity),
+      );
+    },
   );
 }
 

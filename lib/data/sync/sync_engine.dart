@@ -262,7 +262,17 @@ class SyncEngine {
     final st = await repo.settings();
     final url = effectiveBackendUrl(st['cloudBackendUrl']);
     final autoSync = kCloudAutoSyncAlways; // مثبتة دائماً.
-    if (!autoSync || url.isEmpty) {
+    // ══ (2026-09-22) المزامنة السحابية عبر حساب جوجل فقط ══
+    // المدير/المستقل بلا حساب جوجل مربوط (account.email فارغ) لا يُبنى
+    // له نقل سحابي إطلاقاً — لا نسخ ولا مزامنة ولا ربط دون جوجل.
+    // أجهزة الأعضاء مستثناة: تعمل تحت مظلة حساب المؤسسة (المدير).
+    var googleGated = false;
+    try {
+      final mode0 = await repo.workspaceMode();
+      googleGated =
+          mode0 != 'member' && (st['account.email'] ?? '').trim().isEmpty;
+    } catch (_) {}
+    if (!autoSync || url.isEmpty || googleGated) {
       _transports.removeWhere((t) => t.targetId == SyncTarget.cloud);
       unawaited(_cloudTransport?.stopListening() ?? Future.value());
       _cloudTransport = null;

@@ -16,6 +16,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/sfx.dart';
+
 /// مراحل عملية التحديث بنقرة واحدة.
 enum InstallPhase {
   idle,
@@ -140,7 +142,8 @@ class UpdateInstaller {
       final st = await _query(id);
       final status = '${st['status']}';
       if (status == 'done' && '${st['path']}'.isNotEmpty) {
-        // اكتمل في الخلفية — ثبّت مباشرة بلا إعادة تنزيل.
+        // اكتمل في الخلفية — أشعر ثم ثبّت مباشرة بلا إعادة تنزيل.
+        _notifyDownloadComplete('${st['path']}');
         yield* _install('${st['path']}');
         return;
       }
@@ -185,6 +188,8 @@ class UpdateInstaller {
                 error: 'اكتمل التنزيل لكن الملف غير موجود. أعد المحاولة.');
             return;
           }
+          // (2026-09-22) إشعار نظام: اكتمل التنزيل — نقرة تفتح المجلد.
+          _notifyDownloadComplete(path);
           yield* _install(path);
           return;
         case 'failed':
@@ -213,6 +218,34 @@ class UpdateInstaller {
               progress: (total > 0) ? bytes / total : null);
       }
     }
+  }
+
+  /// (2026-09-22) إشعار نظام بعد اكتمال تنزيل التحديث — نقرته تفتح
+  /// مجلد التنزيلات العام (Download/Nexora) عبر openNotificationEntity.
+  void _notifyDownloadComplete(String path) {
+    Sfx.systemNotify(
+      title: 'اكتمل تنزيل التحديث',
+      body: 'الملف محفوظ في Download/Nexora — اضغط لفتح مجلد التنزيلات.',
+      entityType: 'update_download',
+      entityId: path,
+    );
+  }
+
+  /// يفتح مجلد التنزيلات العام الذي يحفظ فيه التطبيق ملفات التحديث —
+  /// أندرويد: نافذة مستندات النظام؛ ويندوز: المستكشف على الملف نفسه.
+  static Future<bool> openDownloadsFolder(String path) async {
+    try {
+      if (Platform.isAndroid) {
+        final r = await _channel.invokeMethod<bool>('openDownloadsFolder');
+        return r ?? false;
+      }
+      if (Platform.isWindows && path.isNotEmpty) {
+        await Process.start('explorer.exe', ['/select,', path],
+            mode: ProcessStartMode.detached);
+        return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   /// يتحقق من الملف ثم يطلق شاشة تثبيت النظام.
@@ -314,6 +347,50 @@ class UpdateInstaller {
     yield* _httpDownload(url, 'nexora-update.apk', (f) => _install(f.path));
   }
 
+  /// (2026-09-22) مجلد التنزيل: على أندرويد مجلد عام مخصص في الهاتف
+  /// Download/Nexora — مرئي في مدير الملفات ولا يضخّم تخزين التطبيق
+  /// الخاص؛ وعند تعذّر الكتابة فيه (قيود بعض المصانع) نعود لمجلد
+  /// التطبيق الخارجي. بقية الأنظمة: مجلد مؤقت يُنظف قبل كل تنزيل.
+  Future<Directory> _downloadDir(String fileName) async {
+    Directory? dir;
+    if (Platform.isAndroid) {
+      try {
+        final d = Directory('/storage/emulated/0/Download/Nexora');
+        await d.create(recursive: true);
+        final probe = File('${d.path}/.probe');
+        await probe.writeAsString('x');
+        await probe.delete();
+        dir = d;
+      } catch (_) {
+        try {
+          final ext = await getExternalStorageDirectory();
+          if (ext != null) {
+            final d = Directory('${ext.path}/updates');
+            await d.create(recursive: true);
+            dir = d;
+          }
+        } catch (_) {}
+      }
+    }
+    if (dir == null) {
+      final cache = await getTemporaryDirectory();
+      final d = Directory('${cache.path}/updates');
+      if (d.existsSync()) d.deleteSync(recursive: true);
+      d.createSync(recursive: true);
+      dir = d;
+    }
+    // نظّف ملفات التحديث القديمة حتى لا تتراكم وتهدر مساحة الهاتف.
+    final keep = '${dir.path}/$fileName';
+    try {
+      await for (final e in dir.list()) {
+        if (e is File && e.path != keep) {
+          await e.delete();
+        }
+      }
+    } catch (_) {}
+    return dir;
+  }
+
   /// تنزيل http عام إلى ملف مؤقت ثم تمرير الملف لخطوة ما بعد التنزيل.
   Stream<InstallProgress> _httpDownload(
     String url,
@@ -322,10 +399,7 @@ class UpdateInstaller {
   ) async* {
     final File apk;
     try {
-      final cache = await getTemporaryDirectory();
-      final dir = Directory('${cache.path}/updates');
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
-      dir.createSync(recursive: true);
+      final dir = await _downloadDir(fileName);
       apk = File('${dir.path}/$fileName');
     } catch (e) {
       yield InstallProgress(InstallPhase.failed,
