@@ -54,9 +54,14 @@ class EffectivePermissions {
         isAdmin: false,
       );
 
+  /// (2026-09-22) المالك/المالك المُنقَلة إليه الملكية: صلاحيات كاملة
+  /// فوراً وبلا انتظار أي صف وارد — لا شارة «بلا صلاحية» في الشريط.
+  factory EffectivePermissions.owner(String email) =>
+      EffectivePermissions.full(email);
+
   factory EffectivePermissions.fromRow(Map<String, Object?> r) {
     final role = '${r['role'] ?? ''}';
-    final admin = role == 'admin' || role == 'agent';
+    final admin = role == 'admin' || role == 'agent' || role == 'owner';
     int flag(String k) => (r[k] as int?) ?? 0;
     return EffectivePermissions(
       email: '${r['user_email'] ?? ''}',
@@ -76,7 +81,8 @@ EffectivePermissions deriveFromRolePerms(
     String email, String roleCode, String permsCsv) {
   final perms = permsCsv.split(',').map((e) => e.trim()).toSet();
   final advanced = roleGrantsAdvancedCode(roleCode);
-  final admin = roleCode == 'admin' || roleCode == 'agent';
+  final admin =
+      roleCode == 'admin' || roleCode == 'agent' || roleCode == 'owner';
   return EffectivePermissions(
     email: email,
     role: roleCode,
@@ -90,6 +96,7 @@ EffectivePermissions deriveFromRolePerms(
 }
 
 bool roleGrantsAdvancedCode(String code) =>
-    code == 'admin' || code == 'agent' || code == 'accountant';
+    code == 'admin' || code == 'agent' || code == 'accountant' ||
+    code == 'owner';
 
 bool roleGrantsAdvanced(UserRole r) => roleGrantsAdvancedCode(r.code);

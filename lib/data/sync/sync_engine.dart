@@ -304,6 +304,11 @@ class SyncEngine {
     try {
       await CloudJoin.reconcileWorkspaceBinding(repo, backendUrl: url);
     } catch (_) {}
+    // (2026-09-22) صف صلاحيات فعّال للمالك بعد كل مواءمة ربط: جهاز
+    // استُرجع أو انتقلت إليه الملكية يعود مديراً فوراً بلا شارة حمراء.
+    try {
+      await repo.ensureSelfPermissionRow();
+    } catch (_) {}
     // Workspace الحالي — يُقرأ من الجدول في كل استدعاء: الربط يستبدل
     // الجدول بلقطة المجموعة، ونقلٌ بُني بالمعرّف القديم يظل يدفع ويسحب من
     // مسار خاطئ فتموت المزامنة بصمت.

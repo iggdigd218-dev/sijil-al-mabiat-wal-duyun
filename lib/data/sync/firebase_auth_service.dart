@@ -116,6 +116,9 @@ class FirebaseAuthRest {
     await repo.setSetting(uidKey, a.uid);
     await repo.setSetting(emailKey, a.email);
     await repo.setSetting(nameKey, a.displayName);
+    // (2026-09-22) صف صلاحيات فعّال للحساب فور الدخول: بدونه يبقى
+    // المدير بلا صلاحية في الشريط العلوي حتى وصول عملية مستخدم.
+    await repo.ensureSelfPermissionRow();
     // (401) توكن الحساب هو الذي يمنح صلاحية المالك — يُحفظ ويُستخدم فوراً.
     if (a.idToken.isNotEmpty) {
       _accountUid = a.uid;

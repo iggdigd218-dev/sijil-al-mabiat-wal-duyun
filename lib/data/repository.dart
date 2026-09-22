@@ -1704,6 +1704,9 @@ class Repo {
     // المنقولة له الملكية يصبح مديرًا فعليًا فور وصول علامة is_owner، وأن
     // فقدان ربط المستخدم لا يحرم المالك من إدارة مجموعته.
     if (await isWorkspaceOwner()) {
+      // (2026-09-22) حقن/تفعيل صف الصلاحيات للمالك أولاً: وجوده شرط
+      // لظهور دوره وصلاحياته في الواجهة بدل «بلا صلاحية».
+      await ensureSelfPermissionRow(roleCode: 'admin');
       final all = await users();
       final admin = all.where((u) => u.role == UserRole.admin).toList();
       if (admin.isNotEmpty) {
@@ -1728,11 +1731,21 @@ class Repo {
     if (mode == 'member') {
       // في وضع العضو: المستخدم الفعّال هو المُعيّن لهذا الجهاز من قِبل المدير.
       // إن لم يُعيَّن بعد = لا صلاحيات على الإطلاق.
-      return deviceAssignedUser();
+      final assigned = await deviceAssignedUser();
+      if (assigned != null) return assigned;
+      // (2026-09-22) استثناء المالك: انتقلت إليه الملكية أو لم يصل تعيينه
+      // بعد — المالك لا يُقفل أبداً، ولا تظهر له شارة «بلا صلاحية».
+      final owner = await _ownerFallbackUser();
+      if (owner != null) return owner;
+      return null;
     }
     // وضع مستقل: المستخدم "أنا" (is_me=1) أو المدير.
     final all = await users();
-    if (all.isEmpty) return null;
+    if (all.isEmpty) {
+      final owner = await _ownerFallbackUser();
+      if (owner != null) return owner;
+      return null;
+    }
     return all.firstWhere(
       (u) => u.isMe,
       orElse: () => all.firstWhere(
@@ -1740,6 +1753,80 @@ class Repo {
         orElse: () => all.first,
       ),
     );
+  }
+
+  /// ══ (2026-09-22) المالك لا يُقفل أبداً ══
+  /// إن تعذّر إسناد مستخدم لهذا الجهاز وهو المالك (ملكية منقولة، تعيين
+  /// لم يصل، استرجاع بجوجل) نرجع هوية مدير كاملة ونضمن صف صلاحيات
+  /// فعّال — بدونه تظهر شارة «بلا صلاحية» فوق شاشة المدير.
+  Future<AppUser?> _ownerFallbackUser() async {
+    try {
+      if (!await isWorkspaceOwner()) return null;
+      await ensureSelfPermissionRow(roleCode: 'admin');
+      final now = DateTime.now();
+      return AppUser(
+        id: null,
+        name: 'المدير',
+        role: UserRole.admin,
+        permissions: defaultPerms(UserRole.admin),
+        active: true,
+        isMe: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// حقن/تفعيل صف الصلاحيات للمستخدم الحالي: يُستدعى عند تسجيل الدخول
+  /// أو إكمال الإعداد أو كلما لزم الأمر، فيضمن وجود صف في user_permissions
+  /// بـ is_active = 1 والدور المناسب — لا صف ⇒ لا صلاحية تظهر في الواجهة.
+  Future<void> ensureSelfPermissionRow({String? roleCode}) async {
+    try {
+      final st = await settings();
+      final email = (st[accountEmailKey] ?? '').trim().toLowerCase();
+      if (email.isEmpty) return;
+      final db = await _db;
+      final rows = await db.query('user_permissions',
+          where: 'user_email = ?', whereArgs: [email], limit: 1);
+      final isOwner = await isWorkspaceOwner();
+      final role = roleCode ?? (isOwner ? 'admin' : null);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final ws = (st['sync.workspaceId'] ?? '').toString();
+      if (rows.isEmpty) {
+        if (role == null) return; // لا نخترع دوراً لعضو عادي.
+        final admin = role == 'admin' || role == 'agent';
+        await db.insert(
+          'user_permissions',
+          {
+            'user_email': email,
+            'store_id': ws,
+            'role': role,
+            'can_discount': admin ? 1 : 0,
+            'can_delete_tx': admin ? 1 : 0,
+            'can_view_reports': admin ? 1 : 0,
+            'can_manage_items': admin ? 1 : 0,
+            'is_active': 1,
+            'updated_at': now,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+        return;
+      }
+      final row = rows.first;
+      final patch = <String, Object?>{};
+      // المالك المُعطَّل أو بلا دور يُرمَّم فوراً.
+      if (role == 'admin') {
+        if ((row['is_active'] as int? ?? 0) != 1) patch['is_active'] = 1;
+        if ('${row['role'] ?? ''}'.trim().isEmpty) patch['role'] = 'admin';
+      }
+      if (patch.isNotEmpty) {
+        patch['updated_at'] = now;
+        await db.update('user_permissions', patch,
+            where: 'user_email = ?', whereArgs: [email]);
+      }
+    } catch (_) {}
   }
 
   /// يمنع المستخدم غير المصرّح من إجراء حُرج. المدير يمر دائمًا.

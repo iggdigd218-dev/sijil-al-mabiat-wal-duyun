@@ -189,6 +189,15 @@ class CloudFirebaseTransport implements SyncTransport {
   // لو حُذفت عقدته نهائياً (وليس فقط عند وسمها revoked/expelled).
 
   /// يُستدعى عند اكتشاف أن هذا الجهاز طُرد/حُذف من سجل المجموعة.
+  /// تبديل فحص المفاتيح الأجنبية (خارج المعاملات فقط — PRAGMA داخل
+  /// معاملة لا أثر له في SQLite).
+  Future<void> _setForeignKeys(bool enabled) async {
+    try {
+      await (await _db)
+          .execute('PRAGMA foreign_keys = ${enabled ? 'ON' : 'OFF'}');
+    } catch (_) {}
+  }
+
   Future<int> pull({ConflictResolver? resolver}) async {
     final db = await _db;
     // نستخدم timestamp-based cursor مع overlap للسماح بالوصول المتأخر.
@@ -305,8 +314,24 @@ class CloudFirebaseTransport implements SyncTransport {
         final c = entryMs(va).compareTo(entryMs(vb));
         return c != 0 ? c : (a.key as String).compareTo(b.key as String);
       });
+      // ══ (2026-09-22) فرز حسب التبعية قبل التطبيق ══
+      // الترتيب الزمني لا يراعي أن الفاتورة تحتاج حسابها وصنفها: وصولها
+      // أولاً يرفع FOREIGN KEY 787 فيتوقف السحب. نُقدّم الآباء على الأبناء
+      // (حسابات ← أصناف ← فواتير ← بنود) ونؤجّل الحذف للنهاية.
+      entries.sort((a, b) {
+        final c = dependencyRankOfMap(a.value)
+            .compareTo(dependencyRankOfMap(b.value));
+        if (c != 0) return c;
+        final t = entryMs(a.value).compareTo(entryMs(b.value));
+        return t != 0 ? t : (a.key as String).compareTo(b.key as String);
+      });
       String? lastKey;
-      await db.transaction((txn) async {
+      // ══ (2026-09-22) حزام الأمان الأخير ══
+      // PRAGMA لا يعمل داخل معاملة — لذلك يُضبط خارجها: يُعطّل فحص
+      // المفاتيح الأجنبية أثناء تطبيق الدفعة ويُعاد بعدها فوراً.
+      await _setForeignKeys(false);
+      try {
+        await db.transaction((txn) async {
         for (final entry in entries) {
           final v = entry.value;
           if (v is! Map) continue;
@@ -356,6 +381,10 @@ class CloudFirebaseTransport implements SyncTransport {
           lastKey = entry.key as String;
         }
       });
+      } finally {
+        // إعادة فحص المفاتيح الأجنبية في كل الحالات (نجاح أو استثناء).
+        await _setForeignKeys(true);
+      }
       // إشعار وصول رسائل دردشة جماعية عبر السحابة (نفس سلوك LAN):
       // خارج المعاملة، وبعد نجاح التطبيق فقط.
       for (final op in chatOps) {

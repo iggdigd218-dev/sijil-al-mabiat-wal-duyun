@@ -11,6 +11,150 @@ import '../repository.dart';
 import 'conflict_resolver.dart';
 import 'operation.dart';
 
+
+/// ══════════════════════════════════════════════════════════════════════════
+/// (2026-09-22) سلامة تطبيق العمليات الواردة — FOREIGN KEY 787
+/// ══════════════════════════════════════════════════════════════════════════
+/// العمليات تصل من السحابة مرتّبة **زمنياً** لا حسب التبعية: فاتورة قد
+/// تسبق حسابها أو صنفَها، فيرفض SQLite إدراجها
+/// (FOREIGN KEY constraint failed — code 787) ويتوقف السحب كله.
+/// الحل ثلاث طبقات:
+///   1) فرز الدفعة الواردة حسب التبعية (ترتيب واعٍ بالاعتمادية).
+///   2) إنشاء سجل مؤقت (Stub) لكل أب مفقود قبل إدراج ابنه.
+///   3) تعطيل فحص المفاتيح أثناء الدفعة من الناقل (حزام أمان أخير).
+
+/// الجدول الأب لكل عمود مفتاح أجنبي معروف في المخطط.
+const Map<String, String> kForeignParentTable = {
+  'account_id': 'accounts',
+  'from_id': 'accounts',
+  'to_id': 'accounts',
+  'item_id': 'items',
+  'tx_id': 'transactions',
+  'category_id': 'item_categories',
+  'conversation_id': 'conversations',
+};
+
+/// رتبة التبعية: الأصغر يُطبَّق أولاً (حسابات ← أصناف ← فواتير ← بنود).
+int dependencyRank(SyncOperation op) {
+  final base = switch (op.entityType) {
+    EntityKind.account || EntityKind.category => 0,
+    EntityKind.itemCategory => 1,
+    EntityKind.item => 2,
+    EntityKind.tx => 3,
+    EntityKind.voucher || EntityKind.stockMove => 4,
+    EntityKind.user || EntityKind.userPermission ||
+    EntityKind.currency ||
+    EntityKind.setting =>
+      5,
+    _ => 6,
+  };
+  // الحذف أخيراً دائماً: حذفُ أب قبل وصول أبنائه يمحوهم (ON DELETE CASCADE).
+  return op.opType == OpKind.delete_ ? base + 100 : base;
+}
+
+/// نفس الرتبة لكن من خريطة العملية الخام (قبل تحويلها إلى SyncOperation)
+/// — يُستخدم في الناقل حيث تُفرز المدخلات قبل فتح المعاملة.
+int dependencyRankOfMap(Object? v) {
+  if (v is! Map) return 99;
+  final base = switch ('${v['entity_type'] ?? ''}') {
+    'account' || 'category' => 0,
+    'itemCategory' => 1,
+    'item' => 2,
+    'tx' => 3,
+    'voucher' || 'stockMove' => 4,
+    'user' || 'userPermission' || 'currency' || 'setting' => 5,
+    _ => 6,
+  };
+  return '${v['op_type'] ?? ''}' == 'delete_' ? base + 100 : base;
+}
+
+/// فرز ثابت (stable) حسب التبعية، مع الحفاظ على ترتيب الأصل داخل الرتبة.
+List<SyncOperation> sortOperationsByDependency(Iterable<SyncOperation> ops) {
+  final indexed = ops.toList().asMap().entries.toList();
+  indexed.sort((a, b) {
+    final c = dependencyRank(a.value).compareTo(dependencyRank(b.value));
+    return c != 0 ? c : a.key.compareTo(b.key);
+  });
+  return indexed.map((e) => e.value).toList();
+}
+
+/// إنشاء سجل مؤقت (Stub) بالمعرف المطلوب: يمنع كسر التكامل المرجعي حتى
+/// تصل العملية الأصلية فتستبدله. الأعمدة الإلزامية تُملأ بقيم آمنة عامة
+/// فلا ينفجر الإدراج على قواعد بختلف مخططها.
+Future<void> insertStubRow(
+  DatabaseExecutor txn,
+  String table,
+  Object id,
+  SyncOperation op,
+) async {
+  final info = await txn.rawQuery('PRAGMA table_info($table)');
+  if (info.isEmpty) return;
+  final pkCol = info.cast<Map<Object?, Object?>?>().firstWhere(
+        (c) => ((c?['pk'] as int?) ?? 0) > 0,
+        orElse: () => null,
+      );
+  if (pkCol == null) return;
+  final pk = pkCol['name'] as String;
+  final now = DateTime.now().toIso8601String();
+  final row = <String, Object?>{
+    pk: id,
+    if (table == 'accounts') 'name': 'حساب مؤقت (قيد المزامنة)',
+    if (table == 'items') 'name': 'صنف مؤقت (قيد المزامنة)',
+    if (table == 'item_categories') 'name': 'تصنيف مؤقت',
+    if (table == 'conversations') 'title': 'محادثة',
+    if (table == 'transactions') ...{
+        'type': 'sale',
+        'amount': 1, // CHECK (amount > 0)
+        'status': 'done',
+        'sync_state': 'pending',
+      },
+  };
+  for (final col in info) {
+    final name = col['name'] as String;
+    if (row.containsKey(name)) continue;
+    final notNull = (col['notnull'] as int? ?? 0) == 1;
+    final hasDefault = col['dflt_value'] != null;
+    final isPk = (col['pk'] as int? ?? 0) > 0;
+    if (!notNull || hasDefault || isPk) continue;
+    final type = ((col['type'] as String?) ?? '').toUpperCase();
+    row[name] = switch (name) {
+      'workspace_id' => op.workspaceId,
+      'created_at' || 'updated_at' || 'date' => now,
+      _ => (type.contains('INT') ||
+              type.contains('REAL') ||
+              type.contains('NUM'))
+          ? 0
+          : '',
+    };
+  }
+  await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
+}
+
+/// يتأكد من وجود كل آباء هذا الصف قبل إدراجه/تحديثه، فيُنشئ لهم سجلات
+/// مؤقتة إن كانوا مفقودين (وصل الابن قبل أبيه).
+Future<void> ensureForeignParents(
+  DatabaseExecutor txn,
+  String table,
+  Map<String, Object?> row,
+  SyncOperation op,
+) async {
+  for (final entry in row.entries) {
+    final parent = kForeignParentTable[entry.key];
+    final id = entry.value;
+    if (parent == null || parent == table || id == null) continue;
+    if (id is String && id.trim().isEmpty) continue;
+    try {
+      final found = await txn.query(parent,
+          columns: ['id'], where: 'id = ?', whereArgs: [id], limit: 1);
+      if (found.isNotEmpty) continue;
+      await insertStubRow(txn, parent, id, op);
+    } catch (_) {
+      // تعذّر إنشاء السجل المؤقت لا يمنع المحاولة الأصلية — حزام
+      // الأمان الثالث (PRAGMA foreign_keys = OFF) يمتصّ الصدمة.
+    }
+  }
+}
+
 extension ApplyRemoteOp on Repo {
   /// Returns false for replay/ignored/conflicting operations. The caller owns
   /// the transaction, so entity data and the operation receipt commit together.
@@ -131,6 +275,9 @@ extension ApplyRemoteOp on Repo {
       case OpKind.create:
       case OpKind.update:
       case OpKind.settings:
+        // (2026-09-22) آباء هذا الصف (حساب/صنف/فاتورة) قد لا يكون وصل بعد
+        // — نُنشئ لهم سجلات مؤقتة قبل الإدراج/التحديث (FOREIGN KEY 787).
+        await ensureForeignParents(txn, table, row, op);
         if (existing.isNotEmpty) {
           if (row.isNotEmpty) {
             await txn.update(table, row,
@@ -453,6 +600,8 @@ extension ApplyRemoteOp on Repo {
         'tx_id': txId,
         if (cols.contains('workspace_id')) 'workspace_id': op.workspaceId,
       };
+      // صنف البند قد لا يكون وصل بعد ⇒ سجل مؤقت له (FOREIGN KEY 787).
+      await ensureForeignParents(txn, 'transaction_items', row, op);
       await txn.insert('transaction_items', row,
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
