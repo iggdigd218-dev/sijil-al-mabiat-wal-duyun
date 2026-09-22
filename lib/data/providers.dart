@@ -658,6 +658,16 @@ final itemCategoriesProvider = FutureProvider<List<ItemCategory>>((ref) async {
       .timeout(const Duration(seconds: 8), onTimeout: () => []);
 });
 
+/// (2026-09-22) شجرة الفئات: الفئات الرئيسية وفي كل واحدة أبناؤها
+/// المباشرون — قراءة واحدة تُجمَّع محلياً (بلا استعلام لكل فئة).
+final itemCategoryTreeProvider = FutureProvider<List<ItemCategory>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .itemCategoryTree()
+      .timeout(const Duration(seconds: 8), onTimeout: () => []);
+});
+
 /// نص البحث في شاشة المخزون.
 final itemQueryProvider = StateProvider<String>((ref) => '');
 

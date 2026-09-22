@@ -173,8 +173,7 @@ class Repo {
       // نطلق إصلاحاً ذاتياً في الخلفية ثم نفشل بصوت عالٍ — أي عملية
       // كتابة قبل اكتمال تهيئة المزامنة يجب أن تُرفض لا أن تُزوَّر.
       unawaited(initSyncInfra().catchError((_) {}));
-      throw StateError(
-          'هوية الجهاز غير مهيأة بعد — أعد المحاولة خلال لحظات '
+      throw StateError('هوية الجهاز غير مهيأة بعد — أعد المحاولة خلال لحظات '
           '(initSyncInfra لم يكتمل).');
     }
     return _deviceId!;
@@ -262,8 +261,8 @@ class Repo {
         if ((st['account.type'] ?? '') == 'enterprise' && _deviceId != null) {
           final dev = await db.query('devices',
               where: 'id = ?', whereArgs: [_deviceId], limit: 1);
-          final ownerFlag = dev.isEmpty ||
-              ((dev.first['is_owner'] ?? 0) as int) == 1;
+          final ownerFlag =
+              dev.isEmpty || ((dev.first['is_owner'] ?? 0) as int) == 1;
           if (ownerFlag) {
             await db.insert(
               'sync_meta',
@@ -414,8 +413,7 @@ class Repo {
     final db = await _db;
     // هوية جهازنا: المصدر الأول إعداد sync.deviceId (الحقيقة المعلنة
     // للسحابة)، ثم الهوية الداخلية كاحتياط.
-    final ownId =
-        (await settings())['sync.deviceId'] ?? _deviceId ?? '';
+    final ownId = (await settings())['sync.deviceId'] ?? _deviceId ?? '';
     await db.transaction((txn) async {
       // أجهزة الأعضاء تُحذف نهائياً — جهازنا يبقى مالكاً نظيفاً.
       await txn.delete('devices', where: 'id <> ?', whereArgs: [ownId]);
@@ -440,8 +438,7 @@ class Repo {
       await txn.delete('sync_queue');
       // الوضع مستقل.
       await txn.insert(
-          'sync_meta',
-          {'key': 'workspaceMode', 'value': 'standalone'},
+          'sync_meta', {'key': 'workspaceMode', 'value': 'standalone'},
           conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
@@ -455,14 +452,12 @@ class Repo {
     // standalone ⇒ host) أي قراءة عابرة لـ workspaceMode أثناء التصفير
     // فيعيد الجهاز المطرود host من جديد.
     try {
-      await db.delete('settings',
-          where: 'key IN (?, ?, ?, ?)',
-          whereArgs: [
-            'has_completed_onboarding',
-            'cloudBackendUrl',
-            'cloudCode',
-            accountModeKey,
-          ]);
+      await db.delete('settings', where: 'key IN (?, ?, ?, ?)', whereArgs: [
+        'has_completed_onboarding',
+        'cloudBackendUrl',
+        'cloudCode',
+        accountModeKey,
+      ]);
     } catch (_) {}
     final devName = await deviceName(this);
     final adminPerms = defaultPerms(UserRole.admin);
@@ -806,8 +801,7 @@ class Repo {
         'updated_at': DateTime.now().toIso8601String(),
         'sync_state': mode == 'standalone' ? 'synced' : 'pending',
       };
-      final hasAtt =
-          ((rows.first['attachment'] as String?) ?? '').isNotEmpty;
+      final hasAtt = ((rows.first['attachment'] as String?) ?? '').isNotEmpty;
       // لا نطمس تجزئة مرفق أصلي بصورة إيصال مولّدة.
       if (!hasAtt && imgHash.isNotEmpty) patch['attachment_hash'] = imgHash;
       await txn.update('transactions', patch, where: 'id = ?', whereArgs: [id]);
@@ -1053,8 +1047,7 @@ class Repo {
     final d = DateTime.tryParse('${rows.first['date']}');
     if (d == null) return;
     if (DateTime.now().difference(d).inDays >= days) {
-      throw StateError(
-          'هذا السجل أقدم من $days يوماً ومقفل ضد التعديل والحذف. '
+      throw StateError('هذا السجل أقدم من $days يوماً ومقفل ضد التعديل والحذف. '
           'يتطلب صلاحية المدير.');
     }
   }
@@ -1229,8 +1222,8 @@ class Repo {
           'سعر الصرف يجب أن يكون رقماً موجباً ومنتهياً (أكبر من الصفر).');
     }
     if (c.decimal < 0 || c.decimal > 6) {
-      throw ArgumentError.value(c.decimal, 'decimal',
-          'منازل العملة العشرية يجب أن تكون بين 0 و 6.');
+      throw ArgumentError.value(
+          c.decimal, 'decimal', 'منازل العملة العشرية يجب أن تكون بين 0 و 6.');
     }
     _decimalsCache = null;
     final db = await _db;
@@ -1315,8 +1308,7 @@ class Repo {
       ((await settings())[accountModeKey] ?? '') == 'individual';
 
   Future<void> setAccountMode({required bool individual}) async {
-    await setSetting(
-        accountModeKey, individual ? 'individual' : 'enterprise');
+    await setSetting(accountModeKey, individual ? 'individual' : 'enterprise');
   }
 
   // ============ (3.70) الصلاحيات المحلية RBAC — user_permissions ============
@@ -2107,16 +2099,14 @@ class Repo {
       limit: 1,
     );
     if (dev.isEmpty) throw StateError('الجهاز غير موجود.');
-    final devName =
-        (dev.first['name'] as String?)?.trim().isNotEmpty == true
-            ? (dev.first['name'] as String)
-            : 'جهاز';
+    final devName = (dev.first['name'] as String?)?.trim().isNotEmpty == true
+        ? (dev.first['name'] as String)
+        : 'جهاز';
     int? uid = overrideUserId ?? dev.first['user_id'] as int?;
     final now = DateTime.now().toIso8601String();
     // المدير يأخذ كل الصلاحيات دائمًا.
-    final effectivePerms = role == UserRole.admin
-        ? kPerms.map((p) => p.key).toSet()
-        : perms;
+    final effectivePerms =
+        role == UserRole.admin ? kPerms.map((p) => p.key).toSet() : perms;
     final permStr = effectivePerms.join(',');
 
     await db.transaction((txn) async {
@@ -2145,18 +2135,17 @@ class Repo {
           userMap['created_at'] = now;
           await txn.insert('users', userMap);
         } else {
-          await txn.update('users', userMap,
-              where: 'id = ?', whereArgs: [uid]);
+          await txn.update('users', userMap, where: 'id = ?', whereArgs: [uid]);
         }
       }
-      await txn.update('devices',
-          {'user_id': uid, 'updated_at': now, 'is_paired': 1},
+      await txn.update(
+          'devices', {'user_id': uid, 'updated_at': now, 'is_paired': 1},
           where: 'id = ?', whereArgs: [deviceId]);
     });
 
     // مزامنة المستخدم المحدّث لبقية الأجهزة.
-    final urow = await db.query('users',
-        where: 'id = ?', whereArgs: [uid], limit: 1);
+    final urow =
+        await db.query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
     if (urow.isNotEmpty) {
       await queueOperation(
         entityType: EntityKind.user,
@@ -2351,7 +2340,8 @@ class Repo {
     // أثر تدقيقي: الطرد يبقى موثقاً في السجل.
     try {
       await db.insert('activity', {
-        'text': 'طرد عضو نهائياً من المجموعة: ${name.isEmpty ? deviceId : name}',
+        'text':
+            'طرد عضو نهائياً من المجموعة: ${name.isEmpty ? deviceId : name}',
         'ref_type': 'expel',
         'ref_id': deviceId,
         'user_name': 'المدير',
@@ -2373,8 +2363,8 @@ class Repo {
     );
     for (final c in convs) {
       final cid = c['id'];
-      await db.delete('messages',
-          where: 'conversation_id = ?', whereArgs: [cid]);
+      await db
+          .delete('messages', where: 'conversation_id = ?', whereArgs: [cid]);
       await db.delete('conversations', where: 'id = ?', whereArgs: [cid]);
     }
   }
@@ -2430,10 +2420,17 @@ class Repo {
             final perms = defaultPerms(UserRole.admin);
             final permStr =
                 perms.entries.where((e) => e.value).map((e) => e.key).join(',');
-            await txn.update('users',
-                {'role': 'admin', 'permissions': permStr, 'active': 1,
-                 'deleted_at': '', 'updated_at': now},
-                where: 'id = ?', whereArgs: [newOwnerUserId]);
+            await txn.update(
+                'users',
+                {
+                  'role': 'admin',
+                  'permissions': permStr,
+                  'active': 1,
+                  'deleted_at': '',
+                  'updated_at': now
+                },
+                where: 'id = ?',
+                whereArgs: [newOwnerUserId]);
           }
         } else {
           newOwnerUserId = null;
@@ -2644,8 +2641,8 @@ class Repo {
     if (prev.isEmpty || prev == _deviceId) {
       throw StateError('لا يوجد مدير سابق معروف لإرجاع الإدارة إليه.');
     }
-    final rows = await db.query('devices',
-        where: 'id = ?', whereArgs: [prev], limit: 1);
+    final rows =
+        await db.query('devices', where: 'id = ?', whereArgs: [prev], limit: 1);
     if (rows.isEmpty) {
       throw StateError('جهاز المدير السابق لم يعد ضمن المجموعة.');
     }
@@ -2746,8 +2743,7 @@ class Repo {
             where: 'id = ?',
             whereArgs: [_currentUserId]);
       }
-      await txn.insert(
-          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+      await txn.insert('sync_meta', {'key': 'workspaceMode', 'value': 'host'},
           conflictAlgorithm: ConflictAlgorithm.replace);
       await txn.insert(
           'sync_meta', {'key': 'ownerDeviceId', 'value': _deviceId},
@@ -2817,8 +2813,7 @@ class Repo {
       if (seen == null) {
         warnings.add('لم يُرصد اتصال حديث لهذا الجهاز — قد يتأخر استلام '
             'الإدارة حتى يفتح التطبيق ويتزامن.');
-      } else if (DateTime.now().difference(seen) >
-          const Duration(hours: 1)) {
+      } else if (DateTime.now().difference(seen) > const Duration(hours: 1)) {
         warnings.add('آخر اتصال للجهاز منذ أكثر من ساعة — تأكد أنه متصل '
             'بالإنترنت الآن ليستلم الإدارة فوراً.');
       }
@@ -2900,8 +2895,7 @@ class Repo {
             where: 'id = ?',
             whereArgs: [_currentUserId]);
       }
-      await txn.insert(
-          'sync_meta', {'key': 'workspaceMode', 'value': 'host'},
+      await txn.insert('sync_meta', {'key': 'workspaceMode', 'value': 'host'},
           conflictAlgorithm: ConflictAlgorithm.replace);
       await txn.insert(
           'sync_meta', {'key': 'ownerDeviceId', 'value': _deviceId},
@@ -3311,8 +3305,8 @@ class Repo {
   Future<void> deleteMessage(int id) async {
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    final rows = await db.query('messages',
-        where: 'id = ?', whereArgs: [id], limit: 1);
+    final rows =
+        await db.query('messages', where: 'id = ?', whereArgs: [id], limit: 1);
     if (rows.isEmpty) return;
     await db.update(
       'messages',
@@ -3420,8 +3414,8 @@ class Repo {
     // 2) صفوف الرسائل نفسها (حذف صلب — انتهى عمرها المقرر).
     var n = 0;
     if (old.isNotEmpty) {
-      n = await db.delete('messages',
-          where: 'created_at < ?', whereArgs: [cutoff]);
+      n = await db
+          .delete('messages', where: 'created_at < ?', whereArgs: [cutoff]);
     }
     // 3) عمليات message المحلية المرفوعة (synced) الأقدم من المهلة —
     //    حمولاتها قد تتضمن base64 ضخماً ولا فائدة من بقائها.
@@ -3491,7 +3485,11 @@ class Repo {
   }
 
   /// الأعمدة التي تُحيل إلى حساب مالي (الأب المرجعي) في الجداول المختلفة.
-  static const _parentAccountColumns = <String>['account_id', 'from_id', 'to_id'];
+  static const _parentAccountColumns = <String>[
+    'account_id',
+    'from_id',
+    'to_id'
+  ];
 
   /// (سلامة السلة) يتحقق أن كل حساب يُحال إليه في [row] ما زال موجوداً في
   /// جدول `accounts` قبل إعادة إدخال الصف.
@@ -3652,8 +3650,8 @@ class Repo {
   Future<void> deleteFromTrash(int trashId) async {
     await _ensureCan('delete_tx');
     final db = await _db;
-    final rows =
-        await db.query('trash', where: 'id = ?', whereArgs: [trashId], limit: 1);
+    final rows = await db.query('trash',
+        where: 'id = ?', whereArgs: [trashId], limit: 1);
     final store = rows.isEmpty ? '' : '${rows.first['store'] ?? ''}';
     var accountId = 0;
     if (store == 'accounts' && rows.isNotEmpty) {
@@ -4121,9 +4119,8 @@ class Repo {
         if (kind == EntityKind.tx) {
           payload['items'] = await _lineMaps(db, row['id'] as int);
         }
-        final entityId = kind == EntityKind.currency
-            ? '${row['code']}'
-            : '${row['id']}';
+        final entityId =
+            kind == EntityKind.currency ? '${row['code']}' : '${row['id']}';
         await rec.record(
           entityType: kind,
           entityId: entityId,
@@ -4353,13 +4350,50 @@ class Repo {
   // ==================== فئات الأصناف ====================
 
   /// فئات المخزون فقط؛ لا تختلط بتصنيفات الحسابات.
-  Future<List<ItemCategory>> itemCategories() async {
+  /// (2026-09-22) فئات الأصناف.
+  /// [rootsOnly] = true  ⇒ الفئات الرئيسية فقط (parent_id IS NULL).
+  /// [parentId]          ⇒ الأبناء المباشرون لفئة بعينها.
+  /// كلتا الحالتين مدعومتان بفهرس idx_item_cat_parent (استعلام محلي فوري).
+  Future<List<ItemCategory>> itemCategories({
+    bool rootsOnly = false,
+    int? parentId,
+  }) async {
     final db = await _db;
+    String? where;
+    List<Object?>? args;
+    if (rootsOnly) {
+      where = 'parent_id IS NULL';
+    } else if (parentId != null) {
+      where = 'parent_id = ?';
+      args = [parentId];
+    }
     final rows = await db.query(
       'item_categories',
+      where: where,
+      whereArgs: args,
       orderBy: 'name COLLATE NOCASE ASC',
     );
     return rows.map(ItemCategory.fromMap).toList();
+  }
+
+  /// (2026-09-22) الشجرة كاملة: الفئات الرئيسية وفي كل واحدة أبناؤها
+  /// المباشرون — قراءة واحدة للجدول تُجمَّع في الذاكرة (بلا استعلامات
+  /// متتابعة لكل فئة).
+  Future<List<ItemCategory>> itemCategoryTree() async {
+    final all = await itemCategories();
+    final roots = <ItemCategory>[];
+    final byParent = <int, List<ItemCategory>>{};
+    for (final c in all) {
+      final p = c.parentId;
+      if (p == null) {
+        roots.add(c);
+      } else {
+        byParent.putIfAbsent(p, () => <ItemCategory>[]).add(c);
+      }
+    }
+    return roots
+        .map((r) => r.withChildren(byParent[r.id] ?? const []))
+        .toList();
   }
 
   /// إضافة فئة أو تعديل اسمها مع تحديث اسم الفئة في الأصناف التابعة لها.
@@ -4386,6 +4420,7 @@ class Repo {
       id = await db.insert('item_categories', {
         'id': newGlobalId(),
         'name': name,
+        if (category.parentId != null) 'parent_id': category.parentId,
         'created_at': category.createdAt.toIso8601String(),
         'updated_at': now,
       });
@@ -4396,6 +4431,7 @@ class Repo {
         payload: {
           'id': id,
           'name': name,
+          if (category.parentId != null) 'parent_id': category.parentId,
           'created_at': category.createdAt.toIso8601String(),
           'updated_at': now,
         },
@@ -4406,10 +4442,37 @@ class Repo {
 
     id = category.id!;
     final now = DateTime.now().toIso8601String();
+    final parentId = category.parentId;
+    // (2026-09-22) منع الدوران في الشجرة: الفئة لا تكون أباً لنفسها،
+    // ولا أباً لأحد أجدادها (مسار الأبناء حلقي ⇒ بيانات تالفة).
+    if (parentId != null) {
+      if (parentId == id) {
+        throw StateError('لا يمكن جعل الفئة أباً لنفسها');
+      }
+      var cursor = parentId;
+      for (var guard = 0; guard < 64; guard++) {
+        final row = await db.query('item_categories',
+            columns: ['parent_id'],
+            where: 'id = ?',
+            whereArgs: [cursor],
+            limit: 1);
+        if (row.isEmpty) break;
+        final up = row.first['parent_id'] as int?;
+        if (up == null) break;
+        if (up == id) {
+          throw StateError('لا يمكن جعل الفئة فرعاً لأحد فروعها');
+        }
+        cursor = up;
+      }
+    }
     await db.transaction((txn) async {
       await txn.update(
         'item_categories',
-        {'name': name, 'updated_at': now},
+        {
+          'name': name,
+          'parent_id': parentId,
+          'updated_at': now,
+        },
         where: 'id = ?',
         whereArgs: [id],
       );
@@ -4424,7 +4487,12 @@ class Repo {
         entityType: EntityKind.itemCategory,
         entityId: '$id',
         opType: OpKind.update,
-        payload: {'id': id, 'name': name, 'updated_at': now},
+        payload: {
+          'id': id,
+          'name': name,
+          'parent_id': parentId,
+          'updated_at': now,
+        },
       );
     });
     await logActivity('تعديل فئة أصناف: $name', 'item_category', '$id');
@@ -4448,6 +4516,14 @@ class Repo {
         'items',
         {'category_id': null, 'category': '', 'updated_at': now},
         where: 'category_id = ?',
+        whereArgs: [id],
+      );
+      // (2026-09-22) الفئات الفرعية تُرقّى إلى الجذر بدل أن يمحوها
+      // قيد CASCADE — حذفُ فئة رئيسية لا يفقد فئاتها الفرعية.
+      await txn.update(
+        'item_categories',
+        {'parent_id': null, 'updated_at': now},
+        where: 'parent_id = ?',
         whereArgs: [id],
       );
       await txn.delete('item_categories', where: 'id = ?', whereArgs: [id]);

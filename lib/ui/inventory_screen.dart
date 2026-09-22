@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
+import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -14,408 +17,597 @@ import 'widgets.dart';
 /// تبدأ الفئات/الأقسام هنا أولًا. يمكن إنشاء عدد غير محدود من الفئات،
 /// ثم إضافة الأصناف داخل كل فئة. لا تُسجّل هذه الشاشة شراءً أو بيعًا أو
 /// مرتجعًا أو تسوية أو أي حركة مخزنية؛ فهي مخصّصة للبيانات الأساسية فقط.
-class InventoryScreen extends ConsumerWidget {
+// ══════════════════════════════════════════════════════════════════════════
+// (2026-09-22) تطوير شاشة المخزون والأصناف
+//   • شريط أدوات: بحث نصي لحظي + زر كاميرا لمسح الباركود.
+//   • فلاتر شجرية: فئات رئيسية (Chips) ← فئات فرعية («الكل» + الأبناء).
+//   • فرز متقدم بتسعة معايير، يُطبَّق محلياً فوراً بلا شبكة.
+//   • نمطا عرض: قائمة تفصيلية / شبكة بطاقات، مع حفظ التفضيل محلياً.
+// ══════════════════════════════════════════════════════════════════════════
+
+/// مفتاح حفظ نمط العرض المفضل في جدول settings.
+const String kInventoryViewModeKey = 'inventory.viewMode';
+
+/// معايير الفرز المتاحة في شاشة الأصناف.
+enum _SortKey {
+  nameAsc('الاسم (أ - ي)', Icons.sort_by_alpha),
+  nameDesc('الاسم (ي - أ)', Icons.sort_by_alpha),
+  qtyAsc('الأقل كمية', Icons.trending_down),
+  qtyDesc('الأكثر كمية', Icons.trending_up),
+  outFirst('المنتهية أولاً', Icons.remove_shopping_cart_outlined),
+  priceDesc('الأعلى سعراً', Icons.arrow_upward_rounded),
+  priceAsc('الأقل سعراً', Icons.arrow_downward_rounded),
+  newest('الأحدث إضافةً', Icons.fiber_new_outlined),
+  oldest('الأقدم', Icons.history_toggle_off_outlined);
+
+  const _SortKey(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+
+  /// هل هذا الفرز يتعلق بالكمية/المخزون؟
+  bool get isStock =>
+      this == _SortKey.qtyAsc ||
+      this == _SortKey.qtyDesc ||
+      this == _SortKey.outFirst;
+}
+
+/// مقارنة صنفين حسب المفتاح — كلها محلية وبلا أي شبكة.
+int _compareItems(Item a, Item b, _SortKey key) {
+  int byName(String x, String y) =>
+      x.trim().toLowerCase().compareTo(y.trim().toLowerCase());
+  return switch (key) {
+    _SortKey.nameAsc => byName(a.name, b.name),
+    _SortKey.nameDesc => byName(b.name, a.name),
+    _SortKey.qtyAsc => a.quantity.compareTo(b.quantity),
+    _SortKey.qtyDesc => b.quantity.compareTo(a.quantity),
+    // المنتهية أولاً: الكمية صفر في المقدمة، ثم الأقرب لحد الطلب.
+    _SortKey.outFirst => () {
+        final ao = a.quantity <= 0 ? 0 : 1;
+        final bo = b.quantity <= 0 ? 0 : 1;
+        final c = ao.compareTo(bo);
+        return c != 0 ? c : a.quantity.compareTo(b.quantity);
+      }(),
+    _SortKey.priceDesc => b.sellPrice.compareTo(a.sellPrice),
+    _SortKey.priceAsc => a.sellPrice.compareTo(b.sellPrice),
+    _SortKey.newest => b.createdAt.compareTo(a.createdAt),
+    _SortKey.oldest => a.createdAt.compareTo(b.createdAt),
+  };
+}
+
+/// شاشة بيانات الأصناف والفئات فقط.
+///
+/// تبدأ الفئات/الأقسام هنا أولًا (فئة رئيسية وفئات فرعية)، ثم تُسجَّل
+/// الأصناف داخلها. لا تُسجّل هذه الشاشة شراءً أو بيعًا أو مرتجعًا أو
+/// تسوية أو أي حركة مخزنية؛ فهي مخصّصة للبيانات الأساسية فقط.
+class InventoryScreen extends ConsumerStatefulWidget {
   const InventoryScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final categories = ref.watch(itemCategoriesProvider);
-    final items = ref.watch(itemsProvider);
-    final q = ref.watch(itemQueryProvider);
+  ConsumerState<InventoryScreen> createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends ConsumerState<InventoryScreen> {
+  String _mode = 'list';
+  _SortKey _sort = _SortKey.nameAsc;
+  int? _rootId; // الفئة الرئيسية المختارة (null = الكل)
+  int? _subId; // الفئة الفرعية المختارة (null = كل ما تحت الرئيسية)
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPreferredMode();
+  }
+
+  /// نمط العرض المفضل محفوظ في التفضيلات المحلية (settings).
+  Future<void> _loadPreferredMode() async {
+    try {
+      final st = await ref.read(repoProvider).settings();
+      final m = (st[kInventoryViewModeKey] ?? '').trim();
+      if (!mounted || (m != 'grid' && m != 'list')) return;
+      setState(() => _mode = m);
+    } catch (_) {}
+  }
+
+  Future<void> _setMode(String mode) async {
+    if (_mode == mode) return;
+    setState(() => _mode = mode);
+    try {
+      await ref.read(repoProvider).setSetting(kInventoryViewModeKey, mode);
+    } catch (_) {}
+  }
+
+  void _selectRoot(int? id) => setState(() {
+        _rootId = id;
+        _subId = null;
+      });
+
+  void _selectSub(int? id) => setState(() => _subId = id);
+
+  /// معرّفات الفئات المطلوب عرضها (null = كل الأصناف).
+  Set<int>? _selectedIds(List<ItemCategory> roots) {
+    if (_subId != null) return <int>{_subId!};
+    if (_rootId == null) return null;
+    final ids = <int>{_rootId!};
+    for (final r in roots) {
+      if (r.id != _rootId) continue;
+      for (final c in r.children) {
+        if (c.id != null) ids.add(c.id!);
+      }
+    }
+    return ids;
+  }
+
+  List<Item> _visibleItems(List<ItemCategory> roots, List<Item> items) {
+    final ids = _selectedIds(roots);
+    final q = ref.read(itemQueryProvider).trim().toLowerCase();
+    final out = items.where((it) {
+      if (ids != null &&
+          (it.categoryId == null || !ids.contains(it.categoryId))) {
+        return false;
+      }
+      if (q.isEmpty) return true;
+      return it.name.toLowerCase().contains(q) ||
+          it.sku.toLowerCase().contains(q) ||
+          it.category.toLowerCase().contains(q) ||
+          it.notes.toLowerCase().contains(q);
+    }).toList()
+      ..sort((a, b) => _compareItems(a, b, _sort));
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final categoriesAsync = ref.watch(itemCategoryTreeProvider);
+    final itemsAsync = ref.watch(itemsProvider);
 
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-          child: TextField(
-            decoration: InputDecoration(
-              hintText: 'ابحث باسم الصنف أو الرمز أو الفئة',
-              prefixIcon: const Icon(Icons.search),
-              isDense: true,
-              suffixIcon: q.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () =>
-                          ref.read(itemQueryProvider.notifier).state = '',
-                    ),
-            ),
-            onChanged: (v) => ref.read(itemQueryProvider.notifier).state = v,
-          ),
+        _InventoryToolbar(
+          mode: _mode,
+          sort: _sort,
+          onModeChanged: _setMode,
+          onSortChanged: (k) => setState(() => _sort = k),
+          onAddCategory: () => openItemCategoryForm(context, ref),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
-          child: Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: AppColors.primarySoftOf(context),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Icon(
-                  Icons.category_outlined,
-                  color: AppColors.primaryOf(context),
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'الفئات والأصناف',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      'أضف فئة أولًا ثم سجّل الأصناف داخلها',
-                      style: TextStyle(fontSize: 11.5),
-                    ),
-                  ],
-                ),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => openItemCategoryForm(context, ref),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('إضافة فئة'),
-              ),
-            ],
+        categoriesAsync.when(
+          loading: () => const SizedBox(
+            height: 54,
+            child: Center(child: SizedBox.shrink()),
+          ),
+          error: (_, __) => const SizedBox.shrink(),
+          data: (roots) => _CategoryChipBar(
+            roots: roots,
+            rootId: _rootId,
+            subId: _subId,
+            onRoot: _selectRoot,
+            onSub: _selectSub,
+            onAddCategory: () => openItemCategoryForm(context, ref),
           ),
         ),
         Expanded(
-          child: categories.when(
+          child: categoriesAsync.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => EmptyState(
               icon: Icons.error_outline,
               title: 'تعذّر تحميل الفئات',
               message: '$e',
             ),
-            data: (categoryList) => items.when(
+            data: (roots) => itemsAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => EmptyState(
                 icon: Icons.error_outline,
                 title: 'تعذّر تحميل الأصناف',
                 message: '$e',
               ),
-              data: (itemList) {
-                if (categoryList.isEmpty) {
-                  return EmptyState(
-                    icon: Icons.create_new_folder_outlined,
-                    title: 'ابدأ بإضافة فئة',
-                    message:
-                        'أنشئ أقسامًا غير محدودة، وبعدها أضف كل صنف داخل قسمه.',
-                    action: FilledButton.icon(
-                      onPressed: () => openItemCategoryForm(context, ref),
-                      icon: const Icon(Icons.add),
-                      label: const Text('إضافة أول فئة'),
-                    ),
-                  );
-                }
-                if (itemList.isEmpty && q.trim().isNotEmpty) {
-                  return const EmptyState(
-                    icon: Icons.search_off,
-                    title: 'لا توجد نتائج',
-                    message: 'جرّب كلمة بحث أخرى.',
-                  );
-                }
-                return _InventorySections(
-                  categories: categoryList,
-                  items: itemList,
-                  query: q,
-                );
-              },
+              data: (items) => _buildBody(context, roots, items),
             ),
           ),
         ),
       ],
     );
   }
-}
 
-/// أقسام الفئات، وتحت كل قسم أصنافه.
-class _InventorySections extends ConsumerWidget {
-  final List<ItemCategory> categories;
-  final List<Item> items;
-  final String query;
-
-  const _InventorySections({
-    required this.categories,
-    required this.items,
-    required this.query,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final grouped = <int, List<Item>>{
-      for (final category in categories)
-        if (category.id != null) category.id!: <Item>[],
-    };
-    final byName = <String, int>{
-      for (final category in categories)
-        if (category.id != null)
-          category.name.trim().toLowerCase(): category.id!,
-    };
-    final uncategorized = <Item>[];
-
-    for (final item in items) {
-      var categoryId = item.categoryId;
-      // توافق مع النسخ/النسخ الاحتياطية القديمة التي كانت تحفظ الاسم فقط.
-      if (categoryId == null && item.category.trim().isNotEmpty) {
-        categoryId = byName[item.category.trim().toLowerCase()];
-      }
-      final bucket = categoryId == null ? null : grouped[categoryId];
-      if (bucket == null) {
-        uncategorized.add(item);
-      } else {
-        bucket.add(item);
-      }
+  Widget _buildBody(
+    BuildContext context,
+    List<ItemCategory> roots,
+    List<Item> items,
+  ) {
+    if (roots.isEmpty && items.isEmpty) {
+      return EmptyState(
+        icon: Icons.create_new_folder_outlined,
+        title: 'ابدأ بإضافة فئة',
+        message: 'أنشئ أقسامًا غير محدودة، وبعدها أضف كل صنف داخل قسمه.',
+        action: FilledButton.icon(
+          onPressed: () => openItemCategoryForm(context, ref),
+          icon: const Icon(Icons.add),
+          label: const Text('إضافة أول فئة'),
+        ),
+      );
     }
-
-    final visibleCategories = query.trim().isEmpty
-        ? categories
-        : categories
-            .where(
-              (category) =>
-                  category.id != null &&
-                  (grouped[category.id!]?.isNotEmpty ?? false),
-            )
-            .toList();
-
-    // (دفعة 58) سحب للأسفل = تحديث فوري للبيانات.
+    final visible = _visibleItems(roots, items);
+    if (visible.isEmpty) {
+      return EmptyState(
+        icon: Icons.search_off,
+        title: 'لا توجد نتائج',
+        message: 'جرّب كلمة بحث أخرى أو بدّل الفئة.',
+        action: FilledButton.tonalIcon(
+          onPressed: () {
+            ref.read(itemQueryProvider.notifier).state = '';
+            setState(() {
+              _rootId = null;
+              _subId = null;
+            });
+          },
+          icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+          label: const Text('مسح الفلاتر'),
+        ),
+      );
+    }
+    const pad = EdgeInsets.fromLTRB(12, 4, 12, 96);
+    final child = _mode == 'grid'
+        ? GridView.builder(
+            padding: pad,
+            itemCount: visible.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: .82,
+            ),
+            itemBuilder: (_, i) => _ItemGridCard(item: visible[i]),
+          )
+        : ListView.builder(
+            padding: pad,
+            itemCount: visible.length,
+            itemBuilder: (_, i) => _ItemTile(item: visible[i]),
+          );
     return RefreshIndicator(
       onRefresh: () async => bump(ref),
-      child: ListView(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-          child: Text(
-            '${categories.length} فئة  ·  ${items.length} صنف',
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: AppColors.text2Of(context),
-            ),
-          ),
-        ),
-        ...visibleCategories.map(
-          (category) => _CategorySection(
-            category: category,
-            items: grouped[category.id!] ?? const [],
-          ),
-        ),
-        if (uncategorized.isNotEmpty)
-          _UncategorizedSection(items: uncategorized),
-        if (visibleCategories.isEmpty && uncategorized.isEmpty)
-          const EmptyState(
-            icon: Icons.search_off,
-            title: 'لا توجد نتائج',
-            message: 'جرّب كلمة بحث أخرى.',
-          ),
-      ],
-      ),
-    );
-  }
-}
-
-enum _CategoryAction { edit, delete }
-
-class _CategorySection extends ConsumerWidget {
-  final ItemCategory category;
-  final List<Item> items;
-
-  const _CategorySection({required this.category, required this.items});
-
-  Future<void> _delete(BuildContext context, WidgetRef ref) async {
-    final count = items.length;
-    final ok = await confirmDialog(
-      context,
-      title: 'حذف الفئة',
-      message: count == 0
-          ? 'سيتم حذف الفئة «${category.name}». '
-              'لا يمكن التراجع عن ذلك.'
-          : 'سيتم حذف الفئة «${category.name}» وفك ربط $count صنفًا بها. '
-              'الأصناف نفسها لن تُحذف.',
-      confirmText: 'حذف الفئة',
-      danger: true,
-    );
-    if (!ok || category.id == null) return;
-    await ref.read(repoProvider).deleteItemCategory(category.id!);
-    bump(ref);
-    if (context.mounted) showSnack(context, 'حُذفت الفئة وبقيت الأصناف محفوظة');
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
-            color: AppColors.primarySoftOf(context).withValues(alpha: .52),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
             child: Row(
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: AppColors.primarySoftOf(context),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.folder_outlined,
-                    color: AppColors.primaryOf(context),
+                Text(
+                  '${visible.length} من ${items.length} صنف',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.text2Of(context),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        category.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${items.length} صنف داخل هذه الفئة',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: AppColors.text2Of(context),
-                        ),
-                      ),
-                    ],
+                const Spacer(),
+                Text(
+                  '${roots.length} فئة رئيسية',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: AppColors.text3Of(context),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'إضافة صنف داخل الفئة',
-                  onPressed: category.id == null
-                      ? null
-                      : () =>
-                          openItemForm(context, ref, categoryId: category.id),
-                  icon: Icon(
-                    Icons.add_box_outlined,
-                    color: AppColors.primaryOf(context),
-                  ),
-                ),
-                PopupMenuButton<_CategoryAction>(
-                  tooltip: 'خيارات الفئة',
-                  onSelected: (action) {
-                    switch (action) {
-                      case _CategoryAction.edit:
-                        openItemCategoryForm(context, ref, category: category);
-                      case _CategoryAction.delete:
-                        _delete(context, ref);
-                    }
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: _CategoryAction.edit,
-                      child: ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(Icons.edit_outlined),
-                        title: Text('تعديل اسم الفئة'),
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: _CategoryAction.delete,
-                      child: ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(Icons.delete_outline),
-                        title: Text('حذف الفئة'),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
-          if (items.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.inventory_2_outlined,
-                    size: 34,
-                    color: AppColors.text3Of(context),
-                  ),
-                  const SizedBox(height: 7),
-                  Text(
-                    'لا توجد أصناف داخل هذه الفئة بعد',
-                    style: TextStyle(color: AppColors.text2Of(context)),
-                  ),
-                  const SizedBox(height: 9),
-                  FilledButton.tonalIcon(
-                    onPressed: category.id == null
-                        ? null
-                        : () => openItemForm(
-                              context,
-                              ref,
-                              categoryId: category.id,
-                            ),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('إضافة أول صنف'),
-                  ),
-                ],
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 2),
-              child: Column(
-                children: [...items.map((item) => _ItemCard(item: item))],
-              ),
-            ),
+          Expanded(child: child),
         ],
       ),
     );
   }
 }
 
-class _UncategorizedSection extends StatelessWidget {
-  final List<Item> items;
-  const _UncategorizedSection({required this.items});
+/// شريط الأدوات: بحث + باركود + فرز + تبديل نمط العرض.
+class _InventoryToolbar extends ConsumerWidget {
+  final String mode;
+  final _SortKey sort;
+  final ValueChanged<String> onModeChanged;
+  final ValueChanged<_SortKey> onSortChanged;
+  final VoidCallback onAddCategory;
+
+  const _InventoryToolbar({
+    required this.mode,
+    required this.sort,
+    required this.onModeChanged,
+    required this.onSortChanged,
+    required this.onAddCategory,
+  });
+
+  Future<void> _scan(BuildContext context, WidgetRef ref) async {
+    try {
+      final code = await scanBarcode(context);
+      if (code == null || code.isEmpty || !context.mounted) return;
+      ref.read(itemQueryProvider.notifier).state = code;
+      showSnack(context, '🔎 تم مسح الرمز: $code');
+    } catch (_) {}
+  }
 
   @override
-  Widget build(BuildContext context) => Card(
-        margin: const EdgeInsets.only(bottom: 10),
-        child: Column(
-          children: [
-            ListTile(
-              leading: Icon(
-                Icons.folder_off_outlined,
-                color: AppColors.accentOf(context),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final q = ref.watch(itemQueryProvider);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: TextEditingController(text: q)
+                    ..selection = TextSelection.collapsed(offset: q.length),
+                  decoration: InputDecoration(
+                    hintText: 'ابحث بالاسم أو الباركود أو الفئة',
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                    suffixIcon: q.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'مسح البحث',
+                            icon: const Icon(Icons.clear),
+                            onPressed: () =>
+                                ref.read(itemQueryProvider.notifier).state = '',
+                          ),
+                  ),
+                  onChanged: (v) =>
+                      ref.read(itemQueryProvider.notifier).state = v,
+                ),
               ),
-              title: const Text(
-                'بدون فئة',
-                style: TextStyle(fontWeight: FontWeight.w800),
+              const SizedBox(width: 8),
+              // زر الكاميرا: مسح الباركود فوراً (نفس ماسح التطبيق).
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.primarySoftOf(context),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: IconButton(
+                  tooltip: 'مسح الباركود',
+                  onPressed: () => _scan(context, ref),
+                  icon: Icon(
+                    Icons.qr_code_scanner_rounded,
+                    color: AppColors.primaryOf(context),
+                  ),
+                ),
               ),
-              subtitle: Text('${items.length} صنف يحتاج إلى فئة'),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 2),
-              child: Column(
-                children: items.map((item) => _ItemCard(item: item)).toList(),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              // ⇅ قائمة الفرز المنسدلة.
+              PopupMenuButton<_SortKey>(
+                tooltip: 'ترتيب النتائج',
+                initialValue: sort,
+                onSelected: onSortChanged,
+                itemBuilder: (_) => [
+                  for (final k in _SortKey.values)
+                    PopupMenuItem<_SortKey>(
+                      value: k,
+                      child: Row(
+                        children: [
+                          Icon(k.icon, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(k.label)),
+                          if (k == sort)
+                            Icon(Icons.check,
+                                size: 18, color: AppColors.primaryOf(context)),
+                        ],
+                      ),
+                    ),
+                ],
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: AppColors.borderOf(context)),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('⇅',
+                          style: TextStyle(fontWeight: FontWeight.w800)),
+                      const SizedBox(width: 6),
+                      Text(
+                        'فرز: ${sort.label}',
+                        style: const TextStyle(fontSize: 12.5),
+                      ),
+                      const Icon(Icons.arrow_drop_down, size: 20),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ],
-        ),
-      );
+              const Spacer(),
+              // مبدّل نمط العرض (قائمة / شبكة) — يُحفظ في التفضيلات.
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment<String>(
+                    value: 'list',
+                    icon: Icon(Icons.view_list_rounded, size: 18),
+                    label: Text('قائمة'),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'grid',
+                    icon: Icon(Icons.grid_view_rounded, size: 18),
+                    label: Text('شبكة'),
+                  ),
+                ],
+                selected: <String>{mode},
+                showSelectedIcon: false,
+                style: SegmentedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12.5),
+                ),
+                onSelectionChanged: (s) => onModeChanged(s.first),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _ItemCard extends ConsumerWidget {
+/// شريط الفئات الأفقي (رئيسية + فرعية للفئة المختارة).
+class _CategoryChipBar extends StatelessWidget {
+  final List<ItemCategory> roots;
+  final int? rootId;
+  final int? subId;
+  final ValueChanged<int?> onRoot;
+  final ValueChanged<int?> onSub;
+  final VoidCallback onAddCategory;
+
+  const _CategoryChipBar({
+    required this.roots,
+    required this.rootId,
+    required this.subId,
+    required this.onRoot,
+    required this.onSub,
+    required this.onAddCategory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedRoot = roots.cast<ItemCategory?>().firstWhere(
+          (r) => r?.id == rootId,
+          orElse: () => null,
+        );
+    final subs = selectedRoot?.children ?? const <ItemCategory>[];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 46,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              _Chip(
+                label: 'الكل',
+                icon: Icons.apps_rounded,
+                selected: rootId == null,
+                onTap: () => onRoot(null),
+              ),
+              for (final r in roots)
+                _Chip(
+                  label: r.name,
+                  icon: r.hasChildren
+                      ? Icons.account_tree_outlined
+                      : Icons.folder_outlined,
+                  selected: rootId == r.id,
+                  badge: r.children.length,
+                  onTap: () => onRoot(r.id),
+                ),
+              // زر مدمج لإضافة فئة جديدة.
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.add, size: 17),
+                  label: const Text('فئة جديدة'),
+                  onPressed: onAddCategory,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (subs.isNotEmpty)
+          SizedBox(
+            height: 42,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                _Chip(
+                  label: 'الكل',
+                  small: true,
+                  selected: subId == null,
+                  onTap: () => onSub(null),
+                ),
+                for (final s in subs)
+                  _Chip(
+                    label: s.name,
+                    small: true,
+                    selected: subId == s.id,
+                    onTap: () => onSub(s.id),
+                  ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 2),
+      ],
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final bool selected;
+  final bool small;
+  final int badge;
+  final VoidCallback onTap;
+
+  const _Chip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+    this.small = false,
+    this.badge = 0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppColors.primaryOf(context);
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: FilterChip(
+        selected: selected,
+        showCheckmark: false,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon,
+                  size: 15,
+                  color: selected ? primary : AppColors.text3Of(context)),
+              const SizedBox(width: 5),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: small ? 12 : 13,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+            if (badge > 0) ...[
+              const SizedBox(width: 5),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? primary.withValues(alpha: .18)
+                      : AppColors.primarySoftOf(context),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('$badge',
+                    style: const TextStyle(
+                        fontSize: 10.5, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ],
+        ),
+        onSelected: (_) => onTap(),
+      ),
+    );
+  }
+}
+
+/// بطاقة الصنف في نمط القائمة التفصيلي.
+class _ItemTile extends ConsumerWidget {
   final Item item;
-  const _ItemCard({required this.item});
+  const _ItemTile({required this.item});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -425,112 +617,120 @@ class _ItemCard extends ConsumerWidget {
     final warnText = item.out ? 'نفد' : (item.low ? 'قارب النفاد' : 'متوفر');
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 9),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () => openItemForm(context, ref, item: item),
         child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          padding: const EdgeInsets.all(11),
+          child: Row(
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: AppColors.primarySoftOf(context),
-                      borderRadius: BorderRadius.circular(12),
+              _Thumb(image: item.image),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.inventory_2_outlined,
-                      color: AppColors.primaryOf(context),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 3),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 3,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Text(
-                          item.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
+                        if (item.sku.isNotEmpty)
+                          _Meta(
+                            icon: Icons.qr_code_2_rounded,
+                            text: item.sku,
                           ),
+                        if (item.category.isNotEmpty)
+                          _Meta(
+                            icon: Icons.folder_outlined,
+                            text: item.category,
+                          ),
+                        _Meta(icon: Icons.straighten, text: item.unit),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        _Price(
+                          label: 'شراء',
+                          value: Fmt.money(item.buyPrice, 0),
+                          color: AppColors.info,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          [
-                            if (item.sku.isNotEmpty) item.sku,
-                            item.unit,
-                          ].join(' · '),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.text3Of(context),
-                          ),
+                        const SizedBox(width: 14),
+                        _Price(
+                          label: 'بيع',
+                          value: Fmt.money(item.sellPrice, 0),
+                          color: AppColors.teal,
                         ),
                       ],
                     ),
-                  ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
                   Pill(warnText, color: warn),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _Cell(
-                    label: 'سعر الشراء',
-                    value: Fmt.money(item.buyPrice, 0),
-                    color: AppColors.info,
-                  ),
-                  _Cell(
-                    label: 'سعر البيع',
-                    value: Fmt.money(item.sellPrice, 0),
-                    color: AppColors.teal,
-                  ),
-                  _Cell(
-                    label: 'الكمية',
-                    value: Fmt.money(item.quantity, 0),
-                    color: warn,
-                    sub: item.minQuantity > 0
-                        ? 'حد التنبيه ${Fmt.money(item.minQuantity, 0)}'
-                        : null,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton.icon(
-                    onPressed: () => openItemForm(context, ref, item: item),
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    label: const Text('تعديل'),
-                  ),
-                  IconButton(
-                    tooltip: 'حذف الصنف',
-                    onPressed: () async {
-                      final ok = await confirmDialog(
-                        context,
-                        title: 'حذف الصنف',
-                        message:
-                            'سيُنقل «${item.name}» إلى سلة المهملات ويمكن استرجاعه.',
-                      );
-                      if (!ok || item.id == null) return;
-                      await ref.read(repoProvider).deleteItem(item.id!);
-                      bump(ref);
-                      if (context.mounted) {
-                        showSnack(context, 'نُقل الصنف إلى سلة المهملات');
-                      }
-                    },
-                    icon: Icon(
-                      Icons.delete_outline,
-                      color: AppColors.dangerOf(context),
+                  const SizedBox(height: 8),
+                  Text(
+                    Fmt.money(item.quantity, 0),
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                      color: warn,
                     ),
+                  ),
+                  if (item.minQuantity > 0)
+                    Text(
+                      'حد ${Fmt.money(item.minQuantity, 0)}',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: AppColors.text3Of(context),
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'تعديل الصنف',
+                        onPressed: () => openItemForm(context, ref, item: item),
+                        icon: Icon(Icons.edit_outlined,
+                            size: 19, color: AppColors.primaryOf(context)),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'حذف الصنف',
+                        onPressed: () async {
+                          final ok = await confirmDialog(
+                            context,
+                            title: 'حذف الصنف',
+                            message: 'سيُنقل «${item.name}» إلى سلة المهملات '
+                                'ويمكن استرجاعه.',
+                          );
+                          if (!ok || item.id == null) return;
+                          await ref.read(repoProvider).deleteItem(item.id!);
+                          bump(ref);
+                          if (context.mounted) {
+                            showSnack(context, 'نُقل الصنف إلى سلة المهملات');
+                          }
+                        },
+                        icon: Icon(Icons.delete_outline,
+                            size: 19, color: AppColors.dangerOf(context)),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -542,69 +742,195 @@ class _ItemCard extends ConsumerWidget {
   }
 }
 
-class _Cell extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-  final String? sub;
-  const _Cell({
-    required this.label,
-    required this.value,
-    required this.color,
-    this.sub,
-  });
+/// بطاقة الصنف في نمط الشبكة.
+class _ItemGridCard extends ConsumerWidget {
+  final Item item;
+  const _ItemGridCard({required this.item});
 
   @override
-  Widget build(BuildContext context) => Expanded(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final warn = item.out
+        ? AppColors.danger
+        : (item.low ? AppColors.amber : AppColors.green);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => openItemForm(context, ref, item: item),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style:
-                  TextStyle(fontSize: 11.5, color: AppColors.text3Of(context)),
-            ),
-            const SizedBox(height: 3),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                value,
-                style: TextStyle(
-                  fontSize: 15.5,
-                  fontWeight: FontWeight.w800,
-                  color: color,
-                ),
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _Thumb(image: item.image, radius: 0, size: 46),
+                  PositionedDirectional(
+                    top: 7,
+                    end: 7,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: warn,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        Fmt.money(item.quantity, 0),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            if (sub != null)
-              Text(
-                sub!,
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 10.5, color: color),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    Fmt.money(item.sellPrice, 0),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.teal,
+                    ),
+                  ),
+                  if (item.sku.isNotEmpty)
+                    Text(
+                      item.sku,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: AppColors.text3Of(context),
+                      ),
+                    ),
+                ],
               ),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// صورة الصنف المصغّرة (ملف محلي) مع بديل أيقوني آمن.
+class _Thumb extends StatelessWidget {
+  final String image;
+  final double radius;
+  final double size;
+
+  const _Thumb({required this.image, this.radius = 13, this.size = 26});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = image.isEmpty ? '' : MediaPaths.toAbsolute(image);
+    final file = path.isEmpty ? null : File(path);
+    final hasImage = file != null && MediaPaths.exists(image);
+    return Container(
+      width: radius == 0 ? null : 52,
+      height: radius == 0 ? null : 52,
+      decoration: BoxDecoration(
+        color: AppColors.primarySoftOf(context),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: hasImage
+            ? Image.file(
+                file,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _fallback(context),
+              )
+            : _fallback(context),
+      ),
+    );
+  }
+
+  Widget _fallback(BuildContext context) => Center(
+        child: Icon(
+          Icons.inventory_2_outlined,
+          size: size,
+          color: AppColors.primaryOf(context),
         ),
       );
 }
 
-// ==================== نموذج الفئة ====================
+class _Meta extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _Meta({required this.icon, required this.text});
 
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: AppColors.text3Of(context)),
+          const SizedBox(width: 3),
+          Text(
+            text,
+            style: TextStyle(fontSize: 11.5, color: AppColors.text2Of(context)),
+          ),
+        ],
+      );
+}
+
+class _Price extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _Price({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style:
+                  TextStyle(fontSize: 10.5, color: AppColors.text3Of(context))),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
+      );
+}
+
+/// يفتح نموذج إضافة/تعديل فئة (مع تحديد الفئة الأب لشجرة الفئات).
+/// [parentId] يُعيَّن ابتداءً عند الإضافة من داخل فئة معيّنة.
 Future<int?> openItemCategoryForm(
   BuildContext context,
   WidgetRef ref, {
   ItemCategory? category,
+  int? parentId,
 }) =>
     showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: _ItemCategoryForm(category: category),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: _ItemCategoryForm(category: category, presetParentId: parentId),
       ),
     ).then((id) {
       if (id != null) bump(ref);
@@ -613,7 +939,11 @@ Future<int?> openItemCategoryForm(
 
 class _ItemCategoryForm extends ConsumerStatefulWidget {
   final ItemCategory? category;
-  const _ItemCategoryForm({this.category});
+
+  /// (2026-09-22) فئة أب مبدئية عند الإضافة من داخل فئة.
+  final int? presetParentId;
+
+  const _ItemCategoryForm({this.category, this.presetParentId});
 
   @override
   ConsumerState<_ItemCategoryForm> createState() => _ItemCategoryFormState();
@@ -621,6 +951,7 @@ class _ItemCategoryForm extends ConsumerStatefulWidget {
 
 class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
   late final TextEditingController _name;
+  int? _parentId;
   String? _error;
   bool _saving = false;
 
@@ -628,6 +959,29 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
   void initState() {
     super.initState();
     _name = TextEditingController(text: widget.category?.name ?? '');
+    _parentId = widget.category?.parentId ?? widget.presetParentId;
+  }
+
+  /// الفئات الممنوع اختيارها كأب: الفئة نفسها وكل سلالتها (منع الدوران).
+  Set<int> _forbidden(List<ItemCategory> all) {
+    final self = widget.category?.id;
+    if (self == null) return const <int>{};
+    final childrenOf = <int, List<int>>{};
+    for (final c in all) {
+      final p = c.parentId;
+      if (p != null && c.id != null) {
+        childrenOf.putIfAbsent(p, () => <int>[]).add(c.id!);
+      }
+    }
+    final banned = <int>{self};
+    final queue = <int>[self];
+    while (queue.isNotEmpty) {
+      final cur = queue.removeLast();
+      for (final child in childrenOf[cur] ?? const <int>[]) {
+        if (banned.add(child)) queue.add(child);
+      }
+    }
+    return banned;
   }
 
   @override
@@ -650,7 +1004,7 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
       final now = DateTime.now();
       final category = (widget.category ??
               ItemCategory(name: name, createdAt: now, updatedAt: now))
-          .copyWith(name: name);
+          .copyWith(name: name, parentId: _parentId);
       final id = await ref.read(repoProvider).saveItemCategory(category);
       if (mounted) Navigator.pop(context, id);
     } catch (e) {
@@ -698,6 +1052,47 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
                   errorText: _error,
                 ),
                 onSubmitted: (_) => _saving ? null : _save(),
+              ),
+              const SizedBox(height: 12),
+              // (2026-09-22) اختيار الفئة الأب: فارغ = فئة رئيسية.
+              Consumer(
+                builder: (ctx, rref, _) {
+                  final all = rref.watch(itemCategoriesProvider).valueOrNull ??
+                      const [];
+                  final banned = _forbidden(all);
+                  final options = all
+                      .where((c) => c.id != null && !banned.contains(c.id))
+                      .toList();
+                  final valid = _parentId != null && banned.contains(_parentId)
+                      ? null
+                      : _parentId;
+                  return DropdownButtonFormField<int?>(
+                    initialValue: valid,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'الفئة الأب',
+                      hintText: 'فئة رئيسية (بدون أب)',
+                      prefixIcon: Icon(Icons.account_tree_outlined),
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('فئة رئيسية (بدون أب)'),
+                      ),
+                      for (final c in options)
+                        DropdownMenuItem<int?>(
+                          value: c.id,
+                          child: Text(
+                            c.parentId == null ? c.name : '↳ ${c.name}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged:
+                        _saving ? null : (v) => setState(() => _parentId = v),
+                  );
+                },
               ),
               const SizedBox(height: 14),
               SizedBox(

@@ -1999,7 +1999,7 @@ class CloudJoin {
     try {
       final raw = await _getJson(
           '${_root(backendUrl, workspaceId)}/roster.json?shallow=true');
-      if (raw == null || raw is! Map) return false; // غير متأكدين: لا نمحو
+      if (raw == null) return false; // غير متأكدين: لا نمحو
       final roster = Map<dynamic, dynamic>.from(raw);
       if (roster.isEmpty) return true;
       for (final k in roster.keys) {

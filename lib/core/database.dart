@@ -77,9 +77,12 @@ class AppDatabase {
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL
       )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_kind ON accounts(kind)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_arch ON accounts(archived)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_acc_del  ON accounts(deleted_at)');
+    await db
+        .execute('CREATE INDEX IF NOT EXISTS idx_acc_kind ON accounts(kind)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_acc_arch ON accounts(archived)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_acc_del  ON accounts(deleted_at)');
 
     // ---------- العمليات ----------
     await db.execute('''
@@ -114,11 +117,16 @@ class AppDatabase {
         FOREIGN KEY (from_id)    REFERENCES accounts (id) ON DELETE CASCADE,
         FOREIGN KEY (to_id)      REFERENCES accounts (id) ON DELETE CASCADE
       )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_acc ON transactions(account_id)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_from ON transactions(from_id)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_id)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_tx_del ON transactions(deleted_at)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_tx_acc ON transactions(account_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_tx_from ON transactions(from_id)');
+    await db
+        .execute('CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_tx_del ON transactions(deleted_at)');
     // قواعد قديمة أنشأت الجدول قبل v20 بدون عمود التجزئة — أضفه (idempotent).
     await _addColumn(db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
 
@@ -144,8 +152,10 @@ class AppDatabase {
         updated_at  TEXT NOT NULL,
         FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
       )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_v_acc ON vouchers(account_id)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_v_del ON vouchers(deleted_at)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_v_acc ON vouchers(account_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_v_del ON vouchers(deleted_at)');
 
     // ---------- العملات ----------
     await db.execute('''
@@ -224,7 +234,8 @@ class AppDatabase {
         created_at      TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
       )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id)');
 
     // ---------- سجل النشاط ----------
     await db.execute('''
@@ -237,7 +248,8 @@ class AppDatabase {
         user_name  TEXT DEFAULT '',
         created_at TEXT NOT NULL
       )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_act_date ON activity(created_at)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_act_date ON activity(created_at)');
 
     // ---------- سلة المحذوفات القديمة (يبقى للتوافق مع الإصدارات السابقة) ----------
     await db.execute('''
@@ -265,8 +277,8 @@ class AppDatabase {
     // قواعد قديمة أنشأت الجدول بدون عمودَي الربط — أضفهما (idempotent).
     await _addColumn(db, 'notifications', 'entity_type', "TEXT DEFAULT ''");
     await _addColumn(db, 'notifications', 'entity_id', "TEXT DEFAULT ''");
-    await _addColumn(db, 'notifications', 'workspace_id',
-        "TEXT NOT NULL DEFAULT 'default'");
+    await _addColumn(
+        db, 'notifications', 'workspace_id', "TEXT NOT NULL DEFAULT 'default'");
 
     // ---------- قوالب الرسائل ----------
     await db.execute('''
@@ -280,7 +292,8 @@ class AppDatabase {
     // ---------- الأصناف والمخزون ----------
     await db.execute(createItemsSql);
     await db.execute(createStockSql);
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
     await db.execute(createTransactionItemsSql);
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_tx_items_tx ON transaction_items(tx_id)',
@@ -337,13 +350,16 @@ class AppDatabase {
       // (دفعة 57) قواعد قديمة فُتحت بلا onUpgrade (نفس الرقم) لكن ناقصة
       // أعمدة v21 — الهجرة idempotent فتصلح أي نقص عند كل فتح.
       await migrateToV21(db);
-    } catch (_) {
-    }
+    } catch (_) {}
     try {
       // (دفعة 58) اجتثاث بقايا LAN عند كل فتح — idempotent بالكامل.
       await migrateToV22(db);
-    } catch (_) {
-    }
+    } catch (_) {}
+    try {
+      // (2026-09-22) عمود الأب لشجرة الفئات — idempotent: قواعد قديمة
+      // أُنشئ جدولها قبل إضافة parent_id تُرقّى عند كل فتح.
+      await migrateToV23(db);
+    } catch (_) {}
   }
 
   /// جداول المزامنة الجديدة (v5).
@@ -438,6 +454,7 @@ class AppDatabase {
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name       TEXT NOT NULL,
+        parent_id  INTEGER NULL REFERENCES item_categories(id) ON DELETE CASCADE,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )''';
@@ -700,7 +717,8 @@ class AppDatabase {
     if (from < 2) {
       await db.execute(createItemsSql);
       await db.execute(createStockSql);
-      await db.execute('CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id)');
       await _addColumn(db, 'transactions', 'image', "TEXT DEFAULT ''");
       await _addColumn(db, 'users', 'password', "TEXT DEFAULT ''");
     }
@@ -937,7 +955,8 @@ class AppDatabase {
     }
     // ====== v20: تجزئة SHA-256 لمرفقات العمليات المالية (جلب عبر LAN) ======
     if (from < 20) {
-      await _addColumn(db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
+      await _addColumn(
+          db, 'transactions', 'attachment_hash', "TEXT DEFAULT ''");
     }
     // ====== v21 (دفعة 57): عزل المساحات + حذف ناعم للدردشة ======
     if (from < 21) {
@@ -972,8 +991,8 @@ class AppDatabase {
   /// عامة (public) لأن ensureFullSchema تستدعيها أيضاً للقواعد الجديدة.
   static Future<void> migrateToV21(Database db) async {
     // 1) عزل الإشعارات.
-    await _addColumn(db, 'notifications', 'workspace_id',
-        "TEXT NOT NULL DEFAULT 'default'");
+    await _addColumn(
+        db, 'notifications', 'workspace_id', "TEXT NOT NULL DEFAULT 'default'");
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_notif_ws ON notifications(workspace_id)');
 
@@ -1002,8 +1021,7 @@ class AppDatabase {
           FROM currencies''');
         await txn.execute('DROP TABLE currencies');
         await txn.execute('ALTER TABLE currencies_v21 RENAME TO currencies');
-        await txn.execute(
-            'CREATE UNIQUE INDEX IF NOT EXISTS idx_curr_pk_v21 '
+        await txn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_curr_pk_v21 '
             'ON currencies(code, workspace_id)');
       });
     }
@@ -1075,6 +1093,17 @@ class AppDatabase {
     try {
       await db.delete('settings',
           where: "key IN ('lanSyncEnabled', 'lastLanSync')");
+    } catch (_) {}
+  }
+
+  /// (2026-09-22) شجرة الفئات: إضافة عمود parent_id إلى item_categories
+  /// وفهرسه. idempotent — آمن على القواعد الجديدة والقديمة معاً، ولا يغيّر
+  /// أي بيانات: كل الفئات القائمة تبقى جذوراً (parent_id = NULL).
+  static Future<void> migrateToV23(Database db) async {
+    await _addColumn(db, 'item_categories', 'parent_id', 'INTEGER');
+    try {
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_item_cat_parent '
+          'ON item_categories(parent_id)');
     } catch (_) {}
   }
 

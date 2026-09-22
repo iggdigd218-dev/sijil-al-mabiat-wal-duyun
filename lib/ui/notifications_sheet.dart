@@ -23,7 +23,7 @@ Future<void> openNotifications(
   await repo.markAllNotificationsSeen();
   bump(ref);
   if (!context.mounted) return;
-  await showModalBottomSheet(
+  await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     // (2026-09-22) الصحيفة لا تغطي شريط التنقل السفلي: تُحجز مسافة
@@ -38,7 +38,26 @@ Future<void> openNotifications(
         child: _NotificationsSheet(onOpenEntity: onOpenEntity),
       );
     },
-  );
+  ).whenComplete(() {
+    // ══ (2026-09-22) استعادة التفاعل فور الإغلاق ══
+    // بلا هذا التسلسل تبقى حلقة التركيز/الإيماءات محجوزة لصالح الصحيفة
+    // فتتجمد أيقونات الشريط السفلي حتى أول لمسة تالية. نُلغي التركيز،
+    // ونُزيل أي تراكب متبقٍ، ثم نُعيد بناء الواجهة في إطار تالٍ.
+    try {
+      FocusManager.instance.primaryFocus?.unfocus();
+    } catch (_) {}
+    try {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try {
+          FocusManager.instance.primaryFocus?.unfocus();
+        } catch (_) {}
+      });
+    } catch (_) {}
+  });
+  // تحديث العدّاد والحالة بعد الإغلاق (الشريط السفلي يبقى قابلاً للنقر).
+  try {
+    bump(ref);
+  } catch (_) {}
 }
 
 class _NotificationsSheet extends ConsumerWidget {
@@ -85,122 +104,145 @@ class _NotificationsSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(notificationsProvider);
-    return DraggableScrollableSheet(
-      initialChildSize: 0.7,
-      minChildSize: 0.4,
-      maxChildSize: 0.92,
-      expand: false,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: AppColors.surfaceOf(context),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-          ),
-          child: Column(
-            children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 42,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.borderOf(context),
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.notifications_rounded,
-                        color: AppColors.primaryOf(context)),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'الإشعارات',
-                      style:
-                          TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: async.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => EmptyState(
-                    icon: Icons.error_outline,
-                    title: 'تعذّر تحميل الإشعارات',
-                    message: '$e',
-                  ),
-                  data: (list) {
-                    if (list.isEmpty) {
-                      return ListView(
-                        controller: scrollController,
-                        children: const [
-                          SizedBox(height: 60),
-                          EmptyState(
-                            icon: Icons.notifications_off_outlined,
-                            title: 'لا توجد إشعارات',
-                            message: 'ستظهر هنا تنبيهات المخزون والنسخ والمزامنة',
-                          ),
-                        ],
-                      );
-                    }
-                    return ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 8, horizontal: 12),
-                      itemCount: list.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, i) {
-                        final n = list[i];
-                        final kind = (n['kind'] ?? 'info') as String;
-                        final (icon, color) = switch (kind) {
-                          'error' => (Icons.error_outline, AppColors.danger),
-                          'warning' => (Icons.warning_amber_rounded,
-                              AppColors.amber),
-                          'success' => (Icons.check_circle_outline,
-                              AppColors.green),
-                          _ => (Icons.info_outline, AppColors.info),
-                        };
-                        final body = (n['body'] ?? '') as String;
-                        final linked =
-                            ((n['entity_type'] ?? '') as String).isNotEmpty;
-                        return ListTile(
-                          onTap: () => _onTap(context, n, kind),
-                          leading: Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: color.withValues(alpha: .12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(icon, color: color),
-                          ),
-                          title: Text(
-                            (n['title'] ?? '') as String,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800, fontSize: 14.5),
-                          ),
-                          subtitle: body.isEmpty
-                              ? null
-                              : Text(body,
-                                  style: const TextStyle(fontSize: 13)),
-                          // سهم يدل على أن الإشعار يقود لسجل محدد.
-                          trailing: linked
-                              ? Icon(Icons.chevron_left,
-                                  size: 20, color: AppColors.text3Of(context))
-                              : null,
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
+    return PopScope<Object?>(
+      // ══ (2026-09-22) زر الرجوع للنظام وإيماءة الرجوع ══
+      // canPop=true يضمن أن مسار الصحيفة هو من يستلم الرجوع فوراً بدل
+      // أن يبتلعه PopScope(canPop:false) الخاص بالشل (والذي يحمي
+      // الشاشة الرئيسية من الخروج العشوائي) فيبدو الزر متجمّداً.
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        // مسار استثنائي: أغلق الصحيفة صراحةً وأعد التركيز للواجهة.
+        try {
+          Navigator.of(context).maybePop();
+        } catch (_) {}
+        try {
+          FocusManager.instance.primaryFocus?.unfocus();
+        } catch (_) {}
       },
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (context, scrollController) {
+          return Container(
+            decoration: BoxDecoration(
+              color: AppColors.surfaceOf(context),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(22)),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.borderOf(context),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.notifications_rounded,
+                          color: AppColors.primaryOf(context)),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'الإشعارات',
+                        style: TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: async.when(
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'تعذّر تحميل الإشعارات',
+                      message: '$e',
+                    ),
+                    data: (list) {
+                      if (list.isEmpty) {
+                        return ListView(
+                          controller: scrollController,
+                          children: const [
+                            SizedBox(height: 60),
+                            EmptyState(
+                              icon: Icons.notifications_off_outlined,
+                              title: 'لا توجد إشعارات',
+                              message:
+                                  'ستظهر هنا تنبيهات المخزون والنسخ والمزامنة',
+                            ),
+                          ],
+                        );
+                      }
+                      return ListView.separated(
+                        controller: scrollController,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 8, horizontal: 12),
+                        itemCount: list.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final n = list[i];
+                          final kind = (n['kind'] ?? 'info') as String;
+                          final (icon, color) = switch (kind) {
+                            'error' => (Icons.error_outline, AppColors.danger),
+                            'warning' => (
+                                Icons.warning_amber_rounded,
+                                AppColors.amber
+                              ),
+                            'success' => (
+                                Icons.check_circle_outline,
+                                AppColors.green
+                              ),
+                            _ => (Icons.info_outline, AppColors.info),
+                          };
+                          final body = (n['body'] ?? '') as String;
+                          final linked =
+                              ((n['entity_type'] ?? '') as String).isNotEmpty;
+                          return ListTile(
+                            onTap: () => _onTap(context, n, kind),
+                            leading: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: color.withValues(alpha: .12),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(icon, color: color),
+                            ),
+                            title: Text(
+                              (n['title'] ?? '') as String,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w800, fontSize: 14.5),
+                            ),
+                            subtitle: body.isEmpty
+                                ? null
+                                : Text(body,
+                                    style: const TextStyle(fontSize: 13)),
+                            // سهم يدل على أن الإشعار يقود لسجل محدد.
+                            trailing: linked
+                                ? Icon(Icons.chevron_left,
+                                    size: 20, color: AppColors.text3Of(context))
+                                : null,
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }

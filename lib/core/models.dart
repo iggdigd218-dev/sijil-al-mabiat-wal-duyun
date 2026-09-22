@@ -792,34 +792,64 @@ enum StockKind {
 /// الفئات مستقلة عن تصنيفات الحسابات، ويمكن إنشاء عدد غير محدود منها.
 class ItemCategory {
   final int? id;
+
+  /// (2026-09-22) الفئة الأب — null تعني فئة رئيسية (جذر في الشجرة).
+  final int? parentId;
   final String name;
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// (2026-09-22) الفئات الفرعية المباشرة — تُملأ في طبقة العرض عند
+  /// بناء الشجرة، ولا تُخزَّن في قاعدة البيانات (مشتقة من parent_id).
+  final List<ItemCategory> children;
+
   const ItemCategory({
     this.id,
+    this.parentId,
     required this.name,
     required this.createdAt,
     required this.updatedAt,
+    this.children = const [],
   });
 
-  ItemCategory copyWith({int? id, String? name, DateTime? updatedAt}) =>
+  /// فئة رئيسية (جذر) إن لم يكن لها أب.
+  bool get isRoot => parentId == null;
+
+  /// هل لها فئات فرعية؟
+  bool get hasChildren => children.isNotEmpty;
+
+  ItemCategory copyWith({
+    int? id,
+    int? parentId,
+    bool clearParentId = false,
+    String? name,
+    DateTime? updatedAt,
+    List<ItemCategory>? children,
+  }) =>
       ItemCategory(
         id: id ?? this.id,
+        parentId: clearParentId ? null : (parentId ?? this.parentId),
         name: name ?? this.name,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
+        children: children ?? this.children,
       );
+
+  /// يربط الأبناء بهذه الفئة (نسخة جديدة للواجهة الثابتة).
+  ItemCategory withChildren(List<ItemCategory> subs) =>
+      copyWith(children: subs);
 
   Map<String, Object?> toMap() => {
         if (id != null) 'id': id,
         'name': name,
+        if (parentId != null) 'parent_id': parentId,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
 
   factory ItemCategory.fromMap(Map<String, Object?> m) => ItemCategory(
         id: m['id'] as int?,
+        parentId: m['parent_id'] as int?,
         name: (m['name'] ?? '') as String,
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt:
