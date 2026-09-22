@@ -370,80 +370,123 @@ class _InventoryToolbar extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              // ⇅ قائمة الفرز المنسدلة.
-              PopupMenuButton<_SortKey>(
-                tooltip: 'ترتيب النتائج',
-                initialValue: sort,
-                onSelected: onSortChanged,
-                itemBuilder: (_) => [
-                  for (final k in _SortKey.values)
-                    PopupMenuItem<_SortKey>(
-                      value: k,
-                      child: Row(
-                        children: [
-                          Icon(k.icon, size: 18),
-                          const SizedBox(width: 8),
-                          Expanded(child: Text(k.label)),
-                          if (k == sort)
-                            Icon(Icons.check,
-                                size: 18, color: AppColors.primaryOf(context)),
-                        ],
-                      ),
-                    ),
+          // (2026-09-22) صفٌّ قابل للالتفاف: على الشاشات الضيقة (360px)
+          // ينزل مبدّل العرض إلى سطر ثانٍ بدل فيض أفقي يقصف الشاشة.
+          LayoutBuilder(
+            builder: (context, box) {
+              final wide = box.maxWidth >= 380;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _SortButton(sort: sort, wide: wide, onChanged: onSortChanged),
+                  _ViewModeToggle(
+                      mode: mode, wide: wide, onChanged: onModeChanged),
                 ],
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.borderOf(context)),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('⇅',
-                          style: TextStyle(fontWeight: FontWeight.w800)),
-                      const SizedBox(width: 6),
-                      Text(
-                        'فرز: ${sort.label}',
-                        style: const TextStyle(fontSize: 12.5),
-                      ),
-                      const Icon(Icons.arrow_drop_down, size: 20),
-                    ],
-                  ),
-                ),
-              ),
-              const Spacer(),
-              // مبدّل نمط العرض (قائمة / شبكة) — يُحفظ في التفضيلات.
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment<String>(
-                    value: 'list',
-                    icon: Icon(Icons.view_list_rounded, size: 18),
-                    label: Text('قائمة'),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'grid',
-                    icon: Icon(Icons.grid_view_rounded, size: 18),
-                    label: Text('شبكة'),
-                  ),
-                ],
-                selected: <String>{mode},
-                showSelectedIcon: false,
-                style: SegmentedButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  textStyle: const TextStyle(fontSize: 12.5),
-                ),
-                onSelectionChanged: (s) => onModeChanged(s.first),
-              ),
-            ],
+              );
+            },
           ),
         ],
       ),
     );
   }
+}
+
+/// زر الفرز المنسدل [⇅ فرز حسب...].
+class _SortButton extends StatelessWidget {
+  final _SortKey sort;
+  final bool wide;
+  final ValueChanged<_SortKey> onChanged;
+
+  const _SortButton(
+      {required this.sort, required this.wide, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: wide ? 210 : 150),
+        child: PopupMenuButton<_SortKey>(
+          tooltip: 'ترتيب النتائج',
+          initialValue: sort,
+          onSelected: onChanged,
+          itemBuilder: (_) => [
+            for (final k in _SortKey.values)
+              PopupMenuItem<_SortKey>(
+                value: k,
+                child: Row(
+                  children: [
+                    Icon(k.icon, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(k.label)),
+                    if (k == sort)
+                      Icon(Icons.check,
+                          size: 18, color: AppColors.primaryOf(context)),
+                  ],
+                ),
+              ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              border: Border.all(color: AppColors.borderOf(context)),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('⇅', style: TextStyle(fontWeight: FontWeight.w800)),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    wide ? 'فرز: ${sort.label}' : sort.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down, size: 20),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+/// مبدّل نمط العرض (قائمة / شبكة) — أيقونات فقط على الشاشات الضيقة.
+class _ViewModeToggle extends StatelessWidget {
+  final String mode;
+  final bool wide;
+  final ValueChanged<String> onChanged;
+
+  const _ViewModeToggle(
+      {required this.mode, required this.wide, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 36,
+        child: SegmentedButton<String>(
+          segments: [
+            ButtonSegment<String>(
+              value: 'list',
+              icon: const Icon(Icons.view_list_rounded, size: 18),
+              label: wide ? const Text('قائمة') : null,
+            ),
+            ButtonSegment<String>(
+              value: 'grid',
+              icon: const Icon(Icons.grid_view_rounded, size: 18),
+              label: wide ? const Text('شبكة') : null,
+            ),
+          ],
+          selected: <String>{mode},
+          showSelectedIcon: false,
+          style: SegmentedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            textStyle: const TextStyle(fontSize: 12.5),
+          ),
+          onSelectionChanged: (s) => onChanged(s.first),
+        ),
+      );
 }
 
 /// شريط الفئات الأفقي (رئيسية + فرعية للفئة المختارة).
