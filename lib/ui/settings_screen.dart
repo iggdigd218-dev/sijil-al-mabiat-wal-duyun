@@ -1566,6 +1566,24 @@ class _GroupWipeTileState extends ConsumerState<_GroupWipeTile> {
     if (!mounted) return;
     setState(() => _busy = true);
     try {
+      // ══ (2026-09-22 — قانون فك الارتباط الشامل) ══
+      // التهيئة من الصفر تعني انفصال كل عضو رسمياً: يمحى من السجل
+      // وعضوية المستخدم وفهرس الأجهزة، وتُلغى كل دعوة وطلب انضمام —
+      // لا عضو يبقى معلقاً في السحابة بعد التهيئة.
+      try {
+        final st0 = await ref.read(repoProvider).settings();
+        final url0 = effectiveBackendUrl(st0['cloudBackendUrl']);
+        if (url0.isNotEmpty) {
+          final db0 = await ref.read(repoProvider).database;
+          final wsRows = await db0.query('workspaces', limit: 1);
+          final ws0 = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+          await CloudJoin.purgeAllMembers(
+            ref.read(repoProvider),
+            backendUrl: url0,
+            workspaceId: ws0,
+          );
+        }
+      } catch (_) {}
       await ref.read(repoProvider).wipeGroupData();
       // دفع فوري لعمليات الحذف نحو الأعضاء.
       try {

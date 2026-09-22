@@ -882,7 +882,10 @@ class SyncEngine {
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
       final t = _cloudTransport;
-      await CloudJoin.removePeerFromCloud(
+      // (2026-09-22 — قانون الطرد الكامل) الطرد يمحو العضو من السجل
+      // وعضوية المستخدم وفهرس الأجهزة وطلباته — لا أثر له في السحابة،
+      // وإعادة ربطه لاحقاً تُسجّله بجهاز واحد لا جهازين.
+      await CloudJoin.expelMemberCompletely(
         repo,
         backendUrl: url,
         deviceId: targetDeviceId,

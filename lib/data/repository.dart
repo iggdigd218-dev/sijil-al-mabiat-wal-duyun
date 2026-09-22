@@ -2171,6 +2171,18 @@ class Repo {
     await _ensureCan('manage_users');
     final db = await _db;
     final now = DateTime.now().toIso8601String();
+    var name = '';
+    int? userId;
+    final row = await db.query('devices',
+        where: 'id = ?', whereArgs: [deviceId], limit: 1);
+    if (row.isNotEmpty) {
+      name = '${row.first['name'] ?? ''}';
+      userId = row.first['user_id'] as int?;
+    }
+    // ══ (2026-09-22 — قانون الطرد الكامل) ══
+    // الطرد = إزالة العضو من المجموعة إزالةً تامة: لا صف «مُعطّل» يبقى
+    // يُعدّ مقعداً أو يظهر جهازاً مرتبطاً. (الوسم القديم ثم الحذف بعده
+    // حتى تلتقطه أي دورة مزامنة جارية بأمان.)
     await db.update(
       'devices',
       {
@@ -2188,6 +2200,28 @@ class Repo {
     // تطهير الدردشة: المحادثة الفردية مع الجهاز المطرود تُحذف برسائلها —
     // لا يبقى المطرود في قوائم المحادثات ولا في بيانات الرسائل الوصفية.
     await purgePeerChat(deviceId);
+    // حذف الصف نهائياً من سجل أجهزة المجموعة.
+    await db.delete('devices', where: 'id = ?', whereArgs: [deviceId]);
+    // المستخدم المرتبط يُلغى تفعيله — يُحسب أثره في الدفاتر (عملياته
+    // تبقى) لكنه لم يعد عضواً ولا يظهر في قوائم الصلاحيات.
+    if (userId != null) {
+      await db.update(
+        'users',
+        {'active': 0, 'deleted_at': now, 'updated_at': now},
+        where: 'id = ? AND COALESCE(is_me, 0) = 0',
+        whereArgs: [userId],
+      );
+    }
+    // أثر تدقيقي: الطرد يبقى موثقاً في السجل.
+    try {
+      await db.insert('activity', {
+        'text': 'طرد عضو نهائياً من المجموعة: ${name.isEmpty ? deviceId : name}',
+        'ref_type': 'expel',
+        'ref_id': deviceId,
+        'user_name': 'المدير',
+        'created_at': now,
+      });
+    } catch (_) {}
   }
 
   /// يحذف محادثة القرين الفردية (peer:<deviceId>) ورسائلها بالكامل.

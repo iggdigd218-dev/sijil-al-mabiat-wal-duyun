@@ -46,6 +46,27 @@ class _State extends ConsumerState<GroupManagementScreen> {
     super.initState();
     _startJoinRequestWatcher();
     _checkJoinRequests();
+    _reconcileRoster();
+  }
+
+  /// (2026-09-22) مواءمة جدول الأجهزة المحلي مع السجل السحابي عند فتح
+  /// الشاشة: الأشباح (صفوف مقترنة بلا عضوية سحابية) تُوسم مفصولاً فلا
+  /// تُعرض أجهزةً مرتبطة ولا تُربك عدّ المقاعد. صامتة تماماً عند الفشل.
+  Future<void> _reconcileRoster() async {
+    try {
+      final repo = ref.read(repoProvider);
+      if (!await repo.isWorkspaceOwner()) return;
+      final st = await repo.settings();
+      final url = effectiveBackendUrl(st['cloudBackendUrl']);
+      if (url.isEmpty) return;
+      final db = await repo.database;
+      final wsRows = await db.query('workspaces', limit: 1);
+      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      final fixed =
+          await CloudJoin.reconcileRosterWithLocal(repo,
+              backendUrl: url, workspaceId: ws);
+      if (fixed > 0 && mounted) bump(ref);
+    } catch (_) {}
   }
 
   Future<void> _startJoinRequestWatcher() async {

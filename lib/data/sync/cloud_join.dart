@@ -426,15 +426,19 @@ class CloudJoin {
         whereArgs: [joiningDeviceId],
         limit: 1);
     if (existing.isNotEmpty) return;
-    // العدد الفعلي: الأكبر بين roster السحابي والمحلي (أيهما أحدث) —
-    // لا يُرفض جهاز ضمن الحصة، ولا يُقبل جهاز فوقها بسباق تحديث.
-    int current = await connectedDevicesCount(repo);
+    // ══ (2026-09-22 — قانون العدّ الصادق) ══
+    // السجل السحابي (roster) هو المصدر الوحيد للأجهزة **المرتبطة
+    // فعلياً**. الجدول المحلي قد يمتلئ بأشباح: أعضاء غادروا، أو طُردوا
+    // من السحابة، أو بقايا ربط قديم على جهاز أُعيد تثبيته — فكان العدد
+    // يبلغ الحد (5/5) ويُرفض أي ربط جديد بينما لا يوجد في الحقيقة أي
+    // جهاز مرتبط. القاعدة الآن: إن قُرئ roster فالعدد = عدده وحده
+    // (لا اتحاداً مع المحلي)، وإن تعذّرت قراءته نعود للعدد المحلي
+    // كاحتياط مُرشَّح. كذلك الأعضاء المطرودون/المفصولون لا يُحسبون.
+    int current;
     if (rosterCloud != null) {
-      final cloudCount = rosterCloud.values
-          .whereType<Map>()
-          .where(activeRow)
-          .length;
-      if (cloudCount > current) current = cloudCount;
+      current = rosterCloud.values.whereType<Map>().where(activeRow).length;
+    } else {
+      current = await connectedDevicesCount(repo);
     }
     // (سباق دعوتين) عند إنشاء دعوة جديدة joiningDeviceId='__new__'،
     // نعدّ الدعوات الحية أيضاً كمقاعد محجوزة مؤقتاً — وإلا دعوتان
@@ -1900,6 +1904,215 @@ class CloudJoin {
     } catch (_) {
       // roster فشل — سيُعاد رفعه في دورة المزامنة التالية
     }
+  }
+
+  /// ══ (2026-09-22 — قانون الطرد الكامل) ══
+  /// طرد العضو = محوه من المجموعة **ومن السحابة** بلا أي أثر:
+  ///   1) عضويته في السجل (/roster/{deviceId}).
+  ///   2) أي طلب انضمام معلّق له (بمفتاحه أو بمطابقة deviceId).
+  ///   3) عضوية المستخدم (/members/{uid}) المرتبطة بجهازه.
+  ///   4) سجله في فهرس الأجهزة (device_index) حتى لا يُستعاد ببصمته.
+  ///   5) عقدة محادثته الخاصة إن وُجدت.
+  /// إعادة ربطه لاحقاً تُنشئ له نفس المعرّف (جهاز واحد لا جهازان) —
+  /// لا ازدواج في السجل ولا في المقاعد.
+  static Future<void> expelMemberCompletely(
+    Repo repo, {
+    required String backendUrl,
+    required String deviceId,
+    String workspaceId = 'default',
+  }) async {
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final root = _root(backendUrl, workspaceId);
+    final enc = Uri.encodeComponent(deviceId);
+    // 1) عضوية السجل.
+    try {
+      await _delete('$root/roster/$enc.json');
+    } catch (_) {}
+    // 2) طلبات الانضمام: بمفتاح الجهاز + مطابقة الحقل (دفاع مزدوج).
+    try {
+      await _delete(requestPath(backendUrl, workspaceId, deviceId));
+    } catch (_) {}
+    await _deleteMatching(root, 'joinRequests', deviceId);
+    // 3) عضوية المستخدم المرتبطة بهذا الجهاز.
+    await _deleteMatching(root, 'members', deviceId);
+    // 4) فهرس الأجهزة (بصمة العتاد) — أي سجل يشير لهذا الجهاز بالذات.
+    try {
+      final idx = await _getJson(
+          '$base/workspaces/_registry/device_index.json');
+      if (idx != null) {
+        for (final e in idx.entries) {
+          final v = e.value;
+          if (v is! Map) continue;
+          if ('${v['device_id'] ?? ''}' == deviceId) {
+            try {
+              await _delete('$base/workspaces/_registry/device_index/'
+                  '${Uri.encodeComponent(e.key)}.json');
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+    // 5) محادثته الخاصة.
+    try {
+      await _delete('$root/chat/$enc.json');
+    } catch (_) {}
+  }
+
+  /// يحذف كل العقد المطابقة تحت `node` التي يشير حقل `deviceId` فيها
+  /// (أو المعرّف نفسه) إلى `deviceId`.
+  static Future<void> _deleteMatching(
+    String root,
+    String node,
+    String deviceId,
+  ) async {
+    try {
+      final map = await _getJson('$root/$node.json');
+      if (map == null) return;
+      for (final e in map.entries) {
+        final v = e.value;
+        String ref = '';
+        if (v is Map) ref = '${v['deviceId'] ?? ''}';
+        if (ref.isEmpty && Uri.decodeComponent(e.key) == deviceId) {
+          ref = deviceId;
+        }
+        if (ref == deviceId && deviceId.isNotEmpty) {
+          try {
+            await _delete(
+                '$root/$node/${Uri.encodeComponent(e.key)}.json');
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// ══ (2026-09-22 — مواءمة السجل مع الجدول المحلي) ══
+  /// السجل السحابي هو الحقيقة؛ الجدول المحلي قد يحتوي أشباحاً (صفوف
+  /// مقترنة بلا عضوية سحابية) فتظهر في قائمة الأجهزة وتُربك عدّ المقاعد.
+  /// القاعدة: من له عضوية فعّالة في roster ⇒ مقترن نظيف؛ من لا عضوية له
+  /// (وهو ليس المالك ولا جهازنا) ⇒ يُوسم مفصولاً ليظهر في «الأجهزة
+  /// المطرودة» بدل أن يُحسب جهازاً مرتبطاً. لا تُلمس صفوف المالك أبداً،
+  /// ولا يُنفَّذ شيء إن تعذّرت قراءة roster.
+  static Future<int> reconcileRosterWithLocal(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    Map<String, dynamic>? roster;
+    try {
+      roster = await _getJson('$root/roster.json');
+    } catch (_) {
+      return 0;
+    }
+    if (roster == null || roster.isEmpty) return 0;
+    bool active(Map d) =>
+        '${d['revoked_at'] ?? ''}'.isEmpty &&
+        '${d['expelled_at'] ?? ''}'.isEmpty;
+    final db = await repo.database;
+    final ourId = (await repo.settings())['sync.deviceId'] ?? '';
+    final rows = await db.query('devices');
+    final now = DateTime.now().toIso8601String();
+    var fixed = 0;
+    for (final r in rows) {
+      final id = '${r['id']}';
+      if (id.isEmpty) continue;
+      final isOwner = (r['is_owner'] as int? ?? 0) == 1;
+      if (isOwner || id == ourId) continue; // لا نفصل المدير ولا أنفسنا
+      final entry = roster[id];
+      if (entry is Map && active(entry)) {
+        if ((r['is_paired'] as int? ?? 0) != 1 ||
+            '${r['revoked_at'] ?? ''}'.isNotEmpty ||
+            '${r['expelled_at'] ?? ''}'.isNotEmpty) {
+          await db.update(
+            'devices',
+            {
+              'is_paired': 1,
+              'revoked_at': '',
+              'expelled_at': '',
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          fixed++;
+        }
+        continue;
+      }
+      // بلا عضوية سحابية = شبح (أو مفصول من جهاز آخر) ⇒ وسمه مفصولاً.
+      if ('${r['expelled_at'] ?? ''}'.isEmpty ||
+          (r['is_paired'] as int? ?? 0) == 1) {
+        await db.update(
+          'devices',
+          {
+            'is_paired': 0,
+            'revoked_at': now,
+            'expelled_at': now,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        fixed++;
+      }
+    }
+    return fixed;
+  }
+
+  /// ══ (2026-09-22 — قانون فك الارتباط الشامل) ══
+  /// حذف كل الأعضاء رسمياً من المجموعة ومن السحابة (منطقة الخطر):
+  /// كل عضو يُمحى من roster وmembers وdevice_index، وتُحذف الدعوات
+  /// وطلبات الانضمام. جهاز المدير (صاحب الاستدعاء) لا يُمسّ.
+  /// يعيد عدد الأعضاء الذين مُحوا.
+  static Future<int> purgeAllMembers(
+    Repo repo, {
+    required String backendUrl,
+    String workspaceId = 'default',
+  }) async {
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    final root = _root(backendUrl, workspaceId);
+    var ourId = '';
+    try {
+      ourId = (await repo.settings())['sync.deviceId'] ?? '';
+    } catch (_) {}
+    final victims = <String>{};
+    try {
+      final roster = await _getJson('$root/roster.json');
+      if (roster != null) {
+        for (final e in roster.entries) {
+          final id = Uri.decodeComponent(e.key);
+          if (id.isNotEmpty && id != ourId) victims.add(id);
+        }
+      }
+    } catch (_) {}
+    for (final id in victims) {
+      await expelMemberCompletely(repo,
+          backendUrl: backendUrl, deviceId: id, workspaceId: workspaceId);
+    }
+    // نظافة العقد المشتركة: الدعوات وطلبات الانضمام كلها.
+    for (final node in const ['invites', 'joinRequests', 'evictions']) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+    // أي فهرس جهاز ما زال يشير لهذه المساحة (عدا بصمة المدير نفسه).
+    try {
+      final idx = await _getJson(
+          '$base/workspaces/_registry/device_index.json');
+      if (idx != null) {
+        for (final e in idx.entries) {
+          final v = e.value;
+          if (v is! Map) continue;
+          if ('${v['workspaceId'] ?? ''}' == workspaceId &&
+              '${v['device_id'] ?? ''}' != ourId) {
+            try {
+              await _delete('$base/workspaces/_registry/device_index/'
+                  '${Uri.encodeComponent(e.key)}.json');
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+    return victims.length;
   }
 
   /// (المدير — دفعة 66) إزالة جهاز من المجموعة: حذف عضويته من السجل

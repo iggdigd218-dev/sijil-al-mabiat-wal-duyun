@@ -109,11 +109,13 @@ void main() {
               where: 'conversation_id = ?', whereArgs: [convId]),
           isEmpty,
           reason: 'رسائل المطرود تُطهَّر');
-      final d = (await db.query('devices',
-              where: "id = 'DEVICE-EVICT01'"))
-          .first;
-      expect('${d['expelled_at']}'.isNotEmpty, isTrue);
-      expect(d['is_paired'], 0);
+      // (قانون 2026-09-22 — الطرد الكامل) صفه يُحذف من سجل المجموعة
+      // نهائياً بدل الاكتفاء بوسمه مفصولاً: لا يبقى له أثر يُعدّ جهازاً
+      // مرتبطاً ولا مقعداً محجوزاً.
+      expect(
+          await db.query('devices', where: "id = 'DEVICE-EVICT01'"),
+          isEmpty,
+          reason: 'الطرد يمحو صف الجهاز من المجموعة');
     });
 
     test('groupPeersProvider يستبعد المطرودين (فلتر expelled_at قائم)',
