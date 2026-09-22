@@ -11,7 +11,6 @@ import '../core/accounting.dart';
 import '../core/desktop.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
-import '../core/media_paths.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import '../data/sync/device_registry.dart';
@@ -1996,44 +1995,92 @@ class _Drawer extends ConsumerWidget {
     ];
   }
 
-  /// (3.70.0) اختيار صورة الملف الشخصي من المعرض — تُحفظ محلياً داخل
-  /// مجلد التطبيق ويحدَّث photo_url في google_auth إن وُجد صف.
-  Future<void> _pickProfilePhoto(BuildContext context, WidgetRef ref) async {
+  /// (2026-09-22) أيقونة المؤسسة: ملك للمؤسسة — المدير وحده يغيّرها أو
+  /// يحذفها، والأعضاء يرونها بلا أي تحكم. تُخزَّن base64 في الإعدادات
+  /// وتُصعَّد كعملية إعدادات متزامنة فتصل كل أجهزة المجموعة.
+  Future<void> _manageOrgIcon(
+    BuildContext context,
+    WidgetRef ref,
+    bool isOwner,
+  ) async {
+    if (!isOwner) {
+      Sfx.tap();
+      showSnack(context, 'أيقونة المؤسسة يحددها المدير — للعرض فقط');
+      return;
+    }
     Sfx.click();
+    final repo = ref.read(repoProvider);
+    var hasIcon = false;
     try {
+      hasIcon = ((await repo.settings())['org.icon.b64'] ?? '').isNotEmpty;
+    } catch (_) {}
+    if (!context.mounted) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('تغيير أيقونة المؤسسة'),
+              subtitle: const Text('تظهر لكل أجهزة المجموعة'),
+              onTap: () => Navigator.pop(ctx, 'change'),
+            ),
+            if (hasIcon)
+              ListTile(
+                leading: Icon(Icons.delete_outline,
+                    color: AppColors.dangerOf(ctx)),
+                title: const Text('حذف أيقونة المؤسسة'),
+                onTap: () => Navigator.pop(ctx, 'delete'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.close_rounded),
+              title: const Text('إلغاء'),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !context.mounted) return;
+    try {
+      if (action == 'delete') {
+        await repo.setSyncedSetting('org.icon.b64', '');
+        ref.invalidate(drawerPhotoProvider);
+        bump(ref);
+        Sfx.pop();
+        if (context.mounted) showSnack(context, 'حُذفت أيقونة المؤسسة');
+        return;
+      }
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        maxWidth: 512,
-        maxHeight: 512,
-        imageQuality: 85,
+        maxWidth: 256,
+        maxHeight: 256,
+        imageQuality: 80,
       );
       if (picked == null) return;
-      final repo = ref.read(repoProvider);
-      String dest = picked.path;
-      try {
-        final docs = await MediaPaths.ensureDocsDir();
-        if (docs != null) {
-          dest = '$docs/profile_photo.jpg';
-          await File(picked.path).copy(dest);
+      final bytes = await picked.readAsBytes();
+      final b64 = base64Encode(bytes);
+      // حد عملي: العملية تمر عبر السحابة — صورة صغيرة تكفي للأيقونة.
+      if (b64.length > 400000) {
+        if (context.mounted) {
+          showSnack(context, 'الصورة أكبر من اللازم — اختر صورة أصغر',
+              error: true);
         }
-      } catch (_) {}
-      await repo.setSetting('account.photoPath', dest);
-      try {
-        final db = await repo.database;
-        await db.update(
-            'google_auth',
-            {
-              'photo_url': dest,
-              'updated_at': DateTime.now().toIso8601String(),
-            },
-            where: 'id = 1');
-      } catch (_) {}
+        return;
+      }
+      await repo.setSyncedSetting('org.icon.b64', b64);
       ref.invalidate(drawerPhotoProvider);
       bump(ref);
       Sfx.pop();
+      if (context.mounted) {
+        showSnack(context, '✅ حُدّثت أيقونة المؤسسة لكل المجموعة');
+      }
     } catch (e) {
       if (context.mounted) {
-        showSnack(context, 'تعذّر تحديث الصورة: $e', error: true);
+        showSnack(context, 'تعذّر تحديث الأيقونة: $e', error: true);
       }
     }
   }
@@ -2096,9 +2143,8 @@ class _Drawer extends ConsumerWidget {
                 children: [
                   Row(
                     children: [
-                      // (3.70.0) صورة الملف الشخصي: photo_url من google_auth
-                      // أو صورة مختارة محلياً — نقرة = تغيير من المعرض،
-                      // وأيقونة افتراضية عند غياب الصورة/الشبكة.
+                      // (2026-09-22) أيقونة المؤسسة: المدير يغيّرها/يحذفها،
+                      // والعضو يراها فقط — نقرة العضو توضّح له القاعدة.
                       Consumer(
                         builder: (ctx, rref, _) {
                           final photo =
@@ -2127,7 +2173,7 @@ class _Drawer extends ConsumerWidget {
                                   : fallback);
                           return InkWell(
                             customBorder: const CircleBorder(),
-                            onTap: () => _pickProfilePhoto(ctx, rref),
+                            onTap: () => _manageOrgIcon(ctx, rref, isOwner),
                             child: Container(
                               width: 54,
                               height: 54,
@@ -2609,9 +2655,9 @@ class _DrawerItems {
           return false;
         }
         final standalone = workspaceMode == 'standalone';
-        // العزل الكامل للوضع المستقل: لا دردشة ولا إدارة مجموعة —
-        // الجهاز الفردي لا يرى أي أثر للشبكات. الترقية من الإعدادات.
-        if (standalone && (s == AppScreen.chat || s == AppScreen.group)) {
+        // العزل الكامل للوضع المستقل: لا دردشة — الجهاز الفردي لا يرى
+        // أي أثر للشبكات. الترقية من الإعدادات.
+        if (standalone && s == AppScreen.chat) {
           return false;
         }
         // المدير يرى كل شيء؛ العضو يرى فقط ما تسمح به صلاحياته —
@@ -2620,6 +2666,9 @@ class _DrawerItems {
         // (إصلاح أندرويد 7) تحصين مزدوج: وضع host يعني هذا الجهاز هو
         // المدير حتى لو تأخرت قراءة is_owner على الأجهزة البطيئة —
         // فلا تختفي «إدارة المجموعة» عن المالك الجديد بعد التسليم أبداً.
+        // (2026-09-22) المدير يراها حتى في الوضع المستقل — فبوابة
+        // googleLinked في القسم تخفيها حتى إنشاء/ربط حساب جوجل، وبعده
+        // تظهر مباشرة ليُنشئ مجموعته أو مؤسسته ويديرها.
         if (s == AppScreen.group) {
           return isOwner || workspaceMode == 'host';
         }
@@ -2635,6 +2684,28 @@ class _DrawerItems {
         if (s == AppScreen.backup) return can('manage_backup');
         // سلة المهملات: الاسترجاع والحذف النهائي شأن من يملك حذف العمليات.
         if (s == AppScreen.trash) return can('delete_tx');
-        return true;
+        // ══ (2026-09-22) بقية الأيقونات حسب صلاحية العضو حرفياً ══
+        // نقطة البيع لمن يضيف عمليات.
+        if (s == AppScreen.pos) return can('add_tx');
+        // العملاء: لمن يتعامل مع العمليات (إضافة/تعديل/حذف).
+        if (s == AppScreen.accounts) {
+          return can('add_tx') || can('edit_tx') || can('delete_tx');
+        }
+        // العمليات: شاشة عمل — لمن يضيف أو يعدّل أو يحذف عمليات.
+        // (العارض يقرأ البيانات من «التقارير» لا من شاشة التحرير.)
+        if (s == AppScreen.transactions) {
+          return can('add_tx') || can('edit_tx') || can('delete_tx');
+        }
+        // السندات: لمن ينشئ عمليات أو يملك اعتماد السندات.
+        if (s == AppScreen.vouchers) {
+          return can('add_tx') || can('approve_vouchers');
+        }
+        // العملات: إعداد مالي لمن يضيف/يعدّل العمليات.
+        if (s == AppScreen.currencies) return can('add_tx') || can('edit_tx');
+        // سجل النشاط: اطلاع تدقيقي — تقارير أو حذف.
+        if (s == AppScreen.activity) {
+          return can('view_reports') || can('delete_tx');
+        }
+        return true; // الدردشة (داخل مجموعة) والإعدادات للجميع.
       }).toList();
 }

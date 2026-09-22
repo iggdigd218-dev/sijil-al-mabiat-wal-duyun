@@ -163,6 +163,10 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
   Widget build(BuildContext context) {
     final c = widget.currency;
     final isBuiltIn = kDefaultCurrencies.any((d) => d.code == c.code);
+    // (2026-09-22) التحكم حسب صلاحية العضو: سعر الصرف والتعيين
+    // والحذف كلها إعدادات مالية تتطلب صلاحية تعديل العمليات.
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    final canEdit = me == null || me.can('edit_tx');
 
     return Card(
       child: Padding(
@@ -213,7 +217,7 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
                 ),
                 if (widget.isDefault)
                   Pill('✓ الافتراضية', color: AppColors.greenOf(context))
-                else
+                else if (canEdit)
                   TextButton(
                     onPressed: () async {
                       await ref
@@ -228,7 +232,7 @@ class _CurrencyCardState extends ConsumerState<_CurrencyCard> {
                   ),
               ],
             ),
-            if (!widget.isDefault) ...[
+            if (!widget.isDefault && canEdit) ...[
               const SizedBox(height: 10),
               Row(
                 children: [

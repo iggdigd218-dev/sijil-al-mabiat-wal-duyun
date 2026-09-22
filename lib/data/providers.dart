@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/media_paths.dart';
 import '../core/models.dart';
 import 'repository.dart';
 import 'sync/cloud_join.dart';
@@ -747,6 +749,22 @@ final drawerPhotoProvider = FutureProvider<String?>((ref) async {
   try {
     final repo = ref.read(repoProvider);
     final st = await repo.settings();
+    // (2026-09-22) أيقونة المؤسسة أولاً: يضعها المدير وتصل الأعضاء
+    // متزامنة (org.icon.b64) — تُفك لملف محلي صغير ليعرضها الدرج.
+    final b64 = (st['org.icon.b64'] ?? '').trim();
+    if (b64.isNotEmpty) {
+      try {
+        final bytes = base64Decode(b64);
+        final docs = await MediaPaths.ensureDocsDir();
+        if (docs != null) {
+          final f = File('$docs/org_icon.jpg');
+          if (!f.existsSync() || f.lengthSync() != bytes.length) {
+            await f.writeAsBytes(bytes, flush: true);
+          }
+          return f.path;
+        }
+      } catch (_) {}
+    }
     final local = (st['account.photoPath'] ?? '').trim();
     if (local.isNotEmpty) return local;
     final db = await repo.database;

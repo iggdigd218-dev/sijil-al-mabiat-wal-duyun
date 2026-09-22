@@ -36,6 +36,11 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     final curs =
         ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final hidden = ref.watch(hideBalancesProvider);
+    // (2026-09-22) التحكم يظهر حسب صلاحية العضو: التعديل/الأرشفة
+    // بإذن تعديل العمليات، والحذف النهائي بإذن الحذف — المدير يرى الكل.
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    final canEdit = me == null || me.can('edit_tx');
+    final canDelete = me == null || me.can('delete_tx');
 
     return FutureBuilder<Account?>(
       future: ref.read(repoProvider).account(accountId),
@@ -101,27 +106,31 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           appBar: AppBar(
             title: Text(a.name, overflow: TextOverflow.ellipsis),
             actions: [
-              IconButton(
-                tooltip: 'تعديل',
-                icon: const Icon(Icons.edit_outlined),
-                onPressed: () async {
-                  await openAccountForm(context, ref, existing: a);
-                  bump(ref);
-                },
-              ),
-              PopupMenuButton<String>(
-                onSelected: (v) => _action(context, ref, a, v),
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: 'archive',
-                    child: Text(a.archived ? 'إلغاء الأرشفة' : 'أرشفة'),
-                  ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Text('حذف نهائي'),
-                  ),
-                ],
-              ),
+              if (canEdit)
+                IconButton(
+                  tooltip: 'تعديل',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () async {
+                    await openAccountForm(context, ref, existing: a);
+                    bump(ref);
+                  },
+                ),
+              if (canEdit || canDelete)
+                PopupMenuButton<String>(
+                  onSelected: (v) => _action(context, ref, a, v),
+                  itemBuilder: (_) => [
+                    if (canEdit)
+                      PopupMenuItem(
+                        value: 'archive',
+                        child: Text(a.archived ? 'إلغاء الأرشفة' : 'أرشفة'),
+                      ),
+                    if (canDelete)
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('حذف نهائي'),
+                      ),
+                  ],
+                ),
             ],
           ),
           body: ListView(

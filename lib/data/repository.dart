@@ -1237,6 +1237,24 @@ class Repo {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// (2026-09-22) إعداد متزامن: يُكتب محلياً ويُصعَّد كعملية إعدادات
+  /// (EntityKind.setting) فينتقل لكل أجهزة المجموعة عبر السحابة —
+  /// يُستخدم لهوية المؤسسة المشتركة (أيقونة المؤسسة) التي يراها
+  /// الأعضاء كما يراها المدير دون أن يملكو تعديلها.
+  Future<void> setSyncedSetting(String key, String value) async {
+    await setSetting(key, value);
+    try {
+      await queueOperation(
+        entityType: EntityKind.setting,
+        entityId: key,
+        opType: OpKind.settings,
+        payload: {'key': key, 'value': value},
+      );
+    } catch (_) {
+      // الإعداد المحلي كُتب؛ التعزيز السحابي يُلتقط لاحقاً.
+    }
+  }
+
   // ============ (3.70) نمط الحساب: فردي / مؤسسة (المرحلة 3) ============
 
   static const accountModeKey = 'account.type';

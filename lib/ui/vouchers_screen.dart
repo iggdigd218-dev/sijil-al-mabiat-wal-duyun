@@ -301,6 +301,10 @@ Future<void> openVoucherPreview(
   );
   final settings = await repo.settings();
   final org = OrgInfo.fromSettings(settings);
+  // (2026-09-22) زر الاعتماد يظهر فقط لمن يملك صلاحية approve_vouchers —
+  // العضو بلا صلاحية لا يرى التحكم أصلاً (والفحص يبقى مطبقاً في Repo).
+  final me = await ref.read(currentUserProvider.future);
+  final canApprove = me?.can('approve_vouchers') ?? true;
   if (!context.mounted) return;
   // (دفعة 65-ب) المعاينة مطابقة تماماً لما يُطبع ويُشارَ: نفس الختم.
   final stamp = await featureNeedsStamp(ref, Feature.reportsExport);
@@ -345,7 +349,7 @@ Future<void> openVoucherPreview(
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  if (v.status != 'approved')
+                  if (v.status != 'approved' && canApprove)
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: () async {
