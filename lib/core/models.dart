@@ -790,11 +790,80 @@ enum StockKind {
 /// فئة/قسم أصناف داخل المخزون.
 ///
 /// الفئات مستقلة عن تصنيفات الحسابات، ويمكن إنشاء عدد غير محدود منها.
+/// (2026-09-22) معرّف افتراضي لمجموعة «عام»: الفئات بلا قسم تُعرض تحته
+/// (ليس صفاً حقيقياً في جدول sections بل تجميعة عرض).
+const int kGeneralSectionId = -1;
+
+/// (2026-09-22) قسم المتجر — المستوى الأول في هرمية:
+/// القسم (إلكترونيات/ملابس/…) ← الفئة ← الصنف.
+class Section {
+  final int? id;
+  final String name;
+  final String icon;
+  final int sortOrder;
+  final bool deleted;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const Section({
+    this.id,
+    required this.name,
+    this.icon = '',
+    this.sortOrder = 0,
+    this.deleted = false,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  Section copyWith({
+    int? id,
+    String? name,
+    String? icon,
+    int? sortOrder,
+    bool? deleted,
+    DateTime? updatedAt,
+  }) =>
+      Section(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        icon: icon ?? this.icon,
+        sortOrder: sortOrder ?? this.sortOrder,
+        deleted: deleted ?? this.deleted,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? DateTime.now(),
+      );
+
+  Map<String, Object?> toMap() => {
+        if (id != null) 'id': id,
+        'name': name,
+        'icon': icon,
+        'sort_order': sortOrder,
+        'deleted_at': deleted ? updatedAt.toIso8601String() : '',
+        'created_at': createdAt.toIso8601String(),
+        'updated_at': updatedAt.toIso8601String(),
+      };
+
+  factory Section.fromMap(Map<String, Object?> m) => Section(
+        id: m['id'] as int?,
+        name: (m['name'] ?? '') as String,
+        icon: (m['icon'] ?? '') as String,
+        sortOrder: (m['sort_order'] as int?) ?? 0,
+        deleted: ((m['deleted_at'] ?? '') as String).isNotEmpty,
+        createdAt: DateTime.tryParse((m['created_at'] ?? '') as String) ??
+            DateTime.now(),
+        updatedAt: DateTime.tryParse((m['updated_at'] ?? '') as String) ??
+            DateTime.now(),
+      );
+}
+
 class ItemCategory {
   final int? id;
 
   /// (2026-09-22) الفئة الأب — null تعني فئة رئيسية (جذر في الشجرة).
   final int? parentId;
+
+  /// (2026-09-22) القسم الذي تتبعه هذه الفئة — null ⇒ «عام/بدون قسم».
+  final int? sectionId;
   final String name;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -806,6 +875,7 @@ class ItemCategory {
   const ItemCategory({
     this.id,
     this.parentId,
+    this.sectionId,
     required this.name,
     required this.createdAt,
     required this.updatedAt,
@@ -815,6 +885,9 @@ class ItemCategory {
   /// فئة رئيسية (جذر) إن لم يكن لها أب.
   bool get isRoot => parentId == null;
 
+  /// بلا قسم محدد ⇒ تُعرض تحت «عام».
+  bool get withoutSection => sectionId == null;
+
   /// هل لها فئات فرعية؟
   bool get hasChildren => children.isNotEmpty;
 
@@ -822,6 +895,8 @@ class ItemCategory {
     int? id,
     int? parentId,
     bool clearParentId = false,
+    int? sectionId,
+    bool clearSectionId = false,
     String? name,
     DateTime? updatedAt,
     List<ItemCategory>? children,
@@ -829,6 +904,7 @@ class ItemCategory {
       ItemCategory(
         id: id ?? this.id,
         parentId: clearParentId ? null : (parentId ?? this.parentId),
+        sectionId: clearSectionId ? null : (sectionId ?? this.sectionId),
         name: name ?? this.name,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
@@ -843,6 +919,7 @@ class ItemCategory {
         if (id != null) 'id': id,
         'name': name,
         if (parentId != null) 'parent_id': parentId,
+        if (sectionId != null) 'section_id': sectionId,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
@@ -850,6 +927,7 @@ class ItemCategory {
   factory ItemCategory.fromMap(Map<String, Object?> m) => ItemCategory(
         id: m['id'] as int?,
         parentId: m['parent_id'] as int?,
+        sectionId: m['section_id'] as int?,
         name: (m['name'] ?? '') as String,
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt:
@@ -862,6 +940,9 @@ class Item {
   final int? id;
   final String name;
   final int? categoryId;
+
+  /// (2026-09-22) القسم الذي يتبعه الصنف (يُشتق من فئته إن لم يُحدَّد).
+  final int? sectionId;
   final String sku;
   final String unit;
   final double buyPrice;
@@ -880,6 +961,7 @@ class Item {
     this.id,
     required this.name,
     this.categoryId,
+    this.sectionId,
     this.sku = '',
     this.unit = 'حبة',
     this.buyPrice = 0,
@@ -918,6 +1000,8 @@ class Item {
     String? name,
     int? categoryId,
     bool clearCategoryId = false,
+    int? sectionId,
+    bool clearSectionId = false,
     String? sku,
     String? unit,
     double? buyPrice,
@@ -934,6 +1018,7 @@ class Item {
         id: id ?? this.id,
         name: name ?? this.name,
         categoryId: clearCategoryId ? null : (categoryId ?? this.categoryId),
+        sectionId: clearSectionId ? null : (sectionId ?? this.sectionId),
         sku: sku ?? this.sku,
         unit: unit ?? this.unit,
         buyPrice: buyPrice ?? this.buyPrice,
@@ -953,6 +1038,7 @@ class Item {
         if (id != null) 'id': id,
         'name': name,
         'category_id': categoryId,
+        if (sectionId != null) 'section_id': sectionId,
         'sku': sku,
         'unit': unit,
         'buy_price': buyPrice,
@@ -972,6 +1058,7 @@ class Item {
         id: m['id'] as int?,
         name: (m['name'] ?? '') as String,
         categoryId: m['category_id'] as int?,
+        sectionId: m['section_id'] as int?,
         sku: (m['sku'] ?? '') as String,
         unit: (m['unit'] ?? 'حبة') as String,
         buyPrice: ((m['buy_price'] ?? 0) as num).toDouble(),

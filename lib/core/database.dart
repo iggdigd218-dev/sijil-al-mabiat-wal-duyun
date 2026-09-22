@@ -183,6 +183,11 @@ class AppDatabase {
       )''');
 
     // ---------- فئات المخزون ----------
+    // ---------- الأقسام (المستوى الأول: قسم ← فئة ← صنف) ----------
+    await db.execute(createSectionsSql);
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sections_ws ON sections(workspace_id)');
+
     await db.execute(createItemCategoriesSql);
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_item_categories_name ON item_categories(name COLLATE NOCASE)',
@@ -449,12 +454,27 @@ class AppDatabase {
       );
   ''';
 
+  /// (2026-09-22) أقسام المتجر (المستوى الأول في الهرمية):
+  /// إلكترونيات · ملابس · مواد غذائية · خدمات … والفئات تتبع الأقسام.
+  static const createSectionsSql = '''
+      CREATE TABLE IF NOT EXISTS sections (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        name        TEXT NOT NULL,
+        icon        TEXT DEFAULT '',
+        sort_order  INTEGER NOT NULL DEFAULT 0,
+        deleted_at  TEXT DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      )''';
+
   static const createItemCategoriesSql = '''
       CREATE TABLE IF NOT EXISTS item_categories (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name       TEXT NOT NULL,
         parent_id  INTEGER NULL REFERENCES item_categories(id) ON DELETE CASCADE,
+        section_id INTEGER NULL REFERENCES sections(id) ON DELETE SET NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )''';
@@ -465,6 +485,7 @@ class AppDatabase {
         workspace_id  TEXT NOT NULL DEFAULT 'default',
         name          TEXT NOT NULL,
         category_id   INTEGER,
+        section_id    INTEGER NULL REFERENCES sections(id) ON DELETE SET NULL,
         sku           TEXT DEFAULT '',
         unit          TEXT DEFAULT 'حبة',
         buy_price     REAL NOT NULL DEFAULT 0,
@@ -1093,6 +1114,33 @@ class AppDatabase {
     try {
       await db.delete('settings',
           where: "key IN ('lanSyncEnabled', 'lastLanSync')");
+    } catch (_) {}
+  }
+
+  /// (2026-09-22) هرمية القسم → الفئة → الصنف:
+  ///   • جدول sections (أقسام المتجر).
+  ///   • section_id في item_categories و items (اختياري — الفئة بلا قسم
+  ///     تُصنَّف تلقائياً تحت «عام»).
+  /// idempotent وآمن على القواعد القديمة: كل الفئات والأصناف القائمة تبقى
+  /// بلا قسم محدد حتى يختار المستخدم، ويُنشأ قسم «عام» عند الحاجة.
+  static Future<void> migrateToV24(Database db) async {
+    await db.execute(createSectionsSql);
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_sections_ws '
+          'ON sections(workspace_id)');
+    } catch (_) {}
+    await _addColumn(db, 'item_categories', 'section_id', 'INTEGER');
+    await _addColumn(db, 'items', 'section_id', 'INTEGER');
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_cat_section '
+          'ON item_categories(section_id)');
+    } catch (_) {}
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_items_section '
+          'ON items(section_id)');
     } catch (_) {}
   }
 

@@ -44,7 +44,8 @@ int dependencyRank(SyncOperation op) {
     EntityKind.voucher || EntityKind.stockMove => 4,
     EntityKind.user || EntityKind.userPermission ||
     EntityKind.currency ||
-    EntityKind.setting =>
+    EntityKind.setting ||
+    EntityKind.section =>
       5,
     _ => 6,
   };
@@ -173,6 +174,9 @@ extension ApplyRemoteOp on Repo {
     if (op.opType == OpKind.settings && op.entityType != EntityKind.setting) {
       throw const FormatException('Invalid settings operation');
     }
+    // (2026-09-22) كيان من إصدار أحدث: نتجاهله صراحةً بدل كتابته في جدول
+    // خاطئ (كان يسقط على transactions فيُتلف البيانات).
+    if (op.entityType == EntityKind.unknown) return false;
     final seen = await txn.query('operations',
         columns: ['id'], where: 'id = ?', whereArgs: [op.id], limit: 1);
     if (seen.isNotEmpty) return false;
@@ -621,5 +625,7 @@ extension ApplyRemoteOp on Repo {
         EntityKind.conversation => 'conversations',
         EntityKind.message => 'messages',
         EntityKind.userPermission => 'user_permissions',
+        EntityKind.section => 'sections',
+        EntityKind.unknown => '__unknown__',
       };
 }

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
+import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -19,7 +20,8 @@ void main() {
         options: OpenDatabaseOptions(
             onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON')));
     await AppDatabase.createSchema(db);
-    await AppDatabase.migrateToV23(db); // عمود parent_id + فهرسه
+    await AppDatabase.migrateToV23(db);
+    await AppDatabase.migrateToV24(db); // عمود parent_id + فهرسه
     // القاعدة في الذاكرة تُشارَك بين الاختبارات في العملية نفسها — نبدأ
     // كل اختبار من صفحة بيضاء لئلا تتسرب بيانات اختبار إلى آخر.
     await db.delete('item_categories');
@@ -141,5 +143,98 @@ void main() {
     expect(back.name, 'ابن');
     // clearParentId يعيدها جذراً
     expect(c.copyWith(clearParentId: true).parentId, isNull);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (2026-09-22) الأقسام: قسم ← فئة ← صنف
+  // ════════════════════════════════════════════════════════════════════════
+
+  Section sec(String name) => Section(
+        name: name,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+  ItemCategory catOf(String name, {int? sectionId}) => ItemCategory(
+        name: name,
+        sectionId: sectionId,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+  test('SECT-01 إنشاء الأقسام وفلترة الفئات بها', () async {
+    final electronics = await repo.saveSection(sec('إلكترونيات'));
+    final food = await repo.saveSection(sec('مواد غذائية'));
+    final c1 = await repo.saveItemCategory(catOf('هواتف', sectionId: electronics));
+    await repo.saveItemCategory(catOf('تمور', sectionId: food));
+    await repo.saveItemCategory(catOf('متنوع')); // بلا قسم ⇒ «عام»
+
+    final all = await repo.sections();
+    expect(all.map((e) => e.name).toSet(),
+        {'إلكترونيات', 'مواد غذائية'},
+        reason: 'قسم «عام» لا يُنشأ تلقائياً بل عند الحاجة');
+
+    expect(await repo.itemCategories(sectionId: electronics),
+        everyElement((c) => c.sectionId == electronics || c.sectionId == null),
+        reason: 'الفئات بلا قسم تظهر ضمن أي قسم «كعام»');
+    expect(
+      (await repo.itemCategories(sectionId: electronics))
+          .map((c) => c.name)
+          .toSet(),
+      contains('هواتف'),
+    );
+    final general = await repo.itemCategories(sectionId: kGeneralSectionId);
+    expect(general.any((c) => c.id == c1), isFalse,
+        reason: 'الفئة المقيّدة بقسم لا تظهر في «عام»');
+  });
+
+  test('SECT-02 حذف قسم يُعيد فئاته إلى «عام» بلا فقدان', () async {
+    final id = await repo.saveSection(sec('قسم مؤقت'));
+    final catId = await repo.saveItemCategory(catOf('فئة تتبع القسم', sectionId: id));
+    await repo.deleteSection(id);
+
+    final c = (await repo.itemCategories()).firstWhere((e) => e.id == catId);
+    expect(c.sectionId, isNotNull, reason: 'الفئة انتقلت إلى قسم «عام»');
+    expect((await repo.sections()).any((s) => s.id == id), isFalse);
+    // قسم «عام» أُنشئ تلقائياً لاستقبال الفئات.
+    final general = await repo.sections();
+    expect(general.any((s) => s.name == Repo.generalSectionName), isTrue);
+  });
+
+  test('SECT-03 الصنف يرث قسم فئته تلقائياً', () async {
+    final sId = await repo.saveSection(sec('ملابس'));
+    final cId = await repo.saveItemCategory(catOf('قمصان', sectionId: sId));
+    final now = DateTime.now();
+    final itemId = await repo.saveItem(Item(
+      name: 'قميص قطني',
+      categoryId: cId,
+      category: 'قمصان',
+      buyPrice: 100,
+      sellPrice: 150,
+      quantity: 5,
+      createdAt: now,
+      updatedAt: now,
+    ));
+    final items = await repo.items();
+    final saved = items.firstWhere((i) => i.id == itemId);
+    expect(saved.sectionId, sId,
+        reason: 'القسم مستمد من الفئة بلا تدخل المستخدم');
+  });
+
+  test('SECT-04 حركات الأقسام مسجلة في طابور المزامنة', () async {
+    final id = await repo.saveSection(sec('خدمات'));
+    final db = await repo.database;
+    final ops = await db.query('operations',
+        where: 'entity_type = ? AND entity_id = ?',
+        whereArgs: ['section', '$id']);
+    expect(ops, isNotEmpty,
+        reason: 'إنشاء القسم مسجل بـ EntityKind.section للمزامنة');
+  });
+
+  test('SECT-05 كيان من إصدار أحدث لا يُكتب في جدول خاطئ', () async {
+    // النوع غير المعروف يعود unknown، والتطبيق يتجاهله (لا يسقط على tx).
+    expect(EntityKind.from('section').name, 'section');
+    expect(EntityKind.from('كيان_مستقبلي'), EntityKind.unknown,
+        reason: 'أمان الإصدارات المختلطة');
   });
 }

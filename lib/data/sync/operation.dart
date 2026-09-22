@@ -20,11 +20,17 @@ enum EntityKind {
   category, // تصنيفات الحسابات (جدول categories)
   conversation, // محادثات الدردشة
   message, // رسائل الدردشة (دردشة المجموعة بين الأجهزة)
-  userPermission; // (3.70) صفوف الصلاحيات المحلية user_permissions
+  unknown, // نوع من إصدار أحدث — يُتجاهل بأمان ولا يُكتب في أي جدول
+  userPermission, // (3.70) صفوف الصلاحيات المحلية user_permissions
+  section; // (2026-09-22) أقسام المتجر (sections)
 
+  /// ══ (2026-09-22) أمان الإصدارات المختلطة ══
+  /// كان أي نوع غير معروف يسقط على `tx` فيُدرج صف القسم/الكيان الجديد في
+  /// جدول transactions (بيانات تالفة). صار يعود `unknown`، والتطبيق
+  /// يتجاهله صراحةً (apply_remote) فلا يُكتب شيء في جدول خاطئ.
   static EntityKind from(String s) => EntityKind.values.firstWhere(
         (e) => e.name == s,
-        orElse: () => EntityKind.tx,
+        orElse: () => EntityKind.unknown,
       );
 }
 

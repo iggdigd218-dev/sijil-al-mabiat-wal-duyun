@@ -36,6 +36,7 @@ void main() {
             ));
         await AppDatabase.createSchema(db);
         await AppDatabase.migrateToV23(db);
+    await AppDatabase.migrateToV24(db);
         await db.delete('item_categories');
         repo = Repo(databaseProvider: () async => db);
         await repo.initSyncInfra();
@@ -45,11 +46,16 @@ void main() {
         ]);
       });
 
-  Future<void> teardown(WidgetTester tester) => tester.runAsync(() async {
+  Future<void> teardown(WidgetTester tester) async {
+    // المزوّدات تُنشئ مؤقت timeout (8 ثوانٍ) داخل المنطقة الزمنية الوهمية؛
+    // نتجاوزها زمنياً قبل إنهاء الاختبار وإلا فشل بـ «Timer is still pending».
+    await tester.pump(const Duration(seconds: 10));
+    await tester.runAsync(() async {
         container.dispose();
         await db.close();
         await tmp.delete(recursive: true);
       });
+  }
 
   Future<void> pumpScreen(WidgetTester tester) async {
     // قراءة المزوّدات داخل runAsync قبل البناء: استعلامات القاعدة الحقيقية
@@ -105,8 +111,8 @@ void main() {
     for (var i = 0; i < 12; i++) {
       await tester.pump(const Duration(milliseconds: 60));
     }
-    expect(find.text('إدارة الفئات'), findsOneWidget,
-        reason: 'اللوح يفتح بشجرة الفئات');
+    expect(find.text('الأقسام والفئات'), findsOneWidget,
+        reason: 'اللوح يفتح بهيكلية الأقسام والفئات');
     expect(find.text('مواد غذائية'), findsWidgets);
     expect(find.byTooltip('إضافة فئة فرعية'), findsWidgets,
         reason: 'لكل فئة زر إضافة فرعية');
@@ -117,7 +123,11 @@ void main() {
     // qa_inventory_tree_test.dart (TREE-05) بقاعدة حقيقية — هنا نتأكد
     // فقط أن اللوح يوفر الأزرار الثلاثة لكل فئة.
     await tester.tapAt(const Offset(5, 5)); // إغلاق اللوح.
-    await tester.pumpAndSettle();
+    // نترك مهلة كافية لانتهاء حركة الإغلاق وأي مؤقت مرتبط بالصحيفة،
+    // وإلا يفشل الاختبار بـ «A Timer is still pending».
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
     await tester.binding.setSurfaceSize(null);
     await teardown(tester);
   });

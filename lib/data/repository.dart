@@ -4350,6 +4350,155 @@ class Repo {
   // ==================== فئات الأصناف ====================
 
   /// فئات المخزون فقط؛ لا تختلط بتصنيفات الحسابات.
+  // ══════════════════════════════════════════════════════════════════════
+  // (2026-09-22) أقسام المتجر — المستوى الأول: قسم ← فئة ← صنف
+  // ══════════════════════════════════════════════════════════════════════
+
+  /// اسم القسم الافتراضي: الفئة بلا قسم تُصنَّف تحته تلقائياً في العرض.
+  static const String generalSectionName = 'عام';
+
+  Future<List<Section>> sections() async {
+    final db = await _db;
+    final rows = await db.query(
+      'sections',
+      where: "deleted_at IS NULL OR deleted_at = ''",
+      orderBy: 'sort_order ASC, name COLLATE NOCASE ASC',
+    );
+    return rows.map(Section.fromMap).toList();
+  }
+
+  /// قسم «عام»: يُنشأ مرة واحدة ليكون ملاذ الفئات بلا قسم.
+  Future<int> ensureGeneralSection() async {
+    final db = await _db;
+    final existing = await db.query('sections',
+        where: 'name = ?', whereArgs: [generalSectionName], limit: 1);
+    if (existing.isNotEmpty) return existing.first['id'] as int;
+    final now = DateTime.now();
+    final id = await db.insert('sections', {
+      'id': newGlobalId(),
+      'name': generalSectionName,
+      'icon': 'apps',
+      'sort_order': 0,
+      'deleted_at': '',
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    await queueOperation(
+      entityType: EntityKind.section,
+      entityId: '$id',
+      opType: OpKind.create,
+      payload: {
+        'id': id,
+        'name': generalSectionName,
+        'icon': 'apps',
+        'sort_order': 0,
+      },
+    );
+    return id;
+  }
+
+  Future<int> saveSection(Section section) async {
+    await _ensureCan(section.id == null ? 'add_tx' : 'edit_tx');
+    final name = section.name.trim();
+    if (name.isEmpty) throw ArgumentError('اسم القسم مطلوب');
+    final db = await _db;
+    final duplicate = await db.query(
+      'sections',
+      columns: ['id'],
+      where: 'name = ? COLLATE NOCASE AND id != ?',
+      whereArgs: [name, section.id ?? -1],
+      limit: 1,
+    );
+    if (duplicate.isNotEmpty) throw StateError('يوجد قسم بهذا الاسم مسبقًا');
+
+    final now = DateTime.now();
+    late final int id;
+    if (section.id == null) {
+      id = await db.insert('sections', {
+        'id': newGlobalId(),
+        'name': name,
+        'icon': section.icon,
+        'sort_order': section.sortOrder,
+        'deleted_at': '',
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      });
+      await queueOperation(
+        entityType: EntityKind.section,
+        entityId: '$id',
+        opType: OpKind.create,
+        payload: {
+          'id': id,
+          'name': name,
+          'icon': section.icon,
+          'sort_order': section.sortOrder,
+        },
+      );
+    } else {
+      id = section.id!;
+      await db.update(
+        'sections',
+        {
+          'name': name,
+          'icon': section.icon,
+          'sort_order': section.sortOrder,
+          'updated_at': now.toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await queueOperation(
+        entityType: EntityKind.section,
+        entityId: '$id',
+        opType: OpKind.update,
+        payload: {
+          'id': id,
+          'name': name,
+          'icon': section.icon,
+          'sort_order': section.sortOrder,
+        },
+      );
+    }
+    await logActivity('حفظ قسم: $name', 'section', '$id');
+    return id;
+  }
+
+  /// حذف قسم: فئاته تُعاد إلى «عام» (تُنشأ إن لم تكن موجودة) بدل محوها.
+  Future<void> deleteSection(int id) async {
+    await _ensureCan('delete_tx');
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    final general = await ensureGeneralSection();
+    await db.transaction((txn) async {
+      await txn.update(
+        'item_categories',
+        {'section_id': general, 'updated_at': now},
+        where: 'section_id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'items',
+        {'section_id': general, 'updated_at': now},
+        where: 'section_id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'sections',
+        {'deleted_at': now, 'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final rec = await newRecorder(txn);
+      await rec.record(
+        entityType: EntityKind.section,
+        entityId: '$id',
+        opType: OpKind.delete_,
+        payload: {'id': id},
+      );
+    });
+    await logActivity('حذف قسم', 'section', '$id');
+  }
+
   /// (2026-09-22) فئات الأصناف.
   /// [rootsOnly] = true  ⇒ الفئات الرئيسية فقط (parent_id IS NULL).
   /// [parentId]          ⇒ الأبناء المباشرون لفئة بعينها.
@@ -4357,15 +4506,23 @@ class Repo {
   Future<List<ItemCategory>> itemCategories({
     bool rootsOnly = false,
     int? parentId,
+    int? sectionId,
   }) async {
     final db = await _db;
     String? where;
     List<Object?>? args;
-    if (rootsOnly) {
+    if (rootsOnly && sectionId != null) {
+      where = 'parent_id IS NULL AND (section_id = ? OR section_id IS NULL)';
+      args = [sectionId];
+    } else if (rootsOnly) {
       where = 'parent_id IS NULL';
     } else if (parentId != null) {
       where = 'parent_id = ?';
       args = [parentId];
+    } else if (sectionId != null) {
+      // قسم محدد: فئاته + الفئات بلا قسم (تظهر تحت «عام»).
+      where = 'section_id = ? OR section_id IS NULL';
+      args = [sectionId];
     }
     final rows = await db.query(
       'item_categories',
@@ -4421,6 +4578,7 @@ class Repo {
         'id': newGlobalId(),
         'name': name,
         if (category.parentId != null) 'parent_id': category.parentId,
+        if (category.sectionId != null) 'section_id': category.sectionId,
         'created_at': category.createdAt.toIso8601String(),
         'updated_at': now,
       });
@@ -4432,6 +4590,7 @@ class Repo {
           'id': id,
           'name': name,
           if (category.parentId != null) 'parent_id': category.parentId,
+          if (category.sectionId != null) 'section_id': category.sectionId,
           'created_at': category.createdAt.toIso8601String(),
           'updated_at': now,
         },
@@ -4471,6 +4630,7 @@ class Repo {
         {
           'name': name,
           'parent_id': parentId,
+          'section_id': category.sectionId,
           'updated_at': now,
         },
         where: 'id = ?',
@@ -4491,6 +4651,7 @@ class Repo {
           'id': id,
           'name': name,
           'parent_id': parentId,
+          'section_id': category.sectionId,
           'updated_at': now,
         },
       );
@@ -4588,19 +4749,32 @@ class Repo {
             'كل صنف يجب أن يملك باركوداً فريداً.');
       }
     }
+    // (2026-09-22) القسم: إن لم يُحدَّد للصنف صراحةً نستمدّه من فئته،
+    // فتبقى الهرمية (قسم ← فئة ← صنف) متسقة بلا جهد من المستخدم.
+    Item itemToSave = it;
+    if (it.sectionId == null && it.categoryId != null) {
+      final catRows = await db.query('item_categories',
+          columns: ['section_id'],
+          where: 'id = ?',
+          whereArgs: [it.categoryId],
+          limit: 1);
+      final sid = catRows.isEmpty ? null : catRows.first['section_id'] as int?;
+      if (sid != null) itemToSave = it.copyWith(sectionId: sid);
+    }
     late final int id;
-    if (it.id == null) {
-      id = await db.insert('items', it.toMap()..['id'] = newGlobalId());
+    if (itemToSave.id == null) {
+      id = await db.insert(
+          'items', itemToSave.toMap()..['id'] = newGlobalId());
       await queueOperation(
         entityType: EntityKind.item,
         entityId: '$id',
         opType: OpKind.create,
-        payload: it.toMap()..['id'] = id,
+        payload: itemToSave.toMap()..['id'] = id,
       );
-      await logActivity('إضافة صنف: ${it.name}', 'item', '$id');
+      await logActivity('إضافة صنف: ${itemToSave.name}', 'item', '$id');
     } else {
-      id = it.id!;
-      final map = it.toMap();
+      id = itemToSave.id!;
+      final map = itemToSave.toMap();
       await db.update('items', map, where: 'id = ?', whereArgs: [id]);
       await queueOperation(
         entityType: EntityKind.item,

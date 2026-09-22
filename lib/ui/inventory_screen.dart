@@ -1,6 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p_;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
@@ -27,6 +30,9 @@ import 'widgets.dart';
 
 /// مفتاح حفظ نمط العرض المفضل في جدول settings.
 const String kInventoryViewModeKey = 'inventory.viewMode';
+
+// (kGeneralSectionId مُعرَّف في core/models.dart — تجميعة «عام» للفئات
+// بلا قسم، وتُستخدم في المخزون ونقطة البيع).
 
 /// معايير الفرز المتاحة في شاشة الأصناف.
 enum _SortKey {
@@ -90,6 +96,7 @@ class InventoryScreen extends ConsumerStatefulWidget {
 class _InventoryScreenState extends ConsumerState<InventoryScreen> {
   String _mode = 'list';
   _SortKey _sort = _SortKey.nameAsc;
+  int? _sectionId; // القسم المختار (null = الكل، -1 = «عام/بدون قسم»)
   int? _rootId; // الفئة الرئيسية المختارة (null = الكل)
   int? _subId; // الفئة الفرعية المختارة (null = كل ما تحت الرئيسية)
 
@@ -117,6 +124,12 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     } catch (_) {}
   }
 
+  void _selectSection(int? id) => setState(() {
+        _sectionId = id;
+        _rootId = null;
+        _subId = null;
+      });
+
   void _selectRoot(int? id) => setState(() {
         _rootId = id;
         _subId = null;
@@ -127,6 +140,19 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
   /// معرّفات الفئات المطلوب عرضها (null = كل الأصناف).
   Set<int>? _selectedIds(List<ItemCategory> roots) {
     if (_subId != null) return <int>{_subId!};
+    // قسم محدد بلا فئة: كل أصناف فئاته (أو الفئات بلا قسم في «عام»).
+    if (_rootId == null && _sectionId != null) {
+      final ids = <int>{
+        for (final c in _rootsOfSection(roots))
+          if (c.id != null) c.id!,
+      };
+      for (final c in _rootsOfSection(roots)) {
+        for (final sub in c.children) {
+          if (sub.id != null) ids.add(sub.id!);
+        }
+      }
+      return ids;
+    }
     if (_rootId == null) return null;
     final ids = <int>{_rootId!};
     for (final r in roots) {
@@ -136,6 +162,16 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       }
     }
     return ids;
+  }
+
+  /// فئات القسم المختار: قسم محدد ⇒ فئاته؛ «عام» ⇒ الفئات بلا قسم؛
+  /// «الكل» ⇒ كل الفئات الرئيسية.
+  List<ItemCategory> _rootsOfSection(List<ItemCategory> roots) {
+    if (_sectionId == null) return roots;
+    if (_sectionId == kGeneralSectionId) {
+      return roots.where((c) => c.sectionId == null).toList();
+    }
+    return roots.where((c) => c.sectionId == _sectionId).toList();
   }
 
   List<Item> _visibleItems(List<ItemCategory> roots, List<Item> items) {
@@ -156,53 +192,118 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     return out;
   }
 
+  /// شارة التصنيف: «اسم القسم • اسم الفئة» (القسم يُحذف إن لم يوجد).
+  String _badgeOf(
+    Item item,
+    List<ItemCategory> roots,
+    List<Section> sections,
+  ) {
+    String catName = item.category.trim();
+    int? sectionId;
+    final cid = item.categoryId;
+    if (cid != null) {
+      for (final r in roots) {
+        if (r.id == cid) {
+          catName = r.name;
+          sectionId = r.sectionId;
+          break;
+        }
+        for (final c in r.children) {
+          if (c.id == cid) {
+            catName = c.name;
+            sectionId = c.sectionId ?? r.sectionId;
+            break;
+          }
+        }
+      }
+    }
+    sectionId ??= item.sectionId;
+    String? secName;
+    for (final sec in sections) {
+      if (sec.id == sectionId) {
+        secName = sec.name;
+        break;
+      }
+    }
+    if (secName != null && secName.isNotEmpty) {
+      return catName.isEmpty ? secName : '$secName • $catName';
+    }
+    return catName;
+  }
+
   @override
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(itemCategoryTreeProvider);
     final itemsAsync = ref.watch(itemsProvider);
+    final sectionsAsync = ref.watch(sectionsProvider);
+    final sections = sectionsAsync.valueOrNull ?? const <Section>[];
 
-    return Column(
+    return Stack(
       children: [
-        _InventoryToolbar(
-          mode: _mode,
-          sort: _sort,
-          onModeChanged: _setMode,
-          onSortChanged: (k) => setState(() => _sort = k),
-          onAddCategory: () => openItemCategoryForm(context, ref),
-        ),
-        categoriesAsync.when(
-          loading: () => const SizedBox(
-            height: 54,
-            child: Center(child: SizedBox.shrink()),
-          ),
-          error: (_, __) => const SizedBox.shrink(),
-          data: (roots) => _CategoryChipBar(
-            roots: roots,
-            rootId: _rootId,
-            subId: _subId,
-            onRoot: _selectRoot,
-            onSub: _selectSub,
-            onAddCategory: () => openItemCategoryForm(context, ref),
-            onManage: () => openCategoryManager(context, ref, roots),
-          ),
-        ),
-        Expanded(
-          child: categoriesAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => EmptyState(
-              icon: Icons.error_outline,
-              title: 'تعذّر تحميل الفئات',
-              message: '$e',
+        Column(
+          children: [
+            _InventoryToolbar(
+              mode: _mode,
+              sort: _sort,
+              onModeChanged: _setMode,
+              onSortChanged: (k) => setState(() => _sort = k),
+              onAddCategory: () => openItemCategoryForm(context, ref),
             ),
-            data: (roots) => itemsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => EmptyState(
-                icon: Icons.error_outline,
-                title: 'تعذّر تحميل الأصناف',
-                message: '$e',
+            categoriesAsync.when(
+              loading: () => const SizedBox(height: 54),
+              error: (_, __) => const SizedBox.shrink(),
+              data: (roots) => _HierarchyChipBar(
+                sections: sections,
+                roots: roots,
+                sectionId: _sectionId,
+                rootId: _rootId,
+                subId: _subId,
+                onSection: _selectSection,
+                onRoot: _selectRoot,
+                onSub: _selectSub,
+                onAddCategory: (sectionId) => openItemCategoryForm(
+                  context,
+                  ref,
+                  parentId: null,
+                  sectionId: sectionId,
+                ),
+                onAddSection: () => openSectionForm(context, ref),
+                onManage: () =>
+                    openCategoryManager(context, ref, roots, sections),
               ),
-              data: (items) => _buildBody(context, roots, items),
             ),
+            Expanded(
+              child: categoriesAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'تعذّر تحميل الفئات',
+                  message: '$e',
+                ),
+                data: (roots) => itemsAsync.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (e, _) => EmptyState(
+                    icon: Icons.error_outline,
+                    title: 'تعذّر تحميل الأصناف',
+                    message: '$e',
+                  ),
+                  data: (items) => _buildBody(context, roots, items, sections),
+                ),
+              ),
+            ),
+          ],
+        ),
+        // زر الإضافة العائم الذكي: نقرة = صنف جديد، ضغطة مطوّلة = قائمة.
+        PositionedDirectional(
+          bottom: 16,
+          end: 16,
+          child: _SmartInventoryFab(
+            onAddItem: () => openItemForm(context, ref,
+                categoryId: _subId ?? _rootId, sectionId: _sectionId),
+            onAddCategory: () => openItemCategoryForm(context, ref,
+                sectionId: _sectionId == kGeneralSectionId ? null : _sectionId),
+            onAddSection: () => openSectionForm(context, ref),
           ),
         ),
       ],
@@ -213,6 +314,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     BuildContext context,
     List<ItemCategory> roots,
     List<Item> items,
+    List<Section> sections,
   ) {
     if (roots.isEmpty && items.isEmpty) {
       return EmptyState(
@@ -238,6 +340,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
             setState(() {
               _rootId = null;
               _subId = null;
+              _sectionId = null;
             });
           },
           icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
@@ -259,12 +362,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
               crossAxisSpacing: 10,
               childAspectRatio: cols >= 4 ? .95 : .82,
             ),
-            itemBuilder: (_, i) => _ItemGridCard(item: visible[i]),
+            itemBuilder: (_, i) => _ItemGridCard(
+                  item: visible[i],
+                  badge: _badgeOf(visible[i], roots, sections),
+                ),
           )
         : ListView.builder(
             padding: pad,
             itemCount: visible.length,
-            itemBuilder: (_, i) => _ItemTile(item: visible[i]),
+            itemBuilder: (_, i) => _ItemTile(
+                  item: visible[i],
+                  badge: _badgeOf(visible[i], roots, sections),
+                ),
           );
     return RefreshIndicator(
       onRefresh: () async => bump(ref),
@@ -284,7 +393,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                 ),
                 const Spacer(),
                 Text(
-                  '${roots.length} فئة رئيسية',
+                  '${sections.length} قسم · ${roots.length} فئة',
                   style: TextStyle(
                     fontSize: 12.5,
                     color: AppColors.text3Of(context),
@@ -499,6 +608,7 @@ Future<void> openCategoryManager(
   BuildContext context,
   WidgetRef ref,
   List<ItemCategory> roots,
+  List<Section> sections,
 ) =>
     showModalBottomSheet<void>(
       context: context,
@@ -511,17 +621,184 @@ Future<void> openCategoryManager(
         final h = MediaQuery.sizeOf(ctx).height * .70;
         return SizedBox(
           height: h,
-          child: _CategoryManager(roots: roots),
+          child: _CategoryManager(roots: roots, sections: sections),
         );
       },
     ).whenComplete(() => bump(ref));
 
+/// (2026-09-22) شريط التنقل المزدوج (Dual-Pill):
+///   الصف الأول: أقسام المتجر [الكل] [عام] [قسم…] + زر [+ قسم].
+///   الصف الثاني: فئات القسم المختار + [كل الفئات].
+///   الصف الثالث: الفئات الفرعية للفئة المختارة (إن وُجدت).
+class _HierarchyChipBar extends StatelessWidget {
+  final List<Section> sections;
+  final List<ItemCategory> roots;
+  final int? sectionId;
+  final int? rootId;
+  final int? subId;
+  final ValueChanged<int?> onSection;
+  final ValueChanged<int?> onRoot;
+  final ValueChanged<int?> onSub;
+  final void Function(int? sectionId) onAddCategory;
+  final VoidCallback onAddSection;
+  final VoidCallback onManage;
+
+  const _HierarchyChipBar({
+    required this.sections,
+    required this.roots,
+    required this.sectionId,
+    required this.rootId,
+    required this.subId,
+    required this.onSection,
+    required this.onRoot,
+    required this.onSub,
+    required this.onAddCategory,
+    required this.onAddSection,
+    required this.onManage,
+  });
+
+  List<ItemCategory> _rootsOfSection() {
+    if (sectionId == null) return roots;
+    if (sectionId == kGeneralSectionId) {
+      return roots.where((c) => c.sectionId == null).toList();
+    }
+    return roots.where((c) => c.sectionId == sectionId).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleRoots = _rootsOfSection();
+    final selectedRoot = visibleRoots.cast<ItemCategory?>().firstWhere(
+          (c) => c?.id == rootId,
+          orElse: () => null,
+        );
+    final subs = selectedRoot?.children ?? const <ItemCategory>[];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ===== الصف الأول: الأقسام =====
+        SizedBox(
+          height: 46,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              _Chip(
+                label: 'الكل',
+                icon: Icons.apps_rounded,
+                selected: sectionId == null,
+                onTap: () => onSection(null),
+              ),
+              _Chip(
+                label: 'عام',
+                icon: Icons.folder_shared_outlined,
+                selected: sectionId == kGeneralSectionId,
+                onTap: () => onSection(kGeneralSectionId),
+              ),
+              for (final sec in sections)
+                _Chip(
+                  label: sec.name,
+                  icon: Icons.storefront_outlined,
+                  selected: sectionId == sec.id,
+                  onTap: () => onSection(sec.id),
+                  onLongPress: onManage,
+                ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.add_business_outlined, size: 17),
+                  label: const Text('قسم'),
+                  onPressed: onAddSection,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.tune_rounded, size: 17),
+                  label: const Text('إدارة'),
+                  onPressed: onManage,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // ===== الصف الثاني: فئات القسم =====
+        SizedBox(
+          height: 42,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              _Chip(
+                label: 'كل الفئات',
+                small: true,
+                selected: rootId == null,
+                onTap: () => onRoot(null),
+              ),
+              for (final c in visibleRoots)
+                _Chip(
+                  label: c.name,
+                  small: true,
+                  icon: c.hasChildren
+                      ? Icons.account_tree_outlined
+                      : Icons.folder_outlined,
+                  selected: rootId == c.id,
+                  badge: c.children.length,
+                  onTap: () => onRoot(c.id),
+                  onLongPress: onManage,
+                ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.add, size: 16),
+                  label: const Text('فئة', style: TextStyle(fontSize: 12)),
+                  onPressed: () => onAddCategory(
+                    sectionId == kGeneralSectionId ? null : sectionId,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // ===== الصف الثالث: الفئات الفرعية =====
+        if (subs.isNotEmpty)
+          SizedBox(
+            height: 40,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                _Chip(
+                  label: 'الكل',
+                  small: true,
+                  selected: subId == null,
+                  onTap: () => onSub(null),
+                ),
+                for (final sub in subs)
+                  _Chip(
+                    label: sub.name,
+                    small: true,
+                    selected: subId == sub.id,
+                    onTap: () => onSub(sub.id),
+                  ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 2),
+      ],
+    );
+  }
+}
+
 class _CategoryManager extends ConsumerWidget {
   final List<ItemCategory> roots;
+  final List<Section> sections;
 
-  const _CategoryManager({required this.roots});
+  const _CategoryManager({required this.roots, required this.sections});
 
-  Future<void> _delete(BuildContext context, WidgetRef ref, ItemCategory c) async {
+  Future<void> _deleteCategory(
+      BuildContext context, WidgetRef ref, ItemCategory c) async {
     final ok = await confirmDialog(
       context,
       title: 'حذف الفئة',
@@ -537,20 +814,51 @@ class _CategoryManager extends ConsumerWidget {
     await ref.read(repoProvider).deleteItemCategory(c.id!);
     bump(ref);
     if (context.mounted) {
-      Navigator.pop(context); // أغلق اللوح بعد الحذف لتحديث الشجرة.
+      Navigator.pop(context);
       showSnack(context, 'حُذفت الفئة وبقيت الأصناف محفوظة');
+    }
+  }
+
+  Future<void> _deleteSection(
+      BuildContext context, WidgetRef ref, Section sec) async {
+    final owned = roots.where((c) => c.sectionId == sec.id).length;
+    final ok = await confirmDialog(
+      context,
+      title: 'حذف القسم',
+      message: 'سيتم حذف القسم «${sec.name}» وإعادة $owned فئة إلى قسم «عام». '
+          'لا تُحذف الفئات ولا الأصناف.',
+      confirmText: 'حذف القسم',
+      danger: true,
+    );
+    if (ok != true || sec.id == null) return;
+    await ref.read(repoProvider).deleteSection(sec.id!);
+    bump(ref);
+    if (context.mounted) {
+      Navigator.pop(context);
+      showSnack(context, 'حُذف القسم وأُعيدت فئاته إلى «عام»');
     }
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (roots.isEmpty) {
+    if (roots.isEmpty && sections.isEmpty) {
       return const EmptyState(
         icon: Icons.folder_off_outlined,
-        title: 'لا توجد فئات بعد',
-        message: 'أضف فئة رئيسية أولاً ثم نظّم تحتها الفئات الفرعية.',
+        title: 'لا توجد أقسام أو فئات بعد',
+        message: 'أضف قسماً رئيسياً، ثم فئاته، ثم أصنافه.',
       );
     }
+    // تجميع الفئات حسب القسم (الفئات بلا قسم ⇒ مجموعة «عام»).
+    final bySection = <int?, List<ItemCategory>>{};
+    for (final c in roots) {
+      bySection.putIfAbsent(c.sectionId, () => <ItemCategory>[]).add(c);
+    }
+    final groups = <({int? id, String name})>[
+      for (final sec in sections) (id: sec.id, name: sec.name),
+      if (bySection.containsKey(null))
+        (id: null, name: 'عام (بدون قسم)'),
+    ];
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 18),
       children: [
@@ -562,34 +870,96 @@ class _CategoryManager extends ConsumerWidget {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  'إدارة الفئات',
+                  'الأقسام والفئات',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
                 ),
               ),
               TextButton.icon(
-                onPressed: () => openItemCategoryForm(context, ref),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('فئة رئيسية'),
+                onPressed: () => openSectionForm(context, ref),
+                icon: const Icon(Icons.add_business_outlined, size: 18),
+                label: const Text('قسم'),
               ),
             ],
           ),
         ),
-        for (final root in roots) ...[
-          _CategoryManagerTile(
-            category: root,
-            level: 0,
-            onEdit: () => openItemCategoryForm(context, ref, category: root),
-            onAddSub: () =>
-                openItemCategoryForm(context, ref, parentId: root.id),
-            onDelete: () => _delete(context, ref, root),
+        for (final g in groups) ...[
+          // بطاقة القسم: زر سريع لإضافة فئة لهذا القسم.
+          Card(
+            margin: const EdgeInsets.only(bottom: 6),
+            color: AppColors.primarySoftOf(context).withValues(alpha: .45),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              child: Row(
+                children: [
+                  Icon(Icons.storefront_outlined,
+                      size: 20, color: AppColors.primaryOf(context)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      g.name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 14.5),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => openItemCategoryForm(context, ref,
+                        sectionId: g.id),
+                    icon: const Icon(Icons.add, size: 17),
+                    label: const Text('فئة', style: TextStyle(fontSize: 12.5)),
+                  ),
+                  if (g.id != null) ...[
+                    IconButton(
+                      tooltip: 'تعديل القسم',
+                      icon: const Icon(Icons.edit_outlined, size: 19),
+                      onPressed: () {
+                        final sec = sections.firstWhere(
+                            (x) => x.id == g.id,
+                            orElse: () => Section(
+                                id: g.id,
+                                name: g.name,
+                                createdAt: DateTime.now(),
+                                updatedAt: DateTime.now()));
+                        openSectionForm(context, ref, section: sec);
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'حذف القسم',
+                      icon: Icon(Icons.delete_outline,
+                          size: 19, color: AppColors.dangerOf(context)),
+                      onPressed: () {
+                        final sec = sections.firstWhere(
+                            (x) => x.id == g.id,
+                            orElse: () => Section(
+                                id: g.id,
+                                name: g.name,
+                                createdAt: DateTime.now(),
+                                updatedAt: DateTime.now()));
+                        _deleteSection(context, ref, sec);
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          for (final sub in root.children)
+          // فئات هذا القسم: لكل فئة «+ إضافة صنف مباشرة هنا».
+          for (final c in bySection[g.id] ?? const <ItemCategory>[])
             _CategoryManagerTile(
-              category: sub,
-              level: 1,
-              onEdit: () => openItemCategoryForm(context, ref, category: sub),
-              onAddSub: () => openItemCategoryForm(context, ref, parentId: sub.id),
-              onDelete: () => _delete(context, ref, sub),
+              category: c,
+              level: 0,
+              sectionId: g.id,
+              onAddItem: () => openItemForm(context, ref,
+                  categoryId: c.id, sectionId: g.id),
+              onEdit: () => openItemCategoryForm(context, ref, category: c),
+              onAddSub: () =>
+                  openItemCategoryForm(context, ref, parentId: c.id),
+              onDelete: () => _deleteCategory(context, ref, c),
+            ),
+          if ((bySection[g.id] ?? const []).isEmpty)
+            const Padding(
+              padding: EdgeInsetsDirectional.only(start: 12, bottom: 8),
+              child: Text('لا توجد فئات في هذا القسم',
+                  style: TextStyle(fontSize: 12)),
             ),
         ],
       ],
@@ -600,6 +970,8 @@ class _CategoryManager extends ConsumerWidget {
 class _CategoryManagerTile extends StatelessWidget {
   final ItemCategory category;
   final int level;
+  final int? sectionId;
+  final VoidCallback onAddItem;
   final VoidCallback onEdit;
   final VoidCallback onAddSub;
   final VoidCallback onDelete;
@@ -607,9 +979,11 @@ class _CategoryManagerTile extends StatelessWidget {
   const _CategoryManagerTile({
     required this.category,
     required this.level,
+    required this.onAddItem,
     required this.onEdit,
     required this.onAddSub,
     required this.onDelete,
+    this.sectionId,
   });
 
   @override
@@ -636,6 +1010,12 @@ class _CategoryManagerTile extends StatelessWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // إضافة صنف مباشرة داخل الفئة (بلا تنقل بين الشاشات).
+              IconButton(
+                tooltip: 'إضافة صنف هنا',
+                icon: const Icon(Icons.add_box_outlined, size: 20),
+                onPressed: onAddItem,
+              ),
               IconButton(
                 tooltip: 'إضافة فئة فرعية',
                 icon: const Icon(Icons.add_circle_outline, size: 20),
@@ -660,111 +1040,206 @@ class _CategoryManagerTile extends StatelessWidget {
   }
 }
 
-/// شريط الفئات الأفقي (رئيسية + فرعية للفئة المختارة).
-class _CategoryChipBar extends StatelessWidget {
-  final List<ItemCategory> roots;
-  final int? rootId;
-  final int? subId;
-  final ValueChanged<int?> onRoot;
-  final ValueChanged<int?> onSub;
+/// زر الإضافة العائم الذكي: نقرة = صنف جديد، ضغطة مطوّلة = قائمة خيارات.
+class _SmartInventoryFab extends StatelessWidget {
+  final VoidCallback onAddItem;
   final VoidCallback onAddCategory;
-  final VoidCallback onManage;
+  final VoidCallback onAddSection;
 
-  const _CategoryChipBar({
-    required this.roots,
-    required this.rootId,
-    required this.subId,
-    required this.onRoot,
-    required this.onSub,
+  const _SmartInventoryFab({
+    required this.onAddItem,
     required this.onAddCategory,
-    required this.onManage,
+    required this.onAddSection,
   });
 
-  @override
-  Widget build(BuildContext context) {
-    final selectedRoot = roots.cast<ItemCategory?>().firstWhere(
-          (r) => r?.id == rootId,
-          orElse: () => null,
-        );
-    final subs = selectedRoot?.children ?? const <ItemCategory>[];
+  Future<void> _menu(BuildContext context) async {
+    await HapticFeedback.mediumImpact();
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: const Text('إضافة صنف جديد'),
+              onTap: () {
+                Navigator.pop(ctx);
+                onAddItem();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('إضافة فئة سريعة'),
+              onTap: () {
+                Navigator.pop(ctx);
+                onAddCategory();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_business_outlined),
+              title: const Text('إضافة قسم جديد'),
+              onTap: () {
+                Navigator.pop(ctx);
+                onAddSection();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 46,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+  @override
+  Widget build(BuildContext context) => FloatingActionButton(
+        heroTag: 'inventoryFab',
+        backgroundColor: const Color(0xFF0F766E),
+        foregroundColor: Colors.white,
+        tooltip: 'إضافة صنف (اضغط مطولاً للخيارات)',
+        onPressed: () async {
+          await HapticFeedback.lightImpact();
+          onAddItem();
+        },
+        child: GestureDetector(
+          onLongPress: () => _menu(context),
+          child: const Icon(Icons.add_rounded, size: 28),
+        ),
+      );
+}
+
+/// نموذج إضافة/تعديل قسم (ورقة سفلية سريعة).
+Future<int?> openSectionForm(
+  BuildContext context,
+  WidgetRef ref, {
+  Section? section,
+}) =>
+    showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: _SectionForm(section: section),
+      ),
+    ).then((id) {
+      if (id != null) bump(ref);
+      return id;
+    });
+
+class _SectionForm extends ConsumerStatefulWidget {
+  final Section? section;
+  const _SectionForm({this.section});
+
+  @override
+  ConsumerState<_SectionForm> createState() => _SectionFormState();
+}
+
+class _SectionFormState extends ConsumerState<_SectionForm> {
+  late final TextEditingController _name;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.section?.name ?? '');
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = 'اسم القسم مطلوب');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final now = DateTime.now();
+      final section = (widget.section ??
+              Section(name: name, createdAt: now, updatedAt: now))
+          .copyWith(name: name);
+      final id = await ref.read(repoProvider).saveSection(section);
+      if (mounted) Navigator.pop(context, id);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = '$e'.replaceFirst('Bad state: ', '');
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              _Chip(
-                label: 'الكل',
-                icon: Icons.apps_rounded,
-                selected: rootId == null,
-                onTap: () => onRoot(null),
-              ),
-              for (final r in roots)
-                GestureDetector(
-                  // ضغطة مطوّلة = إدارة الفئة (تعديل/حذف/إضافة فرعية).
-                  onLongPress: onManage,
-                  child: _Chip(
-                    label: r.name,
-                    icon: r.hasChildren
-                        ? Icons.account_tree_outlined
-                        : Icons.folder_outlined,
-                    selected: rootId == r.id,
-                    badge: r.children.length,
-                    onTap: () => onRoot(r.id),
+              Row(
+                children: [
+                  const Icon(Icons.add_business_outlined,
+                      color: Color(0xFF0F766E)),
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.section == null ? 'قسم جديد' : 'تعديل القسم',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                ),
-              // زر مدمج لإضافة فئة جديدة.
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.add, size: 17),
-                  label: const Text('فئة جديدة'),
-                  onPressed: onAddCategory,
-                ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
               ),
-              // زر مدمج لإدارة الفئات (تعديل/حذف/إضافة فرعية).
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.tune_rounded, size: 17),
-                  label: const Text('إدارة'),
-                  onPressed: onManage,
+              TextField(
+                controller: _name,
+                autofocus: true,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: 'اسم القسم *',
+                  hintText: 'مثل: إلكترونيات، ملابس، مواد غذائية',
+                  prefixIcon: const Icon(Icons.storefront_outlined),
+                  errorText: _error,
+                ),
+                onSubmitted: (_) => _saving ? null : _save(),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F766E),
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: Text(
+                      widget.section == null ? 'حفظ القسم' : 'حفظ التعديل'),
                 ),
               ),
             ],
           ),
         ),
-        if (subs.isNotEmpty)
-          SizedBox(
-            height: 42,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                _Chip(
-                  label: 'الكل',
-                  small: true,
-                  selected: subId == null,
-                  onTap: () => onSub(null),
-                ),
-                for (final s in subs)
-                  _Chip(
-                    label: s.name,
-                    small: true,
-                    selected: subId == s.id,
-                    onTap: () => onSub(s.id),
-                  ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 2),
-      ],
-    );
-  }
+      );
 }
 
 class _Chip extends StatelessWidget {
@@ -774,6 +1249,7 @@ class _Chip extends StatelessWidget {
   final bool small;
   final int badge;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _Chip({
     required this.label,
@@ -782,14 +1258,13 @@ class _Chip extends StatelessWidget {
     this.icon,
     this.small = false,
     this.badge = 0,
+    this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     final primary = AppColors.primaryOf(context);
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 6),
-      child: FilterChip(
+    final chip = FilterChip(
         selected: selected,
         showCheckmark: false,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -828,7 +1303,12 @@ class _Chip extends StatelessWidget {
           ],
         ),
         onSelected: (_) => onTap(),
-      ),
+      );
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: onLongPress == null
+          ? chip
+          : GestureDetector(onLongPress: onLongPress, child: chip),
     );
   }
 }
@@ -836,7 +1316,8 @@ class _Chip extends StatelessWidget {
 /// بطاقة الصنف في نمط القائمة التفصيلي.
 class _ItemTile extends ConsumerWidget {
   final Item item;
-  const _ItemTile({required this.item});
+  final String badge;
+  const _ItemTile({required this.item, this.badge = ''});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -880,10 +1361,10 @@ class _ItemTile extends ConsumerWidget {
                             icon: Icons.qr_code_2_rounded,
                             text: item.sku,
                           ),
-                        if (item.category.isNotEmpty)
+                        if (badge.isNotEmpty)
                           _Meta(
-                            icon: Icons.folder_outlined,
-                            text: item.category,
+                            icon: Icons.sell_outlined,
+                            text: badge,
                           ),
                         _Meta(icon: Icons.straighten, text: item.unit),
                       ],
@@ -974,7 +1455,8 @@ class _ItemTile extends ConsumerWidget {
 /// بطاقة الصنف في نمط الشبكة.
 class _ItemGridCard extends ConsumerWidget {
   final Item item;
-  const _ItemGridCard({required this.item});
+  final String badge;
+  const _ItemGridCard({required this.item, this.badge = ''});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1039,9 +1521,9 @@ class _ItemGridCard extends ConsumerWidget {
                       color: AppColors.teal,
                     ),
                   ),
-                  if (item.sku.isNotEmpty)
+                  if (badge.isNotEmpty)
                     Text(
-                      item.sku,
+                      badge,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1152,6 +1634,7 @@ Future<int?> openItemCategoryForm(
   WidgetRef ref, {
   ItemCategory? category,
   int? parentId,
+  int? sectionId,
 }) =>
     showModalBottomSheet<int>(
       context: context,
@@ -1159,7 +1642,11 @@ Future<int?> openItemCategoryForm(
       useSafeArea: true,
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: _ItemCategoryForm(category: category, presetParentId: parentId),
+        child: _ItemCategoryForm(
+          category: category,
+          presetParentId: parentId,
+          presetSectionId: sectionId,
+        ),
       ),
     ).then((id) {
       if (id != null) bump(ref);
@@ -1172,7 +1659,11 @@ class _ItemCategoryForm extends ConsumerStatefulWidget {
   /// (2026-09-22) فئة أب مبدئية عند الإضافة من داخل فئة.
   final int? presetParentId;
 
-  const _ItemCategoryForm({this.category, this.presetParentId});
+  /// (2026-09-22) قسم مبدئي عند الإضافة من شريط قسم محدد.
+  final int? presetSectionId;
+
+  const _ItemCategoryForm(
+      {this.category, this.presetParentId, this.presetSectionId});
 
   @override
   ConsumerState<_ItemCategoryForm> createState() => _ItemCategoryFormState();
@@ -1181,6 +1672,7 @@ class _ItemCategoryForm extends ConsumerStatefulWidget {
 class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
   late final TextEditingController _name;
   int? _parentId;
+  int? _sectionId;
   String? _error;
   bool _saving = false;
 
@@ -1189,6 +1681,7 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
     super.initState();
     _name = TextEditingController(text: widget.category?.name ?? '');
     _parentId = widget.category?.parentId ?? widget.presetParentId;
+    _sectionId = widget.category?.sectionId ?? widget.presetSectionId;
   }
 
   /// الفئات الممنوع اختيارها كأب: الفئة نفسها وكل سلالتها (منع الدوران).
@@ -1233,7 +1726,7 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
       final now = DateTime.now();
       final category = (widget.category ??
               ItemCategory(name: name, createdAt: now, updatedAt: now))
-          .copyWith(name: name, parentId: _parentId);
+          .copyWith(name: name, parentId: _parentId, sectionId: _sectionId);
       final id = await ref.read(repoProvider).saveItemCategory(category);
       if (mounted) Navigator.pop(context, id);
     } catch (e) {
@@ -1281,6 +1774,38 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
                   errorText: _error,
                 ),
                 onSubmitted: (_) => _saving ? null : _save(),
+              ),
+              const SizedBox(height: 12),
+              // (2026-09-22) القسم: «عام» يعني بلا قسم.
+              Consumer(
+                builder: (ctx, rref, _) {
+                  final secs =
+                      rref.watch(sectionsProvider).valueOrNull ?? const [];
+                  return DropdownButtonFormField<int?>(
+                    initialValue: _sectionId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'القسم',
+                      hintText: 'عام (بدون قسم)',
+                      prefixIcon: Icon(Icons.storefront_outlined),
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('عام (بدون قسم)'),
+                      ),
+                      for (final sec in secs)
+                        DropdownMenuItem<int?>(
+                          value: sec.id,
+                          child: Text(sec.name,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                    ],
+                    onChanged:
+                        _saving ? null : (v) => setState(() => _sectionId = v),
+                  );
+                },
               ),
               const SizedBox(height: 12),
               // (2026-09-22) اختيار الفئة الأب: فارغ = فئة رئيسية.
@@ -1353,6 +1878,7 @@ Future<void> openItemForm(
   WidgetRef ref, {
   Item? item,
   int? categoryId,
+  int? sectionId,
 }) =>
     showModalBottomSheet<void>(
       context: context,
@@ -1361,14 +1887,19 @@ Future<void> openItemForm(
       builder: (_) => Padding(
         padding:
             EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: _ItemForm(item: item, presetCategoryId: categoryId),
+        child: _ItemForm(
+          item: item,
+          presetCategoryId: categoryId,
+          presetSectionId: sectionId,
+        ),
       ),
     ).then((_) => bump(ref));
 
 class _ItemForm extends ConsumerStatefulWidget {
   final Item? item;
+  final int? presetSectionId;
   final int? presetCategoryId;
-  const _ItemForm({this.item, this.presetCategoryId});
+  const _ItemForm({this.item, this.presetCategoryId, this.presetSectionId});
 
   @override
   ConsumerState<_ItemForm> createState() => _ItemFormState();
@@ -1384,6 +1915,9 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   late final TextEditingController _min;
   late final TextEditingController _notes;
   int? _categoryId;
+  int? _sectionId;
+  String? _image;
+  bool _saving = false;
   String? _error;
   String? _categoryError;
 
@@ -1392,6 +1926,8 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
     super.initState();
     final i = widget.item;
     _categoryId = widget.presetCategoryId ?? i?.categoryId;
+    _sectionId = widget.presetSectionId ?? i?.sectionId;
+    _image = i?.image ?? '';
     _name = TextEditingController(text: i?.name ?? '');
     _sku = TextEditingController(text: i?.sku ?? '');
     _unit = TextEditingController(text: i?.unit ?? 'حبة');
@@ -1428,6 +1964,25 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
     BuildContext context,
     AsyncValue<List<ItemCategory>> state,
   ) {
+    // الفئات المعروضة: فئات القسم المختار + الفئات بلا قسم (عام).
+    final scoped = state.maybeWhen(
+          data: (list) => _sectionId == null
+              ? list
+              : list
+                  .where((c) =>
+                      c.sectionId == _sectionId || c.sectionId == null)
+                  .toList(),
+          orElse: () => null,
+        ) ??
+        (state.valueOrNull ?? const <ItemCategory>[]);
+    return _categoryPickerBody(context, state, scoped);
+  }
+
+  Widget _categoryPickerBody(
+    BuildContext context,
+    AsyncValue<List<ItemCategory>> state,
+    List<ItemCategory> scoped,
+  ) {
     return state.when(
       loading: () => const Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
@@ -1441,7 +1996,8 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
         ),
         child: Text('$e', maxLines: 2, overflow: TextOverflow.ellipsis),
       ),
-      data: (categories) {
+      data: (_) {
+        final categories = scoped;
         final validId =
             categories.any((c) => c.id == _categoryId) ? _categoryId : null;
         if (categories.isEmpty) {
@@ -1534,10 +2090,14 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
 
     final now = DateTime.now();
     final base = widget.item;
+    setState(() => _saving = true);
+    await HapticFeedback.mediumImpact();
     final it =
         (base ?? Item(name: name, createdAt: now, updatedAt: now)).copyWith(
       name: name,
       categoryId: category.id,
+      sectionId: _sectionId ?? category.sectionId,
+      image: _image ?? '',
       sku: _sku.text.trim(),
       unit: _unit.text.trim().isEmpty ? 'حبة' : _unit.text.trim(),
       buyPrice: _buyV,
@@ -1559,7 +2119,26 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
           error: true,
         );
       }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// اختيار صورة الصنف (معرض الجهاز) — تُحفظ كمسار نسبي داخل المستندات.
+  Future<void> _pickImage() async {
+    try {
+      final picked =
+          await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 900);
+      if (picked == null) return;
+      final dir = await MediaPaths.ensureDocsDir();
+      if (dir == null || dir.isEmpty) return;
+      final ext = p_.extension(picked.path);
+      final name =
+          'item_${DateTime.now().millisecondsSinceEpoch}$ext';
+      final dest = p_.join(dir, name);
+      await File(picked.path).copy(dest);
+      if (mounted) setState(() => _image = MediaPaths.toRelative(dest));
+    } catch (_) {}
   }
 
   @override
@@ -1591,7 +2170,94 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 10),
+              // (2026-09-22) معاينة دائرية لصورة الصنف مع زر رفع سريع.
+              Row(
+                children: [
+                  Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 34,
+                        backgroundColor: AppColors.primarySoftOf(context),
+                        backgroundImage: (_image ?? '').isNotEmpty &&
+                                MediaPaths.exists(_image ?? '')
+                            ? FileImage(
+                                File(MediaPaths.toAbsolute(_image ?? '')))
+                            : null,
+                        child: (_image ?? '').isEmpty ||
+                                !MediaPaths.exists(_image ?? '')
+                            ? Icon(Icons.inventory_2_outlined,
+                                size: 30,
+                                color: AppColors.primaryOf(context))
+                            : null,
+                      ),
+                      PositionedDirectional(
+                        bottom: 0,
+                        end: 0,
+                        child: Material(
+                          color: const Color(0xFF0F766E),
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _pickImage,
+                            child: const Padding(
+                              padding: EdgeInsets.all(5),
+                              child: Icon(Icons.photo_camera_outlined,
+                                  size: 16, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _image?.isNotEmpty == true
+                          ? 'صورة الصنف مضافة — اضغط الكاميرا لتغييرها'
+                          : 'أضف صورة للصنف (اختياري) لتسهيل تمييزه في البيع',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.text2Of(context),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // (2026-09-22) القسم ← الفئة: اختيار القسم يفلتر الفئات.
+              Consumer(
+                builder: (ctx, rref, _) {
+                  final secs = rref.watch(sectionsProvider).valueOrNull ?? const [];
+                  return DropdownButtonFormField<int?>(
+                    initialValue: _sectionId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'القسم',
+                      hintText: 'عام (بدون قسم)',
+                      prefixIcon: Icon(Icons.storefront_outlined),
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('عام (بدون قسم)'),
+                      ),
+                      for (final sec in secs)
+                        DropdownMenuItem<int?>(
+                          value: sec.id,
+                          child: Text(sec.name,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                    ],
+                    onChanged: (v) => setState(() {
+                      _sectionId = v;
+                      _categoryId = null;
+                    }),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
               TextField(
                 controller: _name,
                 autofocus: widget.item == null,
@@ -1745,9 +2411,15 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _save,
+                  onPressed: _saving ? null : _save,
                   icon: const Icon(Icons.save_outlined),
-                  label: const Text('حفظ الصنف'),
+                  label: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('حفظ الصنف'),
                 ),
               ),
             ],

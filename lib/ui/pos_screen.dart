@@ -48,6 +48,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
   int? _selectedCategoryId;
+  // (2026-09-22) القسم المختار في الشريط اللمسي (null = الكل، -1 = عام).
+  int? _selectedSectionId;
   String _searchQuery = '';
   final TextEditingController _searchCtrl = TextEditingController();
   bool _saving = false;
@@ -647,9 +649,24 @@ class _PosScreenState extends ConsumerState<PosScreen>
         ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
     final cur = currencies.first;
 
+    final catsInSection = <int>{
+      for (final c in categories)
+        if (_selectedSectionId == null ||
+            (_selectedSectionId == kGeneralSectionId
+                ? c.sectionId == null
+                : c.sectionId == _selectedSectionId))
+          c.id!,
+    };
     final filteredItems = allItems.where((item) {
       if (_selectedCategoryId != null &&
           item.categoryId != _selectedCategoryId) {
+        return false;
+      }
+      // القسم: صنف ضمن فئات القسم المختار (أو بلا قسم في «عام»).
+      if (_selectedSectionId != null &&
+          _selectedCategoryId == null &&
+          (item.categoryId == null ||
+              !catsInSection.contains(item.categoryId))) {
         return false;
       }
       if (_searchQuery.isNotEmpty) {
@@ -709,31 +726,74 @@ class _PosScreenState extends ConsumerState<PosScreen>
           ),
         ),
 
-        // فئات الأصناف
+        // (2026-09-22) شريط الأقسام اللمسي السريع (قسم ← فئة).
+        Consumer(
+          builder: (ctx, rref, _) {
+            final sections =
+                rref.watch(sectionsProvider).valueOrNull ?? const [];
+            if (sections.isEmpty) return const SizedBox.shrink();
+            return SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                children: [
+                  _posChip(
+                    label: 'كل الأقسام',
+                    icon: Icons.apps_rounded,
+                    selected: _selectedSectionId == null,
+                    onTap: () => setState(() {
+                      _selectedSectionId = null;
+                      _selectedCategoryId = null;
+                    }),
+                  ),
+                  _posChip(
+                    label: 'عام',
+                    icon: Icons.folder_shared_outlined,
+                    selected: _selectedSectionId == kGeneralSectionId,
+                    onTap: () => setState(() {
+                      _selectedSectionId = kGeneralSectionId;
+                      _selectedCategoryId = null;
+                    }),
+                  ),
+                  for (final sec in sections)
+                    _posChip(
+                      label: sec.name,
+                      icon: Icons.storefront_outlined,
+                      selected: _selectedSectionId == sec.id,
+                      onTap: () => setState(() {
+                        _selectedSectionId = sec.id;
+                        _selectedCategoryId = null;
+                      }),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+
+        // فئات الأصناف (التابعة للقسم المختار)
         SizedBox(
           height: 44,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: FilterChip(
-                  label: const Text('الكل'),
-                  selected: _selectedCategoryId == null,
-                  onSelected: (_) => setState(() => _selectedCategoryId = null),
-                ),
+              _posChip(
+                label: 'الكل',
+                selected: _selectedCategoryId == null,
+                onTap: () => setState(() => _selectedCategoryId = null),
               ),
               for (final cat in categories)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: FilterChip(
-                    label: Text(cat.name),
+                if (_selectedSectionId == null ||
+                    (_selectedSectionId == kGeneralSectionId
+                        ? cat.sectionId == null
+                        : cat.sectionId == _selectedSectionId))
+                  _posChip(
+                    label: cat.name,
                     selected: _selectedCategoryId == cat.id,
-                    onSelected: (_) =>
-                        setState(() => _selectedCategoryId = cat.id),
+                    onTap: () => setState(() => _selectedCategoryId = cat.id),
                   ),
-                ),
             ],
           ),
         ),
@@ -750,8 +810,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
                 )
               : GridView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 6, 12, 90),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    // 2 على الهاتف · 3 على اللوحي · 4 على الحاسوب.
+                    crossAxisCount: MediaQuery.sizeOf(context).width >= 900
+                        ? 4
+                        : (MediaQuery.sizeOf(context).width >= 600 ? 3 : 2),
                     childAspectRatio: 1.15,
                     crossAxisSpacing: 10,
                     mainAxisSpacing: 10,
@@ -893,6 +956,25 @@ class _PosScreenState extends ConsumerState<PosScreen>
     );
   }
 
+  /// شريحة لمسية موحّدة لشريط الأقسام والفئات في نقطة البيع.
+  Widget _posChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    IconData? icon,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: FilterChip(
+          label: Text(label),
+          avatar: icon == null ? null : Icon(icon, size: 16),
+          selected: selected,
+          showCheckmark: false,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          onSelected: (_) => onTap(),
+        ),
+      );
+
   Widget _buildCartBottomBar() {
     final currencies =
         ref.watch(currenciesProvider).valueOrNull ?? kDefaultCurrencies;
@@ -944,10 +1026,23 @@ class _PosScreenState extends ConsumerState<PosScreen>
               onPressed: _clearCart,
             ),
             const SizedBox(width: 8),
+            // (2026-09-22) دفع سريع: نقداً بضغطة، أو آجل على عميل.
+            OutlinedButton.icon(
+              onPressed: () => _quickSettle(_PosPayment.credit),
+              icon: const Icon(Icons.person_outline, size: 18),
+              label: const Text('آجل'),
+            ),
+            const SizedBox(width: 6),
             FilledButton.icon(
+              onPressed: () => _quickSettle(_PosPayment.cash),
+              icon: const Icon(Icons.payments_outlined, size: 18),
+              label: const Text('نقداً'),
+            ),
+            const SizedBox(width: 6),
+            FilledButton.tonalIcon(
               onPressed: _openCheckoutSheet,
-              icon: const Icon(Icons.shopping_cart_checkout),
-              label: const Text('إتمام الفاتورة'),
+              icon: const Icon(Icons.shopping_cart_checkout, size: 18),
+              label: const Text('تفاصيل'),
             ),
           ],
         ),

@@ -1048,6 +1048,8 @@ class SyncEngine {
               EntityKind.user => 'users',
               EntityKind.currency => 'currencies',
               EntityKind.setting => 'settings',
+              EntityKind.section => 'sections',
+              EntityKind.unknown => '(غير معروف)',
               EntityKind.category => 'categories',
               EntityKind.conversation => 'conversations',
               EntityKind.message => 'messages',

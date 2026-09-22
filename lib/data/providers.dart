@@ -649,6 +649,15 @@ final messagesProvider = FutureProvider.family<List<ChatMessage>, int>((
 
 // ==================== الأصناف والمخزون ====================
 
+/// (2026-09-22) أقسام المتجر (المستوى الأول: قسم ← فئة ← صنف).
+final sectionsProvider = FutureProvider<List<Section>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref
+      .read(repoProvider)
+      .sections()
+      .timeout(const Duration(seconds: 8), onTimeout: () => []);
+});
+
 /// فئات الأصناف التي تظهر أولًا في شاشة المخزون.
 final itemCategoriesProvider = FutureProvider<List<ItemCategory>>((ref) async {
   ref.watch(refreshProvider);
