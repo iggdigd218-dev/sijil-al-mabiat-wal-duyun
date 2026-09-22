@@ -19,6 +19,8 @@ import 'data/providers.dart';
 import 'data/repository.dart';
 import 'data/sync/firebase_auth_service.dart';
 import 'data/sync/sync_engine.dart';
+import 'services/floating_pos_overlay.dart';
+import 'services/floating_pos_service.dart';
 import 'ui/splash.dart';
 
 Future<void> main() async {
@@ -113,7 +115,31 @@ Future<void> main() async {
       child: const NexoraApp(),
     ),
   );
+
+  // الزر العائم للاستعلام والبيع السريع (أندرويد فقط): يربط مستمع الرسائل
+  // بالمستودع ثم يعيد إظهار الفقاعة إن كان المستخدم قد فعّلها على الجهاز.
+  unawaited(_initFloatingPos(repo));
 }
+
+/// تهيئة الزر العائم — لا تُسقط الإقلاع إن فشلت (جهاز بلا صلاحية/غير مدعوم).
+Future<void> _initFloatingPos(Repo repo) async {
+  if (!FloatingPosService.supported) return;
+  try {
+    await FloatingPosService.instance.bind(repo);
+    await FloatingPosService.instance.restore();
+  } catch (e) {
+    debugPrint('floating pos init: $e');
+  }
+}
+
+/// نقطة دخول محرك النافذة العائمة (الفقاعة + بطاقة البيع السريع).
+///
+/// يجب أن تبقى في مكتبة الجذر (main.dart) ليجدها `DartEntrypoint` الأصلي
+/// بالاسم "overlayMain". المحرك الذي يُشغّلها **لا تُسجَّل فيه إضافات
+/// فلاتر**، لذا الواجهة هنا خفيفة وصرفة: كل البيانات تمرّ عبر رسائل JSON
+/// إلى التطبيق الأم الذي يقرأ SQLite ويكتبها.
+@pragma('vm:entry-point')
+void overlayMain() => runQuickPosOverlay();
 
 class NexoraApp extends ConsumerWidget {
   const NexoraApp({super.key});

@@ -19,6 +19,7 @@ import '../data/sync/auto_backup.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/sync/google_auth_service.dart';
 import '../data/sync/workspace_service.dart';
+import '../services/floating_pos_service.dart';
 import 'splash.dart' show SplashScreen;
 import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
@@ -1035,6 +1036,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                   ),
                                 ),
                               ],
+                            ),
+                          ],
+                          // (الزر العائم) أندرويد فقط: فقاعة الاستعلام والبيع
+                          // السريع فوق التطبيقات الأخرى + بلاطة الستارة.
+                          if (Platform.isAndroid) ...[
+                            const SizedBox(height: 18),
+                            const _Collapsible(
+                              title: 'الزر العائم للبيع السريع',
+                              icon: Icons.picture_in_picture_alt_rounded,
+                              color: Color(0xFF0F766E),
+                              children: [_FloatingPosSection()],
                             ),
                           ],
                           // (حساب Google) هوية المؤسسة الدائمة — للمدير/المستقل فقط.
@@ -2172,6 +2184,172 @@ class _AutoBackupControlsState extends ConsumerState<_AutoBackupControls> {
           style: TextStyle(fontSize: 10.5, height: 1.5),
         ),
       ],
+    );
+  }
+}
+
+/// (أندرويد فقط) مفتاح تشغيل الزر العائم للاستعلام والبيع السريع.
+///
+/// الحالة تُحفظ في SharedPreferences **محلياً على هذا الجهاز فقط** — لا تُزامن
+/// مع بقية الأجهزة لأنها صلاحية نظام تخصّ الجهاز نفسه.
+class _FloatingPosSection extends StatefulWidget {
+  const _FloatingPosSection();
+
+  @override
+  State<_FloatingPosSection> createState() => _FloatingPosSectionState();
+}
+
+class _FloatingPosSectionState extends State<_FloatingPosSection> {
+  bool? _enabled;
+  bool _permission = false;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final enabled = await FloatingPosService.isEnabled();
+    final perm = await FloatingPosService.instance.hasPermission();
+    if (!mounted) return;
+    setState(() {
+      _enabled = enabled;
+      _permission = perm;
+    });
+  }
+
+  Future<void> _setOn(bool value) async {
+    setState(() => _busy = true);
+    if (value) {
+      var perm = await FloatingPosService.instance.hasPermission();
+      if (!perm) perm = await FloatingPosService.instance.requestPermission();
+      if (!perm) {
+        if (mounted) {
+          setState(() {
+            _busy = false;
+            _permission = false;
+            _enabled = false;
+          });
+          showSnack(
+            context,
+            'يجب منح صلاحية «الظهور فوق التطبيقات الأخرى» من شاشة أندرويد.',
+            error: true,
+          );
+        }
+        await FloatingPosService.setEnabled(false);
+        return;
+      }
+      final ok = await FloatingPosService.instance.show();
+      if (!ok) {
+        if (mounted) {
+          setState(() {
+            _busy = false;
+            _enabled = false;
+          });
+          showSnack(context, 'تعذّر تشغيل الزر العائم.', error: true);
+        }
+        await FloatingPosService.setEnabled(false);
+        return;
+      }
+      await FloatingPosService.setEnabled(true);
+      if (mounted) {
+        showSnack(context, 'تم تشغيل الزر العائم ⚡');
+      }
+    } else {
+      await FloatingPosService.instance.hide();
+      await FloatingPosService.setEnabled(false);
+    }
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _enabled = value;
+      if (value) _permission = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_enabled == null) {
+      return const SizedBox(
+        height: 48,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.picture_in_picture_alt_rounded,
+                  color: Color(0xFF0F766E)),
+              title: const Text(
+                'تفعيل الزر العائم للبيع السريع فوق التطبيقات',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                _permission
+                    ? 'الفقاعة تبقى ظاهرة فوق أي تطبيق للاستعلام الفوري والبيع.'
+                    : 'صلاحية «الظهور فوق التطبيقات» غير ممنوحة حالياً.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: _permission ? Colors.black54 : const Color(0xFFB91C1C),
+                ),
+              ),
+              value: _enabled!,
+              onChanged: _busy ? null : _setOn,
+            ),
+            if (!_permission) ...[
+              const SizedBox(height: 4),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F766E),
+                ),
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        final granted = await FloatingPosService
+                            .instance
+                            .requestPermission();
+                        if (!mounted) return;
+                        setState(() => _permission = granted);
+                        if (granted) {
+                          await FloatingPosService.instance.show();
+                          await FloatingPosService.setEnabled(true);
+                          if (mounted) {
+                            setState(() => _enabled = true);
+                          }
+                        }
+                      },
+                icon: const Icon(Icons.security_rounded, size: 16),
+                label: const Text('منح صلاحية الظهور'),
+              ),
+            ],
+            const SizedBox(height: 6),
+            const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline_rounded,
+                    size: 15, color: Color(0xFF0F766E)),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'يمكنك أيضاً تفعيل واستخدام الميزة مباشرة من لوحة '
+                    'الإعدادات السريعة (الستارة) أعلى هاتفك عبر بلاطة '
+                    '«استعلام نكسورا».',
+                    style: TextStyle(fontSize: 10.5, height: 1.6),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
     );
   }
 }
