@@ -182,6 +182,31 @@ class Repo {
 
   String get requireWorkspaceId => _workspaceId ?? defaultWorkspaceId;
 
+  /// ══ (2026-09-22 — توجيه العمليات) ══
+  /// تثبيت الربط بمساحة محددة: يضمن وجود صفها، ويكتب الإعداد الصريح،
+  /// ويحدّث الكاش — حتى يكتب المُسجِّل ويقرأ النقل من المسار الذي تقرأه
+  /// بقية أجهزة المجموعة. لا يمس بيانات الأعمال.
+  Future<void> bindWorkspaceId(String workspaceId) async {
+    final id = workspaceId.trim();
+    if (id.isEmpty) return;
+    final db = await _db;
+    final rows = await db.query('workspaces',
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    if (rows.isEmpty) {
+      await db.insert('workspaces', {
+        'id': id,
+        'name': 'متجري',
+        'owner_google_id': '',
+        'owner_email': '',
+        'owner_name': '',
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+    }
+    await setSetting('sync.workspaceId', id);
+    await refreshWorkspaceId();
+  }
+
   /// (الاسترداد الذاتي) تحديث كاش معرف المساحة بعد تبديل مستعاد.
   void debugSetWorkspaceId(String ws) => _workspaceId = ws;
 
@@ -305,7 +330,31 @@ class Repo {
     final row = await ownDeviceRow();
     if (row == null) return null;
     final uid = row['user_id'] as int?;
-    if (uid == null) return null;
+    if (uid == null) {
+      // ══ (2026-09-22) العضو بلا مستخدم مُعيَّن لا يُقفل بالكامل ══
+      // تعيين المدير يصل عبر عملية مستخدم (EntityKind.user) في مساحة
+      // المجموعة؛ إن كانت المساحة خاطئة أو العملية لم تصل بعد ظلّ العضو
+      // بلا أي صلاحية (fail-closed) فتبدو «الصلاحيات لا تُطبق». الجسر:
+      // الدور المحفوظ في سجل الجهاز (user_role/role) يمنح الصلاحيات
+      // الافتراضية لدوره فوراً — بلا انتظار الشبكة — وهي نفسها التي
+      // يرسلها المدير لاحقاً.
+      final code = '${row['user_role'] ?? row['role'] ?? ''}'.trim();
+      if (code.isEmpty) return null;
+      final role = UserRole.values.firstWhere(
+        (r) => r.code == code,
+        orElse: () => UserRole.viewer,
+      );
+      return AppUser(
+        id: null,
+        name: '${row['name'] ?? 'عضو'}',
+        role: role,
+        permissions: defaultPerms(role),
+        active: true,
+        isMe: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+    }
     return userById(uid);
   }
 

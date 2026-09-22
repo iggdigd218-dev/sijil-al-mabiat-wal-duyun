@@ -47,12 +47,14 @@ class _FakeCloud {
         final v = store[key];
         if (v != null) return _json(jsonEncode(v), 200);
         final prefix = key.replaceAll('.json', '');
+        final shallow = req.url.queryParameters['shallow'] == 'true';
         final children = <String, Object?>{};
         for (final e in store.entries) {
           if (e.key.startsWith('$prefix/')) {
-            final child =
-                e.key.substring(prefix.length + 1).replaceAll('.json', '');
-            children[Uri.decodeComponent(child)] = e.value;
+            var child = e.key.substring(prefix.length + 1);
+            if (shallow) child = child.split('/').first;
+            child = child.replaceAll('.json', '');
+            children[Uri.decodeComponent(child)] = shallow ? true : e.value;
           }
         }
         if (children.isNotEmpty) return _json(jsonEncode(children), 200);
@@ -413,5 +415,61 @@ void main() {
     final own = await row('DEVICE-OWNER2');
     expect(own['is_paired'], 1, reason: 'المالك لا يُمسّ');
     expect('${own['expelled_at']}', isEmpty);
+  });
+
+  test('ROUTE-01 السحابة تحسم المساحة: الربط المحلي الخاطئ يُصوَّب', () async {
+    final c = _FakeCloud();
+    final me = (await repo.settings())['sync.deviceId'] ?? '';
+    // السحابة تضعنا في مساحة واحدة (ونحن محلياً في أخرى).
+    c.put('$_root/roster/$me.json', {
+      'id': me,
+      'is_paired': 1,
+      'last_sync_at': DateTime.now().toIso8601String(),
+      'revoked_at': '',
+      'expelled_at': '',
+    });
+    // نُزيح الربط المحلي عمداً إلى مساحة أخرى (حال الجهاز المعطوب).
+    await db.insert('workspaces', {
+      'id': 'WS-STALE',
+      'name': 'قديم',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+    await repo.setSetting('sync.workspaceId', 'WS-STALE');
+    await repo.refreshWorkspaceId();
+    expect(repo.requireWorkspaceId, 'WS-STALE');
+
+    final bound = await http.runWithClient(
+      () => CloudJoin.reconcileWorkspaceBinding(repo, backendUrl: _url),
+      c.client,
+    );
+    expect(bound, _ws, reason: 'المساحة تُحسم من السحابة لا من المحلي');
+    await repo.refreshWorkspaceId();
+    expect(repo.requireWorkspaceId, _ws);
+    expect((await repo.settings())['sync.workspaceId'], _ws);
+  });
+
+  test('ROUTE-02 findWorkspaceOfDevice يرجّح المساحة الأحدث نشاطاً', () async {
+    final c = _FakeCloud();
+    final me = (await repo.settings())['sync.deviceId'] ?? '';
+    c.put('$_root/roster/$me.json', {
+      'id': me,
+      'last_sync_at': '2026-09-22T05:00:00.000',
+    });
+    c.put('/workspaces/WS-OLD/roster/$me.json', {
+      'id': me,
+      'last_sync_at': '2026-09-01T05:00:00.000',
+    });
+    final found = await http.runWithClient(
+      () => CloudJoin.findWorkspaceOfDevice(_url, me),
+      c.client,
+    );
+    expect(found, _ws, reason: 'الأحدث نشاطاً يفوز على المساحة القديمة');
+    // مساحة بلا سجل لنا لا تُؤخذ.
+    final none = await http.runWithClient(
+      () => CloudJoin.findWorkspaceOfDevice(_url, 'DEVICE-NOBODY'),
+      c.client,
+    );
+    expect(none, isEmpty);
   });
 }

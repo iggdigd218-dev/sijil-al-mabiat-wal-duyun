@@ -213,6 +213,9 @@ class CloudFirebaseTransport implements SyncTransport {
     final r = resolver ?? ConflictResolver();
     int applied = 0;
     int maxTsMs = lastTsMs;
+    // (2026-09-22) عمليات مُهمَلة لأنها من مساحة أخرى — كانت تُسقط بصمت.
+    int droppedOtherWs = 0;
+    String droppedSample = '';
     final ourId = await ensureDeviceId(repo);
     // رسائل دردشة وصلت في هذه السحبة — تُشعر بعد إغلاق المعاملة.
     final chatOps = <SyncOperation>[];
@@ -308,7 +311,11 @@ class CloudFirebaseTransport implements SyncTransport {
           final v = entry.value;
           if (v is! Map) continue;
           final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
-          if (op.workspaceId != workspaceId) continue;
+          if (op.workspaceId != workspaceId) {
+            droppedOtherWs++;
+            if (droppedSample.isEmpty) droppedSample = op.workspaceId;
+            continue;
+          }
           // المؤشر يتقدم دائماً بـ server_ts (ختم خادم فيربيس الموثوق) —
           // في الحالتين (ترشيح خادمي بـ orderBy=server_ts أو جلب كامل).
           // العمليات القديمة جداً بلا server_ts تسقط لـ timestamp كاحتياط.
@@ -451,6 +458,15 @@ class CloudFirebaseTransport implements SyncTransport {
       hasMore = serverFiltered && entries.length >= kPullPageSize;
       startAfterKey = lastKey;
       // إذا كانت الصفحة تحتوي على عمليات بنفس timestamp نكرر بالصفحة التالية بstartAfter.
+
+    // (2026-09-22) عمليات أُسقطت لأنها من مساحة أخرى: كانت تُهمَل بصمت
+    // فيبدو السحب ناجحاً ولا يصل شيء — نسجّلها لتظهر صراحةً.
+    if (droppedOtherWs > 0) {
+      try {
+        await repo.setSetting('sync.droppedOtherWs', '$droppedOtherWs');
+        await repo.setSetting('sync.droppedOtherWsSample', droppedSample);
+      } catch (_) {}
+    }
     }
 
     if (maxTsMs > lastTsMs) {

@@ -1906,6 +1906,191 @@ class CloudJoin {
     }
   }
 
+  /// ══ (2026-09-22 — توجيه العمليات بين الأجهزة) ══
+  /// أين يسكن هذا الجهاز في السحابة؟ يمسح سجلات (roster) كل المساحات
+  /// ويعيد المساحة التي تضم معرّف جهازنا، مرجَّحة بالأحدث نشاطاً
+  /// (last_sync_at ثم last_seen_at/updated_at).
+  ///
+  /// هذه هي الحقيقة المشتركة بين الأجهزة: إن اختلف عنها الربط المحلي
+  /// كتب الجهاز عملياته في مسار لا يقرأه أحد — «الأسهم خضراء ولا شيء
+  /// ينتقل» — وهو بالضبط العطل المُبلَّغ عنه. تُستدعى قبل بناء النقل
+  /// السحابي في كل دورة، وعند ربط الحساب.
+  static Future<String> findWorkspaceOfDevice(
+    String backendUrl,
+    String deviceId, {
+    int maxScan = 40,
+  }) async {
+    if (deviceId.isEmpty) return '';
+    final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+    // مفاتيح المساحات فقط (shallow) — قراءة الشجرة كاملة تحمل كل
+    // العمليات فتثقل الشبكة بلا داع.
+    Map<String, dynamic>? wsMap;
+    try {
+      final res = await http
+          .get(Uri.parse('$base/workspaces.json?shallow=true'))
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final body = utf8.decode(res.bodyBytes).trim();
+        if (body.isNotEmpty && body != 'null') {
+          final d = jsonDecode(body);
+          if (d is Map) {
+            wsMap = d.map((k, v) => MapEntry('$k', v));
+          }
+        }
+      }
+    } catch (_) {}
+    final ids = <String>[];
+    wsMap?.forEach((k, _) {
+      if (k.isEmpty || k == '_registry') return;
+      if (ids.length < maxScan) ids.add(k);
+    });
+    if (ids.isEmpty) return '';
+    String best = '';
+    int bestTs = -1;
+    for (final ws in ids) {
+      Map? row;
+      try {
+        final r = await _getJson(
+            '${_root(backendUrl, ws)}/roster/'
+            '${Uri.encodeComponent(deviceId)}.json');
+        if (r is Map) row = r;
+      } catch (_) {}
+      if (row == null) continue;
+      int ms(Object? v) =>
+          DateTime.tryParse('${v ?? ''}')?.millisecondsSinceEpoch ?? 0;
+      final ts = [
+        ms(row['last_sync_at']),
+        ms(row['last_seen_at']),
+        ms(row['updated_at']),
+      ].reduce((a, b) => a > b ? a : b);
+      if (ts > bestTs) {
+        bestTs = ts;
+        best = ws;
+      }
+    }
+    return best;
+  }
+
+  /// ══ (2026-09-22 — مساحة واحدة لكل جهاز) ══
+  /// البصمة (فهرس device_index) تعرّف الجهاز ولو اختلف بريد جوجل:
+  /// نعيد استخدام مساحته السابقة نفسها بدل إنشاء مساحة جديدة لكل
+  /// تسجيل — فلا يتفرّق أعضاء المجموعة في مساحات متوازية.
+  static Future<String> workspaceOfDeviceIndex(
+    Repo repo,
+    String backendUrl,
+  ) async {
+    try {
+      final fp = await DeviceRegistry.fingerprintKey(repo);
+      if (fp.isEmpty) return '';
+      final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
+      final rawRec = await _getJson(
+          '$base/workspaces/_registry/device_index/'
+          '${Uri.encodeComponent(fp)}.json');
+      final rec = rawRec == null
+          ? const <String, Object?>{}
+          : Map<String, Object?>.from(rawRec);
+      if (rec.isEmpty) return '';
+      final ws = (rec['workspaceId'] ?? '').toString().trim();
+      if (ws.isEmpty || ws == 'default') return '';
+      // المساحة ما زالت قائمة؟
+      final alive = await _getJson('${_root(backendUrl, ws)}/subscription') ??
+          await _getJson('${_root(backendUrl, ws)}.json?shallow=true');
+      if (alive == null) return '';
+      return ws;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// تهيئة مساحة الجهاز للعمل «كأنها أول مرة»: تُفرغ العمليات
+  /// والدعوات والطلبات والدردشة واللقطات والنسخ، وتُبقي رخصة
+  /// الاشتراك وسجل جهازنا فقط — فلا يبدأ الجهاز على بيانات قديمة.
+  /// يُستدعى فقط عند بداية جديدة (لا بيانات أعمال محلية).
+  static Future<void> resetWorkspaceContents(
+    String backendUrl,
+    String workspaceId, {
+    String keepDeviceId = '',
+  }) async {
+    final root = _root(backendUrl, workspaceId);
+    for (final node in const [
+      'operations',
+      'invites',
+      'joinRequests',
+      'joinSnapshot',
+      'chat',
+      'backup',
+      'notifications',
+      'evictions',
+    ]) {
+      try {
+        await _delete('$root/$node.json');
+      } catch (_) {}
+    }
+    // السجل: نبقي صف جهازنا ونحذف بقية الأجهزة (أعضاء قدامى).
+    try {
+      final rawRoster = await _getJson('$root/roster.json?shallow=true');
+      final roster = rawRoster == null
+          ? const <String, Object?>{}
+          : Map<String, Object?>.from(rawRoster);
+      if (roster.isNotEmpty) {
+        for (final k in roster.keys) {
+          final id = '$k';
+          if (id.isEmpty || id == keepDeviceId) continue;
+          try {
+            await _delete(
+                '$root/roster/${Uri.encodeComponent(id)}.json');
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// هل هذا الجهاز بلا بيانات أعمال؟ (تثبيت جديد أو بعد تهيئة) — تُتخذ
+  /// على ضوئه قرار تنظيف مساحته السحابية عند استرجاعها.
+  static Future<bool> _hasNoBusinessData(Repo repo) async {
+    try {
+      final db = await repo.database;
+      for (final t in const ['transactions', 'accounts']) {
+        final c = await db.rawQuery('SELECT COUNT(*) c FROM $t');
+        final n = (c.first['c'] as int?) ?? 0;
+        if (n > 0) return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (2026-09-22) مواءمة ربط المساحة مع السحابة: إن كان سجلنا في مساحة
+  /// أخرى غير المحلية نثبّت المحلي عليها — فتعود العمليات تُكتب وتُقرأ
+  /// من المسار الذي تقرأه بقية الأجهزة. تعيد المعرف المُثبَّت (أو فارغاً).
+  static Future<String> reconcileWorkspaceBinding(
+    Repo repo, {
+    required String backendUrl,
+  }) async {
+    try {
+      final devId = await ensureDeviceId(repo);
+      var cloud = await findWorkspaceOfDevice(backendUrl, devId);
+      var freshStart = false;
+      if (cloud.isEmpty) {
+        // بلا عضوية في أي سجل (تثبيت جديد/بيانات ممسوحة) ⇒ نردّ الجهاز
+        // إلى مساحته المخصصة من فهرس الأجهزة (بصمته) ولو اختلف البريد.
+        cloud = await workspaceOfDeviceIndex(repo, backendUrl);
+        if (cloud.isEmpty) return '';
+        freshStart = await _hasNoBusinessData(repo);
+      }
+      final current = (await repo.settings())['sync.workspaceId'] ?? '';
+      if (freshStart) {
+        await resetWorkspaceContents(backendUrl, cloud, keepDeviceId: devId);
+      }
+      if (current.trim() == cloud) return cloud;
+      await repo.bindWorkspaceId(cloud);
+      return cloud;
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// ══ (2026-09-22 — قانون الطرد الكامل) ══
   /// طرد العضو = محوه من المجموعة **ومن السحابة** بلا أي أثر:
   ///   1) عضويته في السجل (/roster/{deviceId}).

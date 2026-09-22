@@ -302,6 +302,11 @@ class SyncDiagnostics {
 
   /// تقرير فني كامل للحافظة: الإصدار، معرف المنشأة/الجهاز، الحالتان،
   /// الأخطاء بمصادرها المصنَّفة وسياقاتها.
+  /// (2026-09-22) عمليات وصلت من مساحة أخرى فأُسقطت في السحب — مؤشر
+  /// «كل جهاز في مساحة منفصلة». تُقرأ من الإعدادات التي يكتبها الناقل.
+  int droppedOtherWs = 0;
+  String droppedOtherWsSample = '';
+
   String buildTechnicalReport({
     required String appVersion,
     required String workspaceId,
@@ -334,6 +339,10 @@ class SyncDiagnostics {
       '↓ الاستقبال: ${s.pulling ? 'نشط الآن' : (s.lastPullOk ? 'آخر سحب ناجح' : 'متعثّر')}'
           '${s.lastPullAt == null ? '' : ' — ${s.lastPullAt!.toIso8601String()}'}',
       '  عمليات طُبقت في آخر سحب: ${s.lastPullApplied}',
+      if (droppedOtherWs > 0)
+        '  ⚠️ عمليات مُهمَلة من مساحة أخرى: $droppedOtherWs'
+            '${droppedOtherWsSample.isEmpty ? '' : ' (مثال: $droppedOtherWsSample)'}'
+            ' — الربط بمساحة غير مساحة المجموعة',
       fault('  آخر استثناء سحب', s.lastPullFault, s.lastPullError, s.lastPullCtx),
     ].join('\n');
   }

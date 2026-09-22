@@ -176,7 +176,12 @@ class _SyncDiagnosticsSheetState extends ConsumerState<_SyncDiagnosticsSheet> {
       final repo = ref.read(repoProvider);
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      final report = SyncDiagnostics.instance.buildTechnicalReport(
+      final diag = SyncDiagnostics.instance;
+      // (2026-09-22) مؤشر «كل جهاز في مساحة منفصلة» يُقرأ من الإعدادات
+      // فيظهر في التقرير الفني بدل أن يبقى عطلاً صامتاً.
+      diag.droppedOtherWs = int.tryParse('${st['sync.droppedOtherWs']}') ?? 0;
+      diag.droppedOtherWsSample = '${st['sync.droppedOtherWsSample'] ?? ''}';
+      final report = diag.buildTechnicalReport(
         appVersion: '$kAppVersion+$kAppBuild',
         workspaceId: repo.requireWorkspaceId,
         deviceId: repo.requireDeviceId,
