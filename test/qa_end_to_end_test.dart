@@ -141,7 +141,11 @@ void main() {
       final fab = find.text('عملية');
       await _waitFor(tester, fab);
       await tester.ensureVisible(fab);
-      await tester.pumpAndSettle();
+      // (إصلاح CI 2026-09-22) نضخ إطارات مقيّدة بدل pumpAndSettle: على
+      // آلات CI البطيئة قد لا تهدأ الحركة ضمن المهلة فيفشل الاختبار زوراً.
+      for (var i = 0; i < 25; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       await tester.tap(fab, warnIfMissed: false);
       await _drain(tester);
       // (قانون 2026-09-19) الزر العائم «إجراء سريع»: يفتح ورقة خيارات —
@@ -172,7 +176,12 @@ void main() {
       final txTile = find.text('سجل الفواتير اليومية');
       await _waitFor(tester, txTile);
       await tester.ensureVisible(txTile);
-      await tester.pumpAndSettle();
+      // (إصلاح CI 2026-09-22) pumpAndSettle لا يستقر على آلات CI البطيئة
+      // فينتهي بمهلة ويُسقط الاختبار بلا عطل حقيقي — نضخ إطارات مقيّدة
+      // حتى تهدأ الحركة (نفس معالجة التذبذب السابقة في هذا الملف).
+      for (var i = 0; i < 25; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       await tester.tap(txTile, warnIfMissed: false);
       await _drain(tester);
       // (إصلاح CI 2026-09-19 — تذبذب QA-E2E) انتظار مقيّد بدل pump ثابت:
