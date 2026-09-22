@@ -127,7 +127,7 @@ class _ConfigDialogState extends State<_ConfigDialog> {
             textDirection: TextDirection.ltr,
             decoration: const InputDecoration(
               labelText: 'مفتاح المصادقة (اختياري)',
-              hintText: 'Database Secret أو ID Token',
+              hintText: 'تلقائي — هوية مجهولة تُنشأ عند الحاجة',
             ),
           ),
           const SizedBox(height: 6),
