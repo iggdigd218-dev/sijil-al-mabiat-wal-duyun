@@ -1,4 +1,4 @@
-// 🔒 محرك الفترة التجريبية الذكية (1-Day Free Trial Engine).
+// 🔒 محرك الفترة التجريبية الذكية (30-Day Free Trial Engine).
 //
 // المبادئ الصارمة:
 //  1) توقيت الخادم حصراً: التفعيل يُختم بـ {".sv":"timestamp"} على فيربيس،
@@ -275,6 +275,22 @@ class SubscriptionGuard {
   static String _trialsRoot(String base) =>
       '${base.replaceAll(RegExp(r'/+$'), '')}/trials';
 
+  /// **المرجع الوحيد** لمعرف مساحة العمل الذي تُقرأ به عقدة الترخيص.
+  ///
+  /// (إصلاح 2026-09-23) مسارات الترخيص كانت تقرأ `workspaces` بـ limit 1
+  /// بلا ترتيب ⇒ أول صف مُدرج (مساحة الجهاز الشخصية القديمة) حتى بعد ربطه
+  /// بمجموعة — فيُحسم الترخيص على عقدة اشتراك **غير** العقدة التي يدفع
+  /// إليها الجهاز ويفعّلها الأدمن («الترخيص لا يعمل»). الربط الصريح في
+  /// الإعدادات هو الحكم (نفس قانون ensureWorkspace)، ثم المعرّف المحمّل.
+  static Future<String> workspaceIdFor(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      final bound = (st['sync.workspaceId'] ?? '').toString().trim();
+      if (bound.isNotEmpty) return bound;
+    } catch (_) {}
+    return repo.requireWorkspaceId;
+  }
+
   /// وقت خادم فيربيس الحقيقي — بطبقتين مؤمّنتين:
   ///  1) الأساس: كتابة {".sv":"timestamp"} وقراءة الناتج (الختم يحسبه
   ///     خادم فيربيس نفسه — الكتابة المشوّهة من عميل متلاعب لا تغيّره،
@@ -345,7 +361,7 @@ class SubscriptionGuard {
   ///  1) فحص فهرس /trials/$fp — بصمة سبق أن استهلكت تجربة تستأنف سجلها
   ///     الأصلي (منع التصفير بإعادة التثبيت/مساحة جديدة).
   ///  2) وإلا: كتابة سجل جديد بختم خادم، ثم write-back لحساب expires_at
-  ///     خادمياً (created_at + 24h) وتثبيته رقماً.
+  ///     خادمياً (created_at + kTrialDuration) وتثبيته رقماً.
   static Future<SubscriptionState> ensureTrialStarted(
     Repo repo, {
     required String backendUrl,
@@ -380,7 +396,7 @@ class SubscriptionGuard {
     //     الخادمي موجود لكن expires_at لم يُثبَّت — نكمل الحساب من الختم
     //     الأصلي نفسه دون أي تصفير للعداد.
     if (existing != null) {
-      final priorCreated = _asMs(existing['created_at']);
+      final priorCreated = _asInt(existing['created_at']);
       if (priorCreated > 0) {
         final repaired = {
           'status': '${existing['status'] ?? 'trial'}',
@@ -450,7 +466,7 @@ class SubscriptionGuard {
       'features': PlanFeatures.allOn.toMap(),
     });
     final written = await _readJson(wsSub) ?? {};
-    final createdMs = _asMs(written['created_at']);
+    final createdMs = _asInt(written['created_at']);
     final expiresMs = createdMs + kTrialDuration.inMilliseconds;
     final finalRec = {
       'plan_type': planType,
@@ -532,14 +548,34 @@ class SubscriptionGuard {
     _backfilledOnce = true;
     try {
       final devId = await ensureDeviceId(repo);
+      final acctUid = ((await repo.settings())['account.uid'] ?? '').trim();
       final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
-      final idx = '${_trialsRoot(backendUrl)}/${fingerprintHash(raw)}.json';
-      final rec = await _readJson(idx);
-      if (rec == null) return; // لا سجل — لا شيء يُرقّع.
-      if ('${rec['device_id'] ?? ''}'.isNotEmpty) return; // مرقّع أصلاً.
-      await _putJson(idx, {...rec, 'device_id': devId});
+      final hwFp = fingerprintHash(raw);
+      // (إصلاح 2026-09-23) الترخيص يتبع حساب Google متى سجّل المستخدم
+      // دخوله، ومفتاح فهرس /trials حينئذٍ sha256('uid:…') لا بصمة العتاد.
+      // الترقيع القديم كان يقرأ عقدة العتاد وحدها ⇒ سجلات العملاء
+      // المرتبطين بحساب تبقى بلا device_id، فيعجز الأدمن عن مطابقة
+      // DEVICE-… بها ويبدو التفعيل كأنه لم يُسجَّل. نفحص المفتاحين.
+      final root = _trialsRoot(backendUrl);
+      final keys = <String>{
+        if (acctUid.isNotEmpty) fingerprintHash('uid:$acctUid'),
+        hwFp,
+      };
+      for (final fp in keys) {
+        final idx = '$root/$fp.json';
+        final rec = await _readJson(idx);
+        if (rec == null) continue; // لا سجل — جرّب المفتاح الآخر.
+        if ('${rec['device_id'] ?? ''}'.isNotEmpty) continue; // مرقّع أصلاً.
+        await _putJson(idx, {...rec, 'device_id': devId});
+        return;
+      }
     } catch (_) {} // تحسيني بحت — لا يعطل الفحص.
   }
+
+  /// (للاختبارات) تنفيذ الترقيع صراحة داخل runWithClient.
+  static Future<void> debugBackfillTrialDeviceId(
+          Repo repo, String backendUrl) =>
+      _backfillTrialDeviceId(repo, backendUrl);
 
   /// آخر حالة مع تقديم وقت الخادم المرجعي بعمر الكاش (monotonic).
   static SubscriptionState _advanced() {
@@ -589,8 +625,8 @@ class SubscriptionGuard {
       if (raw.isEmpty) return null;
       final m = jsonDecode(raw);
       if (m is! Map) return null;
-      final serverNow = _asMs(m['server_now']);
-      final deviceMs = _asMs(m['device_ms']);
+      final serverNow = _asInt(m['server_now']);
+      final deviceMs = _asInt(m['device_ms']);
       final nowDevice = DateTime.now().millisecondsSinceEpoch;
       // 🛡️ (كشف التلاعب) ساعة الهاتف الآن أقدم من لحظة آخر تثبيت =
       // المستخدم أرجع الساعة للخلف وهو بلا شبكة. لا نكافئه: نعتبر
@@ -608,9 +644,9 @@ class SubscriptionGuard {
               ? 'enterprise'
               : 'individual',
           maxDevices:
-              _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
-          createdAtMs: _asMs(m['created_at']),
-          expiresAtMs: _asMs(m['expires_at']),
+              _asInt(m['max_devices']) > 0 ? _asInt(m['max_devices']) : 1,
+          createdAtMs: _asInt(m['created_at']),
+          expiresAtMs: _asInt(m['expires_at']),
           isActive: m['is_active'] != false,
           deviceFingerprint: '${m['fp'] ?? ''}',
           features: PlanFeatures.fromMap(rawFeat0 is Map
@@ -618,8 +654,8 @@ class SubscriptionGuard {
               : null),
           // إسناد وقت الخادم إلى expires_at مباشرة ⇒ expired=true
           // للتجربة، فتُقفل كل المزايا المدفوعة حتى الفحص السحابي.
-          serverNowMs: _asMs(m['expires_at']) > 0
-              ? _asMs(m['expires_at'])
+          serverNowMs: _asInt(m['expires_at']) > 0
+              ? _asInt(m['expires_at'])
               : serverNow,
         );
       }
@@ -632,9 +668,9 @@ class SubscriptionGuard {
             '${m['plan_type'] ?? 'individual'}' == 'enterprise'
                 ? 'enterprise'
                 : 'individual',
-        maxDevices: _asMs(m['max_devices']) > 0 ? _asMs(m['max_devices']) : 1,
-        createdAtMs: _asMs(m['created_at']),
-        expiresAtMs: _asMs(m['expires_at']),
+        maxDevices: _asInt(m['max_devices']) > 0 ? _asInt(m['max_devices']) : 1,
+        createdAtMs: _asInt(m['created_at']),
+        expiresAtMs: _asInt(m['expires_at']),
         isActive: m['is_active'] != false,
         deviceFingerprint: '${m['fp'] ?? ''}',
         features: PlanFeatures.fromMap(
@@ -693,8 +729,8 @@ class SubscriptionGuard {
             ? kDefaultEnterpriseSeats
             : 1;
       })(),
-      createdAtMs: _asMs(m['created_at']),
-      expiresAtMs: _asMs(m['expires_at']),
+      createdAtMs: _asInt(m['created_at']),
+      expiresAtMs: _asInt(m['expires_at']),
       isActive: m['is_active'] != false,
       deviceFingerprint: '${m['device_fingerprint'] ?? ''}',
       features: PlanFeatures.fromMap(
@@ -748,7 +784,9 @@ class SubscriptionGuard {
     debugReset(); // الفحص التالي يقرأ الخطة الجديدة فوراً.
   }
 
-  static int _asMs(Object? v) {
+  /// تحويل آمن لأي قيمة سحابية إلى عدد صحيح (timestamps و max_devices).
+  /// (كان اسمه _asMs فيُقرأ خطأً مخصّصاً بالأختام فقط.)
+  static int _asInt(Object? v) {
     if (v is int) return v;
     if (v is num) return v.toInt();
     return int.tryParse('$v') ?? 0;

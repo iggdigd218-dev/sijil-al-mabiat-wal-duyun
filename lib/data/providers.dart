@@ -10,9 +10,9 @@ import '../core/format.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import 'repository.dart';
-import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
 import 'sync/google_auth_service.dart';
+import 'device_license.dart';
 import 'sync/subscription_guard.dart';
 import 'sync/sync_engine.dart';
 import 'sync/sync_queue.dart';
@@ -1334,9 +1334,9 @@ final subscriptionProvider = FutureProvider<SubscriptionState>((ref) async {
   final st = await repo.settings();
   final url = effectiveBackendUrl(st['cloudBackendUrl']);
   if (url.isEmpty) return SubscriptionState.none;
-  final db = await repo.database;
-  final wsRows = await db.query('workspaces', limit: 1);
-  final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+  // (إصلاح 2026-09-23) المرجع الموحّد: أول صف بلا ترتيب كان يقرأ ترخيص
+  // مساحة شخصية قديمة حتى بعد ربط الجهاز بمجموعة.
+  final ws = await SubscriptionGuard.workspaceIdFor(repo);
   return SubscriptionGuard.check(
     repo,
     backendUrl: url,
@@ -1379,10 +1379,11 @@ final seatUsageProvider = FutureProvider<(int, int)?>((ref) async {
   try {
     final sub = await ref.watch(subscriptionProvider.future);
     if (sub.status == 'none' || sub.planType != 'enterprise') return null;
-    final connected = await CloudJoin.connectedDevicesCount(
-      ref.read(repoProvider),
-    );
-    return (connected, sub.maxDevices);
+    // مصدر واحد للعدّ والمقاعد (نفس قاعدة DeviceLicense) بدل مسارين
+    // مختلفين كانا يعطيان «الأجهزة N/M» متناقضاً مع استنتاج الخطة.
+    final lic = await DeviceLicense.check(ref.read(repoProvider));
+    if (!lic.resolved) return null;
+    return (lic.connectedDevices, lic.maxSeats);
   } catch (_) {
     return null;
   }

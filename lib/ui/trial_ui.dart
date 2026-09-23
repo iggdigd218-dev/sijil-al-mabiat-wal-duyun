@@ -676,9 +676,10 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
         }
         return;
       }
-      final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (إصلاح 2026-09-23) التحقق يقرأ عقدة المساحة المرتبطة فعلاً لا أول
+      // صف: عضو مجموعة كان يتحقق من اشتراكه الشخصي فيبدو التفعيل كأنه
+      // لم يصل («لم يُرصد تفعيل بعد») والمدير فعّله على مساحة المجموعة.
+      final ws = await SubscriptionGuard.workspaceIdFor(repo);
       SubscriptionGuard.debugReset(); // تجاوز الكاش — قراءة حقيقية الآن.
       final sub = await SubscriptionGuard.check(repo,
           backendUrl: url, workspaceId: ws, force: true);

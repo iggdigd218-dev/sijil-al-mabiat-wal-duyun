@@ -342,9 +342,8 @@ class CloudJoin {
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) return;
-      final db = await repo.database;
-      final wsRows = await db.query('workspaces', limit: 1);
-      final ws = wsRows.isNotEmpty ? '${wsRows.first['id']}' : 'default';
+      // (إصلاح 2026-09-23) بوابة الترخيص على مساحة العمل المرتبطة فعلاً.
+      final ws = await SubscriptionGuard.workspaceIdFor(repo);
       final blocked = await SubscriptionGuard.isBlocked(repo,
           backendUrl: url, workspaceId: ws);
       if (blocked) {
