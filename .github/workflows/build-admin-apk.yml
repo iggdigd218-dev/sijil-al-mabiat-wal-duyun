@@ -33,6 +33,23 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Decode release keystore & create signing config
+        env:
+          ADMIN_KEYSTORE_B64: ${{ secrets.ADMIN_KEYSTORE_B64 }}
+          ADMIN_KEYSTORE_PASSWORD: ${{ secrets.ADMIN_KEYSTORE_PASSWORD }}
+          ADMIN_KEY_PASSWORD: ${{ secrets.ADMIN_KEY_PASSWORD }}
+          ADMIN_KEY_ALIAS: ${{ secrets.ADMIN_KEY_ALIAS }}
+        run: |
+          echo "$ADMIN_KEYSTORE_B64" | base64 -d > android/app/license-admin.jks
+          cat > android/key.properties <<EOF
+          storeFile=license-admin.jks
+          storePassword=$ADMIN_KEYSTORE_PASSWORD
+          keyPassword=$ADMIN_KEY_PASSWORD
+          keyAlias=$ADMIN_KEY_ALIAS
+          storeType=PKCS12
+          EOF
+          echo "تم تجهيز مفتاح التوقيع الثابت"
+
       - name: Get dependencies
         run: flutter pub get
 
