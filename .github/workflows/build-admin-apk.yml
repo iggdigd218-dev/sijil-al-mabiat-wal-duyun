@@ -77,7 +77,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: license-admin-apk
-          path: license-admin.apk
+          path: |
+            license-admin.apk
+            license-admin-armv7.apk
+            license-admin-x64.apk
           retention-days: 30
 
       - name: Attach to admin release
@@ -89,9 +92,17 @@ jobs:
           body: |
             ## ⚠️ تطبيق خاص بمالك النظام فقط — لا يوزَّع للعملاء
 
-            حمّل `license-admin.apk` وثبّته على هاتفك، ثم اضبط رابط
-            قاعدة البيانات من ⚙️ داخل التطبيق.
-          files: license-admin.apk
+            حمّل حزمة معالج هاتفك (أصغر بنحو الثلث من السابق):
+            - `license-admin.apk` — **arm64** (معظم الهواتف الحديثة، ~16 MB).
+            - `license-admin-armv7.apk` — الهواتف الأقدم 32-بت.
+            - `license-admin-x64.apk` — محاكيات/أجهزة x86 النادرة.
+
+            ثم اضبط رابط قاعدة البيانات من ⚙️ داخل التطبيق. التوقيع واحد
+            لكل الحزم ⇒ التحديثات تُثبَّت فوق بعضها بلا حذف.
+          files: |
+            license-admin.apk
+            license-admin-armv7.apk
+            license-admin-x64.apk
           fail_on_unmatched_files: true
           prerelease: false
           make_latest: false
