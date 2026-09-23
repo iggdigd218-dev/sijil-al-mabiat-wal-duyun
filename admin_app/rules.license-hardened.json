@@ -1,0 +1,18 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+
+    "workspaces": {
+      "$ws": {
+        "subscription": {
+          ".write": "(auth != null && auth.uid === 'mTMmR6MDBMZH8nKEbvCntRemkq73') || ((newData.child('status').val() === 'trial' || (data.child('status').val() === 'active' && newData.child('status').val() === 'active')) && newData.child('expires_at').val() <= newData.child('created_at').val() + 2592000000)"
+        },
+        "admin_log": {
+          ".read": "auth != null && auth.uid === 'mTMmR6MDBMZH8nKEbvCntRemkq73'",
+          ".write": "auth != null && auth.uid === 'mTMmR6MDBMZH8nKEbvCntRemkq73'"
+        }
+      }
+    }
+  }
+}

@@ -94,6 +94,13 @@ int asMs(Object? v) => asInt(v, 0);
 /// تحويل آمن إلى نص.
 String asStr(Object? v) => v == null ? '' : '$v';
 
+/// (2026-09-23 — تأمين الترخيص) رمز تحديث هوية **المدير** — يُلصق مرة
+/// واحدة في ⚙️ داخل التطبيق (أو يُمرَّر بـ dart-define عند بناء نسخة
+/// خاصة). به وحده تُقبل الكتابة على عقدة الاشتراك بعد تشديد القواعد؛
+/// بدونه يعمل التطبيق بالهوية المجهولة (كتابة مرفوضة بعد التشديد).
+const String kAdminRefreshTokenDefault =
+    String.fromEnvironment('ADMIN_REFRESH_TOKEN');
+
 class Rtdb {
   Rtdb._();
   static final Rtdb instance = Rtdb._();
@@ -111,11 +118,18 @@ class Rtdb {
   String baseUrl = '';
   String authToken = ''; // اختياري: legacy secret أو ID token.
 
+  /// رمز تحديث هوية المدير (إن ضُبط) + معرّفها — يُعرض في ⚙️ للتأكد أن
+  /// القواعد والحالة يستخدمان نفس الهوية.
+  String adminRefreshToken = '';
+  String adminUid = '';
+
   static const _kUrl = 'rtdbUrl';
   static const _kAuth = 'rtdbAuth';
   static const _kIdToken = 'rtdbIdToken';
   static const _kRefresh = 'rtdbRefreshToken';
   static const _kExpiry = 'rtdbTokenExpiryMs';
+  static const _kAdminRt = 'rtdbAdminRefreshToken';
+  static const _kAdminUid = 'rtdbAdminUid';
 
   /// جلسة الهوية المجهولة (Firebase Auth) — تُرفق بكل طلب تلقائياً.
   String _idToken = '';
@@ -149,6 +163,10 @@ class Rtdb {
     _idToken = sp.getString(_kIdToken) ?? '';
     _refreshToken = sp.getString(_kRefresh) ?? '';
     _expiryMs = sp.getInt(_kExpiry) ?? 0;
+    adminRefreshToken = (sp.getString(_kAdminRt) ?? '').trim().isEmpty
+        ? kAdminRefreshTokenDefault.trim()
+        : (sp.getString(_kAdminRt) ?? '').trim();
+    adminUid = (sp.getString(_kAdminUid) ?? '').trim();
     // (قانون 2026-09-22) الهوية تُبنى عند أول استخدام — لا عند الإقلاع،
     // حتى لا يعلق التطبيق على شاشة التحميل عند ضعف الشبكة.
   }
@@ -158,6 +176,22 @@ class Rtdb {
     await sp.setString(_kIdToken, _idToken);
     await sp.setString(_kRefresh, _refreshToken);
     await sp.setInt(_kExpiry, _expiryMs);
+    await sp.setString(_kAdminRt, adminRefreshToken);
+    await sp.setString(_kAdminUid, adminUid);
+  }
+
+  /// حفظ رمز هوية المدير (يُلصق مرة واحدة من ⚙️) وتبديل الهوية فوراً.
+  Future<void> saveAdminRefreshToken(String rt) async {
+    adminRefreshToken = rt.trim();
+    adminUid = '';
+    _idToken = '';
+    _refreshToken = '';
+    _expiryMs = 0;
+    resetClockCache();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kAdminRt, adminRefreshToken);
+    await sp.setString(_kAdminUid, '');
+    lastAuthError = '';
   }
 
   bool get _tokenAlive =>
@@ -170,6 +204,9 @@ class Rtdb {
   Future<String> _ensureAuth({bool force = false, bool retried = false}) async {
     if (authToken.trim().isNotEmpty) return authToken.trim();
     if (!force && _tokenAlive) return _idToken;
+    // (2026-09-23) هوية المدير الثابتة — هي الوحيدة المخوّلة بكتابة
+    // عقدة الاشتراك بعد تشديد القواعد.
+    if (adminRefreshToken.isNotEmpty) return _signInAsAdmin();
     final refresh = force && _refreshToken.isNotEmpty;
     try {
       final body = refresh
@@ -207,6 +244,43 @@ class Rtdb {
       final exp = '${m['expires_in'] ?? m['expiresIn'] ?? '3600'}';
       _expiryMs = DateTime.now().millisecondsSinceEpoch +
           (int.tryParse(exp) ?? 3600) * 1000;
+      lastAuthError = '';
+      await _persistSession();
+    } catch (e) {
+      lastAuthError = 'تعذّر الاتصال بخادم الهوية: $e';
+    }
+    return _idToken;
+  }
+
+  /// توقيع الدخول بهوية **المدير** الثابتة عبر رمز التحديث: نفس الهوية
+  /// (user_id) في كل مرة، وهو ما تشترطه قواعد الكتابة على الاشتراك.
+  Future<String> _signInAsAdmin() async {
+    try {
+      final res = await _http
+          .post(
+              Uri.https('securetoken.googleapis.com', '/v1/token',
+                  {'key': kFirebaseApiKey}),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'grant_type': 'refresh_token',
+                'refresh_token': adminRefreshToken,
+              }))
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) {
+        lastAuthError =
+            'رفض خادم الهوية رمز المدير (${res.statusCode}) — أعد لصق رمز '
+            'هوية المدير من ⚙️.';
+        return _idToken;
+      }
+      final m = jsonDecode(utf8.decode(res.bodyBytes));
+      if (m is! Map) return _idToken;
+      _idToken = asStr(m['id_token']);
+      final rt = asStr(m['refresh_token']);
+      if (rt.isNotEmpty) adminRefreshToken = rt;
+      final uid = asStr(m['user_id']);
+      if (uid.isNotEmpty) adminUid = uid;
+      _expiryMs = DateTime.now().millisecondsSinceEpoch +
+          (int.tryParse(asStr(m['expires_in'])) ?? 3600) * 1000;
       lastAuthError = '';
       await _persistSession();
     } catch (e) {

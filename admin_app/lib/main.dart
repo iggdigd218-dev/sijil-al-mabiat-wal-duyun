@@ -121,6 +121,8 @@ class _ConfigDialog extends StatefulWidget {
 class _ConfigDialogState extends State<_ConfigDialog> {
   late final _url = TextEditingController(text: Rtdb.instance.baseUrl);
   late final _auth = TextEditingController(text: Rtdb.instance.authToken);
+  late final _admin = TextEditingController(
+      text: Rtdb.instance.adminRefreshToken);
   bool _busy = false;
 
   @override
@@ -128,6 +130,7 @@ class _ConfigDialogState extends State<_ConfigDialog> {
     // (إصلاح) إفلات المتحكمات — كانت تُترك معلّقة بعد كل فتح للحوار.
     _url.dispose();
     _auth.dispose();
+    _admin.dispose();
     super.dispose();
   }
 
@@ -155,10 +158,30 @@ class _ConfigDialogState extends State<_ConfigDialog> {
               hintText: 'تلقائي — هوية مجهولة تُنشأ عند الحاجة',
             ),
           ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _admin,
+            textDirection: TextDirection.ltr,
+            maxLines: 2,
+            minLines: 1,
+            decoration: const InputDecoration(
+              labelText: 'رمز هوية المدير (اختياري الآن — لازم بعد التشديد)',
+              hintText: 'AMf-uB… (يُلصق مرة واحدة)',
+              prefixIcon: Icon(Icons.admin_panel_settings_outlined),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            Rtdb.instance.adminUid.isEmpty
+                ? 'بدونه يعمل التطبيق بهوية مجهولة (قراءة فقط بعد تشديد '
+                    'قواعد قاعدة البيانات).'
+                : 'الهوية الحالية: ${Rtdb.instance.adminUid}',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+          ),
           const SizedBox(height: 6),
           const Text(
             'نفس الرابط المستخدم في تطبيق مدير الحسابات — '
-            'يُحفظ محلياً على هذا الهاتف فقط.',
+            'الرابط وهوية المدير يُحفظان محلياً على هذا الهاتف فقط.',
             style: TextStyle(fontSize: 11, color: Colors.grey),
           ),
         ],
@@ -173,6 +196,7 @@ class _ConfigDialogState extends State<_ConfigDialog> {
               : () async {
                   setState(() => _busy = true);
                   await Rtdb.instance.save(_url.text, _auth.text);
+                  await Rtdb.instance.saveAdminRefreshToken(_admin.text);
                   if (!context.mounted) return;
                   Navigator.pop(context);
                 },

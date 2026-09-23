@@ -25,7 +25,8 @@ class _Req {
   final String path;
   final String auth;
   final String body;
-  _Req(this.method, this.path, this.auth, this.body);
+  final String host;
+  _Req(this.method, this.path, this.auth, this.body, this.host);
 }
 
 /// قاعدة بيانات وهمية تكفي مسارات اللوحة كلها.
@@ -48,7 +49,7 @@ class _FakeDb {
   Future<http.Response> handle(http.Request req) async {
     final url = req.url;
     reqs.add(_Req(req.method, url.path, url.queryParameters['auth'] ?? '',
-        req.method == 'GET' ? '' : req.body));
+        req.method == 'GET' ? '' : req.body, url.host));
 
     if (url.host.contains('identitytoolkit')) {
       signups++;
@@ -66,6 +67,7 @@ class _FakeDb {
         'id_token': 'IDTOK-REFRESH',
         'refresh_token': 'REF-NEW',
         'expires_in': '3600',
+        'user_id': 'UID-ADMIN-1',
       });
     }
 
@@ -493,6 +495,55 @@ void main() {
     expect(await rtdb.resolveWorkspaceId('DEVICE-HIT'), 'WS-7');
     expect(db.count('workspaces.json'), 1,
         reason: 'المسح القديم كان يطلب مفاتيح المساحات مرتين');
+  });
+
+  test('ADMIN-12 هوية المدير الثابتة: securetoken لا signUp، وتُحمل في كل طلب',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final rtdb = Rtdb.instance;
+    await rtdb.load();
+    rtdb.authToken = '';
+    rtdb.resetClockCache();
+    await rtdb.saveAdminRefreshToken('RT-ADMIN-QA');
+
+    final db = _FakeDb(ws: {
+      'WS-ADM': {'sub': {'status': 'trial', 'expires_at': 1}},
+    });
+    rtdb.clientOverride = MockClient(db.handle);
+
+    final m = await rtdb.metrics();
+    expect(m.totalWorkspaces, 1);
+    expect(rtdb.adminUid, 'UID-ADMIN-1', reason: 'الهوية الثابتة تُلتقط');
+    expect(
+      db.reqs
+          .where((r) => r.path.contains('workspaces'))
+          .every((r) => r.auth == 'IDTOK-REFRESH'),
+      isTrue,
+      reason: 'كل طلب بيانات يحمل توكن المدير');
+    expect(db.reqs.any((r) => r.host.contains('identitytoolkit')), isFalse,
+        reason: 'لا إنشاء هوية مجهولة مع هوية مدير مضبوطة');
+  });
+
+  test('ADMIN-13 بعد 401: إعادة التوقيع بهوية المدير (لا بهوية مجهولة)',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final rtdb = Rtdb.instance;
+    await rtdb.load();
+    rtdb.authToken = '';
+    rtdb.resetClockCache();
+    await rtdb.saveAdminRefreshToken('RT-ADMIN-QA');
+
+    final db = _FakeDb(ws: {
+      'WS-ADM2': {'sub': {'status': 'active', 'expires_at': 1}},
+    })
+      ..failFirstShallow = true;
+    rtdb.clientOverride = MockClient(db.handle);
+
+    final m = await rtdb.metrics();
+    expect(m.totalWorkspaces, 1, reason: 'الطلب يُعاد بهوية المدير وينجح');
+    expect(rtdb.adminUid, 'UID-ADMIN-1');
+    expect(db.reqs.any((r) => r.host.contains('identitytoolkit')), isFalse,
+        reason: '');
   });
 
   test('LIC-11 رمز تحديث تالف ⇒ هوية مجهولة جديدة فوراً (بلا حلقة 401)',
