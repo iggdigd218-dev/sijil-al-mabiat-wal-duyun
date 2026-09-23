@@ -6,11 +6,49 @@
 // حزمًا تلقائيًا لأن ذلك يتطلب أذونات خطرة على أندرويد ولا يعمل في المتاجر.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
 import '../core/app_version.dart';
+
+/// مفتاح معالج أندرويد الحالي، أو `null` إن لم نعرفه (منصّة أخرى).
+///
+/// يُستعمل لاختيار حزمة APK المطابقة من بيان الإصدار: الحزمة المُقسّمة
+/// حسب المعالج (split-per-abi) أصغر بنحو النصف من الشاملة، فإن تعذّرت
+/// معرفة المعالج رجعنا إلى الشاملة (`downloads.android`) بلا ضرر.
+String? androidAbiKey() {
+  if (!Platform.isAndroid) return null;
+  switch (ffi.Abi.current()) {
+    case ffi.Abi.androidArm64:
+      return 'arm64';
+    case ffi.Abi.androidArm:
+      return 'armv7';
+    case ffi.Abi.androidX64:
+      return 'x64';
+    default:
+      return null;
+  }
+}
+
+/// يختار رابط APK الأصغر المناسب للجهاز من خريطة `downloads` في version.json.
+///
+/// الترتيب: حزمة المعالج المطابق (`androidVariants.<abi>`) ← الشاملة
+/// (`android`). روابط غير `https://` تُرفض، وأي نقص يرجّع `null` فيبقى
+/// سلوك التحديث كما كان (فتح صفحة الإصدار).
+String? pickAndroidApkUrl(Object? downloads, String? abiKey) {
+  if (downloads is! Map) return null;
+  if (abiKey != null) {
+    final variants = downloads['androidVariants'];
+    if (variants is Map) {
+      final v = variants[abiKey];
+      if (v is String && v.startsWith('https://')) return v;
+    }
+  }
+  final v = downloads['android'];
+  return (v is String && v.startsWith('https://')) ? v : null;
+}
 
 /// نتيجة فحص التحديث.
 enum UpdateStatus {
@@ -195,13 +233,17 @@ class UpdateService {
     final downloads = map['downloads'];
     String? downloadUrl;
     if (downloads is Map) {
-      final key = switch (platform) {
-        UpdatePlatform.android => 'android',
-        UpdatePlatform.windows => 'windows',
-        UpdatePlatform.other => '',
-      };
-      final v = downloads[key];
-      if (v is String && v.startsWith('https://')) downloadUrl = v;
+      if (platform == UpdatePlatform.android) {
+        // حزمة المعالج المطابق (أصغر بنحو النصف) والشاملة بديلاً آمناً.
+        downloadUrl = pickAndroidApkUrl(downloads, androidAbiKey());
+      } else {
+        final key = switch (platform) {
+          UpdatePlatform.windows => 'windows',
+          _ => '',
+        };
+        final v = downloads[key];
+        if (v is String && v.startsWith('https://')) downloadUrl = v;
+      }
     }
     final release = map['releaseUrl'];
     final releaseUrl = (release is String && release.startsWith('https://'))
