@@ -48,6 +48,11 @@ jobs:
           keyAlias=$ADMIN_KEY_ALIAS
           storeType=PKCS12
           EOF
+          # تحقق مبكر: إن تعذّر فتح المفتاح نفشل هنا برسالة واضحة بدل فشل
+          # غامض داخل Gradle («Given final block not properly padded»).
+          keytool -list -v -keystore android/app/license-admin.jks \
+            -storepass "$ADMIN_KEYSTORE_PASSWORD" -alias "$ADMIN_KEY_ALIAS" \
+            | grep -E "Owner|Entry type"
           echo "تم تجهيز مفتاح التوقيع الثابت"
 
       - name: Get dependencies
