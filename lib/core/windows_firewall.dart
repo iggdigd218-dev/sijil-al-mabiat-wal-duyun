@@ -9,6 +9,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'platform_info.dart';
 
 class WindowsFirewall {
   WindowsFirewall._();
@@ -22,7 +23,7 @@ class WindowsFirewall {
   /// يتحقق من وجود القاعدة ثم يسجّلها إن غابت. آمن تماماً:
   /// أي فشل (رفض صلاحية/بيئة غريبة) لا يمس إقلاع التطبيق.
   static Future<void> ensureRegistered() async {
-    if (!Platform.isWindows) return;
+    if (!PlatformInfo.isWindows) return;
     try {
       final exe = Platform.resolvedExecutable;
       // 1) هل القاعدة مسجلة أصلاً؟ (فحص لا يحتاج صلاحيات.)

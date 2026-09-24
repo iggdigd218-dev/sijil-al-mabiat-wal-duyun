@@ -1,14 +1,14 @@
 // شاشة مسح الباركود بالكاميرا (تولّي إضافة صنف/بيع) — محروسة بمنصة لعدم كسر ويندوز.
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../core/sfx.dart';
+import '../core/platform_info.dart';
 
 Future<String?> scanBarcode(BuildContext context) async {
   // الكاميرا غير متاحة على سطح المكتب.
-  if (!Platform.isAndroid && !Platform.isIOS) {
+  if (!PlatformInfo.isMobile) {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(content: Text('مسح الباركود متاح على الهاتف فقط')),
     );

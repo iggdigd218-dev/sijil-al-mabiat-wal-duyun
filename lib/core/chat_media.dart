@@ -1,15 +1,14 @@
 // وسائط الدردشة: تسجيل صوتي + تشغيل + فتح ملفات بتطبيق النظام.
 // يستخدم MediaRecorder/MediaPlayer الأصليين عبر قناة nexora/sfx —
 // بلا أي مكتبات إضافية.
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
+import 'platform_info.dart';
 
 class ChatMedia {
   static const MethodChannel _channel = MethodChannel('nexora/sfx');
 
-  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+  static bool get _isAndroid => PlatformInfo.isAndroid;
 
   /// يبدأ تسجيلاً صوتياً m4a إلى [path]. يعيد هل بدأ فعلاً.
   static Future<bool> startRecording(String path) async {

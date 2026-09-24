@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
 import 'quick_pos_protocol.dart';
+import '../core/platform_info.dart';
 
 /// لون الهوية الموحّد (المخزون • نقطة البيع • الزر العائم).
 const Color kQuickPosTeal = Color(0xFF0F766E);
@@ -41,7 +41,7 @@ class FloatingOverlayWindow {
 
   const FloatingOverlayWindow._();
 
-  static bool get supported => Platform.isAndroid;
+  static bool get supported => PlatformInfo.supportsOverlay;
 
   static Future<void> toBubble() async {
     if (!supported) return;

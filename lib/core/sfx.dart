@@ -16,10 +16,9 @@
 //   - pair      : اقتران جهاز — نمط احتفالي صاعد.
 //   - synced    : اكتمال مزامنة عملية — نغمتان خفيفتان.
 //   - opCreated : إنشاء عملية — صوت الدفع + اهتزاز طويل (1.5 ثانية).
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
+import 'platform_info.dart';
 
 class Sfx {
   static const MethodChannel _channel = MethodChannel('nexora/sfx');
@@ -47,7 +46,7 @@ class Sfx {
   static bool get _soundEnabled => !_muted && _soundOn;
   static bool get _hapticEnabled => !_muted && _hapticOn;
 
-  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+  static bool get _isAndroid => PlatformInfo.isAndroid;
 
   /// يشغّل صوتاً مخصصاً من res/raw على أندرويد؛ يتجاهل الفشل بصمت.
   static Future<void> _playCustom(String name) async {

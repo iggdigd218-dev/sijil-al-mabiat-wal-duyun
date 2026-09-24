@@ -5,12 +5,12 @@
 //      لا سحب لللقطة ولا مساس بالبيانات المحلية قبل الموافقة.
 //   ٤) عند الموافقة: ترطيب نظيف كامل ثم الانتقال للشاشة الرئيسية فوراً.
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/cloud_config.dart';
+import '../core/platform_info.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -590,7 +590,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
 
   // ═══════════ خطوة 2: طريقة الاقتران ═══════════
   Widget _methodStep() {
-    final mobile = Platform.isAndroid || Platform.isIOS;
+    final mobile = PlatformInfo.isMobile;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

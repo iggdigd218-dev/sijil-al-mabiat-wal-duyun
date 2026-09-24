@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,7 @@ import '../core/permission_dialog.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
 import 'widgets.dart';
+import '../core/platform_info.dart';
 
 /// فتح نموذج إضافة/تعديل حساب.
 Future<bool> openAccountForm(
@@ -183,7 +183,7 @@ class _State extends ConsumerState<AccountFormScreen> {
 
   /// جلب اسم ورقم العميل من تطبيق جهات الاتصال (منتقي النظام الخارجي).
   Future<void> _pickContact() async {
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    if (!PlatformInfo.isMobile) {
       showSnack(context, 'اختيار جهة الاتصال متاح على الهاتف فقط', error: true);
       return;
     }

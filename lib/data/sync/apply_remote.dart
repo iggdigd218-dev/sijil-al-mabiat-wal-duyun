@@ -131,6 +131,29 @@ Future<void> insertStubRow(
   await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
 }
 
+/// (2026-09-24) يُفرغ `section_id` إن كان يشير إلى قسم غير موجود محلياً.
+///
+/// وصول فئة (أو صنف) قبل قسمها — أو بقسم محذوف على هذا الجهاز — كان يكسر
+/// قيد `sections(id)` فيفشل تطبيق العملية كلها (FOREIGN KEY 787) وتعلق
+/// المزامنة. نُفرغ العلاقة مؤقتاً: يُعرض الكيان تحت «عام»، ويُصحَّح تلقائياً
+/// عند وصول القسم أو باختيار المستخدم.
+Future<void> nullDanglingSection(
+  DatabaseExecutor txn,
+  String table,
+  Map<String, Object?> row,
+) async {
+  if (table != 'item_categories' && table != 'items') return;
+  final sid = row['section_id'];
+  if (sid == null) return;
+  try {
+    final found = await txn.query('sections',
+        columns: ['id'], where: 'id = ?', whereArgs: [sid], limit: 1);
+    if (found.isEmpty) row['section_id'] = null;
+  } catch (_) {
+    row['section_id'] = null;
+  }
+}
+
 /// يتأكد من وجود كل آباء هذا الصف قبل إدراجه/تحديثه، فيُنشئ لهم سجلات
 /// مؤقتة إن كانوا مفقودين (وصل الابن قبل أبيه).
 Future<void> ensureForeignParents(
@@ -282,6 +305,8 @@ extension ApplyRemoteOp on Repo {
         // (2026-09-22) آباء هذا الصف (حساب/صنف/فاتورة) قد لا يكون وصل بعد
         // — نُنشئ لهم سجلات مؤقتة قبل الإدراج/التحديث (FOREIGN KEY 787).
         await ensureForeignParents(txn, table, row, op);
+        // (2026-09-24) قسم يتيح: يُفرغ section_id غير الموجود محلياً.
+        await nullDanglingSection(txn, table, row);
         if (existing.isNotEmpty) {
           if (row.isNotEmpty) {
             await txn.update(table, row,
@@ -294,6 +319,7 @@ extension ApplyRemoteOp on Repo {
           // محاولة أبدية. نُكمل الأعمدة الإلزامية الناقصة بقيم افتراضية آمنة
           // (النصوص فارغة، الأرقام صفر، التواريخ الآن) بدل الانفجار.
           final insertRow = {...row, primaryKey: op.entityId};
+          await nullDanglingSection(txn, table, insertRow);
           for (final col in tableInfo) {
             final name = col['name'] as String;
             if (insertRow.containsKey(name)) continue;

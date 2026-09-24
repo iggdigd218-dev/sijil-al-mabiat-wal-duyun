@@ -17,6 +17,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/sfx.dart';
+import '../core/platform_info.dart';
 
 /// مراحل عملية التحديث بنقرة واحدة.
 enum InstallPhase {
@@ -50,8 +51,8 @@ class UpdateInstaller {
   /// هل منح المستخدم إذن «تثبيت التطبيقات غير المعروفة» لهذا التطبيق؟
   Future<bool> canInstall() async {
     // ويندوز لا يحتاج إذناً مسبقاً: تشغيل المُثبّت يُظهر حوار UAC للنظام.
-    if (Platform.isWindows) return true;
-    if (!Platform.isAndroid) return false;
+    if (PlatformInfo.isWindows) return true;
+    if (!PlatformInfo.isAndroid) return false;
     try {
       return await _channel.invokeMethod<bool>('canInstall') ?? false;
     } catch (_) {
@@ -107,11 +108,11 @@ class UpdateInstaller {
   /// ينزّل APK من [url] ويبث التقدم، ثم يفتح شاشة تثبيت النظام.
   /// لا يرمي استثناءً — يبث InstallPhase.failed مع سبب عربي مفهوم.
   Stream<InstallProgress> downloadAndInstall(String url) async* {
-    if (Platform.isWindows) {
+    if (PlatformInfo.isWindows) {
       yield* _windowsDownloadAndInstall(url);
       return;
     }
-    if (!Platform.isAndroid) {
+    if (!PlatformInfo.isAndroid) {
       yield const InstallProgress(InstallPhase.failed,
           error: 'التحديث المباشر متاح على أندرويد وويندوز فقط.');
       return;
@@ -235,11 +236,11 @@ class UpdateInstaller {
   /// أندرويد: نافذة مستندات النظام؛ ويندوز: المستكشف على الملف نفسه.
   static Future<bool> openDownloadsFolder(String path) async {
     try {
-      if (Platform.isAndroid) {
+      if (PlatformInfo.isAndroid) {
         final r = await _channel.invokeMethod<bool>('openDownloadsFolder');
         return r ?? false;
       }
-      if (Platform.isWindows && path.isNotEmpty) {
+      if (PlatformInfo.isWindows && path.isNotEmpty) {
         await Process.start('explorer.exe', ['/select,', path],
             mode: ProcessStartMode.detached);
         return true;
@@ -353,7 +354,7 @@ class UpdateInstaller {
   /// التطبيق الخارجي. بقية الأنظمة: مجلد مؤقت يُنظف قبل كل تنزيل.
   Future<Directory> _downloadDir(String fileName) async {
     Directory? dir;
-    if (Platform.isAndroid) {
+    if (PlatformInfo.isAndroid) {
       try {
         final d = Directory('/storage/emulated/0/Download/Nexora');
         await d.create(recursive: true);

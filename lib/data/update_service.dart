@@ -7,11 +7,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
 import '../core/app_version.dart';
+import '../core/platform_info.dart';
 
 /// مفتاح معالج أندرويد الحالي، أو `null` إن لم نعرفه (منصّة أخرى).
 ///
@@ -19,7 +19,7 @@ import '../core/app_version.dart';
 /// حسب المعالج (split-per-abi) أصغر بنحو النصف من الشاملة، فإن تعذّرت
 /// معرفة المعالج رجعنا إلى الشاملة (`downloads.android`) بلا ضرر.
 String? androidAbiKey() {
-  if (!Platform.isAndroid) return null;
+  if (!PlatformInfo.isAndroid) return null;
   switch (ffi.Abi.current()) {
     case ffi.Abi.androidArm64:
       return 'arm64';
@@ -147,8 +147,8 @@ class UpdateService {
         platform = platform ?? detectPlatform();
 
   static UpdatePlatform detectPlatform() {
-    if (Platform.isAndroid) return UpdatePlatform.android;
-    if (Platform.isWindows) return UpdatePlatform.windows;
+    if (PlatformInfo.isAndroid) return UpdatePlatform.android;
+    if (PlatformInfo.isWindows) return UpdatePlatform.windows;
     return UpdatePlatform.other;
   }
 

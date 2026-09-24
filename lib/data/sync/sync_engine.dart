@@ -457,6 +457,11 @@ class SyncEngine {
         try {
           await repo.purgeExpiredChatMessages();
         } catch (_) {}
+        // (2026-09-24) النمط الفردي: تقليم سجل العمليات المحلي (بلا ناقل
+        // سحابي يستهلكه) حتى لا تتضخّم القاعدة بلا حد.
+        try {
+          await repo.pruneIndividualOperations();
+        } catch (_) {}
         // (3.70) النسخ الاحتياطي التلقائي الموحّد: المجدول (محلي/Drive/سحابي)
         // أو الصامت القديم — فشل أي مسار يُبتلع ويُعاد في الدورة القادمة.
         try {
@@ -479,6 +484,10 @@ class SyncEngine {
       // (دفعة 58) تنظيف الدردشة المنتهية عمرها فور الإقلاع أيضاً.
       try {
         await repo.purgeExpiredChatMessages();
+      } catch (_) {}
+      // (2026-09-24) تقليم سجل العمليات عند الإقلاع أيضاً (النمط الفردي).
+      try {
+        await repo.pruneIndividualOperations();
       } catch (_) {}
     });
     // مصالحة دورية سريعة لقائمة الأجهزة/الملكية: تكتشف نقل الملكية إلينا أو

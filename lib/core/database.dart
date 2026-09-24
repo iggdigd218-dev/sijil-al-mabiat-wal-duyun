@@ -390,9 +390,30 @@ class AppDatabase {
   static Future<void> ensureItemCategoryColumns(Database db) async {
     await _alterAddColumn(db, 'item_categories', 'parent_id', 'INTEGER');
     await _alterAddColumn(db, 'item_categories', 'section_id', 'INTEGER');
+    // (2026-09-24) الحذف الناعم: القواعد القديمة تملكها من _migrate4to5،
+    // والجديدة من التعريف؛ والترميم يضمن وجودها في الحالتين.
+    await _alterAddColumn(db, 'item_categories', 'deleted_at', "TEXT DEFAULT ''");
+    await _alterAddColumn(db, 'item_categories', 'deleted_by', 'INTEGER');
+    await _alterAddColumn(
+        db, 'item_categories', 'restore_op_id', "TEXT DEFAULT ''");
+    // ── الفهارس الحيوية ──
+    // عزل المساحات: كل استعلام فئات مقيد بـ workspace_id.
+    try {
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_item_cat_ws '
+          'ON item_categories(workspace_id)');
+    } catch (_) {}
     try {
       await db.execute('CREATE INDEX IF NOT EXISTS idx_item_cat_parent '
           'ON item_categories(parent_id)');
+    } catch (_) {}
+    // تسريع الفرز والبحث في الأصناف (شاشة المخزون ترتّب بالكمية والسعر).
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_items_qty ON items(quantity)');
+    } catch (_) {}
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_items_price ON items(sell_price)');
     } catch (_) {}
     try {
       await db.execute(
@@ -525,8 +546,16 @@ class AppDatabase {
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name       TEXT NOT NULL,
-        parent_id  INTEGER NULL REFERENCES item_categories(id) ON DELETE CASCADE,
+        -- (2026-09-24) SET NULL لا CASCADE: حذف فئة أب يمحو أبناءها محلياً
+        -- دون أن تُولَّد عمليات حذف متزامنة لها ⇒ بقية الأجهزة تبقى متسقة.
+        parent_id  INTEGER NULL REFERENCES item_categories(id) ON DELETE SET NULL,
         section_id INTEGER NULL REFERENCES sections(id) ON DELETE SET NULL,
+        -- (2026-09-24) أعمدة الحذف الناعم موحّدة مع بقية جداول الكيانات؛
+        -- كانت تُضاف للقواعد القديمة فقط (_migrate4to5) فتختلف بنية التثبيت
+        -- الجديد عن المُرقّى. صارت جزءاً من التعريف والترميم معاً.
+        deleted_at TEXT DEFAULT '',
+        deleted_by INTEGER,
+        restore_op_id TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )''';

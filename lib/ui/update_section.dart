@@ -1,6 +1,5 @@
 // قسم التحديثات في الإعدادات + الفحص التلقائي عند بدء التشغيل.
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +12,7 @@ import '../data/providers.dart';
 import '../data/update_installer.dart';
 import '../data/update_service.dart';
 import 'widgets.dart';
+import '../core/platform_info.dart';
 
 /// خدمة التحديث (قابلة للاستبدال في الاختبارات).
 final updateServiceProvider = Provider<UpdateService>((ref) => UpdateService());
@@ -49,7 +49,7 @@ Future<void> startOneClickUpdate(
   UpdateInfo info,
 ) async {
   final url = info.downloadUrl;
-  final oneClick = Platform.isAndroid || Platform.isWindows;
+  final oneClick = PlatformInfo.supportsSelfUpdate;
   if (!oneClick || url == null) {
     final ok = await openUpdateLink(info);
     if (!ok && context.mounted) showSnack(context, 'تعذّر فتح رابط التحديث');
@@ -146,7 +146,7 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
         ),
       InstallPhase.downloading => (
           'جارٍ تنزيل التحديث…',
-          Platform.isWindows
+          PlatformInfo.isWindows
               ? (_state.progress != null
                   ? '${(_state.progress! * 100).round()}٪ — أبقِ التطبيق '
                       'مفتوحاً حتى يكتمل التنزيل'
@@ -158,7 +158,7 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
         ),
       InstallPhase.launchingInstaller || InstallPhase.done => (
           'اكتمل التنزيل ✅',
-          Platform.isWindows
+          PlatformInfo.isWindows
               ? 'سيُفتح معالج التثبيت الآن — اتبع خطواته وسيُغلق التطبيق '
                   'تلقائياً لإتمام التحديث. بياناتك محفوظة.'
               : 'اضغط «تثبيت» في شاشة النظام لإتمام التحديث. بياناتك محفوظة.',
@@ -191,7 +191,7 @@ class _OneClickUpdateDialogState extends State<_OneClickUpdateDialog> {
         actions: [
           // على أندرويد يواصل مدير تنزيلات النظام في الخلفية؛ على ويندوز
           // التنزيل داخل التطبيق فلا نعرض زر «متابعة في الخلفية».
-          if (downloading && !Platform.isWindows)
+          if (downloading && !PlatformInfo.isWindows)
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('متابعة في الخلفية'),

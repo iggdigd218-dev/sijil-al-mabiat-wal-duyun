@@ -18,6 +18,7 @@ import 'barcode_scanner.dart';
 import 'trial_ui.dart' show featureNeedsStamp;
 import 'tx_share.dart';
 import 'widgets.dart';
+import '../core/data_change.dart';
 
 enum _PosPayment {
   cash('نقداً 💵', 'cash'),
@@ -88,6 +89,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _discountCtrl = TextEditingController(text: d.discountText);
     _notesCtrl = TextEditingController(text: d.notesText);
     _tabController = TabController(length: 2, vsync: this);
+    // (2026-09-24) بيع من الزر العائم ⇒ حدّث الأرصدة والمسودة فوراً.
+    dataChangeTick.addListener(_onExternalDataChange);
     // (3.70 — المرحلة 4) RBAC محلي Offline-Ready: حقل الخصم يظهر فقط
     // لصاحب صلاحية can_discount.
     ref.read(repoProvider).effectivePermissions().then((p) {
@@ -107,8 +110,17 @@ class _PosScreenState extends ConsumerState<PosScreen>
     };
   }
 
+  /// (2026-09-24) كتابة خارجية (الزر العائم): أعد قراءة الأصناف فتظهر
+  /// الأرصدة الحديثة، وحدّث المسودة المعروضة.
+  void _onExternalDataChange() {
+    if (!mounted) return;
+    bump(ref);
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    dataChangeTick.removeListener(_onExternalDataChange);
     if (PosScreen.openCheckoutBridge != null) {
       PosScreen.openCheckoutBridge = null;
     }

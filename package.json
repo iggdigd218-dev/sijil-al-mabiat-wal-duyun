@@ -1,7 +1,7 @@
 {
   "name": "sijil-al-mabiat-wal-duyun",
   "private": true,
-  "version": "3.70.0",
+  "version": "3.75.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",

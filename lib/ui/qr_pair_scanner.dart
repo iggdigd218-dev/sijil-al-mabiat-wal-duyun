@@ -1,12 +1,12 @@
 // شاشة مسح QR للاقتران السحابي (دفعة 58: الدعوات السحابية حصرياً —
 // حُذف تماماً تحليل رموز LAN القديمة nexora://pair بعنوان IP).
 // تستخدم mobile_scanner نفسها المستخدمة في barcode_scanner.dart.
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../data/sync/cloud_join.dart';
+import '../core/platform_info.dart';
 
 class PairingData {
   final String ws;
@@ -34,7 +34,7 @@ class PairingData {
 }
 
 Future<PairingData?> scanQrPair(BuildContext context) async {
-  if (!Platform.isAndroid && !Platform.isIOS) {
+  if (!PlatformInfo.isMobile) {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(
         content: Text(

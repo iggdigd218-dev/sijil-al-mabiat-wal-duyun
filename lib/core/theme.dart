@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'platform_info.dart';
 
 /// خط واجهة التطبيق.
 ///
@@ -126,7 +127,7 @@ class AppTheme {
   static bool get _desktop {
     try {
       if (Platform.environment.containsKey('FLUTTER_TEST')) return false;
-      return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+      return PlatformInfo.isDesktop;
     } catch (_) {
       return false;
     }

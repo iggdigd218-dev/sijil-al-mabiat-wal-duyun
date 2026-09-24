@@ -673,16 +673,23 @@ class _HierarchyChipBar extends StatelessWidget {
           orElse: () => null,
         );
     final subs = selectedRoot?.children ?? const <ItemCategory>[];
+    // (2026-09-24) شاشة صغيرة أو لوحة مفاتيح مفتوحة ⇒ شريط أنحف وهوامش
+    // أضيق: every pixel تذهب لعرض الأصناف بدل الشريط المزدوج.
+    final mq = MediaQuery.of(context);
+    final tight = mq.size.height < 700 || mq.viewInsets.bottom > 0;
+    final sectionHeight = tight ? 38.0 : 46.0;
+    final categoryHeight = tight ? 34.0 : 42.0;
+    final sidePadding = tight ? 8.0 : 12.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // ===== الصف الأول: الأقسام =====
         SizedBox(
-          height: 46,
+          height: sectionHeight,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: EdgeInsets.symmetric(horizontal: sidePadding),
             children: [
               _Chip(
                 label: 'الكل',
@@ -725,10 +732,10 @@ class _HierarchyChipBar extends StatelessWidget {
         ),
         // ===== الصف الثاني: فئات القسم =====
         SizedBox(
-          height: 42,
+          height: categoryHeight,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: EdgeInsets.symmetric(horizontal: sidePadding),
             children: [
               _Chip(
                 label: 'كل الفئات',

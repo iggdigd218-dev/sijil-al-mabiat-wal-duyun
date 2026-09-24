@@ -3379,6 +3379,54 @@ class Repo {
   /// documents/chat_media. تعمل دورياً عند الإقلاع وفي دورة الصيانة —
   /// على كل جهاز محلياً، والمدير يطهّر المسار السحابي بالتوازي
   /// (CloudJoin.purgeOldChatOperations). يعيد عدد الرسائل المحذوفة.
+  /// (2026-09-24) تنظيف سجل [operations] في نمط الحساب الفردي.
+  ///
+  /// في النمط الفردي لا يوجد ناقل سحابي (ولا صفوف sync_queue أصلاً)، فتبقى
+  /// كل عملية محلية مكدَّسة إلى الأبد ويتضخّم حجم القاعدة بلا داعٍ. نحذف
+  /// العمليات الأقدم من مهلة الاحتفاظ بشرطين:
+  ///   • ليست معلّقة في sync_queue (لم تُسلَّم بعد).
+  ///   • ليست أحدث عملية لكيانها (آخر حالة لكل كيان تُحفظ دائماً).
+  /// تُستدعى من دورة الصيانة (كل 6 ساعات) وعند الإقلاع. تعيد عدد المحذوف.
+  Future<int> pruneIndividualOperations({
+    Duration retention = const Duration(days: 90),
+  }) async {
+    final db = await _db;
+    final st = await db.query('settings',
+        columns: ['key', 'value'],
+        where: 'key IN (?, ?)',
+        whereArgs: ['account.type', 'cloudBackendUrl']);
+    final map = {for (final r in st) r['key'] as String: r['value'] as String?};
+    final individual = (map['account.type'] ?? '') == 'individual';
+    // احتياط: بلا ناقل سحابي مهيأ ⇒ لا مستهلك للسجل، والتنظيف آمن أيضاً.
+    final noTransport = effectiveBackendUrl(map['cloudBackendUrl']).isEmpty;
+    if (!individual && !noTransport) return 0;
+    final cutoff = DateTime.now().subtract(retention).toIso8601String();
+    try {
+      return await db.rawDelete('''
+        DELETE FROM operations
+        WHERE timestamp < ?
+          AND id NOT IN (
+            SELECT operation_id FROM sync_queue
+            WHERE status IN ('pending', 'syncing')
+          )
+          AND id NOT IN (
+            SELECT o2.id FROM operations o2
+            WHERE o2.entity_type = operations.entity_type
+              AND o2.entity_id = operations.entity_id
+              AND o2.rowid = (
+                SELECT o3.rowid FROM operations o3
+                WHERE o3.entity_type = operations.entity_type
+                  AND o3.entity_id = operations.entity_id
+                ORDER BY o3.timestamp DESC, o3.rowid DESC
+                LIMIT 1
+              )
+          )
+      ''', [cutoff]);
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<int> purgeExpiredChatMessages(
       {Duration ttl = const Duration(hours: 24)}) async {
     final db = await _db;
@@ -3749,6 +3797,9 @@ class Repo {
     'users',
     'accounts',
     'transactions',
+    // (2026-09-24) الأقسام قبل الفئات: section_id مفتاح أجنبي إلى sections
+    // — كانت sections غائبة تماماً عن مسار الاستعادة.
+    'sections',
     'item_categories',
     'items',
     'transaction_items',
@@ -3977,6 +4028,7 @@ class Repo {
           'templates',
           'trash',
           'notifications',
+          'sections',
         ]) {
           await txn.delete(table);
         }
@@ -3992,6 +4044,11 @@ class Repo {
         } catch (_) {
           // قواعد قديمة بلا جداول مزامنة.
         }
+
+        // (2026-09-24) معرّفات الأقسام المعروفة: تُستخدم لإفراغ أي مرجع
+        // يتيم (section_id لقسم لم يصل بعد) بدل إسقاط الاستعادة كلها.
+        final sectionRows = await txn.query('sections', columns: ['id']);
+        final knownSectionIds = <Object?>{for (final r in sectionRows) r['id']};
 
         var imported = 0;
         for (final table in _importOrder) {
@@ -4029,6 +4086,14 @@ class Repo {
               final oldPath = clean['value'];
               clean['value'] = oldPath is String ? (remap[oldPath] ?? '') : '';
             }
+            // حماية المفتاح الأجنبي: فئة/صنف يشير إلى قسم غير متوفر محلياً
+            // ⇒ نُفرغ العلاقة مؤقتاً (NULL) فيُعرض تحت «عام» بدل كسر قيد
+            // sections(id) وإسقاط الاستعادة بأكملها.
+            if ((table == 'item_categories' || table == 'items') &&
+                clean['section_id'] != null &&
+                !knownSectionIds.contains(clean['section_id'])) {
+              clean['section_id'] = null;
+            }
             if (clean.isEmpty) {
               throw BackupImportException(
                 'الصف ${index + 1} في $table لا يحتوي أعمدة مفهومة.',
@@ -4055,6 +4120,10 @@ class Repo {
                 clean,
                 conflictAlgorithm: ConflictAlgorithm.abort,
               );
+              // كل قسم يُستورد يصبح مرجعاً معروفاً لما بعده من الفئات.
+              if (table == 'sections' && clean['id'] != null) {
+                knownSectionIds.add(clean['id']);
+              }
             } catch (e) {
               throw BackupImportException(
                 'تعذّر استيراد الصف ${index + 1} من $table؛ أُلغيت الاستعادة بالكامل: $e',
@@ -4402,11 +4471,13 @@ class Repo {
     final name = section.name.trim();
     if (name.isEmpty) throw ArgumentError('اسم القسم مطلوب');
     final db = await _db;
+    // (2026-09-24) الفرادة مقيدة بمساحة العمل: نفس الاسم مسموح في مساحة
+    // أخرى وممنوع داخل المساحة نفسها (كان الفحص عالمياً).
     final duplicate = await db.query(
       'sections',
       columns: ['id'],
-      where: 'name = ? COLLATE NOCASE AND id != ?',
-      whereArgs: [name, section.id ?? -1],
+      where: 'name = ? COLLATE NOCASE AND id != ? AND workspace_id = ?',
+      whereArgs: [name, section.id ?? -1, requireWorkspaceId],
       limit: 1,
     );
     if (duplicate.isNotEmpty) throw StateError('يوجد قسم بهذا الاسم مسبقًا');
@@ -4416,6 +4487,9 @@ class Repo {
     if (section.id == null) {
       id = await db.insert('sections', {
         'id': newGlobalId(),
+        // (2026-09-24) مساحة العمل تُحفظ صراحةً: بلاها يبقى الصف على
+        // القيمة الافتراضية 'default' فلا يطابقه فحص الفرادة المقيد بالمساحة.
+        'workspace_id': requireWorkspaceId,
         'name': name,
         'icon': section.icon,
         'sort_order': section.sortOrder,
@@ -4624,6 +4698,12 @@ class Repo {
         cursor = up;
       }
     }
+    // (2026-09-24) نقرأ القسم **السابق** قبل التحديث: قراءته بعد التحديث
+    // تعيد القسم الجديد نفسه فلا يحدث أي نقل (خطأ مقارنة صامت).
+    final prevRows = await db.query('item_categories',
+        columns: ['section_id'], where: 'id = ?', whereArgs: [id], limit: 1);
+    final prevSection =
+        prevRows.isEmpty ? null : prevRows.first['section_id'] as int?;
     await db.transaction((txn) async {
       await txn.update(
         'item_categories',
@@ -4636,9 +4716,14 @@ class Repo {
         where: 'id = ?',
         whereArgs: [id],
       );
+      // (2026-09-24) نقل الفئة إلى قسم جديد ⇒ أصنافها تتبعها.
       await txn.update(
         'items',
-        {'category': name, 'updated_at': now},
+        <String, Object?>{
+          'category': name,
+          'updated_at': now,
+          if (prevSection != category.sectionId) 'section_id': category.sectionId,
+        },
         where: 'category_id = ?',
         whereArgs: [id],
       );
@@ -4731,6 +4816,26 @@ class Repo {
     return r.isEmpty ? null : Item.fromMap(r.first);
   }
 
+  /// (2026-09-24) هل يسمح الإعداد «السماح بالبيع عند نفاد الرصيد الدفتري»؟
+  ///
+  /// تُقرأ داخل منفّذ المعاملة نفسها: استعلام عبر [settings] (اتصال آخر)
+  /// أثناء احتفاظ المعاملة بقفل كتابة ⇒ تجميد متبادل (deadlock) يجمّد
+  /// الحركة 30 ثانية ثم يُفشل الاختبار/العملية.
+  Future<bool> _allowNegativeStock(DatabaseExecutor txn) async {
+    try {
+      final rows = await txn.query(
+        'settings',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['allowNegativeStock'],
+        limit: 1,
+      );
+      return rows.isNotEmpty && '${rows.first['value']}' == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<int> saveItem(Item it) async {
     await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
@@ -4752,14 +4857,19 @@ class Repo {
     // (2026-09-22) القسم: إن لم يُحدَّد للصنف صراحةً نستمدّه من فئته،
     // فتبقى الهرمية (قسم ← فئة ← صنف) متسقة بلا جهد من المستخدم.
     Item itemToSave = it;
-    if (it.sectionId == null && it.categoryId != null) {
+    if (it.categoryId != null) {
       final catRows = await db.query('item_categories',
           columns: ['section_id'],
           where: 'id = ?',
           whereArgs: [it.categoryId],
           limit: 1);
       final sid = catRows.isEmpty ? null : catRows.first['section_id'] as int?;
-      if (sid != null) itemToSave = it.copyWith(sectionId: sid);
+      // (2026-09-24) الفئة هي المرجع في الهرمية (قسم ← فئة ← صنف):
+      //  • بلا قسم للصنف ⇒ يستمدّه من فئته (السلوك القديم).
+      //  • قسم صريح يخالف قسم فئته ⇒ يُصحَّح تلقائياً.
+      if (sid != null && (it.sectionId == null || it.sectionId != sid)) {
+        itemToSave = it.copyWith(sectionId: sid);
+      }
     }
     late final int id;
     if (itemToSave.id == null) {
@@ -4865,10 +4975,19 @@ class Repo {
         // منع البيع/الخصم بما يتجاوز الرصيد المتاح (لا مخزون سالب).
         // (سلامة الحساب) مقارنة بتسامح: كمية متاحة 0.29999999999999999
         // كانت ترفض بيع 0.3 المتاح واقعيّاً.
-        if (m.kind == StockKind.sale && Fmt.moneyGt(m.quantity, it.quantity)) {
+        // (2026-09-24) حكم صارم: الرصيد الناتج عن أي حركة (بيع/تسوية/
+        // مرتجع …) لا يصير سالباً إلا بتفعيل «السماح بالبيع عند نفاد الرصيد
+        // الدفتري» صراحةً في الإعدادات.
+        final allowNegative = await _allowNegativeStock(txn);
+        final resultingQty = it.quantity + delta;
+        if (!allowNegative && Fmt.moneyGt(0, resultingQty)) {
           throw StateError(
-            'الكمية المطلوبة من «${it.name}» غير متوفرة. '
-            'المتاح: ${it.quantity.toStringAsFixed(0)} ${it.unit}.',
+            m.kind == StockKind.sale
+                ? 'الكمية المطلوبة من «${it.name}» غير متوفرة. '
+                    'المتاح: ${it.quantity.toStringAsFixed(0)} ${it.unit}.'
+                : 'لا يمكن أن يصير رصيد «${it.name}» سالباً '
+                    '(الناتج ${resultingQty.toStringAsFixed(0)} ${it.unit}). '
+                    'فعّل «السماح بالبيع عند نفاد الرصيد» من الإعدادات.',
           );
         }
         final now = DateTime.now().toIso8601String();

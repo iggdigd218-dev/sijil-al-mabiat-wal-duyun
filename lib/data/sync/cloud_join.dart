@@ -2073,7 +2073,7 @@ class CloudJoin {
           : Map<String, Object?>.from(rawRoster);
       if (roster.isNotEmpty) {
         for (final k in roster.keys) {
-          final id = '$k';
+          final id = k;
           if (id.isEmpty || id == keepDeviceId) continue;
           try {
             await _delete(

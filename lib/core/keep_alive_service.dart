@@ -5,15 +5,14 @@
 // حتى أثناء سكون الهاتف والشاشة مطفأة، ولا يقتله النظام لضغط الذاكرة.
 // كما نطلب من المستخدم — عبر نافذة النظام الرسمية وليس نافذة مصطنعة —
 // إعفاء التطبيق من تحسينات البطارية وإذن الإشعارات (أندرويد 13+).
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
+import 'platform_info.dart';
 
 class NexKeepAlive {
   static const MethodChannel _channel = MethodChannel('nexora/sfx');
 
-  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+  static bool get _isAndroid => PlatformInfo.isAndroid;
 
   /// يشغّل/يوقف خدمة اليقظة. تُفعّل عند دخول مجموعة وتُوقف عند مغادرتها.
   static Future<void> setEnabled(bool on) async {

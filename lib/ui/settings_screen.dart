@@ -30,6 +30,7 @@ import 'join_approval_flow.dart' show startJoinApprovalFlow;
 import 'group_management_screen.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
+import '../core/platform_info.dart';
 
 /// الإعدادات — نقل مفاتيح `settings.js` كاملة، مع حفظ صريح بزر واحد.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -1040,7 +1041,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           ],
                           // (الزر العائم) أندرويد فقط: فقاعة الاستعلام والبيع
                           // السريع فوق التطبيقات الأخرى + بلاطة الستارة.
-                          if (Platform.isAndroid) ...[
+                          if (PlatformInfo.isAndroid) ...[
                             const SizedBox(height: 18),
                             const _Collapsible(
                               title: 'الزر العائم للبيع السريع',

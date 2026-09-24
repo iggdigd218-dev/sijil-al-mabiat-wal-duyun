@@ -1,13 +1,13 @@
 // خدمة المصادقة بـ Google.
 // تُستخدم لإثبات هوية المالك وربط Workspace بحساب Google.
 // النطاقات المطلوبة محدودة: email + openid + profile (لا Drive هنا).
-import 'dart:io';
 
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/auth_config.dart';
 import '../../core/token_cipher.dart';
+import '../../core/platform_info.dart';
 
 class GoogleUser {
   final String id; // Google sub (subject) ثابت لكل حساب
@@ -254,4 +254,4 @@ class GoogleAuthService {
   }
 }
 
-bool isPlatformSupportingGoogleSignIn() => Platform.isAndroid || Platform.isIOS;
+bool isPlatformSupportingGoogleSignIn() => PlatformInfo.isMobile;

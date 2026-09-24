@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'platform_info.dart';
 
 /// عتبة «الشاشة الكبيرة» بالـ dp — فوقها نعتمد هندسة سطح المكتب.
 const double kDesktopBreakpoint = 900;
@@ -12,7 +13,7 @@ const double kDesktopBreakpoint = 900;
 bool get isDesktopPlatform {
   if (kIsWeb) return false;
   try {
-    return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    return PlatformInfo.isDesktop;
   } catch (_) {
     return false;
   }

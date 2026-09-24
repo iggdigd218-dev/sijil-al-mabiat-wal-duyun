@@ -3,13 +3,13 @@
 // الهوية بعد حذف التطبيق وإعادة تثبيته — يمنع «الأشباح» في قائمة الأجهزة:
 // إعادة الانضمام تُحيي السجل القديم بدوره وصلاحياته بدل إنشاء جهاز مكرر.
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 import '../repository.dart';
+import '../../core/platform_info.dart';
 
 const _chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const _deviceIdKey = 'sync.deviceId';
@@ -41,7 +41,7 @@ String _hashToCode(String input, [int len = 12]) {
 Future<String?> hardwareFingerprintRaw() async {
   try {
     final plugin = DeviceInfoPlugin();
-    if (Platform.isAndroid) {
+    if (PlatformInfo.isAndroid) {
       final a = await plugin.androidInfo;
       // (تدعيم البصمة) مكوّنات عتادية ثابتة لنفس الجهاز الفعلي حتى بعد
       // مسح بيانات التطبيق أو إعادة تثبيته:
@@ -57,21 +57,21 @@ Future<String?> hardwareFingerprintRaw() async {
       final parts = [a.id, fpStable, a.hardware, a.model, a.board];
       return 'android:${parts.join('|')}';
     }
-    if (Platform.isWindows) {
+    if (PlatformInfo.isWindows) {
       final w = await plugin.windowsInfo;
       // deviceId = MachineGuid — ثابت عبر إعادة تثبيت التطبيق.
       return 'windows:${w.deviceId}|${w.computerName}';
     }
-    if (Platform.isLinux) {
+    if (PlatformInfo.isLinux) {
       final l = await plugin.linuxInfo;
       // machineId من /etc/machine-id — ثابت للنظام.
       return 'linux:${l.machineId ?? l.id}|${l.name}';
     }
-    if (Platform.isMacOS) {
+    if (PlatformInfo.isMacOS) {
       final m = await plugin.macOsInfo;
       return 'macos:${m.systemGUID ?? m.computerName}';
     }
-    if (Platform.isIOS) {
+    if (PlatformInfo.isIOS) {
       final i = await plugin.iosInfo;
       return 'ios:${i.identifierForVendor ?? i.utsname.machine}';
     }

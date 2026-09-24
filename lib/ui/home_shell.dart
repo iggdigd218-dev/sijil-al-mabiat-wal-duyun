@@ -36,7 +36,6 @@ import 'transactions_screen.dart';
 import 'tx_form.dart';
 import 'vouchers_screen.dart';
 import 'pos_screen.dart';
-import 'sync_status_indicator.dart';
 import 'widgets/sync_arrows_indicator.dart';
 import 'sync_ops_screen.dart';
 import '../data/sync/sync_service.dart';
@@ -102,7 +101,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// الشريط الجانبي المكتبي: مطوي (أيقونات) أو موسّع (أيقونات + عناوين).
   bool _railExtended = true;
 
-  Future<SyncStatusInfo>? _syncFuture;
   Timer? _syncTimer;
   bool _updatePrompted = false;
 
@@ -862,9 +860,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final repo = ref.read(repoProvider);
     final engine = ref.read(syncEngineProvider);
     if (!engine.hasStarted) engine.start();
-    setState(() {
-      _syncFuture = _safeSyncStatus(repo, engine);
-    });
+    // (2026-09-24) أُزيلت شارة المزامنة المكرّرة من الشريط؛ نُبقي الاستعلام
+    // الدوري (يهيّئ حالة المزامنة) بلا تخزين نتيجته — لا مستهلك لها بعد الآن.
+    unawaited(_safeSyncStatus(repo, engine));
   }
 
   /// (3.71.0+136) درع سباق الإغلاق: تحديث دوري قيد الطيران قد يكتمل بعد
@@ -1329,25 +1327,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
-            // مؤشر المزامنة: يختفي في الوضع المستقل (جهاز واحد لا مجموعة).
-            // الضغط عليه يفتح قسم «العمليات والمزامنة» مباشرة.
-            Consumer(
-              builder: (ctx, rref, _) {
-                final modeAsync = rref.watch(workspaceModeProvider);
-                final mode = modeAsync.valueOrNull ?? 'standalone';
-                if (mode == 'standalone') return const SizedBox.shrink();
-                return FutureBuilder<SyncStatusInfo>(
-                  future: _syncFuture,
-                  builder: (ctx, snap) {
-                    if (!snap.hasData) return const SizedBox.shrink();
-                    return SyncStatusBadge(
-                      info: snap.data!,
-                      onTap: () => _go(AppScreen.syncOps),
-                    );
-                  },
-                );
-              },
-            ),
+            // (2026-09-24) أُزيلت شارة المزامنة المكرّرة: كانت تزاحم اسم
+            // المنشأة والشعار في شريط العنوان على الشاشات الضيقة، وتكرّر
+            // ما يعرضه SyncArrowsIndicator (السهمان ↑↓) بنقرة واحدة.
+            // المرجع الوحيد لحالة المزامنة صار السهمين (أنظر أدناه)، وشاشة
+            // «العمليات والمزامنة» متاحة من الشريط الجانبي والسهمين معاً.
             // (3.71.0) مؤشرا المزامنة اللحظيان (↑↓) — بجوار الجرس
             // مباشرة؛ يختفيان في الوضع الفردي، والنقر يفتح ورقة التشخيص.
             const SyncArrowsIndicator(),

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -11,12 +10,14 @@ import '../core/models.dart';
 import '../data/repository.dart';
 import 'floating_pos_overlay.dart';
 import 'quick_pos_protocol.dart';
+import '../core/platform_info.dart';
+import '../core/data_change.dart';
 
 /// إدارة «الزر العائم للاستعلام والبيع السريع» من جانب التطبيق الأم.
 ///
 /// قواعد العزل (بناء آمن على ويندوز/سطح المكتب):
 ///  * كل استدعاء لإضافة flutter_overlay_window محمي بـ [supported]
-///    (`Platform.isAndroid`) — لا يُستدعى شيء منها على غير أندرويد إطلاقاً.
+///    ([PlatformInfo.supportsOverlay]) — لا يُستدعى شيء منها على غير أندرويد إطلاقاً.
 ///  * قراءة وكتابة SQLite تتم حصراً هنا (اتصال واحد، WAL) ثم تُرسل
 ///    النتيجة كرسالة JSON إلى واجهة النافذة العائمة.
 class FloatingPosService {
@@ -34,7 +35,7 @@ class FloatingPosService {
   bool _bound = false;
 
   /// أندرويد فقط — الميزة عديمة المعنى على ويندوز/سطح المكتب.
-  static bool get supported => Platform.isAndroid;
+  static bool get supported => PlatformInfo.supportsOverlay;
 
   // ---------------- التفضيل المحلي (جهاز واحد، بلا مزامنة) ----------------
 
@@ -298,6 +299,9 @@ class RepoQuickPosSource implements QuickPosDataSource {
       ),
     );
     final fresh = await repo.item(itemId);
+    // (2026-09-24) أبلغ الواجهة (نقطة البيع/المخزون) أن الأرصدة تغيّرت
+    // خارجها فتُحدَّث فوراً بلا انتظار إعادة فتح.
+    markDataChanged();
     return QuickPosSaleResult(
       ok: true,
       ref: ref,

@@ -180,7 +180,7 @@ class _SyncDiagnosticsSheetState extends ConsumerState<_SyncDiagnosticsSheet> {
       // (2026-09-22) مؤشر «كل جهاز في مساحة منفصلة» يُقرأ من الإعدادات
       // فيظهر في التقرير الفني بدل أن يبقى عطلاً صامتاً.
       diag.droppedOtherWs = int.tryParse('${st['sync.droppedOtherWs']}') ?? 0;
-      diag.droppedOtherWsSample = '${st['sync.droppedOtherWsSample'] ?? ''}';
+      diag.droppedOtherWsSample = (st['sync.droppedOtherWsSample'] ?? '') as String? ?? '';
       final report = diag.buildTechnicalReport(
         appVersion: '$kAppVersion+$kAppBuild',
         workspaceId: repo.requireWorkspaceId,
