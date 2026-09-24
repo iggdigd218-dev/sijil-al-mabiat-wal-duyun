@@ -6,8 +6,9 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'quick_pos_protocol.dart';
 import '../core/platform_info.dart';
 
+import '../core/theme.dart';
 /// لون الهوية الموحّد (المخزون • نقطة البيع • الزر العائم).
-const Color kQuickPosTeal = Color(0xFF0F766E);
+const Color kQuickPosTeal = AppColors.primary;
 
 /// قناة الربط بين واجهة النافذة العائمة والتطبيق الأم.
 ///

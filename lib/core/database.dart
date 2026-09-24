@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 24;
+  static const int _version = 25;
 
   static int get schemaVersion => _version;
 
@@ -376,6 +376,11 @@ class AppDatabase {
       // مباشر داخل try/catch — لا انهيار عند الفتح، ولا استثناء في الواجهة.
       await ensureItemCategoryColumns(db);
     } catch (_) {}
+    try {
+      // (2026-09-24) أعمدة هوية الأقسام — نفس المنطق: ترميم مباشر إن
+      // تعذّرت الهجرة لأي سبب.
+      await ensureSectionColumns(db);
+    } catch (_) {}
   }
 
   /// (2026-09-24) ترميم ذاتي لأعمدة شجرة الفئات في `item_categories`.
@@ -396,6 +401,13 @@ class AppDatabase {
     await _alterAddColumn(db, 'item_categories', 'deleted_by', 'INTEGER');
     await _alterAddColumn(
         db, 'item_categories', 'restore_op_id', "TEXT DEFAULT ''");
+    // (2026-09-24) الهوية البصرية للفئة: أيقونة + لون باستيل + صورة.
+    await _alterAddColumn(
+        db, 'item_categories', 'icon_key', "TEXT DEFAULT ''");
+    await _alterAddColumn(
+        db, 'item_categories', 'color_hex', "TEXT DEFAULT ''");
+    await _alterAddColumn(
+        db, 'item_categories', 'image_path', "TEXT DEFAULT ''");
     // ── الفهارس الحيوية ──
     // عزل المساحات: كل استعلام فئات مقيد بـ workspace_id.
     try {
@@ -419,6 +431,27 @@ class AppDatabase {
       await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_cat_section ON item_categories(section_id)');
     } catch (_) {}
+  }
+
+  /// (2026-09-24) ترميم ذاتي لأعمدة هوية الأقسام في `sections`
+  /// (`icon_key`, `color_hex`, `image_path`) — نفس فلسفة
+  /// [ensureItemCategoryColumns]: idempotent ولا يُسقط فتح التطبيق.
+  static Future<void> ensureSectionColumns(Database db) async {
+    await _alterAddColumn(db, 'sections', 'icon_key', "TEXT DEFAULT ''");
+    await _alterAddColumn(db, 'sections', 'color_hex', "TEXT DEFAULT ''");
+    await _alterAddColumn(db, 'sections', 'image_path', "TEXT DEFAULT ''");
+  }
+
+  /// (2026-09-24) الهوية البصرية للأقسام والفئات: أيقونة من الكتالوج،
+  /// لون باستيل للكرت، وصورة اختيارية. idempotent — آمن على كل القواعد.
+  static Future<void> migrateToV25(Database db) async {
+    await ensureSectionColumns(db);
+    await _alterAddColumn(
+        db, 'item_categories', 'icon_key', "TEXT DEFAULT ''");
+    await _alterAddColumn(
+        db, 'item_categories', 'color_hex', "TEXT DEFAULT ''");
+    await _alterAddColumn(
+        db, 'item_categories', 'image_path', "TEXT DEFAULT ''");
   }
 
   /// `ALTER TABLE … ADD COLUMN` آمن: يتجاهل «duplicate column name» وأي
@@ -535,6 +568,11 @@ class AppDatabase {
         workspace_id TEXT NOT NULL DEFAULT 'default',
         name        TEXT NOT NULL,
         icon        TEXT DEFAULT '',
+        -- (2026-09-24) هوية القسم البصرية: أيقونة من كتالوج نكسورا،
+        -- لون باستيل للكرت، وصورة اختيارية.
+        icon_key    TEXT DEFAULT '',
+        color_hex   TEXT DEFAULT '',
+        image_path  TEXT DEFAULT '',
         sort_order  INTEGER NOT NULL DEFAULT 0,
         deleted_at  TEXT DEFAULT '',
         created_at  TEXT NOT NULL,
@@ -550,6 +588,10 @@ class AppDatabase {
         -- دون أن تُولَّد عمليات حذف متزامنة لها ⇒ بقية الأجهزة تبقى متسقة.
         parent_id  INTEGER NULL REFERENCES item_categories(id) ON DELETE SET NULL,
         section_id INTEGER NULL REFERENCES sections(id) ON DELETE SET NULL,
+        -- (2026-09-24) هوية الفئة البصرية (مثل الأقسام).
+        icon_key    TEXT DEFAULT '',
+        color_hex   TEXT DEFAULT '',
+        image_path  TEXT DEFAULT '',
         -- (2026-09-24) أعمدة الحذف الناعم موحّدة مع بقية جداول الكيانات؛
         -- كانت تُضاف للقواعد القديمة فقط (_migrate4to5) فتختلف بنية التثبيت
         -- الجديد عن المُرقّى. صارت جزءاً من التعريف والترميم معاً.
@@ -1078,6 +1120,10 @@ class AppDatabase {
     // تفشل بـ «table item_categories has no column named section_id».
     if (from < 24) {
       await migrateToV24(db);
+    }
+    // ====== v25 (2026-09-24): الهوية البصرية — icon_key/color_hex/image_path ======
+    if (from < 25) {
+      await migrateToV25(db);
     }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا

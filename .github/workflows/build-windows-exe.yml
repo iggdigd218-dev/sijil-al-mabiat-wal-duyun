@@ -51,6 +51,10 @@ jobs:
           Remove-Item -Recurse -Force windows -ErrorAction SilentlyContinue
           flutter create --platforms=windows --project-name nexora_app .
 
+      - name: Apply Nexora Windows branding (app icon + window/taskbar icon)
+        shell: pwsh
+        run: pwsh -File scripts\apply_windows_branding.ps1
+
       - name: Analyze (non-blocking)
         run: flutter analyze || true
 

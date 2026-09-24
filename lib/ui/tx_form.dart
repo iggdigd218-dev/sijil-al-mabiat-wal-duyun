@@ -458,7 +458,7 @@ class _TxFormState extends ConsumerState<TxForm> {
                 gradient: const LinearGradient(
                   begin: Alignment.topRight,
                   end: Alignment.bottomLeft,
-                  colors: [Color(0xFF1E3A5F), Color(0xFF0F766E)],
+                  colors: [Color(0xFF1E3A5F), AppColors.primary],
                 ),
                 borderRadius: BorderRadius.circular(16),
               ),

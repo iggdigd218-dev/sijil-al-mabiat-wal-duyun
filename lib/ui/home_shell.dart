@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/accounting.dart';
+import '../core/shell_nav.dart';
 import '../core/desktop.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
@@ -183,6 +184,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // (2026-09-24) قناة تنقّل من الشاشات الداخلية (زر الرئيسية في نقطة البيع).
+    ShellNav.request.addListener(_onShellNavRequest);
     // (منع تكرار الحوار) استعادة سجل الطلبات المعالجة قبل أي استطلاع.
     unawaited(_loadHandledJoinRequests());
     _refreshSync();
@@ -853,6 +856,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     SyncEngine.onSyncDanger = null;
     ChatHooks.onChatMessage = null;
     ChatHooks.onMemberNotice = null;
+    ShellNav.request.removeListener(_onShellNavRequest);
     super.dispose();
   }
 
@@ -1006,6 +1010,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
           await engine.recheckDangerNow();
         } catch (_) {}
       }
+    }
+  }
+
+  /// (2026-09-24) يستجيب لطلبات التنقّل القادمة من الشاشات الداخلية.
+  void _onShellNavRequest() {
+    final target = ShellNav.request.value;
+    if (target.isEmpty) return;
+    switch (target) {
+      case ShellNav.home:
+        _go(AppScreen.dashboard);
+      case ShellNav.inventory:
+        _go(AppScreen.inventory);
     }
   }
 
@@ -2077,14 +2093,14 @@ class _Drawer extends ConsumerWidget {
         AppScreen.reports => const Color(0xFF6366F1),
         AppScreen.settings => const Color(0xFF64748B),
         AppScreen.inventory => const Color(0xFF8B5CF6),
-        AppScreen.currencies => const Color(0xFF0D9488),
+        AppScreen.currencies => AppColors.primary2,
         AppScreen.vouchers => const Color(0xFFF59E0B),
         AppScreen.pos => const Color(0xFF16A34A),
         AppScreen.chat => const Color(0xFF22C55E),
         AppScreen.group => const Color(0xFF8B5CF6),
         AppScreen.trash => const Color(0xFFE11D48),
         AppScreen.activity => const Color(0xFF64748B),
-        AppScreen.backup => const Color(0xFF0D9488),
+        AppScreen.backup => AppColors.primary2,
         AppScreen.syncOps => const Color(0xFF0284C7),
       };
 
@@ -2115,7 +2131,7 @@ class _Drawer extends ConsumerWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [Color(0xFF1E3A5F), Color(0xFF0F766E)],
+                  colors: [Color(0xFF1E3A5F), AppColors.primary],
                 ),
                 borderRadius: BorderRadius.only(
                   bottomLeft: Radius.circular(22),

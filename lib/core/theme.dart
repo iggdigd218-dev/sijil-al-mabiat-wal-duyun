@@ -1,7 +1,4 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
-import 'platform_info.dart';
 
 /// خط واجهة التطبيق.
 ///
@@ -14,8 +11,8 @@ String? get uiFontFamily => 'Tajawal';
 /// الخاصة بهذا التطبيق وحده. لا علاقة لها بأي تطبيق آخر.
 class AppColors {
   // ===== الوضع الفاتح =====
-  static const bg = Color(0xFFF4F6FB); // --bg
-  static const bg2 = Color(0xFFEEF1F7); // --bg2
+  static const bg = Color(0xFFF4F6F9); // --bg
+  static const bg2 = Color(0xFFEDF1F8); // --bg2
   static const surface = Color(0xFFFFFFFF); // --surface
   static const surface2 = Color(0xFFF7F9FC); // --surface2
   static const text = Color(0xFF12223A); // --text
@@ -23,17 +20,17 @@ class AppColors {
   static const text3 = Color(0xFF8A97AB); // --text3
   static const border = Color(0xFFE2E8F2); // --border
 
-  static const primary = Color(0xFF0F766E); // --primary
-  static const primary2 = Color(0xFF0D9488); // --primary2
-  static const primarySoft = Color(0xFFE6F6F3); // --primary-soft
+  static const primary = Color(0xFF0D6EFD); // --primary
+  static const primary2 = Color(0xFF0066FF); // --primary2
+  static const primarySoft = Color(0xFFE8F0FF); // --primary-soft
   static const accent = Color(0xFFF59E0B); // --accent
   static const accentSoft = Color(0xFFFDF3E3); // --accent-soft
   static const danger = Color(0xFFE11D48); // --danger
   static const dangerSoft = Color(0xFFFDE8EE); // --danger-soft
   static const green = Color(0xFF16A34A); // --green
   static const greenSoft = Color(0xFFE7F7EE); // --green-soft
-  static const info = Color(0xFF2563EB); // --info
-  static const infoSoft = Color(0xFFE8EFFC); // --info-soft
+  static const info = Color(0xFF0EA5E9); // --info
+  static const infoSoft = Color(0xFFE6F6FD); // --info-soft
   static const violet = Color(0xFF7C3AED); // --violet
   static const violetSoft = Color(0xFFF0E9FD); // --violet-soft
 
@@ -47,17 +44,17 @@ class AppColors {
   static const dText3 = Color(0xFF6B7890);
   static const dBorder = Color(0xFF263349);
 
-  static const dPrimary = Color(0xFF2DD4BF);
-  static const dPrimary2 = Color(0xFF5EEAD4);
-  static const dPrimarySoft = Color(0xFF0F3A36);
+  static const dPrimary = Color(0xFF6EA8FE);
+  static const dPrimary2 = Color(0xFF9CC3FF);
+  static const dPrimarySoft = Color(0xFF132B52);
   static const dAccent = Color(0xFFFBBF24);
   static const dAccentSoft = Color(0xFF3A2F14);
   static const dDanger = Color(0xFFFB7185);
   static const dDangerSoft = Color(0xFF3A1622);
   static const dGreen = Color(0xFF4ADE80);
   static const dGreenSoft = Color(0xFF123023);
-  static const dInfo = Color(0xFF60A5FA);
-  static const dInfoSoft = Color(0xFF16283F);
+  static const dInfo = Color(0xFF38BDF8);
+  static const dInfoSoft = Color(0xFF0E2A3A);
   static const dViolet = Color(0xFFA78BFA);
   static const dVioletSoft = Color(0xFF2A1F45);
 
@@ -95,8 +92,87 @@ class AppColors {
   static const amber = accent;
 }
 
-/// ظلال نكسورا — مطابقة لـ --shadow و --shadow-lg.
+/// أنصاف أقطار الزوايا الموحّدة للتطبيق (16px للبطاقات والحقول).
+class AppRadius {
+  static const double small = 10;
+  static const double card = 16;
+  static const double field = 16;
+  static const double button = 14;
+  static const double sheet = 24;
+  static const double pill = 999;
+
+  static BorderRadius get cardAll => BorderRadius.circular(card);
+  static BorderRadius get fieldAll => BorderRadius.circular(field);
+  static BorderRadius get sheetTop =>
+      const BorderRadius.vertical(top: Radius.circular(sheet));
+}
+
+/// تدرجات الباستيل الهادئة لكروت الأقسام والفئات.
+class AppTone {
+  final String key;
+  final String label;
+  final Color background;
+  final Color foreground;
+
+  const AppTone(this.key, this.label, this.background, this.foreground);
+
+  static const blue = AppTone('blue', 'أزرق ناعم', Color(0xFFE8F0FF), Color(0xFF0D6EFD));
+  static const orange = AppTone('orange', 'برتقالي', Color(0xFFFFF1E3), Color(0xFFEA8C1C));
+  static const violet = AppTone('violet', 'موف', Color(0xFFF2EAFD), Color(0xFF7C3AED));
+  static const green = AppTone('green', 'أخضر', Color(0xFFE7F7EE), Color(0xFF16A34A));
+  static const pink = AppTone('pink', 'وردي', Color(0xFFFDE9F1), Color(0xFFDB2777));
+  static const teal = AppTone('teal', 'فيروزي', Color(0xFFE3F7F5), Color(0xFF0E9488));
+  static const sand = AppTone('sand', 'بيج', Color(0xFFF7EFE1), Color(0xFFB4741A));
+
+  static const List<AppTone> all = [blue, orange, violet, green, pink, teal, sand];
+
+  static AppTone byKey(String? key) {
+    for (final t in all) {
+      if (t.key == key) return t;
+    }
+    return blue;
+  }
+
+  /// يحوّل نص لون HEX (#RRGGBB) إلى نغمة مخصّصة بخلفية باستيل مشتقة.
+  static AppTone fromHex(String? hex) {
+    final h = (hex ?? '').trim().replaceAll('#', '');
+    if (h.length != 6) return byKey(null);
+    final v = int.tryParse(h, radix: 16);
+    if (v == null) return byKey(null);
+    final base = Color(0xFF000000 | v);
+    return AppTone('custom', 'مخصص', _pastelize(base), base);
+  }
+
+  /// يخفف اللون إلى خلفية باستيل هادئة تحافظ على هوية اللون.
+  static Color _pastelize(Color c) {
+    final r = (c.r * 255).round();
+    final g = (c.g * 255).round();
+    final b = (c.b * 255).round();
+    return Color.fromARGB(
+      255,
+      r + ((255 - r) * 0.86).round(),
+      g + ((255 - g) * 0.86).round(),
+      b + ((255 - b) * 0.86).round(),
+    );
+  }
+}
+
+/// ظلال نكسورا — ظلال ناعمة خفيفة جداً بدل الحدود السميكة.
 class AppShadows {
+  /// ظل بطاقة بالكاد يُرى — البديل الحديث للحدود السميكة.
+  static List<BoxShadow> card(ColorScheme scheme) => [
+        BoxShadow(
+          color: scheme.primary.withValues(alpha: .05),
+          blurRadius: 16,
+          offset: const Offset(0, 4),
+        ),
+        BoxShadow(
+          color: Colors.black.withValues(alpha: .04),
+          blurRadius: 6,
+          offset: const Offset(0, 1),
+        ),
+      ];
+
   static List<BoxShadow> soft(bool dark) => [
         BoxShadow(
           color: dark
@@ -121,17 +197,6 @@ class AppShadows {
 class AppTheme {
   static ThemeData light() => _build(false);
   static ThemeData dark() => _build(true);
-
-  /// منصة سطح مكتب أصلية؟ (تُحدد نمط حدود/ظلال الألواح في الثيم).
-  /// بيئة flutter test تُستثنى حتى تحافظ الاختبارات على النمط المحمول.
-  static bool get _desktop {
-    try {
-      if (Platform.environment.containsKey('FLUTTER_TEST')) return false;
-      return PlatformInfo.isDesktop;
-    } catch (_) {
-      return false;
-    }
-  }
 
   static ThemeData _build(bool dark) {
     final primary = dark ? AppColors.dPrimary : AppColors.primary;
@@ -220,20 +285,14 @@ class AppTheme {
       cardTheme: CardThemeData(
         color: surface,
         surfaceTintColor: Colors.transparent,
-        // سطح المكتب: ألواح محددة بوضوح — حد أبرز + ظل خفيف بدل
-        // التسطيح الكامل؛ الهاتف يبقى مسطحاً كما كان.
-        elevation: _desktop ? 1.5 : 0,
-        shadowColor: _desktop ? Colors.black26 : null,
+        // (2026-09-24) هوية حديثة: بلا حدود سميكة — ظل ناعم خفيف جداً
+        // وزاوية موحّدة 16px على كل المنصات.
+        elevation: 1,
+        shadowColor: const Color(0xFF0D6EFD).withValues(alpha: .10),
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(_desktop ? 12 : 16),
-          side: _desktop
-              ? BorderSide(
-                  color: (dark ? Colors.white : Colors.black)
-                      .withValues(alpha: 0.18),
-                  width: 1.2,
-                )
-              : BorderSide(color: border),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          side: BorderSide.none,
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -244,11 +303,11 @@ class AppTheme {
           vertical: 14,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.field),
           borderSide: BorderSide(color: border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.field),
           borderSide: BorderSide(color: border),
         ),
         focusedBorder: OutlineInputBorder(
@@ -256,7 +315,7 @@ class AppTheme {
           borderSide: BorderSide(color: primary, width: 1.6),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.field),
           borderSide: BorderSide(color: danger),
         ),
         labelStyle: TextStyle(color: text2),
@@ -271,7 +330,7 @@ class AppTheme {
           foregroundColor: dark ? const Color(0xFF06231F) : Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppRadius.button),
           ),
           textStyle: TextStyle(
             fontFamily: uiFontFamily,
@@ -286,7 +345,7 @@ class AppTheme {
           side: BorderSide(color: border),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppRadius.button),
           ),
           textStyle: TextStyle(
             fontFamily: uiFontFamily,
@@ -318,7 +377,9 @@ class AppTheme {
           fontWeight: FontWeight.w600,
           color: text,
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+        ),
       ),
       dividerTheme: DividerThemeData(color: border, thickness: 1, space: 1),
       navigationBarTheme: NavigationBarThemeData(
@@ -346,13 +407,15 @@ class AppTheme {
       dialogTheme: DialogThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.sheet),
+        ),
       ),
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
       ),
       snackBarTheme: SnackBarThemeData(
@@ -362,7 +425,9 @@ class AppTheme {
       listTileTheme: ListTileThemeData(
         iconColor: text2,
         textColor: text,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
       ),
     );
   }

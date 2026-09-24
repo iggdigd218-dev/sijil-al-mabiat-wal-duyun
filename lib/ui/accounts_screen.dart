@@ -10,6 +10,7 @@ import 'account_detail.dart';
 import 'account_form.dart';
 import 'widgets.dart';
 
+import '../core/theme.dart';
 enum _BalanceFilter { all, debt, credit, settled }
 
 final _balanceFilterProvider =
@@ -616,7 +617,7 @@ class _AccountCard extends StatelessWidget {
   Color _avatarColor(String name) {
     final colors = [
       const Color(0xFF0284C7),
-      const Color(0xFF0D9488),
+      AppColors.primary2,
       const Color(0xFF7C3AED),
       const Color(0xFFEA580C),
       const Color(0xFF4F46E5),

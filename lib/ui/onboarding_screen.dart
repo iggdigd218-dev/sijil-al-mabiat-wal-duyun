@@ -296,7 +296,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               padding: const EdgeInsets.fromLTRB(22, 28, 22, 28),
               children: [
                 // ---------- الترويسة ----------
-                Icon(Icons.storefront_rounded,
+                // (2026-09-24) علامة الهوية: العربة نفسها في أيقونة التطبيق.
+                Icon(Icons.shopping_cart_rounded,
                     size: 58, color: AppColors.primaryOf(context)),
                 const SizedBox(height: 14),
                 Text(

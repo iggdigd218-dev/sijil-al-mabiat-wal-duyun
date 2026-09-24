@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p_;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/format.dart';
+import '../core/icon_catalog.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
@@ -706,7 +707,8 @@ class _HierarchyChipBar extends StatelessWidget {
               for (final sec in sections)
                 _Chip(
                   label: sec.name,
-                  icon: Icons.storefront_outlined,
+                  // (2026-09-24) أيقونة القسم من الكتالوج بدل أيقونة ثابتة.
+                  icon: IconCatalog.of(sec.effectiveIcon),
                   selected: sectionId == sec.id,
                   onTap: () => onSection(sec.id),
                   onLongPress: onManage,
@@ -860,10 +862,12 @@ class _CategoryManager extends ConsumerWidget {
     for (final c in roots) {
       bySection.putIfAbsent(c.sectionId, () => <ItemCategory>[]).add(c);
     }
-    final groups = <({int? id, String name})>[
-      for (final sec in sections) (id: sec.id, name: sec.name),
+    // (2026-09-24) أيقونة القسم تُرافق اسمه في ترويسة المجموعة.
+    final groups = <({int? id, String name, IconData icon})>[
+      for (final sec in sections)
+        (id: sec.id, name: sec.name, icon: IconCatalog.of(sec.effectiveIcon)),
       if (bySection.containsKey(null))
-        (id: null, name: 'عام (بدون قسم)'),
+        (id: null, name: 'عام (بدون قسم)', icon: IconCatalog.of('category')),
     ];
 
     return ListView(
@@ -898,8 +902,7 @@ class _CategoryManager extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               child: Row(
                 children: [
-                  Icon(Icons.storefront_outlined,
-                      size: 20, color: AppColors.primaryOf(context)),
+                  Icon(g.icon, size: 20, color: AppColors.primaryOf(context)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1103,7 +1106,7 @@ class _SmartInventoryFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FloatingActionButton(
         heroTag: 'inventoryFab',
-        backgroundColor: const Color(0xFF0F766E),
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         tooltip: 'إضافة صنف (اضغط مطولاً للخيارات)',
         onPressed: () async {
@@ -1149,10 +1152,16 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
   String? _error;
   bool _saving = false;
 
+  /// (2026-09-24) الهوية البصرية للقسم: مفتاح أيقونة + لون كرت.
+  late String _iconKey;
+  late String _color;
+
   @override
   void initState() {
     super.initState();
     _name = TextEditingController(text: widget.section?.name ?? '');
+    _iconKey = widget.section?.iconKey ?? '';
+    _color = widget.section?.colorHex ?? '';
   }
 
   @override
@@ -1175,7 +1184,7 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
       final now = DateTime.now();
       final section = (widget.section ??
               Section(name: name, createdAt: now, updatedAt: now))
-          .copyWith(name: name);
+          .copyWith(name: name, iconKey: _iconKey, colorHex: _color);
       final id = await ref.read(repoProvider).saveSection(section);
       if (mounted) Navigator.pop(context, id);
     } catch (e) {
@@ -1189,7 +1198,8 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
   }
 
   @override
-  Widget build(BuildContext context) => SafeArea(
+  Widget build(BuildContext context) => _BrandSheet(
+        scrollable: true,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -1197,8 +1207,8 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.add_business_outlined,
-                      color: Color(0xFF0F766E)),
+                  Icon(Icons.add_business_outlined,
+                      color: AppColors.primaryOf(context)),
                   const SizedBox(width: 8),
                   Text(
                     widget.section == null ? 'قسم جديد' : 'تعديل القسم',
@@ -1223,12 +1233,20 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
                 ),
                 onSubmitted: (_) => _saving ? null : _save(),
               ),
+              const SizedBox(height: 12),
+              // (2026-09-24) اختيار الأيقونة واللون مع معاينة فورية.
+              _BrandPickers(
+                iconKey: _iconKey,
+                color: _color,
+                onIcon: (k) => setState(() => _iconKey = k),
+                onColor: (c) => setState(() => _color = c),
+              ),
               const SizedBox(height: 14),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF0F766E),
+                    backgroundColor: AppColors.primaryOf(context),
                     minimumSize: const Size.fromHeight(48),
                   ),
                   onPressed: _saving ? null : _save,
@@ -1683,12 +1701,18 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
   String? _error;
   bool _saving = false;
 
+  /// (2026-09-24) الهوية البصرية للفئة: مفتاح أيقونة + لون كرت.
+  late String _iconKey;
+  late String _color;
+
   @override
   void initState() {
     super.initState();
     _name = TextEditingController(text: widget.category?.name ?? '');
     _parentId = widget.category?.parentId ?? widget.presetParentId;
     _sectionId = widget.category?.sectionId ?? widget.presetSectionId;
+    _iconKey = widget.category?.iconKey ?? '';
+    _color = widget.category?.colorHex ?? '';
   }
 
   /// الفئات الممنوع اختيارها كأب: الفئة نفسها وكل سلالتها (منع الدوران).
@@ -1733,7 +1757,13 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
       final now = DateTime.now();
       final category = (widget.category ??
               ItemCategory(name: name, createdAt: now, updatedAt: now))
-          .copyWith(name: name, parentId: _parentId, sectionId: _sectionId);
+          .copyWith(
+        name: name,
+        parentId: _parentId,
+        sectionId: _sectionId,
+        iconKey: _iconKey,
+        colorHex: _color,
+      );
       final id = await ref.read(repoProvider).saveItemCategory(category);
       if (mounted) Navigator.pop(context, id);
     } catch (e) {
@@ -1747,7 +1777,8 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
   }
 
   @override
-  Widget build(BuildContext context) => SafeArea(
+  Widget build(BuildContext context) => _BrandSheet(
+        scrollable: true,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -1781,6 +1812,14 @@ class _ItemCategoryFormState extends ConsumerState<_ItemCategoryForm> {
                   errorText: _error,
                 ),
                 onSubmitted: (_) => _saving ? null : _save(),
+              ),
+              const SizedBox(height: 12),
+              // (2026-09-24) اختيار الأيقونة واللون مع معاينة فورية.
+              _BrandPickers(
+                iconKey: _iconKey,
+                color: _color,
+                onIcon: (k) => setState(() => _iconKey = k),
+                onColor: (c) => setState(() => _color = c),
               ),
               const SizedBox(height: 12),
               // (2026-09-22) القسم: «عام» يعني بلا قسم.
@@ -2152,7 +2191,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   Widget build(BuildContext context) {
     final categories = ref.watch(itemCategoriesProvider);
     final profit = _sellV - _buyV;
-    return SafeArea(
+    return _BrandSheet(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
@@ -2202,7 +2241,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                         bottom: 0,
                         end: 0,
                         child: Material(
-                          color: const Color(0xFF0F766E),
+                          color: AppColors.primary,
                           shape: const CircleBorder(),
                           child: InkWell(
                             customBorder: const CircleBorder(),
@@ -2478,4 +2517,150 @@ class _AmountField extends StatelessWidget {
           if (words) AmountWords(controller: controller),
         ],
       );
+}
+
+/// (2026-09-24) غلاف موحّد للأوراق السفلية: زوايا علوية 24px ومقبض سحب.
+class _BrandSheet extends StatelessWidget {
+  const _BrandSheet({required this.child, this.scrollable = false});
+
+  final Widget child;
+
+  /// يغلّف المحتوى بمنطقة تمرير (للنماذج القصيرة التي لا تملك واحدة).
+  final bool scrollable;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceOf(context),
+          borderRadius: AppRadius.sheetTop,
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.borderOf(context),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              if (scrollable)
+                Flexible(child: SingleChildScrollView(child: child))
+              else
+                Flexible(child: child),
+            ],
+          ),
+        ),
+      );
+}
+
+/// (2026-09-24) منتقيا الأيقونة واللون مع معاينة فورية لشكل الكرت.
+class _BrandPickers extends StatelessWidget {
+  const _BrandPickers({
+    required this.iconKey,
+    required this.color,
+    required this.onIcon,
+    required this.onColor,
+  });
+
+  final String iconKey;
+  final String color;
+  final ValueChanged<String> onIcon;
+  final ValueChanged<String> onColor;
+
+  /// النغمة الفعالة: مفتاح باستيل أو لون HEX مخصّص.
+  AppTone get _tone =>
+      color.startsWith('#') ? AppTone.fromHex(color) : AppTone.byKey(color);
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = _tone;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'شكل الكرت',
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: AppColors.text2Of(context),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // معاينة فورية.
+            Container(
+              width: 92,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: tone.background,
+                borderRadius: BorderRadius.circular(AppRadius.card),
+                border: Border.all(color: tone.foreground.withValues(alpha: .22)),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: Icon(
+                      IconCatalog.of(iconKey),
+                      size: 22,
+                      color: tone.foreground,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      'معاينة',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: tone.foreground,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        final picked = await showIconPicker(
+                          context,
+                          initialKey: iconKey,
+                        );
+                        if (picked != null) onIcon(picked);
+                      },
+                      icon: Icon(IconCatalog.of(iconKey), size: 18),
+                      label: const Text('اختيار أيقونة'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  ColorTonePicker(value: color, onChanged: onColor),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }

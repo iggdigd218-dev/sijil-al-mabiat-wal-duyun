@@ -799,7 +799,20 @@ const int kGeneralSectionId = -1;
 class Section {
   final int? id;
   final String name;
+
+  /// (قديم) رمز تعبيري مخزّن في عمود `icon` — يُبقى للتوافق مع البيانات القديمة.
   final String icon;
+
+  /// (2026-09-24) مفتاح الأيقونة من `IconCatalog` (مثال: `tools`, `phone`).
+  final String iconKey;
+
+  /// (2026-09-24) لون الكرت بصيغة HEX (مثال: `#0D6EFD`) أو مفتاح نغمة
+  /// باستيل (مثال: `blue`). فارغ ⇒ اللون الافتراضي.
+  final String colorHex;
+
+  /// (2026-09-24) مسار صورة اختيارية تظهر أعلى كرت القسم.
+  final String imagePath;
+
   final int sortOrder;
   final bool deleted;
   final DateTime createdAt;
@@ -809,16 +822,25 @@ class Section {
     this.id,
     required this.name,
     this.icon = '',
+    this.iconKey = '',
+    this.colorHex = '',
+    this.imagePath = '',
     this.sortOrder = 0,
     this.deleted = false,
     required this.createdAt,
     required this.updatedAt,
   });
 
+  /// الأيقونة الفعالة: المفتاح الحديث إن وُجد، وإلا الرمز القديم.
+  String get effectiveIcon => iconKey.isNotEmpty ? iconKey : icon;
+
   Section copyWith({
     int? id,
     String? name,
     String? icon,
+    String? iconKey,
+    String? colorHex,
+    String? imagePath,
     int? sortOrder,
     bool? deleted,
     DateTime? updatedAt,
@@ -827,6 +849,9 @@ class Section {
         id: id ?? this.id,
         name: name ?? this.name,
         icon: icon ?? this.icon,
+        iconKey: iconKey ?? this.iconKey,
+        colorHex: colorHex ?? this.colorHex,
+        imagePath: imagePath ?? this.imagePath,
         sortOrder: sortOrder ?? this.sortOrder,
         deleted: deleted ?? this.deleted,
         createdAt: createdAt,
@@ -837,6 +862,9 @@ class Section {
         if (id != null) 'id': id,
         'name': name,
         'icon': icon,
+        'icon_key': iconKey,
+        'color_hex': colorHex,
+        'image_path': imagePath,
         'sort_order': sortOrder,
         'deleted_at': deleted ? updatedAt.toIso8601String() : '',
         'created_at': createdAt.toIso8601String(),
@@ -847,6 +875,9 @@ class Section {
         id: m['id'] as int?,
         name: (m['name'] ?? '') as String,
         icon: (m['icon'] ?? '') as String,
+        iconKey: (m['icon_key'] ?? '') as String,
+        colorHex: (m['color_hex'] ?? '') as String,
+        imagePath: (m['image_path'] ?? '') as String,
         sortOrder: (m['sort_order'] as int?) ?? 0,
         deleted: ((m['deleted_at'] ?? '') as String).isNotEmpty,
         createdAt: DateTime.tryParse((m['created_at'] ?? '') as String) ??
@@ -865,6 +896,16 @@ class ItemCategory {
   /// (2026-09-22) القسم الذي تتبعه هذه الفئة — null ⇒ «عام/بدون قسم».
   final int? sectionId;
   final String name;
+
+  /// (2026-09-24) مفتاح الأيقونة من `IconCatalog`.
+  final String iconKey;
+
+  /// (2026-09-24) لون الكرت (HEX أو مفتاح نغمة باستيل).
+  final String colorHex;
+
+  /// (2026-09-24) مسار صورة اختيارية للفئة.
+  final String imagePath;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -877,6 +918,9 @@ class ItemCategory {
     this.parentId,
     this.sectionId,
     required this.name,
+    this.iconKey = '',
+    this.colorHex = '',
+    this.imagePath = '',
     required this.createdAt,
     required this.updatedAt,
     this.children = const [],
@@ -898,6 +942,9 @@ class ItemCategory {
     int? sectionId,
     bool clearSectionId = false,
     String? name,
+    String? iconKey,
+    String? colorHex,
+    String? imagePath,
     DateTime? updatedAt,
     List<ItemCategory>? children,
   }) =>
@@ -906,6 +953,9 @@ class ItemCategory {
         parentId: clearParentId ? null : (parentId ?? this.parentId),
         sectionId: clearSectionId ? null : (sectionId ?? this.sectionId),
         name: name ?? this.name,
+        iconKey: iconKey ?? this.iconKey,
+        colorHex: colorHex ?? this.colorHex,
+        imagePath: imagePath ?? this.imagePath,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
         children: children ?? this.children,
@@ -920,6 +970,9 @@ class ItemCategory {
         'name': name,
         if (parentId != null) 'parent_id': parentId,
         if (sectionId != null) 'section_id': sectionId,
+        'icon_key': iconKey,
+        'color_hex': colorHex,
+        'image_path': imagePath,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
@@ -929,6 +982,9 @@ class ItemCategory {
         parentId: m['parent_id'] as int?,
         sectionId: m['section_id'] as int?,
         name: (m['name'] ?? '') as String,
+        iconKey: (m['icon_key'] ?? '') as String,
+        colorHex: (m['color_hex'] ?? '') as String,
+        imagePath: (m['image_path'] ?? '') as String,
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt:
             DateTime.parse((m['updated_at'] ?? m['created_at']) as String),

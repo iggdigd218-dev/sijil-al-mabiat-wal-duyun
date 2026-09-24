@@ -92,16 +92,16 @@ Future<Uint8List> buildVoucherPdf({
   }
 
   final doc = pw.Document();
-  const teal = PdfColor.fromInt(0xFF0F766E);
+  const brand = PdfColor.fromInt(0xFF0D6EFD);
   const border = PdfColor.fromInt(0xFFE2E8F2);
-  const soft = PdfColor.fromInt(0xFFE6F6F3);
+  const soft = PdfColor.fromInt(0xFFE8F0FF);
   const muted = PdfColor.fromInt(0xFF5B6B83);
   // لون المبلغ حسب نوع السند: أحمر لمدين/صرف (عليه)، أخضر لقبض/دائن (له).
   final isRed = v.kind == VoucherKind.debit || v.kind == VoucherKind.payment;
   final isGreen = v.kind == VoucherKind.receipt || v.kind == VoucherKind.credit;
   final amtColor = isRed
       ? const PdfColor.fromInt(0xFFC0392B)
-      : (isGreen ? const PdfColor.fromInt(0xFF16A34A) : teal);
+      : (isGreen ? const PdfColor.fromInt(0xFF16A34A) : brand);
   final amtBg = isRed
       ? const PdfColor.fromInt(0xFFFDECEA)
       : (isGreen ? const PdfColor.fromInt(0xFFEAF7EF) : soft);
@@ -197,7 +197,7 @@ Future<Uint8List> buildVoucherPdf({
                       style: pw.TextStyle(
                         fontSize: 20,
                         font: bold,
-                        color: teal,
+                        color: brand,
                       ),
                     ),
                     if (org.nameEn.isNotEmpty)
@@ -248,13 +248,13 @@ Future<Uint8List> buildVoucherPdf({
                 alignment: pw.Alignment.center,
                 child: pw.Text(
                   v.kind.label.split(' ').last,
-                  style: pw.TextStyle(font: bold, fontSize: 12, color: teal),
+                  style: pw.TextStyle(font: bold, fontSize: 12, color: brand),
                 ),
               ),
             ],
           ),
           pw.SizedBox(height: 14),
-          pw.Container(height: 2, color: teal),
+          pw.Container(height: 2, color: brand),
           pw.SizedBox(height: 14),
 
           // شريط المعلومات
@@ -290,7 +290,7 @@ Future<Uint8List> buildVoucherPdf({
           if (items.isNotEmpty) ...[
             pw.Text(
               'تفاصيل المشتريات',
-              style: pw.TextStyle(fontSize: 13, font: bold, color: teal),
+              style: pw.TextStyle(fontSize: 13, font: bold, color: brand),
             ),
             pw.SizedBox(height: 8),
             pw.Table(
@@ -336,7 +336,7 @@ Future<Uint8List> buildVoucherPdf({
               alignment: pw.AlignmentDirectional.centerEnd,
               child: pw.Text(
                 'إجمالي المشتريات: ${Fmt.money(items.fold<double>(0, (sum, line) => sum + line.total), currency.decimal)} ${currency.symbol}',
-                style: pw.TextStyle(fontSize: 11, font: bold, color: teal),
+                style: pw.TextStyle(fontSize: 11, font: bold, color: brand),
               ),
             ),
             pw.SizedBox(height: 16),

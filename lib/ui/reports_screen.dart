@@ -780,7 +780,7 @@ class _ReportView extends ConsumerWidget {
                       width: 120,
                       padding: const pw.EdgeInsets.all(8),
                       decoration: pw.BoxDecoration(
-                        color: const PdfColor.fromInt(0xFFE6F6F3),
+                        color: const PdfColor.fromInt(0xFFE8F0FF),
                         borderRadius: pw.BorderRadius.circular(6),
                       ),
                       child: pw.Column(
@@ -806,7 +806,7 @@ class _ReportView extends ConsumerWidget {
             headerStyle: pw.TextStyle(font: bold, fontSize: 10),
             cellStyle: const pw.TextStyle(fontSize: 9),
             headerDecoration: const pw.BoxDecoration(
-              color: PdfColor.fromInt(0xFFE6F6F3),
+              color: PdfColor.fromInt(0xFFE8F0FF),
             ),
             cellAlignment: pw.Alignment.centerRight,
             border: pw.TableBorder.all(

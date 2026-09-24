@@ -696,7 +696,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           _Collapsible(
                             title: 'العملة والترقيم',
                             icon: Icons.currency_exchange,
-                            color: const Color(0xFF0D9488),
+                            color: AppColors.primary2,
                             children: [
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
@@ -950,7 +950,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             _Collapsible(
                               title: 'نسخة احتياطية محلية',
                               icon: Icons.save_outlined,
-                              color: const Color(0xFF0D9488),
+                              color: AppColors.primary2,
                               children: [
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
@@ -1046,7 +1046,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             const _Collapsible(
                               title: 'الزر العائم للبيع السريع',
                               icon: Icons.picture_in_picture_alt_rounded,
-                              color: Color(0xFF0F766E),
+                              color: AppColors.primary,
                               children: [_FloatingPosSection()],
                             ),
                           ],
@@ -1467,15 +1467,9 @@ class _Collapsible extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: AppColors.surfaceOf(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderOf(context)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: .03),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
+        // (2026-09-24) هوية حديثة: ظل ناعم خفيف بدل الحدود السميكة.
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        boxShadow: AppShadows.card(Theme.of(context).colorScheme),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1484,12 +1478,13 @@ class _Collapsible extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 2),
             child: Row(
               children: [
+                // أيقونة دائرية ملوّنة داخل الكرت المجمّع.
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
                     color: c.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(12),
+                    shape: BoxShape.circle,
                   ),
                   child: Icon(icon, color: c, size: 22),
                 ),
@@ -1520,12 +1515,72 @@ class _Collapsible extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
-            child: Column(children: children),
+            child: Column(
+              // (2026-09-24) كل سطر يحمل أيقونة دائرية ملوّنة متناسقة.
+              children: [for (final w in children) _decorate(w, c)],
+            ),
           ),
         ],
       ),
     );
   }
+
+  /// يغلّف أيقونة السطر بدائرة ملوّنة ناعمة (نصوص نظيفة ومتباعدة).
+  Widget _decorate(Widget child, Color c) {
+    if (child is SwitchListTile) {
+      final sec = child.secondary;
+      if (sec is Icon) {
+        final col = sec.color ?? c;
+        return SwitchListTile(
+          key: child.key,
+          contentPadding: EdgeInsets.zero,
+          secondary: _RoundIcon(icon: sec.icon!, color: col),
+          title: child.title,
+          subtitle: child.subtitle,
+          value: child.value,
+          onChanged: child.onChanged,
+        );
+      }
+      return child;
+    }
+    if (child is ListTile) {
+      final lead = child.leading;
+      if (lead is Icon) {
+        final col = lead.color ?? c;
+        return ListTile(
+          key: child.key,
+          contentPadding: EdgeInsets.zero,
+          leading: _RoundIcon(icon: lead.icon!, color: col),
+          title: child.title,
+          subtitle: child.subtitle,
+          trailing: child.trailing,
+          onTap: child.onTap,
+          onLongPress: child.onLongPress,
+          enabled: child.enabled,
+        );
+      }
+    }
+    return child;
+  }
+}
+
+/// أيقونة دائرية ملوّنة بخلفية باستيل ناعمة — عنصر الهوية في القوائم.
+class _RoundIcon extends StatelessWidget {
+  const _RoundIcon({required this.icon, required this.color});
+
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .12),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: color, size: 19),
+      );
 }
 
 /// خيار «تهيئة المجموعة من الصفر» — جهاز المدير فقط:
@@ -2062,7 +2117,7 @@ class _AutoBackupSection extends StatelessWidget {
   Widget build(BuildContext context) => const _Collapsible(
         title: 'النسخ الاحتياطي التلقائي',
         icon: Icons.autorenew_rounded,
-        color: Color(0xFF0D9488),
+        color: AppColors.primary2,
         children: [_AutoBackupControls()],
       );
 }
@@ -2287,7 +2342,7 @@ class _FloatingPosSectionState extends State<_FloatingPosSection> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               secondary: const Icon(Icons.picture_in_picture_alt_rounded,
-                  color: Color(0xFF0F766E)),
+                  color: AppColors.primary),
               title: const Text(
                 'تفعيل الزر العائم للبيع السريع فوق التطبيقات',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
@@ -2308,7 +2363,7 @@ class _FloatingPosSectionState extends State<_FloatingPosSection> {
               const SizedBox(height: 4),
               FilledButton.icon(
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF0F766E),
+                  backgroundColor: AppColors.primary,
                 ),
                 onPressed: _busy
                     ? null
@@ -2335,7 +2390,7 @@ class _FloatingPosSectionState extends State<_FloatingPosSection> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.info_outline_rounded,
-                    size: 15, color: Color(0xFF0F766E)),
+                    size: 15, color: AppColors.primary),
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
