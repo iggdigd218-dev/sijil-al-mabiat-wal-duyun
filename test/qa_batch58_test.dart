@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:nexora_app/core/auth_config.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
@@ -64,6 +65,7 @@ void main() {
   late Repo repo;
 
   setUp(() async {
+    debugFirebaseApiKeyOverride = 'AIzaSyFakeKeyForTesting';
     tmp = await Directory.systemTemp.createTemp('nexora_b58_');
     db = await databaseFactory.openDatabase('${tmp.path}/qa.db');
     await AppDatabase.createSchema(db);
@@ -71,6 +73,7 @@ void main() {
     await repo.initSyncInfra();
   });
   tearDown(() async {
+    debugFirebaseApiKeyOverride = null;
     if (db.isOpen) await db.close();
     await tmp.delete(recursive: true);
   });

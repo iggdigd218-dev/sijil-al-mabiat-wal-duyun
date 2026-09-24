@@ -52,6 +52,7 @@ import '../data/sync/subscription_guard.dart';
 import '../data/repository.dart';
 import '../data/sync/workspace_service.dart';
 import '../data/sync/chat_hooks.dart';
+import '../data/sync/cloud_control_service.dart';
 import 'trial_ui.dart';
 import 'widgets.dart' show showSnack;
 import '../core/cloud_config.dart';
@@ -222,6 +223,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
     // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
     _ensureGroupKeepAlive();
+    // 🌐 مركز التحكم السحابي والتنبيهات المباشرة والإدارة عن بعد
+    CloudControlService.instance
+        .startPeriodicHeartbeat(ref.read(repoProvider));
   }
 
   /// داخل مجموعة: يشغّل خدمة اليقظة (foreground service) ليستقبل الجهاز
@@ -856,6 +860,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     ChatHooks.onChatMessage = null;
     ChatHooks.onMemberNotice = null;
     ShellNav.request.removeListener(_onShellNavRequest);
+    CloudControlService.instance.stop();
     super.dispose();
   }
 
@@ -1282,11 +1287,23 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final hidden = ref.watch(hideBalancesProvider);
     final desktop = isDesktopLayout(context);
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
-      child: Scaffold(
-        key: _scaffoldKey,
+    return ValueListenableBuilder<bool>(
+      valueListenable: CloudControlService.instance.isFrozenNotifier,
+      builder: (ctx, frozen, _) {
+        if (frozen) {
+          return const FrozenAccountBarrier();
+        }
+        return ValueListenableBuilder<bool>(
+          valueListenable: CloudControlService.instance.forceUpdateNotifier,
+          builder: (ctx, forceUpdate, _) {
+            if (forceUpdate) {
+              return const ForceUpdateBarrier();
+            }
+            return PopScope(
+              canPop: false,
+              onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
+              child: Scaffold(
+                key: _scaffoldKey,
         appBar: AppBar(
           leading: Builder(
             builder: (ctx) {
@@ -1527,6 +1544,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
               ),
       ),
     );
+        },
+      );
+    },
+  );
   }
 }
 

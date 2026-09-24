@@ -27,6 +27,7 @@ import 'join_approval_flow.dart' show startJoinApprovalFlow;
 import 'package:url_launcher/url_launcher.dart';
 import 'logout_flow.dart' show showLogoutRequestsSheet;
 import 'group_management_screen.dart';
+import 'support_chat_screen.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
 import '../core/platform_info.dart';
@@ -962,13 +963,53 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               ],
                             ),
                           ],
-                          // (الدعم والمساعدة) خدمة العملاء عبر واتساب
+                          // (الدعم والمساعدة) خدمة العملاء والدردشة المباشرة
                           const SizedBox(height: 18),
                           _Collapsible(
                             title: 'الدعم والمساعدة',
                             icon: Icons.support_agent_rounded,
                             color: const Color(0xFF16A34A),
                             children: [
+                              Card(
+                                color: AppColors.primarySoftOf(context),
+                                child: ListTile(
+                                  leading: Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryOf(context),
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: const Icon(
+                                      Icons.chat_bubble_outline_rounded,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  title: const Text(
+                                    'الدعم الفني والدردشة المباشرة',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  subtitle: const Text(
+                                    'محادثة مباشرة ومشفرة مع إدارة النظام داخل التطبيق (نص ورموز).',
+                                    style: TextStyle(
+                                        fontSize: 11.5, height: 1.5),
+                                  ),
+                                  trailing: const Icon(Icons.chevron_left_rounded),
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const SupportChatScreen(),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 8),
                               Card(
                                 color: const Color(0xFFE7F7EE),
                                 child: ListTile(
@@ -1001,7 +1042,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                         color: Color(0xFF128C4B)),
                                   ),
                                   trailing: const Icon(
-                                    Icons.chat_bubble_outline_rounded,
+                                    Icons.open_in_new_rounded,
                                     color: Color(0xFF128C4B),
                                   ),
                                   onTap: () async {

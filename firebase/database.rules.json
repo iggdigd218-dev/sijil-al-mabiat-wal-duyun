@@ -66,6 +66,26 @@
         "backup": {
           ".read": "auth != null",
           ".write": "auth != null"
+        },
+        "devices": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
+        "notifications": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
+        "control": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
+        "monitoring": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
+        "billing": {
+          ".read": "auth != null",
+          ".write": "auth != null"
         }
       }
     },
@@ -74,6 +94,22 @@
       ".write": "auth != null"
     },
     "trials": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "vouchers": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "support_chats": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "system": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "billing_records": {
       ".read": "auth != null",
       ".write": "auth != null"
     },

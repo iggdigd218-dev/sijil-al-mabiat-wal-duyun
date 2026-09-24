@@ -12,6 +12,7 @@ import '../core/license_model.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/cloud_control_service.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/subscription_guard.dart';
 import 'widgets.dart' show showSnack;
@@ -598,6 +599,21 @@ class _SubscriptionDetailsSectionState
                 ],
               ],
             ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              onPressed: () => showVoucherRedeemDialog(context),
+              icon: const Icon(Icons.confirmation_number_outlined, size: 18),
+              label: const Text(
+                'شحن كود تفعيل (Voucher Key)',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
           ],
         ),
       ),
@@ -794,28 +810,33 @@ Future<void> showTrialExpiredSheet(BuildContext context,
 }
 
 
+bool Function(String text)? debugLaunchActivationWhatsAppOverride;
+
 /// فتح محادثة واتساب على رقم التفعيل — متانة أندرويد 11+:
 /// (1) الرابط المباشر whatsapp://send (يتطلب <queries> المصرّح بها)،
 /// (2) احتياط wa.me في المتصفح الخارجي، (3) احتياط أخير بالوضع الافتراضي.
 Future<bool> launchActivationWhatsApp(String text) async {
+  if (debugLaunchActivationWhatsAppOverride != null) {
+    return debugLaunchActivationWhatsAppOverride!(text);
+  }
   final phone = kActivationContact.replaceAll('+', '');
   final encoded = Uri.encodeComponent(text);
   final direct = Uri.parse('whatsapp://send?phone=$phone&text=$encoded');
   final web = Uri.parse('https://wa.me/$phone?text=$encoded');
   try {
-    if (await canLaunchUrl(direct)) {
-      if (await launchUrl(direct, mode: LaunchMode.externalApplication)) {
+    if (await canLaunchUrl(direct).timeout(const Duration(milliseconds: 500))) {
+      if (await launchUrl(direct, mode: LaunchMode.externalApplication).timeout(const Duration(seconds: 1))) {
         return true;
       }
     }
   } catch (_) {}
   try {
-    if (await launchUrl(web, mode: LaunchMode.externalApplication)) {
+    if (await launchUrl(web, mode: LaunchMode.externalApplication).timeout(const Duration(seconds: 1))) {
       return true;
     }
   } catch (_) {}
   try {
-    return await launchUrl(web); // آخر احتياط: الوضع الافتراضي للمنصة.
+    return await launchUrl(web).timeout(const Duration(seconds: 1)); // آخر احتياط: الوضع الافتراضي للمنصة.
   } catch (_) {
     return false;
   }
@@ -958,10 +979,11 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
 
     if (!_formKey.currentState!.validate()) {
       Sfx.warning();
-      showSnack(
-        context,
-        'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة',
-        error: true,
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
       );
       return;
     }
@@ -1417,6 +1439,60 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
               ),
             ),
             const SizedBox(height: 18),
+
+            // بطاقة شحن كود التفعيل الذاتي (Voucher Key)
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: .06),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: const Color(0xFF7C3AED).withValues(alpha: .25),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.confirmation_number_outlined,
+                          color: Color(0xFF7C3AED), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'شحن كود الترخيص (تفعيل ذاتي فوري)',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF7C3AED),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'إذا حصلت على كود تفعيل مسبق الدفع (Voucher)، اشحنه هنا لتفعيل حسابك فورياً دون انتظار.',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: AppColors.text2Of(context),
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: () => showVoucherRedeemDialog(context),
+                    icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                    label: const Text(
+                      'إدخال كود الشحن والتفعيل',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
             const Divider(height: 1),
             const SizedBox(height: 16),
 
@@ -1625,4 +1701,340 @@ Future<bool> ensureFeatureUnlocked(
         featureName: featureName, description: description);
   }
   return false;
+}
+
+/// حوار شحن وتفعيل كود الترخيص الذاتي (Voucher Key).
+Future<void> showVoucherRedeemDialog(BuildContext context) async {
+  final ctrl = TextEditingController();
+  bool submitting = false;
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.confirmation_number_outlined, color: Color(0xFF7C3AED)),
+            SizedBox(width: 8),
+            Text('شحن كود الترخيص'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'أدخل كود الشحن مسبق الدفع (Voucher) لتمديد وتفعيل حسابك تلقائياً وبشكل فوري:',
+              style: TextStyle(fontSize: 12.5, height: 1.5),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: 'كود الشحن والتفعيل',
+                hintText: 'VCH-XXXX-XXXX-XXXX',
+                prefixIcon: const Icon(Icons.vpn_key_outlined),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: submitting ? null : () => Navigator.pop(ctx),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF7C3AED),
+            ),
+            onPressed: submitting
+                ? null
+                : () async {
+                    final code = ctrl.text.trim();
+                    if (code.isEmpty) return;
+                    setState(() => submitting = true);
+                    try {
+                      final container = ProviderScope.containerOf(context);
+                      final repo = container.read(repoProvider);
+                      final st = await repo.settings();
+                      final backendUrl = effectiveBackendUrl((st['cloudBackendUrl'] ?? '').toString());
+                      if (backendUrl.isEmpty) {
+                        throw StateError('يرجى تفعيل المزامنة السحابية أولاً');
+                      }
+                      final wsId = await SubscriptionGuard.workspaceIdFor(repo);
+                      final voucher = await CloudControlService.instance.redeemVoucherKey(
+                        repo,
+                        backendUrl: backendUrl,
+                        workspaceId: wsId,
+                        rawVoucherCode: code,
+                      );
+                      if (context.mounted) {
+                        Navigator.pop(ctx);
+                        Sfx.success();
+                        container.read(refreshProvider.notifier).state++;
+                        await showDialog<void>(
+                          context: context,
+                          builder: (c) => AlertDialog(
+                            icon: const Icon(Icons.verified, color: Color(0xFF16A34A), size: 48),
+                            title: const Text('🎉 تم التفعيل بنجاح!'),
+                            content: Text(
+                              'تم شحن الحساب بنجاح لمدة ${voucher.durationLabel}.\nكافة المزايا مفعلة الآن.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(height: 1.6),
+                            ),
+                            actions: [
+                              FilledButton(
+                                onPressed: () => Navigator.pop(c),
+                                child: const Text('رائع'),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        showSnack(context, '$e', error: true);
+                        setState(() => submitting = false);
+                      }
+                    }
+                  },
+            child: submitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Text('تفعيل وشحن'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// شاشة حظر وتجميد الحساب عن بعد (Remote Kill Switch / Freeze Barrier).
+class FrozenAccountBarrier extends StatelessWidget {
+  const FrozenAccountBarrier({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 90,
+                height: 90,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDC2626).withValues(alpha: .12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.lock_rounded, size: 50, color: Color(0xFFDC2626)),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                'تم تعليق الحساب مؤقتاً',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFFDC2626),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'تم إيقاف صلاحيات الوصول لهذا التطبيق عن بُعد بواسطة إدارة النظام.\nيرجى مراجعة الإدارة لتسوية الحساب واستئناف الخدمة.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, height: 1.6, color: Color(0xFF4B5563)),
+              ),
+              const SizedBox(height: 28),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF16A34A),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: () => launchActivationWhatsApp('السلام عليكم، تم تعليق حساب المنشأة في التطبيق، نرجو المساعدة.'),
+                icon: const Icon(Icons.chat_outlined),
+                label: const Text('تواصل مع الإدارة (واتساب)', style: TextStyle(fontWeight: FontWeight.w800)),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: () async {
+                  final tel = Uri.parse('tel:$kActivationContact');
+                  try {
+                    await launchUrl(tel);
+                  } catch (_) {}
+                },
+                icon: const Icon(Icons.phone),
+                label: const Text('اتصال مباشر بالإدارة'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// شاشة التحديث الإجباري عن بعد (Force Update Barrier).
+class ForceUpdateBarrier extends StatelessWidget {
+  const ForceUpdateBarrier({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 90,
+                height: 90,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: .12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.system_update_rounded, size: 50, color: Color(0xFF2563EB)),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                'تحديث إجباري مطلوب',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'أصبح إصدار التطبيق المثبت قديماً ولم يعد متوافقاً مع المنظومة السحابية.\nيرجى تنزيل الإصدار الأحدث لمتابعة العمل بأمان.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, height: 1.6, color: Color(0xFF4B5563)),
+              ),
+              const SizedBox(height: 28),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: () async {
+                  final uri = Uri.parse('https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/tag/latest');
+                  try {
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  } catch (_) {}
+                },
+                icon: const Icon(Icons.download_rounded),
+                label: const Text('تنزيل التحديث الآن', style: TextStyle(fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// نافذة التنبيهات السحابية الحية (In-App Cloud Alerts Sheet).
+Future<void> showCloudAlertsSheet(BuildContext context, WidgetRef ref) async {
+  final alerts = CloudControlService.instance.cloudAlertsNotifier.value;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.notifications_active_rounded,
+                    color: Color(0xFF7C3AED)),
+                const SizedBox(width: 8),
+                const Text(
+                  'التنبيهات والإشعارات السحابية',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (alerts.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 30),
+                child: Center(
+                  child: Text('لا توجد تنبيهات جديدة في الوقت الحالي'),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.55,
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: alerts.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (c, i) {
+                    final a = alerts[i];
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                      leading: CircleAvatar(
+                        backgroundColor:
+                            a.isRead ? Colors.grey.shade200 : const Color(0xFFEDE9FE),
+                        child: Icon(
+                          Icons.campaign_rounded,
+                          color: a.isRead
+                              ? Colors.grey
+                              : const Color(0xFF7C3AED),
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(
+                        a.title,
+                        style: TextStyle(
+                          fontWeight:
+                              a.isRead ? FontWeight.w600 : FontWeight.w800,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          a.body,
+                          style: const TextStyle(fontSize: 12, height: 1.4),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

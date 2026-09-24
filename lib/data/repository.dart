@@ -3379,6 +3379,26 @@ class Repo {
   /// documents/chat_media. تعمل دورياً عند الإقلاع وفي دورة الصيانة —
   /// على كل جهاز محلياً، والمدير يطهّر المسار السحابي بالتوازي
   /// (CloudJoin.purgeOldChatOperations). يعيد عدد الرسائل المحذوفة.
+  /// (متطلب 10 — نظام الحذف التلقائي الدوري لرسائل المجموعات Auto-Purge & Retention Policy)
+  /// يحذف تلقائياً وبشكل نهائي كافة الرسائل التي تجاوزت فترة البقاء المحددة (3، 7، 30 يوماً).
+  Future<int> purgeOldChatMessages({int? retentionDays}) async {
+    final db = await _db;
+    int days = retentionDays ?? 7;
+    try {
+      final st = await settings();
+      final custom = int.tryParse(st['chat.retention_days'] ?? '');
+      if (custom != null && custom > 0) days = custom;
+    } catch (_) {}
+    final cutoff =
+        DateTime.now().subtract(Duration(days: days)).toIso8601String();
+    final count = await db.delete(
+      'messages',
+      where: 'created_at < ?',
+      whereArgs: [cutoff],
+    );
+    return count;
+  }
+
   /// (2026-09-24) تنظيف سجل [operations] في نمط الحساب الفردي.
   ///
   /// في النمط الفردي لا يوجد ناقل سحابي (ولا صفوف sync_queue أصلاً)، فتبقى
@@ -3427,10 +3447,17 @@ class Repo {
     }
   }
 
-  Future<int> purgeExpiredChatMessages(
-      {Duration ttl = const Duration(hours: 24)}) async {
+  Future<int> purgeExpiredChatMessages({Duration? ttl}) async {
     final db = await _db;
-    final cutoff = DateTime.now().subtract(ttl).toIso8601String();
+    Duration effectiveTtl = ttl ?? const Duration(hours: 24);
+    if (ttl == null) {
+      try {
+        final st = await settings();
+        final days = int.tryParse(st['chat.retention_days'] ?? '');
+        if (days != null && days > 0) effectiveTtl = Duration(days: days);
+      } catch (_) {}
+    }
+    final cutoff = DateTime.now().subtract(effectiveTtl).toIso8601String();
     List<Map<String, Object?>> old;
     try {
       old = await db.query('messages',

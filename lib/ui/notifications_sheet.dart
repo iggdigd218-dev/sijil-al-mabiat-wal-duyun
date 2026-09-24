@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/format.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/sync/cloud_control_service.dart';
 import 'app_notice.dart';
 import 'widgets.dart';
 
@@ -169,7 +170,9 @@ class _NotificationsSheet extends ConsumerWidget {
                       message: '$e',
                     ),
                     data: (list) {
-                      if (list.isEmpty) {
+                      final cloudAlerts = CloudControlService
+                          .instance.cloudAlertsNotifier.value;
+                      if (list.isEmpty && cloudAlerts.isEmpty) {
                         return ListView(
                           controller: scrollController,
                           children: const [
@@ -178,19 +181,69 @@ class _NotificationsSheet extends ConsumerWidget {
                               icon: Icons.notifications_off_outlined,
                               title: 'لا توجد إشعارات',
                               message:
-                                  'ستظهر هنا تنبيهات المخزون والنسخ والمزامنة',
+                                  'ستظهر هنا تنبيهات المخزون والنسخ والمزامنة وإشعارات الإدارة',
                             ),
                           ],
                         );
                       }
+                      final totalCount = cloudAlerts.length + list.length;
                       return ListView.separated(
                         controller: scrollController,
                         padding: const EdgeInsets.symmetric(
                             vertical: 8, horizontal: 12),
-                        itemCount: list.length,
+                        itemCount: totalCount,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, i) {
-                          final n = list[i];
+                          if (i < cloudAlerts.length) {
+                            final ca = cloudAlerts[i];
+                            return ListTile(
+                              leading: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF7C3AED)
+                                      .withValues(alpha: .14),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(Icons.cloud_outlined,
+                                    color: Color(0xFF7C3AED)),
+                              ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      ca.title,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14.5),
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF7C3AED),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      'إشعار إداري',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(ca.body,
+                                    style: const TextStyle(fontSize: 13)),
+                              ),
+                            );
+                          }
+                          final n = list[i - cloudAlerts.length];
                           final kind = (n['kind'] ?? 'info') as String;
                           final (icon, color) = switch (kind) {
                             'error' => (Icons.error_outline, AppColors.danger),

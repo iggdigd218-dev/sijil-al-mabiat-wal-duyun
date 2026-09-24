@@ -1,20 +1,18 @@
-// خدمة Firebase RTDB عبر REST — نفس قاعدة بيانات تطبيق «مدير الحسابات».
-// لا تحتاج SDK: قراءة/كتابة JSON مباشرة + وقت الخادم بختم {".sv":"timestamp"}.
+// طبقة الاتصال بقاعدة بيانات Firebase RTDB — تطبيق المدير المستقل.
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'license_model.dart';
-
-export 'license_model.dart';
-
-/// مدة الخطة المتاحة للاختيار.
+/// مدد خطط الاشتراك المتاحة للتفعيل/التمديد.
 enum PlanDuration {
-  month('شهر واحد (30 يوماً)', Duration(days: 30)),
-  quarter('3 أشهر (90 يوماً)', Duration(days: 90)),
-  year('سنة كاملة (365 يوماً)', Duration(days: 365)),
-  lifetime('تفعيل دائم (Lifetime)', Duration(days: 365 * 100));
+  month('شهر واحد', Duration(days: 30)),
+  quarter('3 أشهر', Duration(days: 90)),
+  semi('6 أشهر', Duration(days: 180)),
+  year('سنة كاملة', Duration(days: 365)),
+  lifetime('دائم (مدى الحياة)', Duration(days: 36500));
 
   final String label;
   final Duration span;
@@ -48,15 +46,6 @@ class ActivationResult {
   });
 }
 
-int _asInt(Object? v, [int dflt = 0]) {
-  if (v is int) return v;
-  if (v is num) return v.toInt();
-  if (v is String) return int.tryParse(v.trim()) ?? dflt;
-  return dflt;
-}
-
-String _asStr(Object? v) => v == null ? '' : '$v'.trim();
-
 /// سجل مشترك للعرض في القائمة.
 class SubscriberEntry {
   final String workspaceId;
@@ -66,14 +55,15 @@ class SubscriberEntry {
   final int expiresAtMs;
   final int activatedAtMs;
   final String deviceRef; // المعرف/البصمة التي أُدخلت وقت التفعيل.
-
-  // الحقول الإجبارية الجديدة (Requirement 2 & 3)
   final String clientName;
   final String storeName;
   final String phone;
-  final String _deviceId;
-  final String _licenseKey;
-  final int _expiryDate;
+  final String deviceId;
+  final String licenseKey;
+  final bool isFrozen;
+  final Map<String, bool> featureFlags;
+
+  int get expiryDate => expiresAtMs;
 
   const SubscriberEntry({
     required this.workspaceId,
@@ -86,91 +76,251 @@ class SubscriberEntry {
     this.clientName = '',
     this.storeName = '',
     this.phone = '',
-    String deviceId = '',
-    String licenseKey = '',
-    int expiryDate = 0,
-  })  : _deviceId = deviceId,
-        _licenseKey = licenseKey,
-        _expiryDate = expiryDate;
+    this.deviceId = '',
+    this.licenseKey = '',
+    this.isFrozen = false,
+    this.featureFlags = const {},
+  });
 
-  String get deviceId => _deviceId.isNotEmpty ? _deviceId : deviceRef;
-
-  String get licenseKey => _licenseKey.isNotEmpty
-      ? _licenseKey
-      : (deviceRef.isNotEmpty
-          ? 'NX-$deviceRef'
-          : (workspaceId.isNotEmpty ? 'NX-$workspaceId' : 'NX-PENDING'));
-
-  int get expiryDate => _expiryDate > 0 ? _expiryDate : expiresAtMs;
-
-  factory SubscriberEntry.fromSubscriptionMap(String wsId, Map map) {
-    final devId = _asStr(map['deviceId'] ??
+  factory SubscriberEntry.fromSubscriptionMap(
+    String wsId,
+    Map<dynamic, dynamic> map,
+  ) {
+    final devId = asStr(map['deviceId'] ??
         map['device_id'] ??
         map['deviceRef'] ??
-        map['device_ref']);
-    final key = _asStr(map['licenseKey'] ?? map['license_key'] ?? map['key']);
-    final exp = _asInt(
-        map['expiryDate'] ?? map['expiry_date'] ?? map['expires_at']);
+        map['device_ref'] ??
+        '');
+    var key =
+        asStr(map['licenseKey'] ?? map['license_key'] ?? map['key'] ?? '');
+    if (key.isEmpty && devId.isNotEmpty) {
+      final clean =
+          devId.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+      final part = clean.length > 8
+          ? clean.substring(clean.length - 8)
+          : clean.padRight(8, '0');
+      key = 'NX-$part-AUTO';
+    } else if (key.isEmpty) {
+      key = 'NX-KEY-${DateTime.now().year}';
+    }
+
+    final flagsRaw = map['features'] ?? map['feature_flags'];
+    final flags = <String, bool>{};
+    if (flagsRaw is Map) {
+      flagsRaw.forEach((k, v) => flags['$k'] = v == true);
+    }
+
     return SubscriberEntry(
       workspaceId: wsId,
-      planType: _asStr(map['plan_type'] ?? map['planType'] ?? 'individual'),
-      status: _asStr(map['status'] ?? 'trial'),
-      maxDevices: _asInt(map['max_devices'] ?? map['maxDevices'], 1),
-      expiresAtMs: exp,
-      activatedAtMs: _asInt(map['activated_at'] ?? map['activatedAt']),
+      planType: asStr(map['plan_type'] ?? map['planType'] ?? 'individual'),
+      status: asStr(map['status'] ?? 'active'),
+      maxDevices: asInt(map['max_devices'] ?? map['maxDevices'], 1),
+      expiresAtMs:
+          asMs(map['expires_at'] ?? map['expiresAt'] ?? map['expiryDate']),
+      activatedAtMs: asMs(map['activated_at'] ?? map['activatedAt']),
       deviceRef: devId,
-      clientName: _asStr(map['clientName'] ?? map['client_name']),
-      storeName: _asStr(map['storeName'] ?? map['store_name']),
-      phone: _asStr(map['phone'] ?? map['whatsapp']),
+      clientName: asStr(
+          map['clientName'] ?? map['client_name'] ?? map['userName']),
+      storeName: asStr(
+          map['storeName'] ?? map['store_name'] ?? map['businessName']),
+      phone: asStr(
+          map['phone'] ?? map['phone_number'] ?? map['whatsapp']),
       deviceId: devId,
       licenseKey: key,
-      expiryDate: exp,
+      isFrozen: map['is_frozen'] == true || map['frozen'] == true,
+      featureFlags: flags,
     );
   }
-
-  LicenseModel toLicenseModel() => LicenseModel(
-        clientName: clientName,
-        storeName: storeName,
-        phone: phone,
-        deviceId: deviceId,
-        licenseKey: licenseKey,
-        expiryDate: expiryDate,
-        status: status,
-        workspaceId: workspaceId,
-        planType: planType,
-        maxDevices: maxDevices,
-        activatedAtMs: activatedAtMs,
-      );
 }
 
-/// الرابط الرسمي الإقليمي لقاعدة النظام — نفس المضمّن في تطبيق المستخدم
-/// (المعمارية الصامتة): الأدمن يعمل فوراً بلا إعداد يدوي، مع إمكانية
-/// التجاوز من حوار «الاتصال بقاعدة البيانات».
+/// جهاز متصل تابع لمنشأة
+class ConnectedDevice {
+  final String deviceId;
+  final String deviceName;
+  final String model;
+  final String platform;
+  final int linkedAt;
+  final int lastSeenAt;
+
+  const ConnectedDevice({
+    required this.deviceId,
+    this.deviceName = '',
+    this.model = '',
+    this.platform = '',
+    this.linkedAt = 0,
+    this.lastSeenAt = 0,
+  });
+
+  factory ConnectedDevice.fromJson(String id, Map<dynamic, dynamic> map) {
+    return ConnectedDevice(
+      deviceId: id,
+      deviceName: asStr(map['device_name'] ?? map['deviceName'] ?? id),
+      model: asStr(map['model'] ?? map['device_model']),
+      platform: asStr(map['platform'] ?? map['os']),
+      linkedAt: asMs(map['linked_at'] ?? map['created_at']),
+      lastSeenAt: asMs(map['last_seen_at'] ?? map['updated_at']),
+    );
+  }
+}
+
+/// سجل مدفوعات وتحصيل
+class BillingRecord {
+  final String id;
+  final String workspaceId;
+  final String clientName;
+  final String storeName;
+  final double amount;
+  final String currency;
+  final String paymentMethod;
+  final int durationDays;
+  final bool isLifetime;
+  final String notes;
+  final int timestamp;
+
+  const BillingRecord({
+    required this.id,
+    required this.workspaceId,
+    this.clientName = '',
+    this.storeName = '',
+    required this.amount,
+    this.currency = 'YER',
+    this.paymentMethod = 'نقداً',
+    this.durationDays = 30,
+    this.isLifetime = false,
+    this.notes = '',
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'workspace_id': workspaceId,
+        'client_name': clientName,
+        'store_name': storeName,
+        'amount': amount,
+        'currency': currency,
+        'payment_method': paymentMethod,
+        'duration_days': durationDays,
+        'is_lifetime': isLifetime,
+        'notes': notes,
+        'timestamp': timestamp,
+      };
+
+  factory BillingRecord.fromJson(String id, Map<dynamic, dynamic> map) {
+    return BillingRecord(
+      id: id,
+      workspaceId: asStr(map['workspace_id']),
+      clientName: asStr(map['client_name']),
+      storeName: asStr(map['store_name']),
+      amount: (map['amount'] is num)
+          ? (map['amount'] as num).toDouble()
+          : (double.tryParse('${map['amount']}') ?? 0.0),
+      currency: asStr(map['currency'] ?? 'YER'),
+      paymentMethod: asStr(map['payment_method'] ?? 'نقداً'),
+      durationDays: asInt(map['duration_days'], 30),
+      isLifetime: map['is_lifetime'] == true,
+      notes: asStr(map['notes']),
+      timestamp: asMs(map['timestamp']),
+    );
+  }
+}
+
+/// كود تفعيل مسبق الدفع (Voucher)
+class VoucherModel {
+  final String code;
+  final int durationDays;
+  final bool isLifetime;
+  final int createdAt;
+  final bool isUsed;
+  final String usedByWs;
+  final int usedAt;
+
+  const VoucherModel({
+    required this.code,
+    required this.durationDays,
+    this.isLifetime = false,
+    required this.createdAt,
+    this.isUsed = false,
+    this.usedByWs = '',
+    this.usedAt = 0,
+  });
+
+  String get durationLabel {
+    if (isLifetime) return 'تفعيل دائم (مدى الحياة)';
+    if (durationDays >= 365) return 'سنة كاملة ($durationDays يوماً)';
+    if (durationDays >= 90) return '3 أشهر ($durationDays يوماً)';
+    return '$durationDays يوماً';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'code': code,
+        'duration_days': durationDays,
+        'is_lifetime': isLifetime,
+        'created_at': createdAt,
+        'is_used': isUsed,
+        'used_by_ws': usedByWs,
+        'used_at': usedAt,
+      };
+
+  factory VoucherModel.fromJson(String code, Map<dynamic, dynamic> map) {
+    return VoucherModel(
+      code: code,
+      durationDays: asInt(map['duration_days'], 30),
+      isLifetime: map['is_lifetime'] == true,
+      createdAt: asMs(map['created_at']),
+      isUsed: map['is_used'] == true,
+      usedByWs: asStr(map['used_by_ws']),
+      usedAt: asMs(map['used_at']),
+    );
+  }
+}
+
+/// رسالة دعم فني
+class SupportMessage {
+  final String id;
+  final String sender; // 'client' or 'admin'
+  final String text;
+  final int timestamp;
+
+  const SupportMessage({
+    required this.id,
+    required this.sender,
+    required this.text,
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'sender': sender,
+        'text': text,
+        'timestamp': timestamp,
+      };
+
+  factory SupportMessage.fromJson(String id, Map<dynamic, dynamic> map) {
+    return SupportMessage(
+      id: id,
+      sender: asStr(map['sender'] ?? 'client'),
+      text: asStr(map['text']),
+      timestamp: asMs(map['timestamp']),
+    );
+  }
+}
+
+/// الرابط الرسمي الإقليمي لقاعدة النظام.
 const String kOfficialRtdbUrl = String.fromEnvironment(
   'ADMIN_RTDB_URL',
   defaultValue:
       'https://nexora-ledger-default-rtdb.europe-west1.firebasedatabase.app',
 );
 
-/// مفتاح Firebase (Web API Key) لنفس المشروع — يُستخدم **للمصادقة
-/// المجهولة** فقط: قواعد RTDB تشترط `auth != null` على كل عقدة تلمسها
-/// اللوحة (workspaces/trials)، فبدون هوية تُرفض كل قراءة وكتابة بـ
-/// 401/403 ويبدو التطبيق «معطّلاً» وهو سليم. قابل للتجاوز بـ dart-define
-/// أو بإدخال توكن يدوي من حوار الإعدادات.
+/// مفتاح Firebase (Web API Key) لنفس المشروع.
 const String kFirebaseApiKey = String.fromEnvironment(
   'ADMIN_FIREBASE_API_KEY',
   defaultValue: 'AIzaSyBHmi_0Oj58JKi2kNLR8gqQHhRN3grRg3U',
 );
 
-/// أقصى عدد مساحات تُمسح في البحث عن جهاز/سجل — سقف يمنع اختناق اللوحة
-/// على قاعدة فيها مئات المساحات (كان المسح المتسلسل بلا سقف يستغرق عشرات
-/// الثواني فيبدو التفعيل «لا يعمل»).
 const int kMaxWorkspaceScan = 40;
-
-/// أقصى عدد مساحات تُعرض/تُحصى في السجل الأخير.
 const int kMaxSubscriberScan = 40;
 
-/// تحويل آمن لأي قيمة سحابية إلى عدد صحيح (القواعد قد تُخزّن رقماً أو نصاً).
 int asInt(Object? v, [int dflt = 0]) {
   if (v is int) return v;
   if (v is num) return v.toInt();
@@ -178,16 +328,10 @@ int asInt(Object? v, [int dflt = 0]) {
   return dflt;
 }
 
-/// تحويل آمن لختم زمني (مللي ثانية) — يقبل نصاً أو رقماً.
 int asMs(Object? v) => asInt(v, 0);
 
-/// تحويل آمن إلى نص.
 String asStr(Object? v) => v == null ? '' : '$v';
 
-/// (2026-09-23 — تأمين الترخيص) رمز تحديث هوية **المدير** — يُلصق مرة
-/// واحدة في ⚙️ داخل التطبيق (أو يُمرَّر بـ dart-define عند بناء نسخة
-/// خاصة). به وحده تُقبل الكتابة على عقدة الاشتراك بعد تشديد القواعد؛
-/// بدونه يعمل التطبيق بالهوية المجهولة (كتابة مرفوضة بعد التشديد).
 const String kAdminRefreshTokenDefault =
     String.fromEnvironment('ADMIN_REFRESH_TOKEN');
 
@@ -195,21 +339,12 @@ class Rtdb {
   Rtdb._();
   static final Rtdb instance = Rtdb._();
 
-  /// عميل HTTP موحد: يعيد استخدام اتصال TCP/TLS نفسه عبر كل الطلبات
-  /// (keep-alive) بدل فتح اتصال جديد لكل طلب — أسرع بمرات على الجوال.
   final http.Client _client = http.Client();
-
-  /// (اختبارات) عميل HTTP قابل للحقن: العميل الموحّد يُبنى مرة واحدة
-  /// (keep-alive) فلا تكفي `runWithClient` لحقنه بعد البناء.
   http.Client? clientOverride;
-
   http.Client get _http => clientOverride ?? _client;
 
   String baseUrl = '';
-  String authToken = ''; // اختياري: legacy secret أو ID token.
-
-  /// رمز تحديث هوية المدير (إن ضُبط) + معرّفها — يُعرض في ⚙️ للتأكد أن
-  /// القواعد والحالة يستخدمان نفس الهوية.
+  String authToken = '';
   String adminRefreshToken = '';
   String adminUid = '';
 
@@ -221,22 +356,15 @@ class Rtdb {
   static const _kAdminRt = 'rtdbAdminRefreshToken';
   static const _kAdminUid = 'rtdbAdminUid';
 
-  /// جلسة الهوية المجهولة (Firebase Auth) — تُرفق بكل طلب تلقائياً.
   String _idToken = '';
   String _refreshToken = '';
   int _expiryMs = 0;
-
-  /// آخر خطأ مصادقة — للعرض في الواجهة بدل رسالة HTTP مبهمة.
   String lastAuthError = '';
 
-  /// (إصلاح الأداء) كاش ساعة الخادم: قياس واحد يكفي لبرهة قصيرة، والإسناد
-  /// بين القراءات بساعة **أحادية** (Stopwatch) لا بساعة الهاتف — فتبقى كل
-  /// الحسابات بختم الخادم دون طلبين إضافيين لكل عملية.
   static const Duration _clockTtl = Duration(seconds: 45);
   final Stopwatch _clockAge = Stopwatch();
   int _clockMs = 0;
 
-  /// (للاختبارات) تصفير كاش الساعة بين الحالات.
   void resetClockCache() {
     _clockMs = 0;
     _clockAge
@@ -247,55 +375,47 @@ class Rtdb {
   Future<void> load() async {
     final sp = await SharedPreferences.getInstance();
     baseUrl = (sp.getString(_kUrl) ?? '').trim();
-    // (المعمارية الصامتة) لا رابط محفوظاً؟ اعتمد الرسمي المضمّن فوراً.
     if (baseUrl.isEmpty) baseUrl = kOfficialRtdbUrl;
-    authToken = sp.getString(_kAuth) ?? '';
+    authToken = (sp.getString(_kAuth) ?? '').trim();
     _idToken = sp.getString(_kIdToken) ?? '';
     _refreshToken = sp.getString(_kRefresh) ?? '';
     _expiryMs = sp.getInt(_kExpiry) ?? 0;
-    adminRefreshToken = (sp.getString(_kAdminRt) ?? '').trim().isEmpty
-        ? kAdminRefreshTokenDefault.trim()
-        : (sp.getString(_kAdminRt) ?? '').trim();
-    adminUid = (sp.getString(_kAdminUid) ?? '').trim();
-    // (قانون 2026-09-22) الهوية تُبنى عند أول استخدام — لا عند الإقلاع،
-    // حتى لا يعلق التطبيق على شاشة التحميل عند ضعف الشبكة.
+    adminRefreshToken = (sp.getString(_kAdminRt) ?? '').trim();
+    if (adminRefreshToken.isEmpty && kAdminRefreshTokenDefault.isNotEmpty) {
+      adminRefreshToken = kAdminRefreshTokenDefault.trim();
+    }
+    adminUid = sp.getString(_kAdminUid) ?? '';
   }
 
-  Future<void> _persistSession() async {
+  Future<void> save(String url, String auth) async {
+    baseUrl = url.trim();
+    if (baseUrl.isEmpty) baseUrl = kOfficialRtdbUrl;
+    authToken = auth.trim();
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kIdToken, _idToken);
-    await sp.setString(_kRefresh, _refreshToken);
-    await sp.setInt(_kExpiry, _expiryMs);
-    await sp.setString(_kAdminRt, adminRefreshToken);
-    await sp.setString(_kAdminUid, adminUid);
+    await sp.setString(_kUrl, baseUrl);
+    await sp.setString(_kAuth, authToken);
   }
 
-  /// حفظ رمز هوية المدير (يُلصق مرة واحدة من ⚙️) وتبديل الهوية فوراً.
   Future<void> saveAdminRefreshToken(String rt) async {
     adminRefreshToken = rt.trim();
-    adminUid = '';
-    _idToken = '';
-    _refreshToken = '';
-    _expiryMs = 0;
-    resetClockCache();
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kAdminRt, adminRefreshToken);
-    await sp.setString(_kAdminUid, '');
-    lastAuthError = '';
+    _idToken = '';
+    _expiryMs = 0;
+    if (adminRefreshToken.isNotEmpty) {
+      await _signInAsAdmin();
+    }
   }
+
+  bool get configured => baseUrl.isNotEmpty;
 
   bool get _tokenAlive =>
       _idToken.isNotEmpty &&
-      _expiryMs > DateTime.now().millisecondsSinceEpoch + 60000;
+      DateTime.now().millisecondsSinceEpoch < (_expiryMs - 60000);
 
-  /// هوية صالحة لكل طلب: توكن يدوي (إن أدخله المالك) وإلا هوية مجهولة
-  /// تُنشأ/تُجدَّد تلقائياً. إخفاقها لا يمنع المحاولة — رسالة الخطأ
-  /// توضّح السبب (401 ⇒ القاعدة ترفض بلا هوية).
   Future<String> _ensureAuth({bool force = false, bool retried = false}) async {
     if (authToken.trim().isNotEmpty) return authToken.trim();
     if (!force && _tokenAlive) return _idToken;
-    // (2026-09-23) هوية المدير الثابتة — هي الوحيدة المخوّلة بكتابة
-    // عقدة الاشتراك بعد تشديد القواعد.
     if (adminRefreshToken.isNotEmpty) return _signInAsAdmin();
     final refresh = force && _refreshToken.isNotEmpty;
     try {
@@ -313,9 +433,6 @@ class Rtdb {
               body: jsonEncode(body))
           .timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
-        // (إصلاح 2026-09-23) رمز تحديث منتهٍ/ملغى كان يدور في حلقة:
-        // المحاولة تفشل ⇒ نُعيد بلا هوية ⇒ 401 ⇒ نُحاول التحديث نفسه.
-        // الآن: نسقط الرمز التالف وننشئ هوية مجهولة جديدة فوراً (مرة واحدة).
         if (refresh && !retried) {
           _refreshToken = '';
           _idToken = '';
@@ -323,8 +440,7 @@ class Rtdb {
           return await _ensureAuth(force: true, retried: true);
         }
         lastAuthError =
-            'تعذّر إنشاء هوية الدخول (${res.statusCode}) — تحقق من '
-            'الاتصال ومن تفعيل Anonymous Auth في Firebase Console.';
+            'تعذّر إنشاء هوية الدخول (${res.statusCode}) — تحقق من الاتصال.';
         return _idToken;
       }
       final m = jsonDecode(utf8.decode(res.bodyBytes));
@@ -342,8 +458,6 @@ class Rtdb {
     return _idToken;
   }
 
-  /// توقيع الدخول بهوية **المدير** الثابتة عبر رمز التحديث: نفس الهوية
-  /// (user_id) في كل مرة، وهو ما تشترطه قواعد الكتابة على الاشتراك.
   Future<String> _signInAsAdmin() async {
     try {
       final res = await _http
@@ -358,8 +472,7 @@ class Rtdb {
           .timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
         lastAuthError =
-            'رفض خادم الهوية رمز المدير (${res.statusCode}) — أعد لصق رمز '
-            'هوية المدير من ⚙️.';
+            'رفض خادم الهوية رمز المدير (${res.statusCode}).';
         return _idToken;
       }
       final m = jsonDecode(utf8.decode(res.bodyBytes));
@@ -369,61 +482,71 @@ class Rtdb {
       if (rt.isNotEmpty) adminRefreshToken = rt;
       final uid = asStr(m['user_id']);
       if (uid.isNotEmpty) adminUid = uid;
+      final exp = '${m['expires_in'] ?? '3600'}';
       _expiryMs = DateTime.now().millisecondsSinceEpoch +
-          (int.tryParse(asStr(m['expires_in'])) ?? 3600) * 1000;
+          (int.tryParse(exp) ?? 3600) * 1000;
       lastAuthError = '';
       await _persistSession();
+      if (adminUid.isNotEmpty) {
+        final sp = await SharedPreferences.getInstance();
+        await sp.setString(_kAdminUid, adminUid);
+      }
     } catch (e) {
-      lastAuthError = 'تعذّر الاتصال بخادم الهوية: $e';
+      lastAuthError = 'تعذّر توقيع هوية المدير: $e';
     }
     return _idToken;
   }
 
-  /// إعادة توقيع الدخول (تُستدعى عند 401) — يبطل الكاش ويطلب رمزاً جديداً.
+  Future<void> _persistSession() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(_kIdToken, _idToken);
+      await sp.setString(_kRefresh, _refreshToken);
+      await sp.setInt(_kExpiry, _expiryMs);
+      if (adminRefreshToken.isNotEmpty) {
+        await sp.setString(_kAdminRt, adminRefreshToken);
+      }
+    } catch (_) {}
+  }
+
+  Future<Uri> _u(String path,
+      [Map<String, String>? q, String? tokenOverride]) async {
+    final clean = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    final map = <String, String>{};
+    if (q != null) map.addAll(q);
+    final tok = tokenOverride ?? await _ensureAuth();
+    if (tok.isNotEmpty) map['auth'] = tok;
+    final qs = map.isEmpty
+        ? ''
+        : '?${map.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&')}';
+    return Uri.parse('$clean/$path.json$qs');
+  }
+
   Future<String> _reauth() async {
     _idToken = '';
     _expiryMs = 0;
-    return _ensureAuth(force: true);
+    return await _ensureAuth(force: true);
   }
 
-  Future<void> save(String url, String auth) async {
-    baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
-    if (baseUrl.isEmpty) baseUrl = kOfficialRtdbUrl; // فارغ = عودة للرسمي.
-    authToken = auth.trim();
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kUrl, baseUrl);
-    await sp.setString(_kAuth, authToken);
-    // (إصلاح) تغيّر الرابط يعني قاعدة أخرى — كاش الساعة القديم لا يصلح لها.
-    resetClockCache();
-  }
-
-  bool get configured => baseUrl.isNotEmpty;
-
-  Future<Uri> _u(String path, [Map<String, String>? q, String? token]) async {
-    final qp = <String, String>{...?q};
-    final t = token ?? await _ensureAuth();
-    if (t.isNotEmpty) qp['auth'] = t;
-    return Uri.parse('$baseUrl/$path.json')
-        .replace(queryParameters: qp.isEmpty ? null : qp);
-  }
-
-  /// رسالة خطأ مقروءة: 401/403 ⇒ مشكلة هوية لا مشكلة بيانات.
-  Exception _fail(String verb, String path, int code, String body) {
+  Exception _fail(String op, String path, int code, String body) {
+    var reason = 'رمز الاستجابة $code';
+    try {
+      final m = jsonDecode(body);
+      if (m is Map && m['error'] != null) reason = '${m['error']}';
+    } catch (_) {}
     if (code == 401 || code == 403) {
       return Exception(
-          'رفضت القاعدة $verb «$path»: تحتاج هوية مسجّلة (auth != null).\n'
-          '${lastAuthError.isNotEmpty ? lastAuthError : 'فعّل Anonymous Auth في Firebase Console أو الصق توكن صالح من ⚙️.'}');
+        'رُفضت $op في مسار $path ($code: $reason).\n'
+        'تحقق من تفعيل قواعد الحماية وهويات المشرفين.',
+      );
     }
-    return Exception('$verb $path فشل ($code): $body');
+    return Exception('فشلت $op في مسار $path ($code): $reason');
   }
 
-  /// قراءة عقدة من RTDB (متاحة للواجهات وللاستعلام المباشر).
-  Future<dynamic> getJson(String path, [Map<String, String>? q]) => _get(path, q);
-
   Future<dynamic> _get(String path, [Map<String, String>? q]) async {
-    var r = await _http
-        .get(await _u(path, q))
-        .timeout(const Duration(seconds: 20));
+    var r = await _http.get(await _u(path, q)).timeout(const Duration(seconds: 20));
     if (r.statusCode == 401 || r.statusCode == 403) {
       final fresh = await _reauth();
       if (fresh.isNotEmpty) {
@@ -432,6 +555,7 @@ class Rtdb {
             .timeout(const Duration(seconds: 20));
       }
     }
+    if (r.statusCode == 404) return null;
     if (r.statusCode != 200) {
       throw _fail('قراءة', path, r.statusCode, r.body);
     }
@@ -472,12 +596,30 @@ class Rtdb {
     }
   }
 
-  /// وقت خادم فيربيس الحقيقي — نكتب {".sv":"timestamp"} ونقرأ الناتج.
-  /// كل الحسابات الزمنية بساعة الخادم حصراً، لا ساعة الهاتف.
-  ///
-  /// (إصلاح أداء) القراءة مُخزّنة مؤقتاً [kClockTtl] وتُسند بينها بساعة
-  /// أحادية: التفعيل والتمديد والإحصائيات في جلسة واحدة تستهلك قياساً
-  /// واحداً بدل طلبين لكل عملية.
+  Future<void> _delete(String path) async {
+    var r = await _http
+        .delete(await _u(path))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode == 401 || r.statusCode == 403) {
+      final fresh = await _reauth();
+      if (fresh.isNotEmpty) {
+        r = await _http
+            .delete(await _u(path, null, fresh))
+            .timeout(const Duration(seconds: 20));
+      }
+    }
+    if (r.statusCode != 200 && r.statusCode != 204) {
+      throw _fail('حذف', path, r.statusCode, r.body);
+    }
+  }
+
+  // Public CRUD operations for external callers
+  Future<dynamic> getJson(String path) => _get(path);
+  Future<void> patchJson(String path, Map<String, dynamic> data) =>
+      _patch(path, data);
+  Future<void> putJson(String path, dynamic data) => _put(path, data);
+  Future<void> deleteJson(String path) => _delete(path);
+
   static const Duration kClockTtl = _clockTtl;
 
   Future<int> serverNowMs({bool force = false}) async {
@@ -495,11 +637,6 @@ class Rtdb {
     return ms;
   }
 
-  /// تنفيذ مهام غير متزامنة بتوازٍ محدود، مع حفظ ترتيب النتائج.
-  ///
-  /// المسح المتسلسل لعشرات المساحات (طلب HTTP لكل واحدة) كان يستغرق عشرات
-  /// الثواني على الجوال فيبدو التفعيل معلّقاً. ست مهام متزامنة تحسم البحث
-  /// في أقل من ثانيتين بلا إغراق القاعدة.
   Future<List<T>> _gather<T>(List<Future<T?> Function()> tasks,
       {int limit = 6}) async {
     if (tasks.isEmpty) return const [];
@@ -511,9 +648,7 @@ class Rtdb {
         if (i >= tasks.length) return;
         try {
           out[i] = await tasks[i]();
-        } catch (_) {
-          // مساحة بلا صلاحية/محذوفة — نتجاوزها ولا نُسقط البحث كله.
-        }
+        } catch (_) {}
       }
     }
 
@@ -522,8 +657,6 @@ class Rtdb {
     return out.whereType<T>().toList();
   }
 
-  /// يحسم مرشح الجهاز داخل مساحة واحدة: (1) سجل التفعيلات الإداري،
-  /// (2) roster الأجهزة. يعيد null إن لم يظهر المعرف في هذه المساحة.
   Future<_DevHit?> _scanWorkspaceForDevice(String ws, String devId) async {
     final enc = Uri.encodeComponent(ws);
     // (1) سجل إداري سابق بنفس المعرف.
@@ -583,20 +716,6 @@ class Rtdb {
       }
       throw Exception('لم يُعثر على مساحة عمل مرتبطة بهذه البصمة.\n'
           'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
-    }
-
-    // (1-ب) كود ترخيص NX-…
-    if (id.toUpperCase().startsWith('NX-')) {
-      final trials = await _get('trials');
-      if (trials is Map) {
-        for (final v in trials.values) {
-          if (v is! Map) continue;
-          final lk = asStr(v['licenseKey'] ?? v['license_key']).toUpperCase();
-          if (lk == id.toUpperCase() && asStr(v['workspace_id']).isNotEmpty) {
-            return asStr(v['workspace_id']);
-          }
-        }
-      }
     }
 
     // (2) معرف جهاز DEVICE-… ⇒ بحث متعدد الطبقات + ربط تلقائي:
@@ -714,18 +833,16 @@ class Rtdb {
     } catch (_) {}
   }
 
-  /// التفعيل/الترقية: تحديث عقدة الاشتراك في المكان (PATCH يحفظ الحقول
-  /// الأخرى مثل created_at وdevice_fingerprint) وفتح كل المزايا.
   Future<ActivationResult> activate({
     required String rawInput,
-    required String planType, // individual | enterprise
+    required String planType,
     required PlanDuration duration,
     required int maxDevices,
-    bool extend = false, // تمديد: يضيف المدة فوق expires_at الحالي إن كان أبعد.
+    bool extend = false,
     String clientName = '',
     String storeName = '',
     String phone = '',
-    String? licenseKey,
+    String licenseKey = '',
   }) async {
     final plan = planType == 'enterprise' ? 'enterprise' : 'individual';
     final seats = plan == 'enterprise' ? (maxDevices < 2 ? 2 : maxDevices) : 1;
@@ -735,66 +852,17 @@ class Rtdb {
     final enc = Uri.encodeComponent(ws);
 
     int base = now;
-    Map? existingSub;
     if (extend) {
       final cur = await _get('workspaces/$enc/subscription');
       if (cur is Map) {
-        existingSub = cur;
-        final curExp = asMs(cur['expires_at'] ?? cur['expiryDate']);
-        if (curExp > now) base = curExp; // التمديد يبني على المتبقي.
+        final curExp = asMs(cur['expires_at']);
+        if (curExp > now) base = curExp;
       }
-    } else {
-      try {
-        final cur = await _get('workspaces/$enc/subscription');
-        if (cur is Map) existingSub = cur;
-      } catch (_) {}
     }
     final expires = base + duration.span.inMilliseconds;
 
-    // استخراج أو إبقاء القيم الحالية إذا لم تُمرّر
-    final cName = clientName.trim().isNotEmpty
-        ? clientName.trim()
-        : asStr(existingSub?['clientName'] ??
-            existingSub?['client_name'] ??
-            existingSub?['userName'] ??
-            existingSub?['user_name'] ??
-            existingSub?['owner_name']);
-    final sName = storeName.trim().isNotEmpty
-        ? storeName.trim()
-        : asStr(existingSub?['storeName'] ??
-            existingSub?['store_name'] ??
-            existingSub?['businessName'] ??
-            existingSub?['business_name']);
-    final ph = phone.trim().isNotEmpty
-        ? phone.trim()
-        : asStr(existingSub?['phone'] ?? existingSub?['whatsapp']);
-    final devId = rawInput.trim().toUpperCase().startsWith('DEVICE-')
-        ? rawInput.trim().toUpperCase()
-        : asStr(existingSub?['deviceId'] ??
-            existingSub?['device_id'] ??
-            existingSub?['device_fingerprint']);
-    final key = (licenseKey != null && licenseKey.trim().isNotEmpty)
-        ? licenseKey.trim()
-        : asStr(existingSub?['licenseKey'] ?? existingSub?['license_key'])
-                .isNotEmpty
-            ? asStr(existingSub?['licenseKey'] ?? existingSub?['license_key'])
-            : generateLicenseKey(devId.isNotEmpty ? devId : ws);
-
-    final licenseObj = {
-      // الحقول الإجبارية بنموذج الترخيص (Requirement 2)
-      'clientName': cName,
-      'storeName': sName,
-      'phone': ph,
-      'deviceId': devId,
-      'licenseKey': key,
-      'expiryDate': expires,
+    final subPayload = <String, dynamic>{
       'status': 'active',
-
-      // أسماء التوافق الرجعي
-      'client_name': cName,
-      'store_name': sName,
-      'device_id': devId,
-      'license_key': key,
       'is_active': true,
       'plan_type': plan,
       'max_devices': seats,
@@ -802,7 +870,6 @@ class Rtdb {
       'activated_at': now,
       'updated_at': now,
       'activated_by': 'license_admin',
-      'workspace_id': ws,
       'features': {
         'can_use_categories': true,
         'can_send_notifications': true,
@@ -812,48 +879,61 @@ class Rtdb {
         'multi_device_sync': true,
         'role_permissions': true,
         'audit_log': true,
+        'cloud_sync': true,
+        'cloud_backup': true,
+        'multi_branch': true,
+        'multi_user': true,
+        'advanced_invoicing': true,
       },
     };
+    if (clientName.trim().isNotEmpty) {
+      subPayload['clientName'] = clientName.trim();
+      subPayload['client_name'] = clientName.trim();
+    }
+    if (storeName.trim().isNotEmpty) {
+      subPayload['storeName'] = storeName.trim();
+      subPayload['store_name'] = storeName.trim();
+    }
+    if (phone.trim().isNotEmpty) {
+      subPayload['phone'] = phone.trim();
+      subPayload['phone_number'] = phone.trim();
+    }
+    if (licenseKey.trim().isNotEmpty) {
+      subPayload['licenseKey'] = licenseKey.trim();
+      subPayload['license_key'] = licenseKey.trim();
+    }
 
-    await _patch('workspaces/$enc/subscription', licenseObj);
-    try {
-      await _put('workspaces/$enc/license', licenseObj);
-    } catch (_) {}
+    await _patch('workspaces/$enc/subscription', subPayload);
 
-    // مزامنة فهرس /trials (مصدر العدادات المجمعة): التفعيل يقلب حالة
-    // المساحة فيه أيضاً حتى تعكس بطاقة «مشتركون مدفوعون» الحقيقة فوراً.
     try {
       final cur = await _get('workspaces/$enc/subscription');
       final fp = cur is Map ? asStr(cur['device_fingerprint']) : '';
       if (fp.isNotEmpty) {
         await _patch('trials/${Uri.encodeComponent(fp)}', {
-          'clientName': cName,
-          'storeName': sName,
-          'phone': ph,
-          'deviceId': devId,
-          'licenseKey': key,
-          'expiryDate': expires,
           'status': 'active',
           'expires_at': expires,
           'workspace_id': ws,
         });
       }
-    } catch (_) {} // الفهرس تحسيني — فشله لا يفسد التفعيل.
+    } catch (_) {}
 
-    // (إصلاح 2026-09-22) سجل إداري داخل **مساحة العمل نفسها**: العقدة
-    // العامة /admin محجوبة في قواعد RTDB (الافتراضي = رفض) فكانت كتابة
-    // السجل تُسقط التفعيل كله بعد نجاح تحديث الاشتراك. المسار الجديد
-    // مسموح بقاعدة workspaces القائمة — بلا تعديل يدوي للقواعد.
     try {
       await _put('workspaces/$enc/admin_log/$now', {
-        ...licenseObj,
+        'workspace_id': ws,
         'device_ref': rawInput.trim(),
+        'plan_type': plan,
+        'max_devices': seats,
+        'expires_at': expires,
+        'activated_at': now,
+        'updated_at': now,
         'lifetime': lifetime,
         if (extend) 'extended': true,
+        if (clientName.trim().isNotEmpty) 'client_name': clientName.trim(),
+        if (storeName.trim().isNotEmpty) 'store_name': storeName.trim(),
+        if (phone.trim().isNotEmpty) 'phone': phone.trim(),
+        if (licenseKey.trim().isNotEmpty) 'license_key': licenseKey.trim(),
       });
-    } catch (_) {
-      // السجل تحسيني: لا يُفسد نجاح التفعيل.
-    }
+    } catch (_) {}
 
     return ActivationResult(
       workspaceId: ws,
@@ -861,63 +941,29 @@ class Rtdb {
       maxDevices: seats,
       expiresAtMs: expires,
       lifetime: lifetime,
-      clientName: cName,
-      storeName: sName,
-      phone: ph,
-      licenseKey: key,
-      deviceId: devId,
+      clientName: clientName,
+      storeName: storeName,
+      phone: phone,
+      licenseKey: licenseKey,
+      deviceId: rawInput.trim(),
     );
   }
 
-  /// آخر الاشتراكات المفعلة مع الحالة الحية لكل مساحة.
-  ///
-  /// (إصلاح 2026-09-22) السجل الإداري صار داخل كل مساحة
-  /// (`workspaces/<ws>/admin_log`) لأن العقدة العامة `/admin` محجوبة
-  /// بالقواعد؛ نقرأ مفاتيح المساحات (طلب واحد) ثم سجل كل مساحة — بحد
-  /// أقصى [kMaxSubscriberScan] حتى لا نختنق، ونرتب تنازلياً بالتاريخ.
-  ///
-  /// (إصلاح 2026-09-23) القراءة أصبحت متوازية محدودة بدل مسح متسلسل،
-  /// وتحويل الحقول الرقمية موحّد عبر asInt/asMs — كان تعبير maxDevices
-  /// القديم يقرأ أولوية العوامل خطأ فيُظهر «1 جهاز» لمشترك مؤسسة.
   Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) return const [];
     final wsKeys =
         keys.keys.map((k) => '$k').take(kMaxSubscriberScan).toList();
 
-    // قراءة فهرس /trials لربط بيانات المتاجر والعملاء
-    Map? trialIdx;
-    try {
-      final t = await _get('trials');
-      if (t is Map) trialIdx = t;
-    } catch (_) {}
-
-    final trialByWs = <String, Map>{};
-    if (trialIdx != null) {
-      for (final v in trialIdx.values) {
-        if (v is Map) {
-          final ws = asStr(v['workspace_id']);
-          if (ws.isNotEmpty && !trialByWs.containsKey(ws)) {
-            trialByWs[ws] = v;
-          }
-        }
-      }
-    }
-
     final rows = await _gather<List<SubscriberEntry>>(
-      [
-        for (final ws in wsKeys)
-          () => _readWorkspaceEntries(ws, trialFallback: trialByWs[ws])
-      ],
+      [for (final ws in wsKeys) () => _readWorkspaceEntries(ws)],
     );
     final out = rows.expand((r) => r).toList();
     out.sort((a, b) => b.activatedAtMs.compareTo(a.activatedAtMs));
     return out.take(limit).toList();
   }
 
-  /// يقرأ مساحة واحدة: سجلها الإداري (إن وُجد) وإلا حالتها الحية.
-  Future<List<SubscriberEntry>> _readWorkspaceEntries(String ws,
-      {Map? trialFallback}) async {
+  Future<List<SubscriberEntry>> _readWorkspaceEntries(String ws) async {
     final enc = Uri.encodeComponent(ws);
     Map? live;
     try {
@@ -931,167 +977,349 @@ class Rtdb {
         for (final e in logs.entries) {
           final v = e.value;
           if (v is! Map) continue;
-
-          final devId = _pick(
-              live?['deviceId'],
-              v['deviceId'],
-              _pick(
-                  live?['device_id'],
-                  v['device_id'],
-                  _pick(
-                      trialFallback?['deviceId'],
-                      trialFallback?['device_id'],
-                      asStr(v['device_ref']))));
-
-          final lKey = _pick(
-              live?['licenseKey'],
-              v['licenseKey'],
-              _pick(
-                  live?['license_key'],
-                  v['license_key'],
-                  _pick(trialFallback?['licenseKey'],
-                      trialFallback?['license_key'], '')));
-
-          final cName = _pick(
-              live?['clientName'],
-              v['clientName'],
-              _pick(
-                  live?['client_name'],
-                  v['client_name'],
-                  _pick(
-                      live?['userName'],
-                      v['userName'],
-                      _pick(trialFallback?['clientName'],
-                          trialFallback?['client_name'], ''))));
-
-          final sName = _pick(
-              live?['storeName'],
-              v['storeName'],
-              _pick(
-                  live?['store_name'],
-                  v['store_name'],
-                  _pick(
-                      live?['businessName'],
-                      v['businessName'],
-                      _pick(trialFallback?['storeName'],
-                          trialFallback?['store_name'], ''))));
-
-          final ph = _pick(
-              live?['phone'],
-              v['phone'],
-              _pick(
-                  live?['whatsapp'],
-                  v['whatsapp'],
-                  _pick(trialFallback?['phone'],
-                      trialFallback?['whatsapp'], '')));
-
+          final devRef = asStr(v['device_ref'] ??
+              live?['device_id'] ??
+              live?['deviceId']);
           out.add(SubscriberEntry(
             workspaceId: ws,
             planType: _pick(live?['plan_type'], v['plan_type'], 'individual'),
             status: _pick(live?['status'], null, 'active'),
-            maxDevices:
-                asInt(_firstNum(live?['max_devices'], v['max_devices']), 1),
-            expiresAtMs: asMs(_firstNum(
-                live?['expires_at'],
-                _firstNum(live?['expiryDate'],
-                    v['expires_at'] ?? v['expiryDate']))),
+            maxDevices: asInt(
+                _firstNum(live?['max_devices'], v['max_devices']), 1),
+            expiresAtMs: asMs(
+                _firstNum(live?['expires_at'], v['expires_at'])),
             activatedAtMs: asMs(v['activated_at']) > 0
                 ? asMs(v['activated_at'])
                 : asMs(e.key),
-            deviceRef: asStr(v['device_ref']),
-            clientName: cName,
-            storeName: sName,
-            phone: ph,
-            deviceId: devId,
-            licenseKey: lKey.isNotEmpty
-                ? lKey
-                : generateLicenseKey(devId.isNotEmpty ? devId : ws),
+            deviceRef: devRef,
+            clientName: asStr(live?['clientName'] ??
+                live?['client_name'] ??
+                v['client_name'] ??
+                v['clientName']),
+            storeName: asStr(live?['storeName'] ??
+                live?['store_name'] ??
+                v['store_name'] ??
+                v['storeName']),
+            phone: asStr(live?['phone'] ??
+                live?['phone_number'] ??
+                v['phone'] ??
+                v['phone_number']),
+            deviceId: devRef,
+            licenseKey: asStr(live?['licenseKey'] ??
+                live?['license_key'] ??
+                v['license_key'] ??
+                v['licenseKey']),
+            isFrozen: live?['is_frozen'] == true || live?['frozen'] == true,
+            featureFlags: (live?['features'] is Map)
+                ? (live!['features'] as Map)
+                    .map((k, val) => MapEntry('$k', val == true))
+                : const {},
           ));
         }
-        return out; // هذه المساحة موثّقة — لا حاجة للفرع التالي.
+        return out;
       }
     } catch (_) {}
-    // مساحة بلا سجل إداري لكن لها اشتراك: تُعرض بحالتها الحية.
     if (live != null) {
-      final devId = _pick(
-          live['deviceId'],
-          live['device_id'],
-          _pick(trialFallback?['deviceId'], trialFallback?['device_id'],
-              asStr(live['device_fingerprint'])));
-
-      final lKey = _pick(
-          live['licenseKey'],
-          live['license_key'],
-          _pick(trialFallback?['licenseKey'],
-              trialFallback?['license_key'], ''));
-
-      final cName = _pick(
-          live['clientName'],
-          live['client_name'],
-          _pick(
-              live['userName'],
-              live['owner_name'],
-              _pick(trialFallback?['clientName'],
-                  trialFallback?['client_name'], '')));
-
-      final sName = _pick(
-          live['storeName'],
-          live['store_name'],
-          _pick(
-              live['businessName'],
-              live['business_name'],
-              _pick(trialFallback?['storeName'],
-                  trialFallback?['store_name'], '')));
-
-      final ph = _pick(
-          live['phone'],
-          live['whatsapp'],
-          _pick(trialFallback?['phone'], trialFallback?['whatsapp'], ''));
-
       return [
-        SubscriberEntry(
-          workspaceId: ws,
-          planType: asStr(live['plan_type']).isEmpty
-              ? 'individual'
-              : asStr(live['plan_type']),
-          status: asStr(live['status']),
-          maxDevices: asInt(live['max_devices'], 1),
-          expiresAtMs: asMs(live['expiryDate'] ?? live['expires_at']),
-          activatedAtMs: asMs(live['activated_at']),
-          deviceRef: devId,
-          clientName: cName,
-          storeName: sName,
-          phone: ph,
-          deviceId: devId,
-          licenseKey: lKey.isNotEmpty
-              ? lKey
-              : generateLicenseKey(devId.isNotEmpty ? devId : ws),
-        ),
+        SubscriberEntry.fromSubscriptionMap(ws, live),
       ];
     }
     return const [];
   }
 
-  /// أول قيمة رقمية صالحة من مرشحين (الحالة الحية تسبق السجل).
-  static Object? _firstNum(Object? a, Object? b) {
-    if (a is num) return a;
-    if (b is num) return b;
-    final pa = int.tryParse(asStr(a));
-    if (pa != null) return pa;
-    final pb = int.tryParse(asStr(b));
-    if (pb != null) return pb;
+  // ==================== أفعال التحكم عن بعد (Remote Actions) ====================
+
+  /// 2. القفل والتعليق الفوري (Kill Switch / Freeze)
+  Future<void> toggleFreezeSubscriber(String wsId, bool freeze) async {
+    final enc = Uri.encodeComponent(wsId);
+    await _patch('workspaces/$enc/subscription', {
+      'is_frozen': freeze,
+      'frozen_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 2. فك ارتباط المعرف (Unlink Device ID)
+  Future<void> unlinkSubscriberDevice(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    await _patch('workspaces/$enc/subscription', {
+      'device_id': '',
+      'deviceId': '',
+      'unlinked_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 3. مفاتيح الميزات والسقوف (Dynamic Feature Flags & Limits)
+  Future<void> updateFeatureFlags(
+    String wsId,
+    Map<String, bool> flags, {
+    int? maxDevices,
+  }) async {
+    final enc = Uri.encodeComponent(wsId);
+    final payload = <String, dynamic>{
+      'features': flags,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    };
+    if (maxDevices != null) {
+      payload['max_devices'] = maxDevices;
+    }
+    await _patch('workspaces/$enc/subscription', payload);
+  }
+
+  /// 4. الأجهزة المتصلة وطرد جهاز (Multi-Device Management)
+  Future<List<ConnectedDevice>> getConnectedDevices(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    final res = await _get('workspaces/$enc/devices');
+    if (res is! Map) return [];
+    return res.entries
+        .map((e) => ConnectedDevice.fromJson('${e.key}', e.value as Map))
+        .toList();
+  }
+
+  Future<void> kickDevice(String wsId, String deviceId) async {
+    final enc = Uri.encodeComponent(wsId);
+    final devEnc = Uri.encodeComponent(deviceId);
+    await _delete('workspaces/$enc/devices/$devEnc');
+    await _put('workspaces/$enc/revoked_devices/$devEnc', {
+      'kicked_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 5. أمر النسخ الفوري عن بعد (Remote Instant Backup)
+  Future<void> requestInstantBackup(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    await _patch('workspaces/$enc/remote_commands', {
+      'request_backup': true,
+      'requested_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 1. إرسال إشعار وتنبيه موجه لعميل محدد (Direct Push Alert)
+  Future<void> sendTargetedNotification(
+    String wsId, {
+    required String title,
+    required String body,
+    bool isModal = false,
+  }) async {
+    final enc = Uri.encodeComponent(wsId);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _put('workspaces/$enc/notifications/$now', {
+      'id': '$now',
+      'title': title,
+      'body': body,
+      'is_modal': isModal,
+      'created_at': now,
+      'read': false,
+    });
+  }
+
+  /// 7. تسجيل الدفع والتحصيل (Billing & CRM)
+  Future<void> recordBillingPayment(BillingRecord record) async {
+    final enc = Uri.encodeComponent(record.workspaceId);
+    await _put(
+        'workspaces/$enc/billing_records/${record.id}', record.toJson());
+    await _put('billing_records/${record.id}', record.toJson());
+  }
+
+  Future<List<BillingRecord>> getBillingHistory(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    final res = await _get('workspaces/$enc/billing_records');
+    if (res is! Map) return [];
+    final list = res.entries
+        .map((e) => BillingRecord.fromJson('${e.key}', e.value as Map))
+        .toList();
+    list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return list;
+  }
+
+  /// 6. توليد واستعراض أكواد التفعيل (Vouchers)
+  Future<void> generateVouchers({
+    required int durationDays,
+    bool isLifetime = false,
+    int count = 5,
+  }) async {
+    final rnd = Random();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (var i = 0; i < count; i++) {
+      final part1 = rnd.nextInt(9000) + 1000;
+      final part2 = rnd.nextInt(9000) + 1000;
+      final part3 = rnd.nextInt(9000) + 1000;
+      final code = 'VCH-$part1-$part2-$part3';
+      final voucher = VoucherModel(
+        code: code,
+        durationDays: durationDays,
+        isLifetime: isLifetime,
+        createdAt: now,
+      );
+      await _put('vouchers/$code', voucher.toJson());
+    }
+  }
+
+  Future<List<VoucherModel>> getVouchers() async {
+    final res = await _get('vouchers');
+    if (res is! Map) return [];
+    final list = res.entries
+        .map((e) => VoucherModel.fromJson('${e.key}', e.value as Map))
+        .toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  Future<void> deleteVoucher(String code) async {
+    await _delete('vouchers/${Uri.encodeComponent(code)}');
+  }
+
+  /// 8. صندوق وارد الدعم الفني (Support Inbox)
+  Future<List<Map<String, dynamic>>> getSupportConversations() async {
+    final res = await _get('support_chats');
+    if (res is! Map) return [];
+    final out = <Map<String, dynamic>>[];
+    for (final e in res.entries) {
+      final ws = '${e.key}';
+      final val = e.value;
+      if (val is! Map) continue;
+      final msgs = val['messages'];
+      String lastMsg = '';
+      int lastTs = 0;
+      if (msgs is Map && msgs.isNotEmpty) {
+        final sorted = msgs.entries.toList()
+          ..sort((a, b) => asMs((a.value as Map)['timestamp'])
+              .compareTo(asMs((b.value as Map)['timestamp'])));
+        lastMsg = asStr((sorted.last.value as Map)['text']);
+        lastTs = asMs((sorted.last.value as Map)['timestamp']);
+      }
+      out.add({
+        'workspaceId': ws,
+        'storeName': asStr(val['store_name']).isNotEmpty
+            ? asStr(val['store_name'])
+            : ws,
+        'clientName': asStr(val['client_name']),
+        'phone': asStr(val['phone']),
+        'unreadByAdmin': val['unread_by_admin'] == true,
+        'lastMessage': lastMsg,
+        'lastTimestamp': lastTs,
+      });
+    }
+    out.sort((a, b) =>
+        (b['lastTimestamp'] as int).compareTo(a['lastTimestamp'] as int));
+    return out;
+  }
+
+  Future<List<SupportMessage>> getSupportMessages(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    final res = await _get('support_chats/$enc/messages');
+    if (res is! Map) return [];
+    final list = res.entries
+        .map((e) => SupportMessage.fromJson('${e.key}', e.value as Map))
+        .toList();
+    list.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return list;
+  }
+
+  Future<void> sendSupportReply(String wsId, String text) async {
+    final enc = Uri.encodeComponent(wsId);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _put('support_chats/$enc/messages/$now', {
+      'id': '$now',
+      'sender': 'admin',
+      'text': text,
+      'timestamp': now,
+    });
+    await _patch('support_chats/$enc', {
+      'unread_by_client': true,
+      'unread_by_admin': false,
+      'last_reply_at': now,
+    });
+  }
+
+  /// 1. إرسال تنبيه جماعي شامل (Broadcast Alert)
+  Future<void> sendBroadcastNotification({
+    required String title,
+    required String body,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _put('system/broadcast_alerts/$now', {
+      'id': '$now',
+      'title': title,
+      'body': body,
+      'created_at': now,
+    });
+  }
+
+  /// 2. وضع الصيانة السحابي (Cloud Maintenance Mode)
+  Future<void> setMaintenanceMode({
+    required bool active,
+    required String message,
+  }) async {
+    await _patch('system/maintenance', {
+      'is_active': active,
+      'message': message,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<Map<String, dynamic>?> getMaintenanceMode() async {
+    final res = await _get('system/maintenance');
+    if (res is Map) return Map<String, dynamic>.from(res);
     return null;
   }
 
-  static String _pick(Object? a, Object? b, String dflt) {
-    final va = asStr(a).trim();
-    if (va.isNotEmpty) return va;
-    final vb = asStr(b).trim();
-    return vb.isEmpty ? dflt : vb;
+  /// 2. فرض التحديث الإجباري (Force Update Policy)
+  Future<void> setForceUpdateMinVersion(int minBuild, String minVersion) async {
+    await _patch('system/force_update', {
+      'min_build': minBuild,
+      'min_version': minVersion,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<Map<String, dynamic>?> getForceUpdatePolicy() async {
+    final res = await _get('system/force_update');
+    if (res is Map) return Map<String, dynamic>.from(res);
+    return null;
+  }
+
+  /// 10. فترة بقاء ومحو رسائل المجموعات (Chat Retention & Purge)
+  Future<void> setGroupChatRetentionDays(int days) async {
+    await _patch('system/chat_policy', {
+      'retention_days': days,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<int> getGroupChatRetentionDays() async {
+    final res = await _get('system/chat_policy');
+    if (res is Map && res['retention_days'] != null) {
+      return asInt(res['retention_days'], 7);
+    }
+    return 7;
+  }
+
+  Future<int> purgeOldGroupChatMessages(int retentionDays) async {
+    final cutoff = DateTime.now().millisecondsSinceEpoch -
+        (retentionDays * 86400 * 1000);
+    int purgedCount = 0;
+    try {
+      final keys = await _get('workspaces', {'shallow': 'true'});
+      if (keys is Map) {
+        for (final ws in keys.keys) {
+          final enc = Uri.encodeComponent('$ws');
+          final msgs = await _get('workspaces/$enc/group_chat_messages');
+          if (msgs is Map) {
+            for (final m in msgs.entries) {
+              final val = m.value;
+              if (val is Map && asMs(val['timestamp']) < cutoff) {
+                await _delete('workspaces/$enc/group_chat_messages/${m.key}');
+                purgedCount++;
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return purgedCount;
   }
 }
 
-/// مرشح مساحة عمل ظهر فيها معرف الجهاز — يُرتَّب بالأحدث نشاطاً.
 class _DevHit {
   final String ws;
   final int sync;
@@ -1111,7 +1339,6 @@ class _DevHit {
     this.viaLog = false,
   });
 
-  /// الأحدث نشاطاً أولاً: مزامنة ⇐ ظهور ⇐ تحديث ⇐ مالك ⇐ خطة مكتملة.
   static int rank(_DevHit a, _DevHit b) {
     var c = b.sync.compareTo(a.sync);
     if (c != 0) return c;
@@ -1125,33 +1352,29 @@ class _DevHit {
   }
 }
 
-/// إحصائيات لوحة المدير — تُقرأ حياً من قاعدة البيانات.
 class AdminMetrics {
-  final int totalWorkspaces; // إجمالي مساحات العمل المسجلة.
-  final int activePaid; // مشتركون مدفوعون فعّالون.
-  final int activeTrials; // في الفترة التجريبية (سارية).
-  final int expired; // منتهية (تجربة أو اشتراك) = الفئة المجانية.
-
-  /// مساحات بلا عقدة اشتراك أصلاً (لم تُفعّل تجربة بعد).
+  final int totalWorkspaces;
+  final int activePaid;
+  final int activeTrials;
+  final int expired;
   final int noPlan;
+  final int expiringIn7Days;
+  final double monthlyRevenue;
+  final double totalRevenue;
+
   const AdminMetrics({
     required this.totalWorkspaces,
     required this.activePaid,
     required this.activeTrials,
     required this.expired,
     this.noPlan = 0,
+    this.expiringIn7Days = 0,
+    this.monthlyRevenue = 0.0,
+    this.totalRevenue = 0.0,
   });
 }
 
 extension RtdbMetrics on Rtdb {
-  /// جمع العدادات بلا اختناق: كان الشكل القديم يطلق طلب HTTP منفصلاً
-  /// لكل مساحة (N+1). الآن قراءة مجمعة واحدة لفهرس /trials (يحمل
-  /// status/expires_at لكل مساحة مفعّلة) + مفاتيح المساحات السطحية —
-  /// طلبان اثنان مهما بلغ عدد العملاء، عبر عميل keep-alive موحد.
-  ///
-  /// (إصلاح 2026-09-23) المساحات غير المفهرسة تُقرأ بتوازٍ محدود بدل
-  /// مسح متسلسل، والفئة الرابعة (بلا خطة) تُحصى صراحةً فلا يظهر الفرق
-  /// بين «إجمالي المساحات» ومجموع البطاقات كأنه خطأ في الأرقام.
   Future<AdminMetrics> metrics() async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) {
@@ -1160,7 +1383,6 @@ extension RtdbMetrics on Rtdb {
     }
     final now = await serverNowMs();
 
-    // القراءة المجمعة: فهرس التجارب يحمل حالة كل مساحة مفعّلة.
     final trialIdx = await _get('trials');
     final byWs = <String, Map>{};
     if (trialIdx is Map) {
@@ -1171,8 +1393,6 @@ extension RtdbMetrics on Rtdb {
         }
       }
     }
-    // مساحات غير مفهرسة في /trials (نادرة — قديمة جداً): قراءة مفردة
-    // كاحتياط، بحد أقصى 25 حتى لا نعود للاختناق.
     final missing =
         keys.keys.map((k) => '$k').where((w) => !byWs.containsKey(w)).toList();
     if (missing.isNotEmpty) {
@@ -1192,11 +1412,12 @@ extension RtdbMetrics on Rtdb {
       );
     }
 
-    int paid = 0, trials = 0, expired = 0, noPlan = 0;
+    int paid = 0, trials = 0, expired = 0, noPlan = 0, expiringIn7Days = 0;
+    const sevenDaysMs = 7 * 86400 * 1000;
     for (final ws in keys.keys) {
       final sub = byWs['$ws'];
       if (sub == null) {
-        noPlan++; // مساحة بلا عقدة اشتراك بعد.
+        noPlan++;
         continue;
       }
       final status = asStr(sub['status']);
@@ -1204,18 +1425,63 @@ extension RtdbMetrics on Rtdb {
       final alive = exp > now;
       if (status == 'active' && alive) {
         paid++;
+        if (exp - now <= sevenDaysMs &&
+            exp < DateTime(2090).millisecondsSinceEpoch) {
+          expiringIn7Days++;
+        }
       } else if (status == 'trial' && alive) {
         trials++;
+        if (exp - now <= sevenDaysMs) {
+          expiringIn7Days++;
+        }
       } else {
         expired++;
       }
     }
+
+    double monthlyRev = 0.0;
+    double totalRev = 0.0;
+    try {
+      final bills = await _get('billing_records');
+      if (bills is Map) {
+        final monthAgo = now - (30 * 86400 * 1000);
+        for (final b in bills.values) {
+          if (b is Map) {
+            final amt = (b['amount'] is num)
+                ? (b['amount'] as num).toDouble()
+                : 0.0;
+            final ts = asMs(b['timestamp']);
+            totalRev += amt;
+            if (ts >= monthAgo) {
+              monthlyRev += amt;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
     return AdminMetrics(
       totalWorkspaces: keys.length,
       activePaid: paid,
       activeTrials: trials,
       expired: expired,
       noPlan: noPlan,
+      expiringIn7Days: expiringIn7Days,
+      monthlyRevenue: monthlyRev,
+      totalRevenue: totalRev,
     );
   }
+}
+
+String _pick(dynamic a, dynamic b, String dflt) {
+  final sa = asStr(a);
+  if (sa.isNotEmpty) return sa;
+  final sb = asStr(b);
+  if (sb.isNotEmpty) return sb;
+  return dflt;
+}
+
+Object? _firstNum(Object? a, Object? b) {
+  if (a != null && asStr(a).trim().isNotEmpty) return a;
+  return b;
 }

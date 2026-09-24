@@ -35,14 +35,20 @@ String _hashToCode(String input, [int len = 12]) {
   return buf.toString();
 }
 
+String? Function()? debugHardwareFingerprintOverride;
+
 /// يجمع معرفات العتاد الثابتة للمنصة الحالية عبر device_info_plus.
 /// يعيد null إن تعذر الجمع (بيئة اختبار VM بلا plugin) — عندها نتراجع
 /// للمعرف العشوائي القديم.
 Future<String?> hardwareFingerprintRaw() async {
+  if (debugHardwareFingerprintOverride != null) {
+    return debugHardwareFingerprintOverride!();
+  }
   try {
     final plugin = DeviceInfoPlugin();
     if (PlatformInfo.isAndroid) {
-      final a = await plugin.androidInfo;
+      final a = await plugin.androidInfo
+          .timeout(const Duration(milliseconds: 400));
       // (تدعيم البصمة) مكوّنات عتادية ثابتة لنفس الجهاز الفعلي حتى بعد
       // مسح بيانات التطبيق أو إعادة تثبيته:
       //  • ANDROID_ID (a.id): ثابت عبر إعادة التثبيت ومسح البيانات —
@@ -58,21 +64,25 @@ Future<String?> hardwareFingerprintRaw() async {
       return 'android:${parts.join('|')}';
     }
     if (PlatformInfo.isWindows) {
-      final w = await plugin.windowsInfo;
+      final w = await plugin.windowsInfo
+          .timeout(const Duration(milliseconds: 400));
       // deviceId = MachineGuid — ثابت عبر إعادة تثبيت التطبيق.
       return 'windows:${w.deviceId}|${w.computerName}';
     }
     if (PlatformInfo.isLinux) {
-      final l = await plugin.linuxInfo;
+      final l = await plugin.linuxInfo
+          .timeout(const Duration(milliseconds: 400));
       // machineId من /etc/machine-id — ثابت للنظام.
       return 'linux:${l.machineId ?? l.id}|${l.name}';
     }
     if (PlatformInfo.isMacOS) {
-      final m = await plugin.macOsInfo;
+      final m = await plugin.macOsInfo
+          .timeout(const Duration(milliseconds: 400));
       return 'macos:${m.systemGUID ?? m.computerName}';
     }
     if (PlatformInfo.isIOS) {
-      final i = await plugin.iosInfo;
+      final i =
+          await plugin.iosInfo.timeout(const Duration(milliseconds: 400));
       return 'ios:${i.identifierForVendor ?? i.utsname.machine}';
     }
   } catch (_) {

@@ -63,6 +63,8 @@ void main() {
   });
 
   setUp(() async {
+    debugHardwareFingerprintOverride = () => 'test_raw_fp';
+    debugLaunchActivationWhatsAppOverride = (text) => true;
     tmp = await Directory.systemTemp.createTemp('nexora_lic_form_');
     db = await databaseFactory.openDatabase(
       '${tmp.path}/test.db',
@@ -82,6 +84,8 @@ void main() {
   });
 
   tearDown(() async {
+    debugHardwareFingerprintOverride = null;
+    debugLaunchActivationWhatsAppOverride = null;
     container.dispose();
     SubscriptionGuard.debugReset();
     if (db.isOpen) await db.close();

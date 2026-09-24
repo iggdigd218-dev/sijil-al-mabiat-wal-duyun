@@ -44,6 +44,10 @@ class PlanFeatures {
   final bool multiDeviceSync;
   final bool rolePermissions;
   final bool auditLog;
+  final bool cloudSync;
+  final bool multiBranch;
+  final bool multiUser;
+  final bool advancedInvoicing;
 
   const PlanFeatures({
     required this.canUseCategories,
@@ -54,6 +58,10 @@ class PlanFeatures {
     required this.multiDeviceSync,
     required this.rolePermissions,
     required this.auditLog,
+    this.cloudSync = true,
+    this.multiBranch = true,
+    this.multiUser = true,
+    this.advancedInvoicing = true,
   });
 
   static const allOn = PlanFeatures(
@@ -65,6 +73,10 @@ class PlanFeatures {
     multiDeviceSync: true,
     rolePermissions: true,
     auditLog: true,
+    cloudSync: true,
+    multiBranch: true,
+    multiUser: true,
+    advancedInvoicing: true,
   );
 
   /// فردي منتهي التجربة: يبقى التسجيل والحركات اليومية محلياً فقط.
@@ -77,6 +89,10 @@ class PlanFeatures {
     multiDeviceSync: false,
     rolePermissions: false,
     auditLog: false,
+    cloudSync: false,
+    multiBranch: false,
+    multiUser: false,
+    advancedInvoicing: false,
   );
 
   factory PlanFeatures.fromMap(Map<String, dynamic>? m) {
@@ -89,12 +105,16 @@ class PlanFeatures {
     return PlanFeatures(
       canUseCategories: b('can_use_categories', true),
       canSendNotifications: b('can_send_notifications', true),
-      canCloudBackup: b('can_cloud_backup', true),
+      canCloudBackup: b('can_cloud_backup', b('cloud_backup', true)),
       canRestoreData: b('can_restore_data', true),
       canAdvancedSearch: b('can_advanced_search', true),
-      multiDeviceSync: b('multi_device_sync', true),
+      multiDeviceSync: b('multi_device_sync', b('multi_user', true)),
       rolePermissions: b('role_permissions', true),
       auditLog: b('audit_log', true),
+      cloudSync: b('cloud_sync', true),
+      multiBranch: b('multi_branch', true),
+      multiUser: b('multi_user', true),
+      advancedInvoicing: b('advanced_invoicing', true),
     );
   }
 
@@ -107,6 +127,10 @@ class PlanFeatures {
         'multi_device_sync': multiDeviceSync,
         'role_permissions': rolePermissions,
         'audit_log': auditLog,
+        'cloud_sync': cloudSync,
+        'multi_branch': multiBranch,
+        'multi_user': multiUser,
+        'advanced_invoicing': advancedInvoicing,
       };
 }
 
@@ -124,6 +148,7 @@ class SubscriptionState {
   final int createdAtMs; // ختم خادم فيربيس (ملي ثانية).
   final int expiresAtMs; // ختم خادم.
   final bool isActive;
+  final bool isFrozen;
   final String deviceFingerprint;
 
   /// مفاتيح المزايا من عقدة features السحابية.
@@ -139,6 +164,7 @@ class SubscriptionState {
     required this.createdAtMs,
     required this.expiresAtMs,
     required this.isActive,
+    this.isFrozen = false,
     required this.deviceFingerprint,
     this.features = PlanFeatures.allOn,
     required this.serverNowMs,
@@ -146,10 +172,13 @@ class SubscriptionState {
 
   /// هل انتهت التجربة؟ المقارنة بوقت الخادم حصراً.
   bool get expired =>
-      status != 'active' && expiresAtMs > 0 && serverNowMs >= expiresAtMs;
+      !isFrozen &&
+      status != 'active' &&
+      expiresAtMs > 0 &&
+      serverNowMs >= expiresAtMs;
 
   /// هل الاشتراك مدفوع وفعّال؟
-  bool get isSubscribed => status == 'active';
+  bool get isSubscribed => status == 'active' && !isFrozen;
 
   /// هل الميزة المدفوعة مفتوحة الآن؟ (تجربة سارية أو اشتراك فعّال +
   /// مفتاح الميزة نفسه غير مطفأ من الخادم).
@@ -782,7 +811,7 @@ class SubscriptionGuard {
     }
   }
 
-  /// البوابة المركزية: true = السحابة محظورة (التجربة انتهت وغير مدفوع).
+  /// البوابة المركزية: true = السحابة محظورة (التجربة انتهت وغير مدفوع، أو الحساب مجمّد).
   /// تُستدعى قبل أي دفع/سحب/ربط/نسخ سحابي.
   static Future<bool> isBlocked(
     Repo repo, {
@@ -791,6 +820,7 @@ class SubscriptionGuard {
   }) async {
     final st = await check(repo,
         backendUrl: backendUrl, workspaceId: workspaceId);
+    if (st.isFrozen) return true; // مجمّد عن بعد عبر مفتاح القفل الفوري
     if (st.status == 'active') return false; // اشتراك مدفوع فعّال.
     if (st.status == 'none') return false; // لا سحابة — لا حظر.
     return st.expired;
@@ -815,9 +845,12 @@ class SubscriptionGuard {
   }
 
   static SubscriptionState _stateFrom(Map<String, dynamic> m, int nowMs) {
-    final rawFeat = m['features'];
+    final rawFeat = m['feature_flags'] ?? m['features'];
+    final frozen = m['is_frozen'] == true ||
+        '${m['status']}'.trim().toLowerCase() == 'suspended';
     return SubscriptionState(
-      status: '${m['status'] ?? 'trial'}',
+      status: frozen ? 'suspended' : '${m['status'] ?? 'trial'}',
+      isFrozen: frozen,
       planType: '${m['plan_type'] ?? 'individual'}' == 'enterprise'
           ? 'enterprise'
           : 'individual',
