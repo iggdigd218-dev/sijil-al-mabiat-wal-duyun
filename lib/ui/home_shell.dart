@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../core/accounting.dart';
 import '../core/shell_nav.dart';
@@ -18,8 +17,8 @@ import '../data/sync/device_registry.dart';
 import '../data/update_installer.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
-import 'logout_flow.dart';
 import 'update_section.dart';
+import 'profile_dialog.dart';
 import 'account_form.dart';
 import 'accounts_screen.dart';
 import 'backup_screen.dart';
@@ -1250,6 +1249,34 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
+  Widget _appBarSquircleAction({
+    required Widget icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    required Color bg,
+    required Color fg,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+        child: Tooltip(
+          message: tooltip,
+          child: Material(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: SizedBox(
+                width: 38,
+                height: 38,
+                child: Center(child: icon),
+              ),
+            ),
+          ),
+        ),
+      );
+
+
   @override
   Widget build(BuildContext context) {
     final hidden = ref.watch(hideBalancesProvider);
@@ -1261,11 +1288,30 @@ class _HomeShellState extends ConsumerState<HomeShell>
       child: Scaffold(
         key: _scaffoldKey,
         appBar: AppBar(
+          leading: Builder(
+            builder: (ctx) {
+              final isDark = Theme.of(ctx).brightness == Brightness.dark;
+              return Padding(
+                padding: const EdgeInsets.all(8),
+                child: Material(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(12),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => Scaffold.of(ctx).openDrawer(),
+                    child: Icon(
+                      Icons.menu,
+                      size: 20,
+                      color: AppColors.textOf(ctx),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
           title: Consumer(
             builder: (ctx, rref, _) {
               if (_screen != AppScreen.dashboard) return Text(_screen.title);
-              // أعلى الرئيسية يظهر اسم الجهاز الذي حدده المستخدم/المدير
-              // (نفس الاسم الظاهر أعلى القائمة الجانبية) بدل «مدير الحسابات».
               final devName =
                   rref.watch(ownDeviceNameProvider).valueOrNull?.trim();
               if (devName != null && devName.isNotEmpty) {
@@ -1275,7 +1321,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
             },
           ),
           actions: [
-            // شارة دور المستخدم الحالي (تظهر في الوضع المُدار فقط).
             Consumer(
               builder: (ctx, rref, _) {
                 final modeAsync = rref.watch(workspaceModeProvider);
@@ -1343,26 +1388,59 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
-            // (2026-09-24) أُزيلت شارة المزامنة المكرّرة: كانت تزاحم اسم
-            // المنشأة والشعار في شريط العنوان على الشاشات الضيقة، وتكرّر
-            // ما يعرضه SyncArrowsIndicator (السهمان ↑↓) بنقرة واحدة.
-            // المرجع الوحيد لحالة المزامنة صار السهمين (أنظر أدناه)، وشاشة
-            // «العمليات والمزامنة» متاحة من الشريط الجانبي والسهمين معاً.
-            // (3.71.0) مؤشرا المزامنة اللحظيان (↑↓) — بجوار الجرس
-            // مباشرة؛ يختفيان في الوضع الفردي، والنقر يفتح ورقة التشخيص.
             const SyncArrowsIndicator(),
-            // جرس الإشعارات الداخلية مع شارة العدد غير المقروء.
             Consumer(
               builder: (ctx, rref, _) {
-                final unread = rref.watch(unreadCountProvider).valueOrNull ?? 0;
-                return IconButton(
+                final current = rref.watch(themeModeProvider);
+                final darkActive = current == ThemeMode.dark ||
+                    (current == ThemeMode.system &&
+                        Theme.of(ctx).brightness == Brightness.dark);
+                return _appBarSquircleAction(
+                  tooltip: darkActive
+                      ? 'التبديل إلى الوضع النهاري'
+                      : 'التبديل إلى الوضع الليلي',
+                  bg: darkActive
+                      ? const Color(0xFF332A15)
+                      : const Color(0xFFFEF3C7),
+                  fg: darkActive
+                      ? const Color(0xFFFBBF24)
+                      : const Color(0xFFD97706),
+                  icon: Icon(
+                    darkActive
+                        ? Icons.light_mode_rounded
+                        : Icons.dark_mode_rounded,
+                    size: 20,
+                    color: darkActive
+                        ? const Color(0xFFFBBF24)
+                        : const Color(0xFFD97706),
+                  ),
+                  onTap: () {
+                    Sfx.tap();
+                    rref.read(themeModeProvider.notifier).state =
+                        darkActive ? ThemeMode.light : ThemeMode.dark;
+                  },
+                );
+              },
+            ),
+            Consumer(
+              builder: (ctx, rref, _) {
+                final unread =
+                    rref.watch(unreadCountProvider).valueOrNull ?? 0;
+                final isDark = Theme.of(ctx).brightness == Brightness.dark;
+                return _appBarSquircleAction(
                   tooltip: 'الإشعارات',
+                  bg: isDark ? const Color(0xFF132B45) : const Color(0xFFE0F2FE),
+                  fg: const Color(0xFF0284C7),
                   icon: Badge(
                     isLabelVisible: unread > 0,
                     label: Text('$unread'),
-                    child: const Icon(Icons.notifications_outlined),
+                    child: const Icon(
+                      Icons.notifications_outlined,
+                      size: 20,
+                      color: Color(0xFF0284C7),
+                    ),
                   ),
-                  onPressed: () => openNotifications(
+                  onTap: () => openNotifications(
                     context,
                     ref,
                     onOpenEntity: openNotificationEntity,
@@ -1370,31 +1448,48 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
-            IconButton(
-              tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
-              icon: Icon(
-                hidden
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-              ),
-              onPressed: () =>
-                  ref.read(hideBalancesProvider.notifier).state = !hidden,
+            Builder(
+              builder: (ctx) {
+                final isDark = Theme.of(ctx).brightness == Brightness.dark;
+                return _appBarSquircleAction(
+                  tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
+                  bg: isDark ? const Color(0xFF281E40) : const Color(0xFFEDE9FE),
+                  fg: const Color(0xFF7C3AED),
+                  icon: Icon(
+                    hidden
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    size: 20,
+                    color: const Color(0xFF7C3AED),
+                  ),
+                  onTap: () => ref
+                      .read(hideBalancesProvider.notifier)
+                      .state = !hidden,
+                );
+              },
             ),
-            // (دفعة 58) سطح المكتب بلا «سحب للتحديث» — زر تحديث دائم
-            // يعيد تحميل بيانات الشاشة الحالية ويحفّز مزامنة فورية.
             if (desktop)
-              IconButton(
-                tooltip: 'تحديث البيانات والتحقق من الإصدارات',
-                icon: const Icon(Icons.refresh_rounded),
-                onPressed: () {
-                  bump(ref);
-                  _refreshSync();
-                  try {
-                    ref.read(syncEngineProvider).forceSyncNow();
-                  } catch (_) {}
-                  // فحص تحديث التطبيق بالخلفية: إن وُجد إصدار أحدث يظهر
-                  // إشعار فوري يقود لقسم التحديث في الإعدادات.
-                  _checkForAppUpdate();
+              Builder(
+                builder: (ctx) {
+                  final isDark = Theme.of(ctx).brightness == Brightness.dark;
+                  return _appBarSquircleAction(
+                    tooltip: 'تحديث البيانات والتحقق من الإصدارات',
+                    bg: isDark ? const Color(0xFF133828) : const Color(0xFFDCFCE7),
+                    fg: const Color(0xFF16A34A),
+                    icon: const Icon(
+                      Icons.refresh_rounded,
+                      size: 20,
+                      color: Color(0xFF16A34A),
+                    ),
+                    onTap: () {
+                      bump(ref);
+                      _refreshSync();
+                      try {
+                        ref.read(syncEngineProvider).forceSyncNow();
+                      } catch (_) {}
+                      _checkForAppUpdate();
+                    },
+                  );
                 },
               ),
           ],
@@ -1480,37 +1575,42 @@ class _MarkedBottomBar extends ConsumerWidget {
         children: [
           _BottomItem(
             label: 'العملاء',
+            tone: AppTone.blue,
             selected: currentScreen == AppScreen.accounts,
-            icon: (sel) => Icon(
+            icon: (sel, fg) => Icon(
               Icons.people_alt_rounded,
-              color: sel ? Colors.white : const Color(0xFF0284C7),
-              size: 22,
+              color: fg,
+              size: 21,
             ),
             onTap: () => onSelect(AppScreen.accounts),
           ),
           _BottomItem(
             label: 'الحركات',
+            tone: AppTone.green,
             selected: currentScreen == AppScreen.transactions,
-            icon: (sel) => _MarkedReceiptIcon(selected: sel),
+            icon: (sel, fg) => _MarkedReceiptIcon(selected: sel),
             onTap: () => onSelect(AppScreen.transactions),
           ),
           _BottomItem(
             label: 'التقارير',
+            tone: AppTone.violet,
             selected: currentScreen == AppScreen.reports,
-            icon: (sel) => _MarkedBarChartIcon(selected: sel),
+            icon: (sel, fg) => _MarkedBarChartIcon(selected: sel),
             onTap: () => onSelect(AppScreen.reports),
           ),
           _BottomItem(
             label: 'الإشعارات',
+            tone: AppTone.orange,
             selected: false,
             badgeCount: unread,
-            icon: (sel) => _MarkedBellIcon(selected: sel, unread: unread),
+            icon: (sel, fg) => _MarkedBellIcon(selected: sel, unread: unread),
             onTap: onOpenNotifications,
           ),
           _BottomItem(
             label: 'الإعدادات',
+            tone: AppTone.teal,
             selected: currentScreen == AppScreen.settings,
-            icon: (sel) => _MarkedGearIcon(selected: sel),
+            icon: (sel, fg) => _MarkedGearIcon(selected: sel),
             onTap: () => onSelect(AppScreen.settings),
           ),
         ],
@@ -1523,20 +1623,29 @@ class _BottomItem extends StatelessWidget {
   final String label;
   final bool selected;
   final int badgeCount;
-  final Widget Function(bool selected) icon;
+  final AppTone tone;
+  final Widget Function(bool selected, Color fg) icon;
   final VoidCallback onTap;
 
   const _BottomItem({
     required this.label,
     required this.selected,
+    required this.tone,
     this.badgeCount = 0,
     required this.icon,
     required this.onTap,
   });
 
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final squircleBg = selected
+        ? tone.foreground
+        : (isDark ? tone.foreground.withValues(alpha: .22) : tone.background);
+    final squircleFg = selected
+        ? Colors.white
+        : (isDark ? Colors.white : tone.foreground);
 
     return InkWell(
       onTap: () {
@@ -1554,23 +1663,15 @@ class _BottomItem extends StatelessWidget {
             AnimatedContainer(
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              width: selected ? 56 : 38,
-              height: 32,
+              width: selected ? 52 : 44,
+              height: 34,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: selected
-                    ? const LinearGradient(
-                        colors: [Color(0xFFFB923C), Color(0xFF0284C7)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      )
-                    : null,
+                color: squircleBg,
+                borderRadius: BorderRadius.circular(14),
                 boxShadow: selected
                     ? [
                         BoxShadow(
-                          color: const Color(
-                            0xFF0284C7,
-                          ).withValues(alpha: 0.35),
+                          color: tone.foreground.withValues(alpha: 0.35),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
@@ -1582,7 +1683,7 @@ class _BottomItem extends StatelessWidget {
                 clipBehavior: Clip.none,
                 alignment: Alignment.center,
                 children: [
-                  icon(selected),
+                  icon(selected, squircleFg),
                   if (badgeCount > 0 && !selected)
                     Positioned(
                       top: -3,
@@ -1619,7 +1720,7 @@ class _BottomItem extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                 color: selected
-                    ? (isDark ? Colors.white : const Color(0xFF0284C7))
+                    ? (isDark ? Colors.white : tone.foreground)
                     : (isDark
                         ? const Color(0xFF94A3B8)
                         : const Color(0xFF64748B)),
@@ -1637,6 +1738,7 @@ class _BottomItem extends StatelessWidget {
 class _MarkedBarChartIcon extends StatelessWidget {
   final bool selected;
   const _MarkedBarChartIcon({required this.selected});
+
 
   @override
   Widget build(BuildContext context) {
@@ -1682,6 +1784,7 @@ class _MarkedBarChartIcon extends StatelessWidget {
 class _MarkedReceiptIcon extends StatelessWidget {
   final bool selected;
   const _MarkedReceiptIcon({required this.selected});
+
 
   @override
   Widget build(BuildContext context) {
@@ -1741,6 +1844,7 @@ class _MarkedBellIcon extends StatelessWidget {
   final int unread;
   const _MarkedBellIcon({required this.selected, required this.unread});
 
+
   @override
   Widget build(BuildContext context) {
     if (selected) {
@@ -1763,6 +1867,7 @@ class _MarkedGearIcon extends StatelessWidget {
   final bool selected;
   const _MarkedGearIcon({required this.selected});
 
+
   @override
   Widget build(BuildContext context) {
     if (selected) {
@@ -1780,6 +1885,7 @@ class _MarkedGearIcon extends StatelessWidget {
 class _MarkedOperationFab extends StatelessWidget {
   final VoidCallback? onPressed;
   const _MarkedOperationFab({required this.onPressed});
+
 
   @override
   Widget build(BuildContext context) {
@@ -1847,6 +1953,7 @@ class _RailTile extends StatelessWidget {
     required this.extended,
     required this.onTap,
   });
+
 
   @override
   Widget build(BuildContext context) {
@@ -2124,20 +2231,26 @@ class _Drawer extends ConsumerWidget {
         child: Column(
           children: [
             // ---------- ترويسة الملف الشخصي ----------
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF1E3A5F), AppColors.primary],
-                ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(22),
-                  bottomRight: Radius.circular(22),
-                ),
+            InkWell(
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(22),
+                bottomRight: Radius.circular(22),
               ),
+              onTap: () => showAccountProfileDialog(context, ref),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF1E3A5F), AppColors.primary],
+                  ),
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(22),
+                    bottomRight: Radius.circular(22),
+                  ),
+                ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2342,6 +2455,7 @@ class _Drawer extends ConsumerWidget {
                 ],
               ),
             ),
+            ),
             const SizedBox(height: 8),
             // ---------- عناصر القائمة ----------
             Expanded(
@@ -2398,149 +2512,110 @@ class _Drawer extends ConsumerWidget {
               ),
             ),
             const Divider(height: 1),
-            // ---------- خدمة العملاء (واتساب) ----------
+            // ---------- التحديثات (الإصدار وسجل التغييرات 3 أسطر) ----------
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-              child: Material(
-                color: const Color(0xFFE7F7EE),
-                borderRadius: BorderRadius.circular(14),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () async {
-                    final uri = Uri.parse(
-                      'https://wa.me/967774190040?text=${Uri.encodeComponent('السلام عليكم، أحتاج الدعم الفني لتطبيق مدير الحسابات.')}',
-                    );
-                    final ok = await canLaunchUrl(uri);
-                    if (ok) {
-                      await launchUrl(
-                        uri,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF25D366),
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                          child: const Icon(
-                            Icons.support_agent_rounded,
-                            color: Colors.white,
-                            size: 22,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'خدمة العملاء',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 14,
-                              color: Color(0xFF128C4B),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              child: Consumer(
+                builder: (ctx, rref, _) {
+                  final updateAsync = rref.watch(updateCheckProvider);
+                  final info = updateAsync.valueOrNull;
+                  final hasUpdate = info?.hasUpdate ?? false;
+                  return Material(
+                    color: hasUpdate
+                        ? const Color(0xFFFEF3C7)
+                        : AppColors.surface2Of(context),
+                    borderRadius: BorderRadius.circular(16),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () {
+                        Navigator.pop(context);
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => DraggableScrollableSheet(
+                            initialChildSize: .7,
+                            minChildSize: .4,
+                            maxChildSize: .9,
+                            builder: (c, s) => SingleChildScrollView(
+                              controller: s,
+                              child: const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: UpdateSection(),
+                              ),
                             ),
                           ),
-                        ),
-                        const Icon(
-                          Icons.chat_bubble_outline_rounded,
-                          color: Color(0xFF128C4B),
-                          size: 20,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // ---------- (3.70) طلبات خروج الموظفين — مدير/وكيل ----------
-            if (wsMode != 'standalone' &&
-                (isOwner || user?.role == UserRole.agent))
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 3,
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(14),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(14),
-                    onTap: () {
-                      Navigator.pop(context);
-                      showLogoutRequestsSheet(ref);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.fact_check_outlined,
-                            color: AppColors.text2Of(context),
-                            size: 20,
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'طلبات خروج الموظفين',
-                            style: TextStyle(
-                              color: AppColors.text2Of(context),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13.5,
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: hasUpdate
+                                    ? const Color(0xFFF59E0B)
+                                    : AppColors.primary.withValues(alpha: .14),
+                                borderRadius: BorderRadius.circular(11),
+                              ),
+                              child: Icon(
+                                hasUpdate
+                                    ? Icons.system_update_rounded
+                                    : Icons.system_update_alt_rounded,
+                                color: hasUpdate ? Colors.white : AppColors.primary,
+                                size: 20,
+                              ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'التحديثات',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13.5,
+                                    ),
+                                  ),
+                                  Text(
+                                    hasUpdate
+                                        ? 'يتوفر تحديث جديد: ${info?.latest}'
+                                        : 'الإصدار $appVersionLabel (محدث)',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: hasUpdate
+                                          ? const Color(0xFFB45309)
+                                          : AppColors.text3Of(context),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (hasUpdate)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF59E0B),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Text(
+                                  'تحديث',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ),
-            // ---------- تسجيل الخروج ----------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Material(
-                color: AppColors.dangerSoftOf(context),
-                borderRadius: BorderRadius.circular(14),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () {
-                    Navigator.pop(context);
-                    showSecuredLogout(ref);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.logout_rounded,
-                          color: AppColors.dangerOf(context),
-                          size: 22,
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          'تسجيل الخروج',
-                          style: TextStyle(
-                            color: AppColors.dangerOf(context),
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
             Padding(
@@ -2574,6 +2649,7 @@ class _DrawerTile extends StatelessWidget {
     required this.dark,
     required this.onTap,
   });
+
 
   @override
   Widget build(BuildContext context) {

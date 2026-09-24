@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 25;
+  static const int _version = 26;
 
   static int get schemaVersion => _version;
 
@@ -381,6 +381,11 @@ class AppDatabase {
       // تعذّرت الهجرة لأي سبب.
       await ensureSectionColumns(db);
     } catch (_) {}
+    try {
+      // (2026-09-24) عمود الترقيم السريع (PLU): ترميم ذاتي عند كل فتح —
+      // قاعدة مستوردة أو هجرة فاشلة تبقى عاملة، ويُرقّم ما بلا رقم فقط.
+      await migrateToV26(db);
+    } catch (_) {}
   }
 
   /// (2026-09-24) ترميم ذاتي لأعمدة شجرة الفئات في `item_categories`.
@@ -609,6 +614,7 @@ class AppDatabase {
         name          TEXT NOT NULL,
         category_id   INTEGER,
         section_id    INTEGER NULL REFERENCES sections(id) ON DELETE SET NULL,
+        plu           INTEGER,
         sku           TEXT DEFAULT '',
         unit          TEXT DEFAULT 'حبة',
         buy_price     REAL NOT NULL DEFAULT 0,
@@ -1125,6 +1131,10 @@ class AppDatabase {
     if (from < 25) {
       await migrateToV25(db);
     }
+    // ====== v26 (2026-09-24): نظام الترقيم السريع PLU ======
+    if (from < 26) {
+      await migrateToV26(db);
+    }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا
     // خطأ "table workspaces already exists" و"تعذّر تحميل الفئات/الإعدادات".
@@ -1285,6 +1295,49 @@ class AppDatabase {
   /// (2026-09-22) شجرة الفئات: إضافة عمود parent_id إلى item_categories
   /// وفهرسه. idempotent — آمن على القواعد الجديدة والقديمة معاً، ولا يغيّر
   /// أي بيانات: كل الفئات القائمة تبقى جذوراً (parent_id = NULL).
+  /// Migration v25 → v26 (2026-09-24): **نظام الترقيم السريع (PLU)**.
+  ///
+  /// يمنح كل صنف رقماً تسلسلياً فريداً يبدأ من 1 بترتيب هرمي
+  /// (قسم ← فئة ← صنف)، ثم **يثبت للأبد**: لا يُعاد ترتيبه عند أي فرز،
+  /// ولا يُعاد استخدام رقم صنف محذوف. الأرقام موجودة للبحث السريع
+  /// (`7` + Enter يضيف حبة، `7*3` يضيف ثلاثاً) وليست للعرض على البطاقة.
+  static Future<void> migrateToV26(Database db) async {
+    await _addColumn(db, 'items', 'plu', 'INTEGER');
+    try {
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_items_plu ON items(plu)');
+    } catch (_) {}
+
+    // الأصناف التي بلا رقم فقط (التعبئة idempotent وتعمل على أي قاعدة).
+    final rows = await db.rawQuery('''
+      SELECT i.id AS id
+      FROM items i
+      LEFT JOIN item_categories c ON c.id = i.category_id
+      LEFT JOIN sections s ON s.id = COALESCE(i.section_id, c.section_id)
+      WHERE i.plu IS NULL
+      ORDER BY (s.name IS NULL), s.name,
+               (c.name IS NULL), c.name,
+               i.name, i.id
+    ''');
+    if (rows.isEmpty) return;
+    var next = await nextPlu(db);
+    for (final r in rows) {
+      await db.update('items', {'plu': next},
+          where: 'id = ?', whereArgs: [r['id']]);
+      next++;
+    }
+  }
+
+  /// أول رقم PLU متاح (MAX الحالي + 1) — لا يُعاد استخدام رقم محذوف أبداً.
+  static Future<int> nextPlu(Database db) async {
+    try {
+      final rows = await db.rawQuery('SELECT COALESCE(MAX(plu), 0) AS m FROM items');
+      return ((rows.first['m'] ?? 0) as num).toInt() + 1;
+    } catch (_) {
+      return 1;
+    }
+  }
+
+
   static Future<void> migrateToV23(Database db) async {
     await _addColumn(db, 'item_categories', 'parent_id', 'INTEGER');
     try {

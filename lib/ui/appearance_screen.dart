@@ -1,5 +1,4 @@
-// شاشة المظهر المستقلة: السمة (فاتح/داكن/حسب النظام)، إخفاء الأرصدة،
-// حجم الخط، والأصوات/الاهتزاز — كل إعدادات العرض والتغذية الراجعة في مكان واحد.
+// شاشة المظهر المستقلة: حجم الخط، والأصوات/الاهتزاز.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,7 +12,6 @@ class AppearanceScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final st = ref.watch(settingsProvider).valueOrNull ?? {};
-    final mode = ref.watch(themeModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('المظهر والأصوات')),
       body: ListView(
@@ -22,51 +20,6 @@ class AppearanceScreen extends ConsumerWidget {
           Card(
             child: Column(
               children: [
-                ListTile(
-                  leading: const Icon(Icons.brightness_6_outlined),
-                  title: const Text('السمة'),
-                  subtitle: Text(switch (mode) {
-                    ThemeMode.light => 'فاتح',
-                    ThemeMode.dark => 'داكن',
-                    ThemeMode.system => 'حسب النظام',
-                  }),
-                  trailing: SegmentedButton<ThemeMode>(
-                    segments: const [
-                      ButtonSegment(
-                          value: ThemeMode.light,
-                          icon: Icon(Icons.light_mode_outlined)),
-                      ButtonSegment(
-                          value: ThemeMode.system,
-                          icon: Icon(Icons.brightness_auto_outlined)),
-                      ButtonSegment(
-                          value: ThemeMode.dark,
-                          icon: Icon(Icons.dark_mode_outlined)),
-                    ],
-                    selected: {mode},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (s) async {
-                      final v = s.first;
-                      ref.read(themeModeProvider.notifier).state = v;
-                      await ref
-                          .read(repoProvider)
-                          .setSetting('theme', v.name);
-                    },
-                  ),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  secondary: const Icon(Icons.visibility_off_outlined),
-                  title: const Text('إخفاء الأرصدة افتراضيًا'),
-                  subtitle: const Text('تظهر الأرصدة كنقاط حتى تكشفها'),
-                  value: ref.watch(hideBalancesProvider),
-                  onChanged: (v) async {
-                    ref.read(hideBalancesProvider.notifier).state = v;
-                    await ref
-                        .read(repoProvider)
-                        .setSetting('hideBalances', v ? '1' : '0');
-                  },
-                ),
-                const Divider(height: 1),
                 SwitchListTile(
                   secondary: const Icon(Icons.format_size),
                   title: const Text('خط أكبر في لوحة التحكم'),

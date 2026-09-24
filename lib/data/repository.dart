@@ -4897,6 +4897,11 @@ class Repo {
     }
     late final int id;
     if (itemToSave.id == null) {
+      // (2026-09-24) رقم الترقيم السريع: يُعيَّن مرة واحدة عند الإضافة
+      // من أعلى رقم موجود + 1، ثم يثبت للأبد (لا إعادة ترتيب ولا تدوير).
+      if (itemToSave.plu == null) {
+        itemToSave = itemToSave.copyWith(plu: await AppDatabase.nextPlu(db));
+      }
       id = await db.insert(
           'items', itemToSave.toMap()..['id'] = newGlobalId());
       await queueOperation(

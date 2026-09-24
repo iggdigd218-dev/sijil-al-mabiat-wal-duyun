@@ -381,16 +381,23 @@ void main() {
     await teardown(tester);
   });
 
-  // ============ حارس المصدر: لا رجوع للشرائط الأفقية ============
-  test('SRC-01 الشاشتان تستخدمان المنسدلات لا الشرائح الأفقية', () {
+  // ============ حارس المصدر: لا رجوع للشرائط الأفقية القديمة ============
+  test('SRC-01 الشاشتان تعتمدان البنية الحديثة لا الشرائح القديمة', () {
     final pos = File('lib/ui/pos_screen.dart').readAsStringSync();
     final inv = File('lib/ui/inventory_screen.dart').readAsStringSync();
-    for (final src in [pos, inv]) {
-      expect(src, contains('hierarchy_filter.dart'));
-      expect(src, contains('HierarchyDropdown'));
-      expect(src, contains('showHierarchySheet'));
-    }
-    // الرموز القديمة للشرائط الأفقية أُزيلت.
+
+    // شاشة المخزون تعتمد القوائم المنسدلة الهرمية.
+    expect(inv, contains('hierarchy_filter.dart'));
+    expect(inv, contains('HierarchyDropdown'));
+    expect(inv, contains('showHierarchySheet'));
+
+    // شاشة البيع تعتمد بوابة الأقسام وشريط الفئات وشبكة الأصناف المربّعة.
+    expect(pos, contains('pos_gate.dart'));
+    expect(pos, contains('pos_items_grid.dart'));
+    expect(pos, contains('PosSectionsGate'));
+    expect(pos, contains('PosCategoryStrip'));
+
+    // الرموز القديمة للشرائط الأفقية أُزيلت نهائياً.
     expect(pos, isNot(contains('_SectionCard')));
     expect(pos, isNot(contains('_CategoryCapsule')));
     expect(inv, isNot(contains('_HierarchyChipBar')),

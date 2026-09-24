@@ -97,12 +97,13 @@ class AppRadius {
   static const double small = 10;
   static const double card = 16;
   static const double field = 16;
-  static const double button = 14;
+  static const double button = 16;
   static const double sheet = 24;
   static const double pill = 999;
 
   static BorderRadius get cardAll => BorderRadius.circular(card);
   static BorderRadius get fieldAll => BorderRadius.circular(field);
+  static BorderRadius get buttonAll => BorderRadius.circular(button);
   static BorderRadius get sheetTop =>
       const BorderRadius.vertical(top: Radius.circular(sheet));
 }
@@ -122,9 +123,10 @@ class AppTone {
   static const green = AppTone('green', 'أخضر', Color(0xFFE7F7EE), Color(0xFF16A34A));
   static const pink = AppTone('pink', 'وردي', Color(0xFFFDE9F1), Color(0xFFDB2777));
   static const teal = AppTone('teal', 'فيروزي', Color(0xFFE3F7F5), Color(0xFF0E9488));
+  static const red = AppTone('red', 'أحمر', Color(0xFFFDE8E8), Color(0xFFDC2626));
   static const sand = AppTone('sand', 'بيج', Color(0xFFF7EFE1), Color(0xFFB4741A));
 
-  static const List<AppTone> all = [blue, orange, violet, green, pink, teal, sand];
+  static const List<AppTone> all = [blue, orange, violet, green, pink, teal, sand, red];
 
   static AppTone byKey(String? key) {
     for (final t in all) {
@@ -311,7 +313,7 @@ class AppTheme {
           borderSide: BorderSide(color: border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.field),
           borderSide: BorderSide(color: primary, width: 1.6),
         ),
         errorBorder: OutlineInputBorder(
@@ -381,7 +383,12 @@ class AppTheme {
           borderRadius: BorderRadius.circular(AppRadius.pill),
         ),
       ),
-      dividerTheme: DividerThemeData(color: border, thickness: 1, space: 1),
+      // (2026-09-24) قاعدة الفواصل النظيفة الصارمة: خط فاصل واحد ناعم خفيف 1px بلا ازدواجية.
+      dividerTheme: DividerThemeData(
+        color: border.withValues(alpha: 0.5),
+        thickness: 1,
+        space: 1,
+      ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,

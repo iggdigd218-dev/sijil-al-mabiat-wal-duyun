@@ -205,7 +205,7 @@ class _AccountSectionState extends ConsumerState<AccountSection> {
           linked ? Icons.verified_user_outlined : Icons.account_circle_outlined,
           color: linked ? const Color(0xFF059669) : const Color(0xFF7C3AED),
         ),
-        title: Text(linked ? 'مؤسستك مربوطة بحسابك' : 'اربط مؤسستك بحساب Google'),
+        title: Text(linked ? 'حساب Google المرتبط' : 'اربط مؤسستك بحساب Google'),
         subtitle: Text(
           linked
               ? '$_email\nبياناتك ومؤسستك تعودان تلقائياً على أي هاتف بهذا الحساب.'

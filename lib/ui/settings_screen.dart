@@ -3,13 +3,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/app_version.dart';
 import '../core/db_init.dart' show isDesktop;
 import '../core/factory_reset.dart';
-import '../core/receipt_image.dart';
 import '../core/models.dart';
 import '../core/security.dart';
 import '../core/sfx.dart';
@@ -25,8 +23,9 @@ import 'trial_ui.dart' show SubscriptionDetailsSection;
 import 'update_section.dart';
 import 'account_section.dart';
 import 'appearance_screen.dart';
-import 'cloud_sync_section.dart';
 import 'join_approval_flow.dart' show startJoinApprovalFlow;
+import 'package:url_launcher/url_launcher.dart';
+import 'logout_flow.dart' show showLogoutRequestsSheet;
 import 'group_management_screen.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
@@ -78,8 +77,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _loaded = false;
   bool _bioSupported = false;
   String _bioLabel = '…';
-  String _logoPath = '';
-  bool _logoBusy = false;
 
   @override
   void initState() {
@@ -335,7 +332,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// نملأ الحقول مرة واحدة فقط حتى لا يُمحى ما يكتبه المستخدم عند التحديث.
   void _hydrate(Map<String, String> st) {
     if (_loaded) return;
-    _logoPath = st['logo'] ?? '';
     for (final f in _orgFields) {
       _ctrls[f.$1] = TextEditingController(text: st[f.$1] ?? '');
     }
@@ -359,69 +355,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       c.dispose();
     }
     super.dispose();
-  }
-
-  bool get _hasLogo =>
-      _logoPath.trim().isNotEmpty && File(_logoPath).existsSync();
-
-  Future<void> _pickLogo() async {
-    // (دفعة 65-ب) الشعارات الجمالية مسموحة للجميع — لا بوابة بعد اليوم.
-    setState(() => _logoBusy = true);
-    try {
-      final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 88,
-      );
-      if (picked == null) return;
-      final old = _logoPath;
-      final path = await saveImageBytes(
-        await picked.readAsBytes(),
-        prefix: 'logo',
-      );
-      await ref.read(repoProvider).setSetting('logo', path);
-      if (old.isNotEmpty && old != path) {
-        try {
-          final oldFile = File(old);
-          if (await oldFile.exists()) await oldFile.delete();
-        } catch (_) {
-          // لا نفشل حفظ الشعار الجديد بسبب ملف قديم غير قابل للحذف.
-        }
-      }
-      if (mounted) {
-        setState(() => _logoPath = path);
-        bump(ref);
-        showSnack(context, 'تم حفظ شعار المؤسسة ✅');
-      }
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر حفظ الشعار: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _logoBusy = false);
-    }
-  }
-
-  Future<void> _removeLogo() async {
-    if (_logoBusy) return;
-    setState(() => _logoBusy = true);
-    final old = _logoPath;
-    try {
-      await ref.read(repoProvider).setSetting('logo', '');
-      if (old.isNotEmpty) {
-        try {
-          final oldFile = File(old);
-          if (await oldFile.exists()) await oldFile.delete();
-        } catch (_) {
-          // لا نفشل حذف الإعداد بسبب ملف قديم غير قابل للحذف.
-        }
-      }
-      if (!mounted) return;
-      setState(() => _logoPath = '');
-      bump(ref);
-      showSnack(context, 'تم حذف شعار المؤسسة');
-    } catch (e) {
-      if (mounted) showSnack(context, 'تعذّر حذف الشعار: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _logoBusy = false);
-    }
   }
 
   Future<void> _saveAll() async {
@@ -499,7 +432,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         // (دفعة 58 — متطلب 8) الإعدادات الحساسة (المزامنة/قاعدة البيانات)
         // للمالك أو من دوره «مدير» فقط — تُخفى تماماً عن بقية الأدوار.
         final userRole = ref.watch(deviceRoleProvider).valueOrNull?.role;
-        final canSensitive = canEditOrg || userRole == UserRole.admin;
         // (دفعة 65) نوع الحساب: فردي أم مؤسسة. توافق خلفي — من لا يملك
         // المفتاح (مستخدم سابق) يُستنتج نوعه من نمط مساحة العمل بدل أن
         // يُخفى عنه قسم المجموعة الذي يستخدمه فعلاً.
@@ -511,7 +443,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         // (3.70.0 — إعادة التصميم) تبويبات وبطاقات نقر مستقلة مصنّفة —
         // بلا قوائم منسدلة متداخلة (ExpansionTile) إطلاقاً.
         return DefaultTabController(
-          length: 6,
+          length: 5,
           child: Stack(
             children: [
               Column(
@@ -537,19 +469,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               text: 'المنشأة'),
                           Tab(
                               icon: Icon(Icons.palette_outlined, size: 19),
-                              text: 'المظهر والخطوط'),
+                              text: 'المظهر'),
                           Tab(
                               icon: Icon(Icons.receipt_long_outlined, size: 19),
                               text: 'الفواتير والبيع'),
                           Tab(
-                              icon: Icon(Icons.lock_outline, size: 19),
-                              text: 'الأمان والنسخ'),
+                              icon: Icon(Icons.security_outlined, size: 19),
+                              text: 'الأمان'),
                           Tab(
                               icon: Icon(Icons.hub_outlined, size: 19),
                               text: 'النظام والمزامنة'),
-                          Tab(
-                              icon: Icon(Icons.warning_amber_rounded, size: 19),
-                              text: 'منطقة الخطر'),
                         ],
                       ),
                     ),
@@ -557,13 +486,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   Expanded(
                     child: TabBarView(
                       children: [
-                        // [بطاقة بيانات المنشأة]
+                        // [بطاقة بيانات المنشأة — مطوية داخل زر مخصص]
                         _tabPage([
                           if (canEditOrg)
                             _Collapsible(
                               title: 'بيانات المؤسسة',
                               icon: Icons.business_outlined,
                               color: const Color(0xFF2563EB),
+                              initiallyExpanded: false,
                               children: [
                                 Card(
                                   child: Padding(
@@ -578,89 +508,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                             keyboard: f.$4,
                                             maxLines: f.$5,
                                           ),
-                                        const Divider(height: 24),
-                                        Align(
-                                          alignment:
-                                              AlignmentDirectional.centerStart,
-                                          child: Text(
-                                            'شعار المؤسسة',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleSmall,
-                                          ),
-                                        ),
-                                        if (_hasLogo) ...[
-                                          const SizedBox(height: 10),
-                                          Align(
-                                            alignment: AlignmentDirectional
-                                                .centerStart,
-                                            child: ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              child: Image.file(
-                                                File(_logoPath),
-                                                width: 96,
-                                                height: 96,
-                                                fit: BoxFit.contain,
-                                                errorBuilder: (_, __, ___) =>
-                                                    Container(
-                                                  width: 96,
-                                                  height: 96,
-                                                  color: AppColors.surface2Of(
-                                                      context),
-                                                  alignment: Alignment.center,
-                                                  child: Icon(
-                                                    Icons.broken_image_outlined,
-                                                    color: AppColors.text3Of(
-                                                        context),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                        const SizedBox(height: 10),
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: OutlinedButton.icon(
-                                                onPressed: _logoBusy
-                                                    ? null
-                                                    : _pickLogo,
-                                                icon: _logoBusy
-                                                    ? const SizedBox(
-                                                        width: 16,
-                                                        height: 16,
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                        ),
-                                                      )
-                                                    : const Icon(
-                                                        Icons.image_outlined),
-                                                label: Text(
-                                                  _hasLogo
-                                                      ? 'استبدال الشعار'
-                                                      : 'اختيار صورة',
-                                                ),
-                                              ),
-                                            ),
-                                            if (_hasLogo) ...[
-                                              const SizedBox(width: 8),
-                                              IconButton(
-                                                tooltip: 'حذف الشعار',
-                                                onPressed: _logoBusy
-                                                    ? null
-                                                    : _removeLogo,
-                                                icon: Icon(
-                                                  Icons.delete_outline,
-                                                  color: AppColors.dangerOf(
-                                                      context),
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
                                         const SizedBox(height: 12),
                                         SizedBox(
                                           width: double.infinity,
@@ -734,14 +581,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           ),
                           const SizedBox(height: 18),
                         ]),
-                        // [بطاقة المظهر والخطوط]
+                        // [بطاقة المظهر]
                         _tabPage([
                           Card(
                             child: ListTile(
                               leading: const Icon(Icons.palette_outlined),
                               title: const Text('المظهر والأصوات'),
                               subtitle: const Text(
-                                  'السمة، إخفاء الأرصدة، حجم الخط، الأصوات والاهتزاز'),
+                                  'حجم الخط، الأصوات والاهتزاز والتنبيهات'),
                               trailing: const Icon(Icons.chevron_left),
                               onTap: () => Navigator.of(context).push(
                                 MaterialPageRoute(
@@ -750,17 +597,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             ),
                           ),
                           const SizedBox(height: 18),
-                          const Card(
-                            child: ListTile(
-                              leading: Icon(Icons.font_download_outlined),
-                              title: Text('الخطوط'),
-                              subtitle: Text(
-                                'خط الواجهة والنسخ: Tajawal — مضمّن داخل التطبيق ويعمل بلا إنترنت',
-                              ),
-                              trailing: Icon(Icons.check_circle_outline,
-                                  color: AppColors.primary),
-                            ),
-                          ),
                         ]),
                         // [بطاقة الفواتير ونقطة البيع]
                         _tabPage([
@@ -882,7 +718,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             ],
                           ),
                         ]),
-                        // [بطاقة النسخ الاحتياطي والأمان]
+                        // [بطاقة الأمان والنسخ الاحتياطي وإعادة الضبط]
                         _tabPage([
                           _Collapsible(
                             title: 'الأمان والخصوصية',
@@ -969,6 +805,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               ],
                             ),
                           ],
+                          const SizedBox(height: 18),
+                          // دمج وظائف الحذف والتعيين تحت اسم "إعادة الضبط والحذف"
+                          _Collapsible(
+                            title: 'إعادة الضبط والحذف',
+                            icon: Icons.warning_amber_rounded,
+                            color: const Color(0xFFDC2626),
+                            initiallyExpanded: false,
+                            children: [
+                              if (isIndividual && wsMode == 'standalone')
+                                const _DeleteAccountTile(),
+                              if (canEditOrg) ...[
+                                _GroupWipeTile(),
+                                const SizedBox(height: 8),
+                                const _DissolveGroupTile(),
+                              ],
+                              if (isDesktop) ...[
+                                const SizedBox(height: 8),
+                                const _FactoryResetTile(),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 18),
                         ]),
                         // [بطاقة إدارة النظام والمزامنة]
                         _tabPage([
@@ -1075,43 +933,93 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               children: [SubscriptionDetailsSection()],
                             ),
                           ],
-                          // (المعمارية الصامتة) بطاقة «المزامنة السحابية (Firebase)»
-                          // التقنية أُزيلت نهائياً: الرابط الرسمي مضمّن برمجياً
-                          // والمزامنة التلقائية مثبتة دائماً في الخلفية — بقي فقط
-                          // مدخل «إدارة المجموعة / ربط الأجهزة» البسيط.
-                          if (canSensitive && !isIndividual) ...[
+                          // (إدارة الموظفين) طلبات خروج الموظفين — للمدير والوكيل
+                          if (wsMode != 'standalone' &&
+                              (canEditOrg || userRole == UserRole.agent)) ...[
                             const SizedBox(height: 18),
                             _Collapsible(
-                              title: 'المجموعة وربط الأجهزة',
-                              icon: Icons.devices_other_outlined,
-                              color: const Color(0xFF0EA5E9),
+                              title: 'إدارة الموظفين',
+                              icon: Icons.badge_outlined,
+                              color: const Color(0xFF0284C7),
                               children: [
-                                // مدير/مالك: دعوة جهاز جديد لنفس مساحة العمل عبر QR/PIN.
-                                if (canEditOrg && wsMode != 'standalone' ||
-                                    (wsMode == 'standalone'))
-                                  Card(
-                                    child: ListTile(
-                                      leading: const Icon(
-                                          Icons.qr_code_2_outlined,
-                                          color: Color(0xFF0EA5E9)),
-                                      title: const Text(
-                                          'ربط جهاز جديد عبر السحابة'),
-                                      subtitle: const Text(
-                                        'اعرض رمز QR أو رمز دعوة من 6 أرقام لضم '
-                                        'جهاز جديد إلى مساحة عملك.',
-                                        style: TextStyle(
-                                            fontSize: 11.5, height: 1.5),
-                                      ),
-                                      trailing: const Icon(Icons.chevron_left),
-                                      onTap: () =>
-                                          showCloudInviteDialog(context, ref),
+                                Card(
+                                  child: ListTile(
+                                    leading: const Icon(
+                                      Icons.fact_check_outlined,
+                                      color: Color(0xFF0284C7),
                                     ),
+                                    title: const Text('طلبات خروج الموظفين'),
+                                    subtitle: const Text(
+                                      'مراجعة والموافقة على طلبات تسجيل خروج أو مغادرة أعضاء المجموعة.',
+                                      style: TextStyle(
+                                          fontSize: 11.5, height: 1.5),
+                                    ),
+                                    trailing: const Icon(Icons.chevron_left),
+                                    onTap: () =>
+                                        showLogoutRequestsSheet(ref),
                                   ),
-                                // (قانون 2026-09-19) «الانضمام إلى مجموعة» لا يظهر
-                                // لحساب المؤسسة إطلاقاً — الانضمام للفردي فقط.
+                                ),
                               ],
                             ),
                           ],
+                          // (الدعم والمساعدة) خدمة العملاء عبر واتساب
+                          const SizedBox(height: 18),
+                          _Collapsible(
+                            title: 'الدعم والمساعدة',
+                            icon: Icons.support_agent_rounded,
+                            color: const Color(0xFF16A34A),
+                            children: [
+                              Card(
+                                color: const Color(0xFFE7F7EE),
+                                child: ListTile(
+                                  leading: Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF25D366),
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: const Icon(
+                                      Icons.support_agent_rounded,
+                                      color: Colors.white,
+                                      size: 22,
+                                    ),
+                                  ),
+                                  title: const Text(
+                                    'خدمة العملاء (واتساب)',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14,
+                                      color: Color(0xFF128C4B),
+                                    ),
+                                  ),
+                                  subtitle: const Text(
+                                    'تواصل مباشر مع فريق الدعم الفني لأي مساعدة أو استفسار.',
+                                    style: TextStyle(
+                                        fontSize: 11.5,
+                                        height: 1.5,
+                                        color: Color(0xFF128C4B)),
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.chat_bubble_outline_rounded,
+                                    color: Color(0xFF128C4B),
+                                  ),
+                                  onTap: () async {
+                                    final uri = Uri.parse(
+                                      'https://wa.me/967774190040?text=${Uri.encodeComponent('السلام عليكم، أحتاج الدعم الفني لتطبيق مدير الحسابات.')}',
+                                    );
+                                    final ok = await canLaunchUrl(uri);
+                                    if (ok) {
+                                      await launchUrl(
+                                        uri,
+                                        mode: LaunchMode.externalApplication,
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
                           // (قانون 2026-09-19) شريط «الترقية إلى مؤسسة» أُزيل:
                           // إعدادات الفردي محصورة — لا مسارات مؤسسة فيها.
                           // (دفعة 65) الحساب الفردي: خيار «الانضمام إلى مؤسسة قائمة»
@@ -1270,45 +1178,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             ),
                           ),
                         ]),
-                        // [منطقة الخطر — بطاقة حمراء مستقلة]
-                        _tabPage([
-                          // (قانون 2026-09-19) الحساب الفردي: منطقة الخطر — حذف
-                          // الحساب نهائياً (كل شيء عدا بصمة الجهاز والاشتراك المدفوع).
-                          if (isIndividual && wsMode == 'standalone') ...[
-                            const SizedBox(height: 18),
-                            const _Collapsible(
-                              title: 'منطقة الخطر — حذف الحساب',
-                              icon: Icons.warning_amber_rounded,
-                              color: Color(0xFFDC2626),
-                              children: [_DeleteAccountTile()],
-                            ),
-                          ],
-                          // تهيئة المجموعة من الصفر: على جهاز المدير (المالك) فقط —
-                          // لا تظهر إطلاقاً في إعدادات الأعضاء ولا الوكيل.
-                          if (canEditOrg) ...[
-                            const SizedBox(height: 18),
-                            _Collapsible(
-                              title: 'منطقة الخطر — تهيئة المجموعة',
-                              icon: Icons.warning_amber_rounded,
-                              color: const Color(0xFFDC2626),
-                              children: [
-                                _GroupWipeTile(),
-                                const SizedBox(height: 8),
-                                // (دفعة 55) حل المجموعة نهائياً: فك ارتباط كل
-                                // الأجهزة فوراً والعودة مستقلاً لإعادة الربط من جديد.
-                                const _DissolveGroupTile(),
-                              ],
-                            ),
-                          ],
-                          // (دفعة 52) نسخة الكمبيوتر: إعادة ضبط المصنع المحلية —
-                          // تحذف ملف قاعدة البيانات نفسه من القرص وتعيد التطبيق
-                          // لشاشة الترحيب (الحل الجذري للبيانات القديمة العالقة).
-                          if (isDesktop) ...[
-                            const SizedBox(height: 18),
-                            const _FactoryResetTile(),
-                          ],
-                          const SizedBox(height: 18),
-                        ]),
+
                       ],
                     ),
                   ),
@@ -1441,21 +1311,21 @@ class _Collapsible extends StatelessWidget {
 
   /// وصف سطر واحد لكل بطاقة — تصنيف واضح بلا حشو.
   static const Map<String, String> _subs = {
-    'بيانات المؤسسة': 'اسم النشاط والشعار وبيانات المنشأة',
+    'بيانات المؤسسة': 'اسم النشاط وبيانات المنشأة والعنوان',
     'العملة والترقيم': 'العملة الافتراضية لكل العمليات والفواتير',
     'المبيعات والسندات': 'خيارات الفواتير والبيع والسندات والتنبيهات',
     'الأمان والخصوصية': 'قفل الشاشة والبصمة وحماية التطبيق',
+    'إعادة الضبط والحذف': 'حذف الحساب أو تهيئة المجموعة وإعادة الضبط',
     'المزامنة وربط الأجهزة': 'حوّل الجهاز إلى مضيف مجموعة واربط الأجهزة',
     'حساب المؤسسة (Google)': 'الهوية الدائمة للمنشأة وربط حساب Google',
     'تفاصيل الاشتراك': 'حالة الترخيص والمقاعد وتاريخ الانتهاء',
-    'المجموعة وربط الأجهزة': 'دعوة الأجهزة وإدارة أعضاء المجموعة',
     'الانضمام إلى مؤسسة قائمة': 'انضم عبر QR أو رمز دعوة بموافقة المدير',
-    'منطقة الخطر — حذف الحساب': 'حذف نهائي لكل البيانات محلياً وسحابياً',
+    'إدارة الموظفين': 'مراجعة طلبات خروج ومغادرة أعضاء المجموعة',
+    'الدعم والمساعدة': 'التواصل المباشر مع الدعم الفني وخدمة العملاء',
     'نسخة احتياطية محلية': 'نسخة داخل مجلد التطبيق على هذا الجهاز فقط',
     'مغادرة المجموعة': 'طلب مغادرة بموافقة المدير وفك ارتباط نظيف',
     'استرداد ملكية مساحة العمل': 'استرجاع ملكية منشأتك فوراً وبثّها للأجهزة',
     'استرجاع الإدارة (صمام الأمان)': 'استعادة الإدارة خلال 24 ساعة من التسليم',
-    'منطقة الخطر — تهيئة المجموعة': 'حذف بيانات المجموعة أو حلّها نهائياً',
     'النسخ الاحتياطي التلقائي': 'جدولة النسخ (كل ساعتين/يومياً) ووجهة Drive',
   };
 

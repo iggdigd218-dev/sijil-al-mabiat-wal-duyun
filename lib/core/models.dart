@@ -999,6 +999,11 @@ class Item {
 
   /// (2026-09-22) القسم الذي يتبعه الصنف (يُشتق من فئته إن لم يُحدَّد).
   final int? sectionId;
+
+  /// (2026-09-24) **رقم الترقيم السريع (PLU)**: رقم تسلسلي فريد وثابت
+  /// يتولّد مرة واحدة عند إضافة الصنف ويبقى للأبد — لا يتغيّر بإعادة
+  /// الترتيب أو الفرز (أبجدي/سعر/كمية) ولا يُعاد استخدامه بعد الحذف.
+  final int? plu;
   final String sku;
   final String unit;
   final double buyPrice;
@@ -1018,6 +1023,7 @@ class Item {
     required this.name,
     this.categoryId,
     this.sectionId,
+    this.plu,
     this.sku = '',
     this.unit = 'حبة',
     this.buyPrice = 0,
@@ -1058,6 +1064,7 @@ class Item {
     bool clearCategoryId = false,
     int? sectionId,
     bool clearSectionId = false,
+    int? plu,
     String? sku,
     String? unit,
     double? buyPrice,
@@ -1075,6 +1082,7 @@ class Item {
         name: name ?? this.name,
         categoryId: clearCategoryId ? null : (categoryId ?? this.categoryId),
         sectionId: clearSectionId ? null : (sectionId ?? this.sectionId),
+        plu: plu ?? this.plu,
         sku: sku ?? this.sku,
         unit: unit ?? this.unit,
         buyPrice: buyPrice ?? this.buyPrice,
@@ -1095,6 +1103,7 @@ class Item {
         'name': name,
         'category_id': categoryId,
         if (sectionId != null) 'section_id': sectionId,
+        if (plu != null) 'plu': plu,
         'sku': sku,
         'unit': unit,
         'buy_price': buyPrice,
@@ -1115,6 +1124,7 @@ class Item {
         name: (m['name'] ?? '') as String,
         categoryId: m['category_id'] as int?,
         sectionId: m['section_id'] as int?,
+        plu: m['plu'] as int?,
         sku: (m['sku'] ?? '') as String,
         unit: (m['unit'] ?? 'حبة') as String,
         buyPrice: ((m['buy_price'] ?? 0) as num).toDouble(),

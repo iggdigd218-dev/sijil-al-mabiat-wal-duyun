@@ -215,7 +215,7 @@ class _CurrencySwipeHeaderState extends ConsumerState<_CurrencySwipeHeader> {
                   padding: const EdgeInsets.all(14),
                   child: Column(
                     children: [
-                      // الصف العلوي: العلم والاسم وزر الوضع الليلي/النهاري السريع
+                      // الصف العلوي: العلم والاسم
                       Row(
                         children: [
                           Text(c.flag, style: const TextStyle(fontSize: 18)),
@@ -230,50 +230,6 @@ class _CurrencySwipeHeaderState extends ConsumerState<_CurrencySwipeHeader> {
                             ),
                           ),
                           const Spacer(),
-                          // زر التبديل السريع لليلي / نهاري
-                          InkWell(
-                            onTap: () {
-                              Sfx.tap();
-                              final current = ref.read(themeModeProvider);
-                              final darkActive = current == ThemeMode.dark ||
-                                  (current == ThemeMode.system &&
-                                      Theme.of(context).brightness ==
-                                          Brightness.dark);
-                              ref.read(themeModeProvider.notifier).state =
-                                  darkActive ? ThemeMode.light : ThemeMode.dark;
-                            },
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    isDark
-                                        ? Icons.light_mode_rounded
-                                        : Icons.dark_mode_rounded,
-                                    color: Colors.white,
-                                    size: 13,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    isDark ? 'نهاري' : 'ليلي',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.w700,
-                                      fontFamily: 'Tajawal',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 10),

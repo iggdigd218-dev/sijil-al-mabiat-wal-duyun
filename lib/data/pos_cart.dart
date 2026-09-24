@@ -95,11 +95,17 @@ class PosDraftNotifier extends StateNotifier<PosDraft> {
   PosDraftNotifier() : super(const PosDraft());
 
   /// إضافة صنف (أو زيادة كميته). يعيد false إذا مُنع لنفاد الرصيد.
-  bool addItem(Item item, {required bool allowNegative}) {
+  /// يضيف الصنف إلى السلة.
+  ///
+  /// (2026-09-24) [quantity] يسمح بإضافة دفعة واحدة **بشكل ذرّي** — مطلوب
+  /// لنظام الترقيم السريع (`7*3` + Enter يضيف ثلاث قطع): التحقق من الرصيد
+  /// يتم مرة واحدة على الكمية كاملة، فلا تُضاف قطعتان ثم تفشل الثالثة.
+  bool addItem(Item item, {required bool allowNegative, double quantity = 1}) {
     final id = item.id;
+    final qty = quantity <= 0 ? 1.0 : quantity;
     if (id == null) return false;
     final inCart = state.cart[id]?.quantity ?? 0.0;
-    if (!allowNegative && inCart + 1 > item.quantity) return false;
+    if (!allowNegative && inCart + qty > item.quantity) return false;
     final next = Map<int, CartEntry>.from(state.cart);
     next[id] = (next[id] ??
             CartEntry(
@@ -108,7 +114,7 @@ class PosDraftNotifier extends StateNotifier<PosDraft> {
               unitPrice:
                   item.sellPrice > 0 ? item.sellPrice : item.buyPrice,
             ))
-        .copyWith(quantity: inCart + 1);
+        .copyWith(quantity: inCart + qty);
     state = state.copyWith(cart: next);
     return true;
   }

@@ -227,18 +227,183 @@ class _TrialCountdownBannerState extends ConsumerState<TrialCountdownBanner> {
 
 /// (الإعدادات — للمدير) قسم «تفاصيل الاشتراك»: حالة الترخيص، تاريخ
 /// الانتهاء، الوقت المتبقي، وزر تجديد/ترقية الاشتراك.
-class SubscriptionDetailsSection extends ConsumerWidget {
+/// (الإعدادات — للمدير) قسم «تفاصيل الاشتراك»: حالة الترخيص، تاريخ
+/// الانتهاء، الوقت المتبقي، وزر التحقق من حالة الاشتراك.
+class SubscriptionDetailsSection extends ConsumerStatefulWidget {
   const SubscriptionDetailsSection({super.key});
+
+  @override
+  ConsumerState<SubscriptionDetailsSection> createState() =>
+      _SubscriptionDetailsSectionState();
+}
+
+class _SubscriptionDetailsSectionState
+    extends ConsumerState<SubscriptionDetailsSection> {
+  bool _checking = false;
 
   String _fmtDate(int ms) {
     if (ms <= 0) return '—';
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
     two(int v) => v.toString().padLeft(2, '0');
-    return '${d.year}/${two(d.month)}/${two(d.day)} — ${two(d.hour)}:${two(d.minute)}';
+    return '${d.year}/${two(d.month)}/${two(d.day)}';
+  }
+
+  bool _isLifetime(SubscriptionState sub) {
+    return sub.status == 'active' &&
+        (sub.expiresAtMs <= 0 ||
+            sub.expiresAtMs >= DateTime(2090).millisecondsSinceEpoch ||
+            sub.planType == 'lifetime');
+  }
+
+  Future<void> _checkSubscription() async {
+    setState(() => _checking = true);
+    Sfx.tap();
+    ref.invalidate(subscriptionProvider);
+    final sub = await ref.read(subscriptionProvider.future);
+    if (!mounted) return;
+    setState(() => _checking = false);
+
+    final isLifetime = _isLifetime(sub);
+    final expDate = _fmtDate(sub.expiresAtMs);
+    final days = (sub.expiresAtMs > sub.serverNowMs
+            ? ((sub.expiresAtMs - sub.serverNowMs) / 86400000).ceil()
+            : 0)
+        .clamp(0, 99999);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.verified_user_outlined, color: AppColors.primary),
+            SizedBox(width: 8),
+            Text('حالة الاشتراك والترخيص'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (isLifetime)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFB45309), Color(0xFFF59E0B)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFF59E0B).withValues(alpha: .3),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.workspace_premium, color: Colors.white, size: 24),
+                    SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'اشتراك مفعّل مدى الحياة — ترخيص دائم',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (sub.status == 'active')
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoftOf(ctx),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.greenOf(ctx).withValues(alpha: .3)),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.verified, color: AppColors.greenOf(ctx), size: 32),
+                    const SizedBox(height: 6),
+                    Text(
+                      'متبقي على تجديد الاشتراك: $days يوم\n(ينتهي في: $expDate)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                        height: 1.5,
+                        color: AppColors.greenOf(ctx),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (sub.status == 'trial' && !sub.expired)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7C3AED).withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: .3)),
+                ),
+                child: Column(
+                  children: [
+                    const Icon(Icons.workspace_premium, color: Color(0xFF7C3AED), size: 32),
+                    const SizedBox(height: 6),
+                    Text(
+                      'متبقي من فترتك التجريبية: $days يوم\n(تاريخ الانتهاء: $expDate)',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                        height: 1.5,
+                        color: Color(0xFF7C3AED),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.dangerSoftOf(ctx),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  'انتهت الفترة التجريبية (انتهت في: $expDate)\nجدّد اشتراكك لمتابعة المزامنة.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13.5,
+                    height: 1.5,
+                    color: AppColors.dangerOf(ctx),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('حسناً'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final subAsync = ref.watch(subscriptionProvider);
     final sub = subAsync.valueOrNull;
     if (sub == null || sub.status == 'none') {
@@ -255,14 +420,27 @@ class SubscriptionDetailsSection extends ConsumerWidget {
         ),
       );
     }
-    final (label, color, icon) = switch ((sub.status, sub.expired)) {
-      ('active', _) => (
-          'اشتراك مدفوع فعّال',
+
+    final isLifetime = _isLifetime(sub);
+    final days = (sub.expiresAtMs > sub.serverNowMs
+            ? ((sub.expiresAtMs - sub.serverNowMs) / 86400000).ceil()
+            : 0)
+        .clamp(0, 99999);
+    final expDate = _fmtDate(sub.expiresAtMs);
+
+    final (label, color, icon) = switch ((isLifetime, sub.status, sub.expired)) {
+      (true, _, _) => (
+          'اشتراك مفعّل مدى الحياة — ترخيص دائم',
+          const Color(0xFFD97706),
+          Icons.workspace_premium,
+        ),
+      (_, 'active', _) => (
+          'اشتراك مدفوع فعّال (متبقي $days يوم)',
           const Color(0xFF16A34A),
           Icons.verified,
         ),
-      ('trial', false) => (
-          'الخطة: تجريبية مجانية — متبقي ${formatTrialRemaining(sub.remaining)}',
+      (_, 'trial', false) => (
+          'فترة تجريبية مجانية (متبقي $days يوم)',
           const Color(0xFF7C3AED),
           Icons.workspace_premium,
         ),
@@ -272,22 +450,7 @@ class SubscriptionDetailsSection extends ConsumerWidget {
           Icons.lock_clock,
         ),
     };
-    Widget row(String k, String v, {Color? vColor}) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Row(
-            children: [
-              Text(k,
-                  style: TextStyle(
-                      fontSize: 12.5, color: AppColors.text2Of(context))),
-              const Spacer(),
-              Text(v,
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      color: vColor ?? AppColors.textOf(context))),
-            ],
-          ),
-        );
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -300,7 +463,7 @@ class SubscriptionDetailsSection extends ConsumerWidget {
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(icon, color: color, size: 22),
                 ),
@@ -323,34 +486,115 @@ class SubscriptionDetailsSection extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const Divider(height: 1),
-            const SizedBox(height: 8),
-            row('حالة الترخيص', label, vColor: color),
-            if (sub.status != 'active') ...[
-              row('تاريخ بداية التجربة', _fmtDate(sub.createdAtMs)),
-              row('تاريخ الانتهاء', _fmtDate(sub.expiresAtMs)),
-              if (!sub.expired)
-                row('الوقت المتبقي', formatTrialRemaining(sub.remaining),
-                    vColor: color),
+            if (isLifetime)
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFB45309), Color(0xFFF59E0B)],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.stars_rounded, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'اشتراك مفعّل مدى الحياة — ترخيص دائم',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Text('تاريخ الانتهاء',
+                        style: TextStyle(
+                            fontSize: 12.5, color: AppColors.text2Of(context))),
+                    const Spacer(),
+                    Text(expDate,
+                        style: const TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w800)),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Text(
+                      sub.status == 'active'
+                          ? 'متبقي على التجديد'
+                          : 'المتبقي من التجربة',
+                      style: TextStyle(
+                          fontSize: 12.5, color: AppColors.text2Of(context)),
+                    ),
+                    const Spacer(),
+                    Text('$days يوم',
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                            color: color)),
+                  ],
+                ),
+              ),
             ],
             const SizedBox(height: 12),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor:
-                    sub.expired ? const Color(0xFFDC2626) : color,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-              onPressed: () =>
-                  showTrialExpiredSheet(context, expired: sub.expired),
-              icon: const Icon(Icons.rocket_launch_outlined, size: 18),
-              label: Text(
-                sub.status == 'active'
-                    ? 'إدارة الاشتراك'
-                    : sub.expired
-                        ? 'تجديد الاشتراك الآن'
-                        : 'ترقية الاشتراك',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: _checking ? null : _checkSubscription,
+                    icon: _checking
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.sync_rounded, size: 18),
+                    label: const Text(
+                      'التحقق من حالة الاشتراك',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+                if (!isLifetime) ...[
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor:
+                          sub.expired ? const Color(0xFFDC2626) : color,
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 12, horizontal: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () =>
+                        showTrialExpiredSheet(context, expired: sub.expired),
+                    icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+                    label: Text(
+                      sub.status == 'active' ? 'إدارة' : 'ترقية',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
         ),

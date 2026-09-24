@@ -1,5 +1,3 @@
-import 'dart:io' show File;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,8 +6,6 @@ import 'package:printing/printing.dart';
 import '../core/accounting.dart';
 import '../core/desktop.dart';
 import '../core/format.dart';
-import '../core/icon_catalog.dart';
-import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/thermal_invoice_doc.dart';
 import '../core/shell_nav.dart';
@@ -19,7 +15,8 @@ import '../data/pos_cart.dart';
 import '../data/providers.dart';
 import '../data/sync/subscription_guard.dart' show Feature;
 import 'barcode_scanner.dart';
-import 'hierarchy_filter.dart';
+import 'pos_gate.dart';
+import 'pos_items_grid.dart';
 import 'trial_ui.dart' show featureNeedsStamp;
 import 'tx_share.dart';
 import 'widgets.dart';
@@ -56,6 +53,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
   int? _selectedCategoryId;
   // (2026-09-22) القسم المختار في الشريط اللمسي (null = الكل، -1 = عام).
   int? _selectedSectionId;
+
+  /// (2026-09-24) هل نحن في **بوابة الأقسام** (المستوى 1)؟
+  /// نقطة البيع تفتح على الأقسام فقط؛ اختيار قسم ينقل إلى مستوى الأصناف.
+  bool _atSectionsGate = true;
+
   String _searchQuery = '';
 
   /// (2026-09-24) ترتيب شبكة الأصناف: 0 الاسم · 1 السعر · 2 الكمية.
@@ -142,14 +144,15 @@ class _PosScreenState extends ConsumerState<PosScreen>
     super.dispose();
   }
 
-  void _addItem(Item item) {
+  /// يضيف الصنف إلى السلة بكمية (الافتراضي 1).
+  void _addItem(Item item, {double quantity = 1}) {
     final allowNeg = _allowNegative;
     if (!allowNeg && item.quantity <= 0) {
       Sfx.reject();
       showSnack(context, 'الصنف «${item.name}» نفد من المخزون', error: true);
       return;
     }
-    final ok = _cartCtl.addItem(item, allowNegative: allowNeg);
+    final ok = _cartCtl.addItem(item, allowNegative: allowNeg, quantity: quantity);
     if (!ok) {
       Sfx.reject();
       showSnack(
@@ -698,7 +701,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
       return true;
     }).toList();
 
-    // (2026-09-24) الترتيب المختار من زر الفلاتر.
+    // (2026-09-24) الترتيب المختار من زر الفلاتر — **لا يغيّر أرقام PLU**:
+    // الأرقام ثابتة للأبد ومستقلة عن أي فرز معروض.
     switch (_posSort) {
       case 1:
         filteredItems.sort((a, b) => b.sellPrice.compareTo(a.sellPrice));
@@ -710,45 +714,141 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
     return Column(
       children: [
-        // (2026-09-24) الشريط العلوي: تدرّج أزرق ملكي + بحث بيضاوي.
+        // الشريط العلوي: تدرّج أزرق ملكي + بحث بيضاوي (Enter = PLU).
         _buildPosHeader(),
-        // (2026-09-24) منسدلتان متجاورتان بدل السحب الأفقي المرهق:
-        // [كل الأقسام ▾] [كل الفئات ▾] — كل واحدة تفتح نافذة سفلية
-        // واحدة تعرض الخيارات بأيقوناتها.
-        Consumer(
-          builder: (ctx, rref, _) {
-            final sections =
-                rref.watch(sectionsProvider).valueOrNull ?? const <Section>[];
-            return _buildHierarchyFilters(sections, categories, allItems);
-          },
-        ),
-        const SizedBox(height: 6),
-        // شبكة الأصناف.
-        Expanded(
-          child: filteredItems.isEmpty
-              ? const EmptyState(
-                  icon: Icons.inventory_2_outlined,
-                  title: 'لا توجد أصناف مطابقة',
-                  message: 'أضف أصنافاً من شاشة المخزون أو غيّر نص البحث.',
-                )
-              : GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    // 2 على الهاتف · 3 على اللوحي · 4 على الحاسوب.
-                    crossAxisCount: MediaQuery.sizeOf(context).width >= 900
-                        ? 4
-                        : (MediaQuery.sizeOf(context).width >= 600 ? 3 : 2),
-                    childAspectRatio: .82,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
+        // المستوى 1 — بوابة الأقسام (الوضع الافتراضي عند فتح الشاشة).
+        if (_atSectionsGate)
+          Expanded(
+            child: Consumer(
+              builder: (ctx, rref, _) {
+                final sections =
+                    rref.watch(sectionsProvider).valueOrNull ?? const <Section>[];
+                final roots =
+                    rref.watch(itemCategoryTreeProvider).valueOrNull ??
+                        const <ItemCategory>[];
+                return PosSectionsGate(
+                  sections: sections,
+                  roots: roots,
+                  items: allItems,
+                  onOpen: (sid) => setState(() {
+                    _selectedSectionId = sid;
+                    _selectedCategoryId = null;
+                    _atSectionsGate = false;
+                  }),
+                );
+              },
+            ),
+          )
+        // المستوى 2 — الفئات + شبكة الأصناف داخل القسم المختار.
+        else ...[
+          Consumer(
+            builder: (ctx, rref, _) {
+              final sections =
+                  rref.watch(sectionsProvider).valueOrNull ?? const <Section>[];
+              return _buildSectionBar(sections, categories);
+            },
+          ),
+          Consumer(
+            builder: (ctx, rref, _) {
+              final roots =
+                  rref.watch(itemCategoryTreeProvider).valueOrNull ??
+                      const <ItemCategory>[];
+              return PosCategoryStrip(
+                categories: _categoriesOfSection(roots, categories),
+                selectedId: _selectedCategoryId,
+                onPick: (cid) =>
+                    setState(() => _selectedCategoryId = cid),
+              );
+            },
+          ),
+          Expanded(
+            child: filteredItems.isEmpty
+                ? const EmptyState(
+                    icon: Icons.inventory_2_outlined,
+                    title: 'لا توجد أصناف مطابقة',
+                    message: 'أضف أصنافاً من شاشة المخزون أو غيّر نص البحث.',
+                  )
+                : PosItemsGrid(
+                    items: filteredItems,
+                    symbol: cur.symbol,
+                    quantityInCart: (it) => _cart[it.id]?.quantity ?? 0,
+                    canAdd: (it) => it.quantity > 0 || _allowNegative,
+                    onAdd: (it) => _addItem(it),
                   ),
-                  itemCount: filteredItems.length,
-                  itemBuilder: (context, i) =>
-                      _buildItemCard(filteredItems[i], cur),
-                ),
-        ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// فئات القسم النشط (بلا فروع) مرتّبة للعرض في الشريط العلوي.
+  List<ItemCategory> _categoriesOfSection(
+    List<ItemCategory> roots,
+    List<ItemCategory> flat,
+  ) {
+    final out = <ItemCategory>[];
+    void collect(ItemCategory c) {
+      if (_sectionMatches(c.sectionId)) out.add(c);
+    }
+
+    if (roots.isNotEmpty) {
+      for (final c in roots) {
+        collect(c);
+      }
+    } else {
+      for (final c in flat) {
+        collect(c);
+      }
+    }
+    out.sort((a, b) => a.name.compareTo(b.name));
+    return out;
+  }
+
+  /// شريط القسم النشط مع تنقّل سريع للقسم المجاور (بلا رجوع للبوابة).
+  Widget _buildSectionBar(List<Section> sections, List<ItemCategory> cats) {
+    final items = ref.watch(itemsProvider).valueOrNull ?? const <Item>[];
+    // تسلسل التنقل: [كل الأقسام] ثم [عام] (إن كان فيه أصناف) ثم الأقسام.
+    final generalCount = items
+        .where((i) => (i.sectionId ?? _sectionOfCat(cats, i.categoryId)) == null)
+        .length;
+    final seq = <(int?, String)>[
+      (null, 'كل الأقسام'),
+      if (generalCount > 0) (kGeneralSectionId, 'عام'),
+      for (final s in sections) (s.id, s.name),
+    ];
+    final idx = seq.indexWhere((e) => e.$1 == _selectedSectionId);
+    final prev = idx > 0 ? seq[idx - 1] : null;
+    final next = (idx >= 0 && idx < seq.length - 1) ? seq[idx + 1] : null;
+    final title = idx >= 0 ? seq[idx].$2 : 'كل الأقسام';
+
+    return PosSectionBar(
+      title: title,
+      onBackToGate: () => setState(() {
+        _atSectionsGate = true;
+        _selectedSectionId = null;
+        _selectedCategoryId = null;
+      }),
+      onPrev: prev == null
+          ? null
+          : () => setState(() {
+                _selectedSectionId = prev.$1;
+                _selectedCategoryId = null;
+              }),
+      onNext: next == null
+          ? null
+          : () => setState(() {
+                _selectedSectionId = next.$1;
+                _selectedCategoryId = null;
+              }),
+    );
+  }
+
+  int? _sectionOfCat(List<ItemCategory> cats, int? catId) {
+    if (catId == null) return null;
+    for (final c in cats) {
+      if (c.id == catId) return c.sectionId;
+    }
+    return null;
   }
 
   /// هل تنتمي الفئة إلى القسم المختار حالياً؟
@@ -881,6 +981,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
             ),
           ),
           onChanged: (v) => setState(() => _searchQuery = v.trim()),
+          // Enter: رقم PLU (أو رقم×كمية) يضيف للسلة مباشرة، وإلا فالبحث.
+          onSubmitted: (v) {
+            if (_handleQuickIndex(v)) return;
+            setState(() => _searchQuery = v.trim());
+          },
         ),
       );
 
@@ -888,6 +993,50 @@ class _PosScreenState extends ConsumerState<PosScreen>
         borderRadius: BorderRadius.circular(999),
         borderSide: BorderSide(color: c),
       );
+
+  /// (2026-09-24) **نظام الترقيم السريع (PLU)** — معالجة الإدخال الرقمي.
+  ///
+  /// • `7` + Enter      ⇒ يضيف حبة واحدة من الصنف صاحب الرقم 7.
+  /// • `7*3` / `7×3`    ⇒ يضيف ثلاث حبات دفعة واحدة (تحقّق ذرّي من الرصيد).
+  ///
+  /// الرقم ثابت للأبد: لا يتأثر بالفرز ولا يُعاد استخدامه بعد الحذف.
+  /// إن لم يطابق الإدخال أي PLU يُترك للبحث النصي/الباركود كما كان.
+  bool _handleQuickIndex(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return false;
+    final m = RegExp(r'^(\d+)\s*(?:[*x×])\s*(\d+)$').firstMatch(text);
+    int? plu;
+    double qty = 1;
+    if (m != null) {
+      plu = int.tryParse(m.group(1)!);
+      qty = double.tryParse(m.group(2)!) ?? 1;
+    } else {
+      plu = int.tryParse(text);
+    }
+    if (plu == null || qty <= 0) return false;
+
+    final items = ref.read(itemsProvider).valueOrNull ?? const <Item>[];
+    Item? hit;
+    for (final it in items) {
+      if (it.plu == plu) {
+        hit = it;
+        break;
+      }
+    }
+    if (hit == null) return false;
+
+    _addItem(hit, quantity: qty);
+    _searchCtrl.clear();
+    setState(() => _searchQuery = '');
+    // إبقاء التركيز في الحقل: الكاشير يواصل الإدخال بلا لمس الشاشة.
+    _searchFocus.requestFocus();
+    showSnack(
+      context,
+      'أُضيف ${Fmt.money(qty)} ${hit.unit} من «${hit.name}» (رقم $plu)',
+      silent: true,
+    );
+    return true;
+  }
 
   /// ترتيب شبكة الأصناف — شريحة سفلية صغيرة.
   void _openPosSortSheet() {
@@ -938,258 +1087,6 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   Navigator.pop(ctx);
                 },
               ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// صفّ الفلاتر الهرمية: منسدلة الأقسام + منسدلة الفئات (متجاورتان).
-  ///
-  /// خيارات الفئات تتحدث آلياً حسب القسم المختار، واختيار قسم جديد
-  /// يُفرغ اختيار الفئة — بلا أي تمرير أفقي.
-  Widget _buildHierarchyFilters(
-    List<Section> sections,
-    List<ItemCategory> categories,
-    List<Item> allItems,
-  ) {
-    int catsInSection(int? id) => categories
-        .where((c) => id == null
-            ? true
-            : (id == kGeneralSectionId
-                ? c.sectionId == null
-                : c.sectionId == id))
-        .length;
-    int itemsIn(int? catId) =>
-        allItems.where((i) => i.categoryId == catId).length;
-
-    final visibleCats =
-        categories.where((c) => _sectionMatches(c.sectionId)).toList();
-    final sec = sections.cast<Section?>().firstWhere(
-          (x) => x?.id == _selectedSectionId,
-          orElse: () => null,
-        );
-    final cat = visibleCats.cast<ItemCategory?>().firstWhere(
-          (c) => c?.id == _selectedCategoryId,
-          orElse: () => null,
-        );
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: HierarchyDropdown(
-            label: sec?.name ??
-                (_selectedSectionId == kGeneralSectionId
-                    ? 'عام'
-                    : 'كل الأقسام'),
-            icon: sec == null
-                ? IconCatalog.of(_selectedSectionId == kGeneralSectionId
-                    ? 'category'
-                    : 'apps')
-                : IconCatalog.of(sec.effectiveIcon),
-            tone: sec == null
-                ? AppTone.blue
-                : toneOf(sec.colorHex.isNotEmpty ? sec.colorHex : ''),
-            badge: '${catsInSection(_selectedSectionId)} فئة',
-            active: _selectedSectionId != null,
-            onTap: () async {
-              final pick = await showHierarchySheet(
-                context: context,
-                title: 'اختر القسم',
-                titleIcon: Icons.storefront_outlined,
-                selectedId: _selectedSectionId,
-                options: [
-                  HierarchyOption(
-                    id: null,
-                    label: 'كل الأقسام',
-                    icon: IconCatalog.of('apps'),
-                    tone: AppTone.blue,
-                    badge: '${categories.length} فئة',
-                  ),
-                  HierarchyOption(
-                    id: kGeneralSectionId,
-                    label: 'عام',
-                    icon: IconCatalog.of('category'),
-                    tone: AppTone.sand,
-                    badge: '${catsInSection(kGeneralSectionId)} فئة',
-                  ),
-                  for (final x in sections)
-                    HierarchyOption(
-                      id: x.id,
-                      label: x.name,
-                      icon: IconCatalog.of(x.effectiveIcon),
-                      tone: toneOf(x.colorHex.isNotEmpty ? x.colorHex : ''),
-                      badge: '${catsInSection(x.id)} فئة',
-                    ),
-                ],
-              );
-              if (pick != null && mounted) {
-                setState(() {
-                  _selectedSectionId = pick.id;
-                  _selectedCategoryId = null;
-                });
-              }
-            },
-          )),
-          const SizedBox(width: 10),
-          Expanded(
-            child: HierarchyDropdown(
-            label: cat?.name ?? 'كل الفئات',
-            icon: cat == null
-                ? IconCatalog.of('widgets')
-                : IconCatalog.of(cat.iconKey),
-            tone: cat == null
-                ? AppTone.blue
-                : toneOf(cat.colorHex.isNotEmpty ? cat.colorHex : ''),
-            badge: cat == null
-                ? '${allItems.length} صنف'
-                : '${itemsIn(cat.id)} صنف',
-            active: _selectedCategoryId != null,
-            onTap: () async {
-              final pick = await showHierarchySheet(
-                context: context,
-                title: 'اختر الفئة',
-                titleIcon: Icons.category_outlined,
-                selectedId: _selectedCategoryId,
-                options: [
-                  HierarchyOption(
-                    id: null,
-                    label: 'كل الفئات',
-                    icon: IconCatalog.of('widgets'),
-                    tone: AppTone.blue,
-                    badge: '${allItems.length} صنف',
-                  ),
-                  for (final c in visibleCats)
-                    HierarchyOption(
-                      id: c.id,
-                      label: c.name,
-                      icon: IconCatalog.of(c.iconKey),
-                      tone: toneOf(c.colorHex.isNotEmpty ? c.colorHex : ''),
-                      badge: '${itemsIn(c.id)} صنف',
-                    ),
-                ],
-              );
-              if (pick != null && mounted) {
-                setState(() => _selectedCategoryId = pick.id);
-              }
-            },
-          )),
-        ],
-      ),
-    );
-  }
-
-  /// بطاقة صنف: صورة أعلى، زر (+) دائري أزرق، اسم، وحدة، سعر أخضر
-  /// عريض وشارة «متوفر».
-  Widget _buildItemCard(Item item, CurrencyDef cur) {
-    final inCart = _cart[item.id]?.quantity ?? 0.0;
-    final price = item.sellPrice > 0 ? item.sellPrice : item.buyPrice;
-    final isOut = item.quantity <= 0;
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceOf(context),
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        boxShadow: AppShadows.card(scheme),
-        border: inCart > 0
-            ? Border.all(color: AppColors.primaryOf(context), width: 2)
-            : null,
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        // السماح بالبيع رغم النفاد إن فُعِّل الإعداد (حركة سالبة مع
-        // تنبيه بصري بدل الحظر).
-        onTap: isOut && !_allowNegative ? null : () => _addItem(item),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // مساحة صورة الصنف + زر الإضافة الفورية.
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(child: _ItemImage(image: item.image)),
-                  PositionedDirectional(
-                    top: 6,
-                    start: 6,
-                    child: _AddButton(
-                      enabled: !isOut || _allowNegative,
-                      count: inCart,
-                      onTap: () => _addItem(item),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13.5,
-                      height: 1.25,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${Fmt.money(item.quantity)} ${item.unit}',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: dark ? AppColors.dText3 : AppColors.text3,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FittedBox(
-                          alignment: AlignmentDirectional.centerStart,
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            '${Fmt.money(price)} ${cur.symbol}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 14,
-                              color: isOut
-                                  ? AppColors.dangerOf(context)
-                                  : AppColors.greenOf(context),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: (isOut ? AppColors.red : AppColors.green)
-                              .withValues(alpha: .12),
-                          borderRadius:
-                              BorderRadius.circular(AppRadius.pill),
-                        ),
-                        child: Text(
-                          isOut ? 'نفد' : 'متوفر',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: isOut ? AppColors.red : AppColors.green,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -2349,92 +2246,6 @@ class _ZeroButtons extends StatelessWidget {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
         ),
       ],
-    );
-  }
-}
-
-
-
-/// زر الإضافة الفوري الدائري (＋) أعلى بطاقة الصنف.
-class _AddButton extends StatelessWidget {
-  const _AddButton({
-    required this.enabled,
-    required this.count,
-    required this.onTap,
-  });
-
-  final bool enabled;
-  final double count;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = enabled;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(99),
-        onTap: active ? onTap : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: active ? AppColors.primaryOf(context) : AppColors.text3,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: .35),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: count > 0
-              ? Center(
-                  child: Text(
-                    '${count.toInt()}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                )
-              : const Icon(Icons.add, size: 18, color: Colors.white),
-        ),
-      ),
-    );
-  }
-}
-
-/// صورة الصنف أعلى البطاقة (ملف محلي) مع بديل أيقوني آمن.
-class _ItemImage extends StatelessWidget {
-  const _ItemImage({required this.image});
-
-  final String image;
-
-  @override
-  Widget build(BuildContext context) {
-    final path = image.isEmpty ? '' : MediaPaths.toAbsolute(image);
-    final hasImage = image.isNotEmpty && MediaPaths.exists(image);
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final placeholder = Container(
-      color: dark ? AppColors.dSurface2 : AppColors.surface2,
-      child: Center(
-        child: Icon(
-          Icons.inventory_2_outlined,
-          size: 30,
-          color: (dark ? AppColors.dText3 : AppColors.text3)
-              .withValues(alpha: .55),
-        ),
-      ),
-    );
-    if (!hasImage) return placeholder;
-    return Image.file(
-      File(path),
-      fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => placeholder,
     );
   }
 }
