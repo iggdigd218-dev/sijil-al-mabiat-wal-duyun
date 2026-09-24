@@ -99,9 +99,9 @@ Future<void> insertStubRow(
   final now = DateTime.now().toIso8601String();
   final row = <String, Object?>{
     pk: id,
-    if (table == 'accounts') 'name': 'حساب مؤقت (قيد المزامنة)',
-    if (table == 'items') 'name': 'صنف مؤقت (قيد المزامنة)',
-    if (table == 'item_categories') 'name': 'تصنيف مؤقت',
+    if (table == 'accounts') 'name': 'حساب مؤقت (قيد المزامنة) $id',
+    if (table == 'items') 'name': 'صنف مؤقت (قيد المزامنة) $id',
+    if (table == 'item_categories') 'name': 'تصنيف مؤقت $id',
     if (table == 'conversations') 'title': 'محادثة',
     if (table == 'transactions') ...{
         'type': 'sale',
@@ -128,7 +128,7 @@ Future<void> insertStubRow(
           : '',
     };
   }
-  await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
+  await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
 }
 
 /// (2026-09-24) يُفرغ `section_id` إن كان يشير إلى قسم غير موجود محلياً.
@@ -309,6 +309,20 @@ extension ApplyRemoteOp on Repo {
         await nullDanglingSection(txn, table, row);
         if (existing.isNotEmpty) {
           if (row.isNotEmpty) {
+            if (table == 'item_categories' && row.containsKey('name')) {
+              final catName = row['name']?.toString().trim() ?? '';
+              if (catName.isNotEmpty) {
+                final dup = await txn.query(
+                  'item_categories',
+                  columns: ['id'],
+                  where: 'name = ? COLLATE NOCASE AND id != ?',
+                  whereArgs: [catName, op.entityId],
+                );
+                if (dup.isNotEmpty) {
+                  row['name'] = '$catName (${op.entityId})';
+                }
+              }
+            }
             await txn.update(table, row,
                 where: '$primaryKey = ?', whereArgs: [op.entityId]);
           }
@@ -320,6 +334,20 @@ extension ApplyRemoteOp on Repo {
           // (النصوص فارغة، الأرقام صفر، التواريخ الآن) بدل الانفجار.
           final insertRow = {...row, primaryKey: op.entityId};
           await nullDanglingSection(txn, table, insertRow);
+          if (table == 'item_categories' && insertRow.containsKey('name')) {
+            final catName = insertRow['name']?.toString().trim() ?? '';
+            if (catName.isNotEmpty) {
+              final dup = await txn.query(
+                'item_categories',
+                columns: ['id'],
+                where: 'name = ? COLLATE NOCASE AND id != ?',
+                whereArgs: [catName, op.entityId],
+              );
+              if (dup.isNotEmpty) {
+                insertRow['name'] = '$catName (${op.entityId})';
+              }
+            }
+          }
           for (final col in tableInfo) {
             final name = col['name'] as String;
             if (insertRow.containsKey(name)) continue;
@@ -337,7 +365,11 @@ extension ApplyRemoteOp on Repo {
                   : '',
             };
           }
-          await txn.insert(table, insertRow);
+          await txn.insert(
+            table,
+            insertRow,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
         }
         if (op.entityType == EntityKind.tx && lines != null) {
           await _replaceInvoiceLines(txn, op, lines);

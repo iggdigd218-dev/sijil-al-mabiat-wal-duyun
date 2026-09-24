@@ -32,16 +32,17 @@ class SyncArrowsIndicator extends ConsumerWidget {
     return ValueListenableBuilder<SyncDiagnosticsSnapshot>(
       valueListenable: SyncDiagnostics.instance.notifier,
       builder: (context, s, _) {
-        final disabled = Theme.of(context).disabledColor;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final disabled = isDark ? Colors.white38 : Colors.black38;
         final upColor = s.uploadFaulted
-            ? AppColors.dangerOf(context)
+            ? const Color(0xFFEF4444)
             : (s.pushing || s.lastPushOk)
-                ? AppColors.greenOf(context)
+                ? const Color(0xFF10B981)
                 : disabled;
         final downColor = s.downloadFaulted
-            ? AppColors.dangerOf(context)
+            ? const Color(0xFFEF4444)
             : (s.pulling || s.lastPullOk)
-                ? AppColors.infoOf(context)
+                ? const Color(0xFF0EA5E9)
                 : disabled;
         return Tooltip(
           message: 'مؤشر المزامنة اللحظية — اضغط للتشخيص',
@@ -49,19 +50,19 @@ class SyncArrowsIndicator extends ConsumerWidget {
             borderRadius: BorderRadius.circular(8),
             onTap: () => showSyncDiagnosticsSheet(context),
             child: SizedBox(
-              width: 34,
+              width: 36,
               height: 32,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _SyncArrow(
-                    icon: Icons.arrow_upward_rounded,
+                    icon: Icons.north_rounded,
                     color: upColor,
                     active: s.pushing && !s.uploadFaulted,
                   ),
                   const SizedBox(width: 2),
                   _SyncArrow(
-                    icon: Icons.arrow_downward_rounded,
+                    icon: Icons.south_rounded,
                     color: downColor,
                     active: s.pulling && !s.downloadFaulted,
                   ),

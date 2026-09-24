@@ -17,11 +17,15 @@
 //   - synced    : اكتمال مزامنة عملية — نغمتان خفيفتان.
 //   - opCreated : إنشاء عملية — صوت الدفع + اهتزاز طويل (1.5 ثانية).
 
+import 'dart:async';
+
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'platform_info.dart';
 
 class Sfx {
   static const MethodChannel _channel = MethodChannel('nexora/sfx');
+  static AudioPlayer? _desktopPlayer;
 
   static bool _muted = false; // كتم شامل (يستخدمه وضع الاختبار).
   static bool _soundOn = true; // الأصوات.
@@ -48,12 +52,25 @@ class Sfx {
 
   static bool get _isAndroid => PlatformInfo.isAndroid;
 
-  /// يشغّل صوتاً مخصصاً من res/raw على أندرويد؛ يتجاهل الفشل بصمت.
-  static Future<void> _playCustom(String name) async {
-    if (!_soundEnabled || !_isAndroid) return;
+  static Future<void> _playDesktopAudio(String name) async {
+    if (!_soundEnabled) return;
     try {
-      await _channel.invokeMethod('play', {'name': name});
+      _desktopPlayer ??= AudioPlayer();
+      await _desktopPlayer!.stop();
+      await _desktopPlayer!.play(AssetSource('audio/$name.wav'));
     } catch (_) {}
+  }
+
+  /// يشغّل صوتاً مخصصاً: من res/raw على أندرويد، أو عبر audioplayers على ويندوز وبقية المنصات.
+  static Future<void> _playCustom(String name) async {
+    if (!_soundEnabled) return;
+    if (_isAndroid) {
+      try {
+        await _channel.invokeMethod('play', {'name': name});
+      } catch (_) {}
+    } else {
+      unawaited(_playDesktopAudio(name));
+    }
   }
 
   /// اهتزاز بمدة محددة على أندرويد (أدق من HapticFeedback المتقطع).

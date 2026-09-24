@@ -1446,15 +1446,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 final isDark = Theme.of(ctx).brightness == Brightness.dark;
                 return _appBarSquircleAction(
                   tooltip: 'الإشعارات',
-                  bg: isDark ? const Color(0xFF132B45) : const Color(0xFFE0F2FE),
-                  fg: const Color(0xFF0284C7),
+                  bg: isDark ? const Color(0xFF3B2706) : const Color(0xFFFEF3C7),
+                  fg: const Color(0xFFD97706),
                   icon: Badge(
                     isLabelVisible: unread > 0,
-                    label: Text('$unread'),
+                    label: Text(
+                      '$unread',
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                    backgroundColor: const Color(0xFFEA580C),
                     child: const Icon(
-                      Icons.notifications_outlined,
+                      Icons.notifications_rounded,
                       size: 20,
-                      color: Color(0xFF0284C7),
+                      color: Color(0xFFD97706),
                     ),
                   ),
                   onTap: () => openNotifications(
@@ -1536,11 +1540,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
             : _MarkedBottomBar(
                 currentScreen: _screen,
                 onSelect: (s) => _go(s),
-                onOpenNotifications: () => openNotifications(
-                  context,
-                  ref,
-                  onOpenEntity: openNotificationEntity,
-                ),
               ),
       ),
     );
@@ -1552,22 +1551,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
 }
 
 /// شريط التنقل السفلي الحديث ذو الأيقونات المُعلّمة والمميّزة بصرياً
-/// كما في هوية التطبيق (العملاء، الحركات، التقارير، الإشعارات، الإعدادات).
+/// كما في هوية التطبيق (العملاء، الحركات، التقارير، الإعدادات).
 class _MarkedBottomBar extends ConsumerWidget {
   final AppScreen currentScreen;
   final ValueChanged<AppScreen> onSelect;
-  final VoidCallback onOpenNotifications;
 
   const _MarkedBottomBar({
     required this.currentScreen,
     required this.onSelect,
-    required this.onOpenNotifications,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final unread = ref.watch(unreadCountProvider).valueOrNull ?? 0;
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
 
     return Container(
@@ -1620,14 +1616,6 @@ class _MarkedBottomBar extends ConsumerWidget {
             onTap: () => onSelect(AppScreen.reports),
           ),
           _BottomItem(
-            label: 'الإشعارات',
-            tone: AppTone.orange,
-            selected: false,
-            badgeCount: unread,
-            icon: (sel, fg) => _MarkedBellIcon(selected: sel, unread: unread),
-            onTap: onOpenNotifications,
-          ),
-          _BottomItem(
             label: 'الإعدادات',
             tone: AppTone.teal,
             selected: currentScreen == AppScreen.settings,
@@ -1643,7 +1631,6 @@ class _MarkedBottomBar extends ConsumerWidget {
 class _BottomItem extends StatelessWidget {
   final String label;
   final bool selected;
-  final int badgeCount;
   final AppTone tone;
   final Widget Function(bool selected, Color fg) icon;
   final VoidCallback onTap;
@@ -1652,7 +1639,6 @@ class _BottomItem extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.tone,
-    this.badgeCount = 0,
     required this.icon,
     required this.onTap,
   });
@@ -1700,39 +1686,7 @@ class _BottomItem extends StatelessWidget {
                     : null,
               ),
               alignment: Alignment.center,
-              child: Stack(
-                clipBehavior: Clip.none,
-                alignment: Alignment.center,
-                children: [
-                  icon(selected, squircleFg),
-                  if (badgeCount > 0 && !selected)
-                    Positioned(
-                      top: -3,
-                      right: -5,
-                      child: Container(
-                        padding: const EdgeInsets.all(3),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFEF4444),
-                          shape: BoxShape.circle,
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 15,
-                          minHeight: 15,
-                        ),
-                        child: Text(
-                          badgeCount > 99 ? '99+' : '$badgeCount',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            height: 1,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+              child: icon(selected, squircleFg),
             ),
             const SizedBox(height: 3),
             Text(
@@ -1855,30 +1809,6 @@ class _MarkedReceiptIcon extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// أيقونة الجرس الذهبي المتوهّج للإشعارات
-class _MarkedBellIcon extends StatelessWidget {
-  final bool selected;
-  final int unread;
-  const _MarkedBellIcon({required this.selected, required this.unread});
-
-
-  @override
-  Widget build(BuildContext context) {
-    if (selected) {
-      return const Icon(
-        Icons.notifications_rounded,
-        color: Colors.white,
-        size: 22,
-      );
-    }
-    return const Icon(
-      Icons.notifications_rounded,
-      color: Color(0xFFF59E0B),
-      size: 22,
     );
   }
 }

@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'dart:io' show SocketException;
 
 import 'package:http/http.dart' as http;
 
@@ -166,7 +167,7 @@ class UpdateService {
     http.Client Function()? clientFactory,
     AppSemVer? current,
     UpdatePlatform? platform,
-    this.timeout = const Duration(seconds: 12),
+    this.timeout = const Duration(seconds: 10),
   })  : manifestUrl = manifestUrl ?? kDefaultManifestUrl,
         _clientFactory = clientFactory ?? (() => http.Client()),
         current = current ?? AppSemVer.current,
@@ -211,17 +212,42 @@ class UpdateService {
       // application/octet-stream بلا charset، فتتراجع res.body إلى Latin-1
       // ويتشوّه النص العربي في الملاحظات (Ø§Ù…). allowMalformed حمايةً من بايتات شاذة.
       return _parse(utf8.decode(res.bodyBytes, allowMalformed: true));
+    } on SocketException {
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'تعذّر الاتصال بالإنترنت.',
+      );
     } on TimeoutException {
       return UpdateInfo(
         status: UpdateStatus.unknown,
         current: current,
         error: 'انتهت مهلة الاتصال.',
       );
+    } on http.ClientException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('socketexception') ||
+          msg.contains('failed host lookup') ||
+          msg.contains('connection refused') ||
+          msg.contains('network') ||
+          msg.contains('connection closed') ||
+          msg.contains('connection reset')) {
+        return UpdateInfo(
+          status: UpdateStatus.unknown,
+          current: current,
+          error: 'تعذّر الاتصال بالإنترنت.',
+        );
+      }
+      return UpdateInfo(
+        status: UpdateStatus.unknown,
+        current: current,
+        error: 'خطأ في خادم التحديثات (${e.message}).',
+      );
     } catch (e) {
       return UpdateInfo(
         status: UpdateStatus.unknown,
         current: current,
-        error: 'تعذّر الاتصال بالإنترنت.',
+        error: 'تعذّر فحص التحديثات: $e',
       );
     } finally {
       client.close();
@@ -262,14 +288,18 @@ class UpdateService {
       if (platform == UpdatePlatform.android) {
         // حزمة المعالج المطابق (أصغر بنحو النصف) والشاملة بديلاً آمناً.
         downloadUrl = pickAndroidApkUrl(downloads, androidAbiKey());
-      } else {
-        final key = switch (platform) {
-          UpdatePlatform.windows => 'windows',
-          _ => '',
-        };
-        final v = downloads[key];
-        if (v is String && v.startsWith('https://')) downloadUrl = v;
+      } else if (platform == UpdatePlatform.windows) {
+        final v = downloads['windows'];
+        if (v is String && v.startsWith('https://')) {
+          downloadUrl = v;
+        } else if (downloads['windows'] != null) {
+          downloadUrl = downloads['windows'].toString();
+        }
       }
+    }
+    // احتياطي لويندوز: إذا كان البيان بلا رابط مباشر لويندوز
+    if (downloadUrl == null && platform == UpdatePlatform.windows) {
+      downloadUrl = 'https://github.com/iggdigd218-dev/sijil-al-mabiat-wal-duyun/releases/download/latest/NexoraSetup.exe';
     }
     final release = map['releaseUrl'];
     final releaseUrl = (release is String && release.startsWith('https://'))

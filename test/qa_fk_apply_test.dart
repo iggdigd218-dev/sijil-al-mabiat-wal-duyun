@@ -137,6 +137,38 @@ void main() {
         reason: 'السجل الحقيقي يحل محل المؤقت بنفس المعرف');
   });
 
+  test('CAT-DEDUP-01 تصنيف مكرر الاسم لا يرمي UNIQUE constraint failed', () async {
+    final db = await repo.database;
+    // إضافة تصنيف باسم معين
+    await db.insert('item_categories', {
+      'id': 10,
+      'name': 'إلكترونيات',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+
+    // وصول تصنيف بمعرف مختلف لكن بنفس الاسم من جهاز آخر
+    final catOp = op(
+      kind: EntityKind.itemCategory,
+      type: OpKind.create,
+      id: '20',
+      payload: {
+        'id': 20,
+        'name': 'إلكترونيات',
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+    );
+
+    final ok = await db.transaction(
+        (txn) => repo.applyRemoteOperation(txn, catOp, ConflictResolver()));
+    expect(ok, isTrue, reason: 'تم تطبيق العملية بنجاح ودون خطأ تعارض');
+
+    final cat20 = await db.query('item_categories', where: 'id = ?', whereArgs: [20]);
+    expect(cat20.length, 1);
+    expect(cat20.first['name'], contains('إلكترونيات'));
+  });
+
   test('ORDER-01 الفرز بالتبعية: آباء قبل أبناء والحذف أخيراً', () {
     final ops = [
       op(kind: EntityKind.tx, type: OpKind.create, id: '1', payload: {}),

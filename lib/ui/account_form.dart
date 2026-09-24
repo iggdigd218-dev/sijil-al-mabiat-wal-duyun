@@ -27,31 +27,36 @@ Future<bool> openAccountForm(
     isScrollControlled: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
-    builder: (ctx) => Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceOf(ctx),
-        borderRadius: AppRadius.sheetTop,
+    builder: (ctx) => ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(ctx).height * 0.85,
       ),
-      child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 44,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppColors.borderOf(ctx),
-                borderRadius: BorderRadius.circular(99),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceOf(ctx),
+          borderRadius: AppRadius.sheetTop,
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.borderOf(ctx),
+                  borderRadius: BorderRadius.circular(99),
+                ),
               ),
-            ),
-            Flexible(
-              child: AccountFormScreen(
-                existing: existing,
-                embedded: true,
+              Flexible(
+                child: AccountFormScreen(
+                  existing: existing,
+                  embedded: true,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),
@@ -295,7 +300,7 @@ class _State extends ConsumerState<AccountFormScreen> {
               16,
               widget.embedded ? 6 : 12,
               16,
-              100 + MediaQuery.of(context).viewInsets.bottom,
+              16,
             ),
             children: [
               if (widget.embedded)
@@ -460,22 +465,39 @@ class _State extends ConsumerState<AccountFormScreen> {
                 decoration: const InputDecoration(labelText: 'ملاحظات'),
                 maxLines: 3,
               ),
-              const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.check),
-                label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
-              ),
+              const SizedBox(height: 8),
             ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: widget.embedded
+                  ? AppColors.surfaceOf(context)
+                  : Theme.of(context).scaffoldBackgroundColor,
+              border: Border(
+                top: BorderSide(
+                  color: AppColors.borderOf(context),
+                  width: 0.5,
+                ),
+              ),
+            ),
+            child: FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.check),
+              label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
+            ),
           ),
         ),
       ),

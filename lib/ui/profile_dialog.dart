@@ -223,8 +223,11 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
               style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         ],
       ),
-      content: SizedBox(
-        width: 480,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+          maxWidth: 480,
+        ),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

@@ -445,7 +445,12 @@ Future<void> openVoucherForm(BuildContext context, WidgetRef ref) =>
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => const _VoucherForm(),
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(ctx).height * 0.85,
+        ),
+        child: const _VoucherForm(),
+      ),
     );
 
 class _VoucherForm extends ConsumerStatefulWidget {
@@ -715,13 +720,22 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
                       prefixIcon: Icon(Icons.sticky_note_2_outlined),
                     ),
                   ),
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _saving ? null : _save,
-                    icon: const Icon(Icons.visibility_outlined),
-                    label: Text(_saving ? 'جارٍ الحفظ...' : 'معاينة وحفظ'),
-                  ),
+                  const SizedBox(height: 8),
                 ],
+              ),
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: const Icon(Icons.visibility_outlined),
+                  label: Text(_saving ? 'جارٍ الحفظ...' : 'معاينة وحفظ'),
+                ),
               ),
             ),
           ),
