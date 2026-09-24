@@ -15,7 +15,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   static Database? _db;
-  static const int _version = 23;
+  static const int _version = 24;
 
   static int get schemaVersion => _version;
 
@@ -365,6 +365,58 @@ class AppDatabase {
       // أُنشئ جدولها قبل إضافة parent_id تُرقّى عند كل فتح.
       await migrateToV23(db);
     } catch (_) {}
+    try {
+      // (2026-09-22) عمود القسم — مُرقّى هنا أيضاً احتياطاً بعد إصلاح
+      // سلسلة onUpgrade أعلاه (قاعدة فُتحت بلا هجرة تبقى عاملة).
+      await migrateToV24(db);
+    } catch (_) {}
+    try {
+      // (2026-09-24) ترميم ذاتي صريح: إن تعذّرت الهجرتان لأي سبب (قاعدة
+      // مستوردة، هجرة فاشلة سابقاً، PRAGMA غير متاح) نضيف العمودين بـ ALTER
+      // مباشر داخل try/catch — لا انهيار عند الفتح، ولا استثناء في الواجهة.
+      await ensureItemCategoryColumns(db);
+    } catch (_) {}
+  }
+
+  /// (2026-09-24) ترميم ذاتي لأعمدة شجرة الفئات في `item_categories`.
+  ///
+  /// المشكلة التي يعالجها: قاعدة بيانات مُرقّاة أُنشئ جدولها قبل إضافة
+  /// `parent_id`/`section_id` لا تمرّ بـ [createSchema] (الجدول موجود)،
+  /// فتبقى بلا العمودين، وأي كتابة للفئة تفشل بـ
+  /// `DatabaseException(table item_categories has no column named …)`.
+  ///
+  /// idempotent بالكامل: يتحقق بـ `PRAGMA table_info` قبل ALTER، وكل أمر
+  /// داخل try/catch فلا يضرّ وجود العمود مسبقاً ولا غياب الجدول.
+  static Future<void> ensureItemCategoryColumns(Database db) async {
+    await _alterAddColumn(db, 'item_categories', 'parent_id', 'INTEGER');
+    await _alterAddColumn(db, 'item_categories', 'section_id', 'INTEGER');
+    try {
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_item_cat_parent '
+          'ON item_categories(parent_id)');
+    } catch (_) {}
+    try {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_cat_section ON item_categories(section_id)');
+    } catch (_) {}
+  }
+
+  /// `ALTER TABLE … ADD COLUMN` آمن: يتجاهل «duplicate column name» وأي
+  /// خطأ بنيوي آخر فلا يُسقط فتح التطبيق (خط دفاع أخير بعد الهجرات).
+  static Future<void> _alterAddColumn(
+    Database db,
+    String table,
+    String column,
+    String type,
+  ) async {
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info($table)');
+      if (cols.any((c) => c['name'] == column)) return;
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+    } catch (_) {
+      // العمود موجود أصلاً أو الجدول لم يُنشأ بعد — ليس خطأً قاتلاً.
+    }
   }
 
   /// جداول المزامنة الجديدة (v5).
@@ -986,6 +1038,17 @@ class AppDatabase {
     // ====== v22 (دفعة 58): اجتثاث LAN — إسقاط op_deliveries وأعمدة الشبكة ======
     if (from < 22) {
       await migrateToV22(db);
+    }
+    // ====== v23 (2026-09-22): شجرة الفئات — عمود parent_id ======
+    if (from < 23) {
+      await migrateToV23(db);
+    }
+    // ====== v24 (2026-09-22): أقسام المتجر — عمود section_id ======
+    // كان migrateToV24 معرّفاً ولا يستدعيه أحد: قاعدة مُرقّاة لا تمرّ بـ
+    // onCreate (الجدول موجود أصلاً) فتبقى بلا section_id، وأول إضافة فئة
+    // تفشل بـ «table item_categories has no column named section_id».
+    if (from < 24) {
+      await migrateToV24(db);
     }
     // ====== v17: ضمان المخطط الكامل عند كل فتح (إصلاح قواعد ويندوز الناقصة) ======
     // أي جدول ناقص من بناء سابق يُنشأ، والبذرة idempotent. هذا يغلق نهائيًا
