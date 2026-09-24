@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/pdf_fonts.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
 import 'trial_ui.dart' show FeatureGate;
@@ -730,14 +731,17 @@ class _ReportView extends ConsumerWidget {
     ReportTable t, {
     bool stamp = false,
   }) async {
-    final regular = pw.Font.ttf(
-      await rootBundle.load('assets/fonts/Cairo-Regular.ttf'),
-    );
-    final bold = pw.Font.ttf(
-      await rootBundle.load('assets/fonts/Cairo-Bold.ttf'),
-    );
+    // (2026-09-24) تحميل موحّد عبر خدمة الخطوط: مصدر واحد، تخزين مؤقت،
+    // ورسالة خطأ صريحة إن تعذّر التحميل بدل PDF صامت بلا حروف عربية.
+    final fonts = await PdfFonts.load();
+    final regular = fonts.base;
+    final bold = fonts.bold;
 
-    final doc = pw.Document();
+    final doc = pw.Document(
+    // الثيم على المستند نفسه: يضمن الخط العربي لأي صفحة تُضاف لاحقاً
+    // حتى لو لم تُعيّن pageTheme صراحةً.
+    theme: fonts.theme,
+  );
     doc.addPage(
       pw.MultiPage(
         // (دفعة 65-ب) طبقة خلفية على **كل** صفحة: ختم مائي مائل بنص

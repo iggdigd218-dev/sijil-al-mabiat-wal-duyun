@@ -3,8 +3,6 @@ import 'dart:io' show File;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../core/accounting.dart';
@@ -13,12 +11,13 @@ import '../core/format.dart';
 import '../core/icon_catalog.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
+import '../core/thermal_invoice_doc.dart';
 import '../core/shell_nav.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/pos_cart.dart';
 import '../data/providers.dart';
-import '../data/sync/subscription_guard.dart' show Feature, kWatermarkText;
+import '../data/sync/subscription_guard.dart' show Feature;
 import 'barcode_scanner.dart';
 import 'hierarchy_filter.dart';
 import 'trial_ui.dart' show featureNeedsStamp;
@@ -2162,123 +2161,25 @@ class _PosScreenState extends ConsumerState<PosScreen>
     final orgPhone = (st['phone'] ?? '').trim();
     final footer = (st['voucherFooter'] ?? 'شكراً لزيارتكم!').trim();
 
-    final doc = pw.Document();
-    doc.addPage(
-      pw.Page(
-        pageFormat: const PdfPageFormat(
-          80 * PdfPageFormat.mm,
-          double.infinity,
-          marginAll: 4 * PdfPageFormat.mm,
-        ),
-        build: (pw.Context context) {
-          return pw.Directionality(
-            textDirection: pw.TextDirection.rtl,
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.center,
-              children: [
-                pw.Text(
-                  orgName,
-                  style: pw.TextStyle(
-                    fontSize: 16,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
-                if (orgPhone.isNotEmpty)
-                  pw.Text(
-                    'هاتف: $orgPhone',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-                pw.Divider(thickness: 1),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text(
-                      'فاتورة مبيعات',
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                    ),
-                    pw.Text('#${tx.reference}'),
-                  ],
-                ),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('التاريخ: ${Fmt.date(tx.date)}'),
-                    pw.Text('الوقت: ${tx.date.hour}:${tx.date.minute}'),
-                  ],
-                ),
-                if (account != null)
-                  pw.Align(
-                    alignment: pw.Alignment.centerRight,
-                    child: pw.Text('العميل: ${account.name}'),
-                  ),
-                pw.Divider(thickness: 1),
-                for (final item in lines) ...[
-                  pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Expanded(
-                        child: pw.Text(
-                          item.name,
-                          style: const pw.TextStyle(fontSize: 10),
-                        ),
-                      ),
-                      pw.Text(
-                        '${item.quantity} × ${Fmt.money(item.unitPrice)} = ${Fmt.money(item.total)}',
-                        style: const pw.TextStyle(fontSize: 10),
-                      ),
-                    ],
-                  ),
-                ],
-                pw.Divider(thickness: 1),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text(
-                      'الإجمالي المطلوب:',
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                    ),
-                    pw.Text(
-                      '${Fmt.money(tx.amount)} ${tx.currency}',
-                      style: pw.TextStyle(
-                        fontWeight: pw.FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-                pw.SizedBox(height: 8),
-                pw.Text(
-                  footer,
-                  style: const pw.TextStyle(fontSize: 9),
-                  textAlign: pw.TextAlign.center,
-                ),
-                // (دفعة 65-ب) الحراري 80مم يضيق عن ختم مائل مقروء —
-                // نكتفي بسطر ختم صغير أسفل التذييل.
-                if (stamp) ...[
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    kWatermarkText,
-                    style: const pw.TextStyle(
-                      fontSize: 7,
-                      color: PdfColors.grey600,
-                    ),
-                    textAlign: pw.TextAlign.center,
-                  ),
-                ],
-              ],
-            ),
-          );
-        },
-      ),
+    // (2026-09-24) بناء الفاتورة انتقل إلى thermal_invoice_doc.dart: المستند
+    // صار يحمل الخط العربي المدمج (Cairo) واتجاه RTL، بدل مستند بلا ثيم
+    // الذي كان يُخرج الحروف العربية مربعات «▯» في المعاينة والطباعة.
+    final bytes = await buildThermalInvoicePdf(
+      tx: tx,
+      account: account,
+      lines: lines,
+      orgName: orgName,
+      orgPhone: orgPhone,
+      footer: footer,
+      stamp: stamp,
     );
 
     await Printing.layoutPdf(
-      onLayout: (_) => doc.save(),
+      onLayout: (_) async => bytes,
       name: 'invoice-${tx.reference}.pdf',
     );
   }
 }
-
 /// تبويب سجل فواتير المبيعات
 class _PosHistoryTab extends ConsumerWidget {
   const _PosHistoryTab();

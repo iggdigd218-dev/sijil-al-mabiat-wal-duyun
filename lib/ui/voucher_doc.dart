@@ -7,6 +7,7 @@ import 'package:pdf/widgets.dart' as pw;
 import '../core/accounting.dart';
 import '../core/format.dart';
 import '../core/models.dart';
+import '../core/pdf_fonts.dart';
 import '../core/words.dart';
 import '../data/sync/subscription_guard.dart' show kWatermarkText;
 
@@ -72,12 +73,11 @@ Future<Uint8List> buildVoucherPdf({
   List<InvoiceLine> items = const [],
   bool stamp = false,
 }) async {
-  final regular = pw.Font.ttf(
-    await rootBundle.load('assets/fonts/Cairo-Regular.ttf'),
-  );
-  final bold = pw.Font.ttf(
-    await rootBundle.load('assets/fonts/Cairo-Bold.ttf'),
-  );
+  // (2026-09-24) تحميل موحّد عبر خدمة الخطوط: مصدر واحد، تخزين مؤقت،
+  // ورسالة خطأ صريحة إن تعذّر التحميل بدل PDF صامت بلا حروف عربية.
+  final fonts = await PdfFonts.load();
+  final regular = fonts.base;
+  final bold = fonts.bold;
 
   pw.MemoryImage? logo;
   if (org.logoPath.trim().isNotEmpty) {
@@ -91,7 +91,11 @@ Future<Uint8List> buildVoucherPdf({
     }
   }
 
-  final doc = pw.Document();
+  final doc = pw.Document(
+    // الثيم على المستند نفسه: يضمن الخط العربي لأي صفحة تُضاف لاحقاً
+    // حتى لو لم تُعيّن pageTheme صراحةً.
+    theme: fonts.theme,
+  );
   const brand = PdfColor.fromInt(0xFF0D6EFD);
   const border = PdfColor.fromInt(0xFFE2E8F2);
   const soft = PdfColor.fromInt(0xFFE8F0FF);
