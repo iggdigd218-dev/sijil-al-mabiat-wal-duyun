@@ -171,6 +171,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 70));
       await _drain(tester);
       await _drain(tester);
+      // (إصلاح CI 2026-09-24) ننتظر اكتمال حركة إغلاق النموذج واختفائه
+      // كلياً قبل محاولة النقر على الشريط الجانبي؛ لأن حاجز النموذج
+      // (Modal Barrier) يغطي كامل الشاشة ويحجب النقرات حتى زواله.
+      for (var i = 0;
+          i < 40 && find.byType(TxForm).evaluate().isNotEmpty;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(TxForm), findsNothing);
       // (تحديث الواجهة 2026-09-19) شاشة العمليات تُفتح من الشريط الجانبي
       // ببلاطة «سجل الفواتير اليومية» — بعد الحفظ من الرئيسية.
       final txTile = find.text('سجل الفواتير اليومية');
@@ -193,15 +202,6 @@ void main() {
           i++) {
         await tester.pump(const Duration(milliseconds: 200));
       }
-      // (إصلاح CI 2026-09-22 — تذبذب) قد تظهر البطاقة في القائمة والنموذج
-      // لا يزال يخرج بحركة الإغلاق، فيُسقط التأكيد أدناه بلا عطل حقيقي.
-      // ننتظر اختفاءه بإطارات مقيّدة (سقف 2.5 ثانية) قبل التأكيد نفسه.
-      for (var i = 0;
-          i < 25 && find.byType(TxForm).evaluate().isNotEmpty;
-          i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      expect(find.byType(TxForm), findsNothing);
       // (دفعة 58 — متطلب 10) البطاقة تعرض «الوصف · HH:MM» — نطابق جزئياً.
       expect(find.textContaining('QA UI SAVE'), findsOneWidget);
       await tester.runAsync(() async {
