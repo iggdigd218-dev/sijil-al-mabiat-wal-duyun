@@ -218,7 +218,7 @@ void main() {
         expect(inDrawer('إدارة المجموعة'), findsNothing,
             reason: 'لا إدارة مجموعة قبل ربط حساب جوجل');
         // أغلق الدرج، اربط حساب جوجل، أعد الفتح.
-        await tester.tap(find.byIcon(Icons.menu).first);
+        await tester.tap(find.byIcon(Icons.menu).first, warnIfMissed: false);
         await _settle(tester);
         await tester.runAsync(() async {
           await db.insert('google_auth', {
@@ -230,7 +230,7 @@ void main() {
         // إغلاق الدرج بالنقر على الحاجز (يمين الشاشة) — لا أيقونة إغلاق.
         await tester.tapAt(const Offset(760, 800));
         await _settle(tester);
-        await tester.tap(find.byIcon(Icons.menu).first);
+        await tester.tap(find.byIcon(Icons.menu).first, warnIfMissed: false);
         await _settle(tester);
         // محاكاة ما يفعله التطبيق بعد نجاح الدخول: تحديث المزودات.
         final ctx = tester.element(find.byType(HomeShell));
