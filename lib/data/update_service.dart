@@ -120,6 +120,32 @@ class UpdateInfo {
 /// مزوّد الوقت — لتسهيل الاختبار.
 typedef NowFn = DateTime Function();
 
+/// (2026-09-24) يقصّر سجل ملاحظات التحديث إلى أحدث إصدار فقط وبحد أقصى
+/// [maxLines] أسطر — ويُسقط ترويسات الإصدارات القديبة (مثل `3.75.0+151`)
+/// والأسطر الفارغة، فلا يُدمج أي سجل تاريخي مع سجل الإصدار الأخير.
+///
+/// دالة نقية (pure) يسهل اختبارها، وتُطبَّق على كل ما يصل من
+/// `version.json` فلا يعتمد العرض على محتوى الخادم.
+String clampReleaseNotes(String notes, {int maxLines = 3}) {
+  final lines = notes
+      .split(RegExp(r'\r?\n'))
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      // ترويسة إصدار قديم (3.75.0+151) ليست ميزة — تُسقط.
+      .where((l) => !RegExp(r'^\d+\.\d+\.\d+\+\d+$').hasMatch(l))
+      .take(maxLines)
+      .toList();
+  return lines.join('\n');
+}
+
+/// أسطر سجل التحديث جاهزة للعرض (بلا رمز النقطة في أولها).
+List<String> releaseNoteLines(String notes, {int maxLines = 3}) =>
+    clampReleaseNotes(notes, maxLines: maxLines)
+        .split('\n')
+        .map((l) => l.trim().replaceFirst(RegExp(r'^[•\-*]\s*'), ''))
+        .where((l) => l.isNotEmpty)
+        .toList();
+
 class UpdateService {
   /// الرابط الافتراضي لبيان الإصدار (يُنشر مع كل بناء ناجح).
   static const String kDefaultManifestUrl =
@@ -274,7 +300,8 @@ class UpdateService {
       minSupported: minSupported,
       releaseUrl: releaseUrl,
       downloadUrl: downloadUrl,
-      notes: '${map['notes'] ?? ''}'.trim(),
+      // (2026-09-24) سجل التحديث مقتضب: أحدث إصدار فقط، ٣ أسطر كحد أقصى.
+      notes: clampReleaseNotes('${map['notes'] ?? ''}'),
       publishedAt: DateTime.tryParse('${map['publishedAt'] ?? ''}'),
     );
   }

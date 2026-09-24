@@ -305,6 +305,8 @@ class _UpdateBody extends ConsumerWidget {
             UpdateStatus.unknown => info.error ?? 'سبب غير معروف.',
           },
         ),
+        // (2026-09-24) أحدث إصدار فقط — ثلاثة أسطر كحد أقصى، بلا أي
+        // دمج مع سجلات الإصدارات السابقة.
         if (info.notes.isNotEmpty) ...[
           const SizedBox(height: 8),
           Container(
@@ -314,7 +316,7 @@ class _UpdateBody extends ConsumerWidget {
               color: AppColors.surface2Of(context),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Text(info.notes, style: const TextStyle(fontSize: 12.5)),
+            child: _ReleaseNotesList(notes: info.notes),
           ),
         ],
         if (info.hasUpdate) ...[
@@ -350,19 +352,6 @@ class _StatusRow extends StatelessWidget {
             style: TextStyle(fontWeight: FontWeight.w600, color: color)),
         subtitle: Text(subtitle),
       );
-}
-
-/// يختصر ملاحظات الإصدار لأول جملتين (بحد أقصى ~160 حرفاً) لعرضها في
-/// حوار «الجديد في التطبيق» بلا نص طويل مرهق.
-String _shortNotes(String notes) {
-  final sentences = notes
-      .split(RegExp(r'[.。]\s*'))
-      .where((s) => s.trim().isNotEmpty)
-      .toList();
-  var out = sentences.take(2).join('. ').trim();
-  if (out.length > 160) out = '${out.substring(0, 157).trimRight()}…';
-  if (out.isNotEmpty && !out.endsWith('…') && !out.endsWith('.')) out = '$out.';
-  return out;
 }
 
 /// حوار التحديث الذي يظهر تلقائيًا. الإلزامي لا يمكن إغلاقه.
@@ -401,12 +390,9 @@ Future<void> showUpdateDialog(
             ],
             if (info.notes.isNotEmpty) ...[
               const SizedBox(height: 10),
-              // نعرض ملخصاً قصيراً فقط — النص الكامل يظهر في قسم
-              // التحديثات داخل الإعدادات لمن أراد التفاصيل.
-              Text(
-                _shortNotes(info.notes),
-                style: const TextStyle(fontSize: 12.5, height: 1.6),
-              ),
+              // (2026-09-24) ملخّص أحدث إصدار: ثلاثة أسطر، النص الكامل
+              // يظهر في قسم التحديثات داخل الإعدادات لمن أراد التفاصيل.
+              _ReleaseNotesList(notes: info.notes),
             ],
           ],
         ),
@@ -439,12 +425,8 @@ Future<void> showWhatsNewDialog(
   String version,
   String notes,
 ) {
-  final items = notes
-      .split(RegExp(r'\n+'))
-      .map((s) => s.trim().replaceFirst(RegExp(r'^[•\-*]\s*'), ''))
-      .where((s) => s.isNotEmpty)
-      .take(10)
-      .toList();
+  // (2026-09-24) أحدث إصدار فقط: ثلاثة أسطر، بلا سجل تاريخي متراكم.
+  final items = releaseNoteLines(notes);
   return showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -482,15 +464,6 @@ Future<void> showWhatsNewDialog(
                     ],
                   ),
                 ),
-              const SizedBox(height: 4),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: TextButton.icon(
-                  onPressed: () => showReleaseNotesArchiveDialog(ctx),
-                  icon: const Icon(Icons.history_outlined, size: 18),
-                  label: const Text('عرض سجل الإصدارات السابقة'),
-                ),
-              ),
             ],
           ),
         ),
@@ -505,59 +478,40 @@ Future<void> showWhatsNewDialog(
   );
 }
 
-/// (دفعة 65) أرشيف الإصدارات السابقة — بصياغة محاسبية موجّهة للمستخدم،
-/// دون أي مصطلح برمجي داخلي (لا أسماء دوال ولا رموز خطأ). يُعرض في نافذة
-/// مستقلة من بطاقة «الجديد في هذا التحديث»، فلا يزحم الشاشة بسرد تراكمي.
-const String kReleaseNotesArchive = '''
-3.64.3 — تحسينات على شاشة النسخ الاحتياطي، وتوحيد مكان تسجيل الدخول بحساب Google داخل الإعدادات.
-3.64.2 — إصلاح خطأ كان يمنع إنشاء دعوة الانضمام لأجهزة الموظفين بعد تسجيل الدخول بحساب Google.
-3.64.1 — تعزيز استقرار ربط مساحة العمل بحسابك، وضمان عدم فقدان البيانات عند إعادة الربط.
-3.64.0 — تحسينات في أمان المزامنة السحابية، وتحديث الهوية البصرية للتطبيق.
-3.63.0 — تحسينات أمنية عامة على المزامنة السحابية وحماية البيانات بين الأجهزة.
-3.62.0 — تحسين سرعة معالجة الأرصدة وفتح التقارير المالية.
-3.61.0 — دقة أعلى في احتساب المبالغ المالية وتقريب الأرقام في الفواتير والسندات.
-3.60.0 — تعزيز استقرار ربط الأجهزة والمزامنة السحابية بين المدير والموظفين.
-3.59.0 — تحسينات على استيراد وتصدير النسخ الاحتياطية.
-3.58.1 — إصلاحات في إدارة أعضاء المجموعة وصلاحياتهم.
-''';
+/// (2026-09-24) يعرض ملاحظات أحدث إصدار فقط: ثلاثة أسطر كحد أقصى،
+/// كل سطر بنقطة خضراء — بلا أي دمج مع الإصدارات السابقة.
+class _ReleaseNotesList extends StatelessWidget {
+  const _ReleaseNotesList({required this.notes});
 
-/// نافذة «سجل الإصدارات السابقة».
-Future<void> showReleaseNotesArchiveDialog(BuildContext context) {
-  final entries = kReleaseNotesArchive
-      .split('\n')
-      .map((e) => e.trim())
-      .where((e) => e.isNotEmpty)
-      .toList();
-  return showDialog<void>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      icon: Icon(Icons.history_outlined, color: AppColors.primaryOf(ctx)),
-      title: const Text('سجل الإصدارات السابقة'),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 420, maxWidth: 460),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final e in entries)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
+  final String notes;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = releaseNoteLines(notes);
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final it in items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.check_circle_outline,
+                    size: 15, color: AppColors.greenOf(context)),
+                const SizedBox(width: 7),
+                Expanded(
                   child: Text(
-                    e,
+                    it,
                     style: const TextStyle(fontSize: 12.5, height: 1.6),
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('إغلاق'),
-        ),
       ],
-    ),
-  );
+    );
+  }
 }
