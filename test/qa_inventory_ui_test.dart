@@ -99,15 +99,15 @@ void main() {
     });
     await pumpScreen(tester);
 
-    // زر «إدارة» في آخر الشريط الأفقي — نُظهره بالتمرير أولاً
-    // (ListView الأفقي يبني أبناءه المرئيين فقط).
-    // سطح اختبار عريض: كل Chips (الكل · الفئات · فئة جديدة · إدارة)
-    // تُبنى دفعة واحدة بدل البناء الكسول لشريط أفقي قصير.
+    // (2026-09-24) التنقل الهرمي صار منسدلتين لا شريطاً أفقياً: زر «إدارة»
+    // أيقونة في الصفّ على الشاشات العريضة (≥400px)، وخيار داخل الورقة
+    // السفلية على الضيقة — سطح الاختبار عريض فيُتوقع الزر مباشرة.
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     await tester.pumpAndSettle();
-    final manage = find.text('إدارة');
-    expect(manage, findsWidgets);
-    await tester.tap(manage.first);
+    final manage = find.byTooltip('إدارة الأقسام والفئات');
+    expect(manage, findsOneWidget,
+        reason: 'زر إدارة الهرمية ظاهر على الشاشات العريضة');
+    await tester.tap(manage);
     for (var i = 0; i < 12; i++) {
       await tester.pump(const Duration(milliseconds: 60));
     }

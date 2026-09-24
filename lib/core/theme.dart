@@ -385,8 +385,10 @@ class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
+        // (2026-09-24) التبويب النشط بكبسولة لونية هادئة (Stadium).
         indicatorColor: dark ? AppColors.dPrimarySoft : AppColors.primarySoft,
-        height: 66,
+        indicatorShape: const StadiumBorder(),
+        height: 68,
         elevation: 8,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         labelTextStyle: WidgetStatePropertyAll(

@@ -20,6 +20,7 @@ import '../data/pos_cart.dart';
 import '../data/providers.dart';
 import '../data/sync/subscription_guard.dart' show Feature, kWatermarkText;
 import 'barcode_scanner.dart';
+import 'hierarchy_filter.dart';
 import 'trial_ui.dart' show featureNeedsStamp;
 import 'tx_share.dart';
 import 'widgets.dart';
@@ -712,18 +713,17 @@ class _PosScreenState extends ConsumerState<PosScreen>
       children: [
         // (2026-09-24) الشريط العلوي: تدرّج أزرق ملكي + بحث بيضاوي.
         _buildPosHeader(),
-        // شريط الأقسام (بطاقات مربعة بنغمة باستيل وعدد الفئات).
+        // (2026-09-24) منسدلتان متجاورتان بدل السحب الأفقي المرهق:
+        // [كل الأقسام ▾] [كل الفئات ▾] — كل واحدة تفتح نافذة سفلية
+        // واحدة تعرض الخيارات بأيقوناتها.
         Consumer(
           builder: (ctx, rref, _) {
             final sections =
                 rref.watch(sectionsProvider).valueOrNull ?? const <Section>[];
-            if (sections.isEmpty) return const SizedBox.shrink();
-            return _buildSectionsRow(sections, categories);
+            return _buildHierarchyFilters(sections, categories, allItems);
           },
         ),
-        // كبسولات الفئات التابعة للقسم المختار.
-        _buildCategoriesRow(categories, allItems),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         // شبكة الأصناف.
         Expanded(
           child: filteredItems.isEmpty
@@ -945,98 +945,138 @@ class _PosScreenState extends ConsumerState<PosScreen>
     );
   }
 
-  /// صف الأقسام: بطاقات مربعة عريضة بنغمة باستيل وأيقونة بارزة
-  /// وشارة بعدد الفئات التابعة (مثال: «6 فئات»).
-  Widget _buildSectionsRow(
-      List<Section> sections, List<ItemCategory> categories) {
-    int countFor(int? id) => categories
+  /// صفّ الفلاتر الهرمية: منسدلة الأقسام + منسدلة الفئات (متجاورتان).
+  ///
+  /// خيارات الفئات تتحدث آلياً حسب القسم المختار، واختيار قسم جديد
+  /// يُفرغ اختيار الفئة — بلا أي تمرير أفقي.
+  Widget _buildHierarchyFilters(
+    List<Section> sections,
+    List<ItemCategory> categories,
+    List<Item> allItems,
+  ) {
+    int catsInSection(int? id) => categories
         .where((c) => id == null
             ? true
             : (id == kGeneralSectionId
                 ? c.sectionId == null
                 : c.sectionId == id))
         .length;
-    const allLabel = 'كل الأقسام';
-    return SizedBox(
-      height: 116,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-        children: [
-          _SectionCard(
-            label: allLabel,
-            iconKey: 'apps',
-            tone: AppTone.blue,
-            badge: '${categories.length} فئات',
-            selected: _selectedSectionId == null,
-            onTap: () => setState(() {
-              _selectedSectionId = null;
-              _selectedCategoryId = null;
-            }),
-          ),
-          _SectionCard(
-            label: 'عام',
-            iconKey: 'category',
-            tone: AppTone.sand,
-            badge: '${countFor(kGeneralSectionId)} فئات',
-            selected: _selectedSectionId == kGeneralSectionId,
-            onTap: () => setState(() {
-              _selectedSectionId = kGeneralSectionId;
-              _selectedCategoryId = null;
-            }),
-          ),
-          for (final sec in sections)
-            _SectionCard(
-              label: sec.name,
-              iconKey: sec.effectiveIcon,
-              tone: AppTone.fromHex(
-                  sec.colorHex.isNotEmpty && sec.colorHex.startsWith('#')
-                      ? sec.colorHex
-                      : ''),
-              toneKey: sec.colorHex,
-              badge: '${countFor(sec.id)} فئات',
-              selected: _selectedSectionId == sec.id,
-              onTap: () => setState(() {
-                _selectedSectionId = sec.id;
-                _selectedCategoryId = null;
-              }),
-            ),
-        ],
-      ),
-    );
-  }
-
-  /// كبسولات الفئات: أيقونة + اسم + شارة رمادية بعدد الأصناف.
-  Widget _buildCategoriesRow(
-      List<ItemCategory> categories, List<Item> allItems) {
     int itemsIn(int? catId) =>
         allItems.where((i) => i.categoryId == catId).length;
-    final visible = categories.where((c) => _sectionMatches(c.sectionId));
-    return SizedBox(
-      height: 52,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+
+    final visibleCats =
+        categories.where((c) => _sectionMatches(c.sectionId)).toList();
+    final sec = sections.cast<Section?>().firstWhere(
+          (x) => x?.id == _selectedSectionId,
+          orElse: () => null,
+        );
+    final cat = visibleCats.cast<ItemCategory?>().firstWhere(
+          (c) => c?.id == _selectedCategoryId,
+          orElse: () => null,
+        );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Row(
         children: [
-          _CategoryCapsule(
-            label: 'الكل',
-            iconKey: 'apps',
-            tone: AppTone.blue,
-            badge: '${allItems.length} صنف',
-            selected: _selectedCategoryId == null,
-            onTap: () => setState(() => _selectedCategoryId = null),
-          ),
-          for (final cat in visible)
-            _CategoryCapsule(
-              label: cat.name,
-              iconKey: cat.iconKey,
-              tone: cat.colorHex.startsWith('#')
-                  ? AppTone.fromHex(cat.colorHex)
-                  : AppTone.byKey(cat.colorHex),
-              badge: '${itemsIn(cat.id)} صنف',
-              selected: _selectedCategoryId == cat.id,
-              onTap: () => setState(() => _selectedCategoryId = cat.id),
-            ),
+          Expanded(
+            child: HierarchyDropdown(
+            label: sec?.name ??
+                (_selectedSectionId == kGeneralSectionId
+                    ? 'عام'
+                    : 'كل الأقسام'),
+            icon: sec == null
+                ? IconCatalog.of(_selectedSectionId == kGeneralSectionId
+                    ? 'category'
+                    : 'apps')
+                : IconCatalog.of(sec.effectiveIcon),
+            tone: sec == null
+                ? AppTone.blue
+                : toneOf(sec.colorHex.isNotEmpty ? sec.colorHex : ''),
+            badge: '${catsInSection(_selectedSectionId)} فئة',
+            active: _selectedSectionId != null,
+            onTap: () async {
+              final pick = await showHierarchySheet(
+                context: context,
+                title: 'اختر القسم',
+                titleIcon: Icons.storefront_outlined,
+                selectedId: _selectedSectionId,
+                options: [
+                  HierarchyOption(
+                    id: null,
+                    label: 'كل الأقسام',
+                    icon: IconCatalog.of('apps'),
+                    tone: AppTone.blue,
+                    badge: '${categories.length} فئة',
+                  ),
+                  HierarchyOption(
+                    id: kGeneralSectionId,
+                    label: 'عام',
+                    icon: IconCatalog.of('category'),
+                    tone: AppTone.sand,
+                    badge: '${catsInSection(kGeneralSectionId)} فئة',
+                  ),
+                  for (final x in sections)
+                    HierarchyOption(
+                      id: x.id,
+                      label: x.name,
+                      icon: IconCatalog.of(x.effectiveIcon),
+                      tone: toneOf(x.colorHex.isNotEmpty ? x.colorHex : ''),
+                      badge: '${catsInSection(x.id)} فئة',
+                    ),
+                ],
+              );
+              if (pick != null && mounted) {
+                setState(() {
+                  _selectedSectionId = pick.id;
+                  _selectedCategoryId = null;
+                });
+              }
+            },
+          )),
+          const SizedBox(width: 10),
+          Expanded(
+            child: HierarchyDropdown(
+            label: cat?.name ?? 'كل الفئات',
+            icon: cat == null
+                ? IconCatalog.of('widgets')
+                : IconCatalog.of(cat.iconKey),
+            tone: cat == null
+                ? AppTone.blue
+                : toneOf(cat.colorHex.isNotEmpty ? cat.colorHex : ''),
+            badge: cat == null
+                ? '${allItems.length} صنف'
+                : '${itemsIn(cat.id)} صنف',
+            active: _selectedCategoryId != null,
+            onTap: () async {
+              final pick = await showHierarchySheet(
+                context: context,
+                title: 'اختر الفئة',
+                titleIcon: Icons.category_outlined,
+                selectedId: _selectedCategoryId,
+                options: [
+                  HierarchyOption(
+                    id: null,
+                    label: 'كل الفئات',
+                    icon: IconCatalog.of('widgets'),
+                    tone: AppTone.blue,
+                    badge: '${allItems.length} صنف',
+                  ),
+                  for (final c in visibleCats)
+                    HierarchyOption(
+                      id: c.id,
+                      label: c.name,
+                      icon: IconCatalog.of(c.iconKey),
+                      tone: toneOf(c.colorHex.isNotEmpty ? c.colorHex : ''),
+                      badge: '${itemsIn(c.id)} صنف',
+                    ),
+                ],
+              );
+              if (pick != null && mounted) {
+                setState(() => _selectedCategoryId = pick.id);
+              }
+            },
+          )),
         ],
       ),
     );
@@ -2412,203 +2452,7 @@ class _ZeroButtons extends StatelessWidget {
   }
 }
 
-/// بطاقة قسم مربعة عريضة (16px) بنغمة باستيل وأيقونة بارزة.
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.label,
-    required this.iconKey,
-    required this.tone,
-    required this.badge,
-    required this.selected,
-    required this.onTap,
-    this.toneKey = '',
-  });
 
-  final String label;
-  final String iconKey;
-  final AppTone tone;
-  final String badge;
-  final bool selected;
-  final VoidCallback onTap;
-  final String toneKey;
-
-  @override
-  Widget build(BuildContext context) {
-    // النغمة: مفتاح باستيل (blue/orange/…) أو لون HEX مخصّص.
-    final t = toneKey.isEmpty || toneKey.startsWith('#')
-        ? tone
-        : AppTone.byKey(toneKey);
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 10),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: 108,
-          padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
-          decoration: BoxDecoration(
-            color: selected ? t.foreground : t.background,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            boxShadow: selected ? AppShadows.card(Theme.of(context).colorScheme) : null,
-            border: selected
-                ? null
-                : Border.all(color: t.foreground.withValues(alpha: .18)),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Colors.white.withValues(alpha: .22)
-                      : Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  IconCatalog.of(iconKey),
-                  size: 19,
-                  color: selected ? Colors.white : t.foreground,
-                ),
-              ),
-              const SizedBox(height: 7),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  height: 1.1,
-                  fontWeight: FontWeight.w800,
-                  color: selected
-                      ? Colors.white
-                      : AppColors.textOf(context),
-                ),
-              ),
-              const SizedBox(height: 3),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Colors.white.withValues(alpha: .22)
-                      : Colors.white.withValues(alpha: .75),
-                  borderRadius: BorderRadius.circular(AppRadius.pill),
-                ),
-                child: Text(
-                  badge,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w700,
-                    color: selected
-                        ? Colors.white
-                        : AppColors.text2Of(context),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// كبسولة فئة أفقية أنيقة: أيقونة + اسم + شارة رمادية بعدد الأصناف.
-class _CategoryCapsule extends StatelessWidget {
-  const _CategoryCapsule({
-    required this.label,
-    required this.iconKey,
-    required this.tone,
-    required this.badge,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final String iconKey;
-  final AppTone tone;
-  final String badge;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final bg = selected
-        ? tone.foreground
-        : (dark ? AppColors.dSurface : AppColors.surface);
-    final fg = selected
-        ? Colors.white
-        : (dark ? AppColors.dText : AppColors.text);
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
-            border: Border.all(
-              color: selected
-                  ? Colors.transparent
-                  : (dark ? AppColors.dBorder : AppColors.border),
-            ),
-            boxShadow: selected
-                ? AppShadows.card(Theme.of(context).colorScheme)
-                : null,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                IconCatalog.of(iconKey),
-                size: 17,
-                color: selected ? Colors.white : tone.foreground,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: fg,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Colors.white.withValues(alpha: .22)
-                      : (dark ? AppColors.dSurface2 : AppColors.surface2),
-                  borderRadius: BorderRadius.circular(AppRadius.pill),
-                ),
-                child: Text(
-                  badge,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: selected ? Colors.white : AppColors.text3Of(context),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// زر الإضافة الفوري الدائري (＋) أعلى بطاقة الصنف.
 class _AddButton extends StatelessWidget {

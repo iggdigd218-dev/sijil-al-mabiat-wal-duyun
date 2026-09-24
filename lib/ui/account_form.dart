@@ -5,6 +5,7 @@ import 'package:flutter_contacts/flutter_contacts.dart' hide Account;
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/theme.dart';
 import '../core/models.dart';
 import '../core/permission_dialog.dart';
 import '../core/sfx.dart';
@@ -13,21 +14,59 @@ import 'widgets.dart';
 import '../core/platform_info.dart';
 
 /// فتح نموذج إضافة/تعديل حساب.
+///
+/// (2026-09-24) نموذج منبثق سفلي بانحناء علوي 24px بدل شاشة كاملة —
+/// نفس المحتوى (AccountFormScreen) بلا أي تغيير في المنطق أو الحفظ.
 Future<bool> openAccountForm(
   BuildContext context,
   WidgetRef ref, {
   Account? existing,
 }) async {
-  final r = await Navigator.push<bool>(
-    context,
-    MaterialPageRoute(builder: (_) => AccountFormScreen(existing: existing)),
+  final r = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(ctx),
+        borderRadius: AppRadius.sheetTop,
+      ),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.borderOf(ctx),
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+            Flexible(
+              child: AccountFormScreen(
+                existing: existing,
+                embedded: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
   );
   return r ?? false;
 }
 
 class AccountFormScreen extends ConsumerStatefulWidget {
   final Account? existing;
-  const AccountFormScreen({super.key, this.existing});
+
+  /// `true` حين يُعرض داخل ورقة سفلية: يلغي الشريط العلوي والخلفية
+  /// المستقلّين (الورقة توفّرهما) ويكتفي بالمحتوى.
+  final bool embedded;
+
+  const AccountFormScreen({super.key, this.existing, this.embedded = false});
 
   @override
   ConsumerState<AccountFormScreen> createState() => _State();
@@ -243,17 +282,33 @@ class _State extends ConsumerState<AccountFormScreen> {
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) => _guardedPop(didPop),
       child: Scaffold(
-        appBar: AppBar(title: Text(_isEdit ? 'تعديل حساب' : 'حساب جديد')),
+        backgroundColor:
+            widget.embedded ? Colors.transparent : null,
+        // داخل الورقة السفلية: ترويسة مدمجة أنحف بدل AppBar كامل.
+        appBar: widget.embedded
+            ? null
+            : AppBar(title: Text(_isEdit ? 'تعديل حساب' : 'حساب جديد')),
         body: Form(
           key: _formKey,
           child: ListView(
             padding: EdgeInsets.fromLTRB(
               16,
-              12,
+              widget.embedded ? 6 : 12,
               16,
               100 + MediaQuery.of(context).viewInsets.bottom,
             ),
             children: [
+              if (widget.embedded)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    _isEdit ? 'تعديل حساب' : 'حساب جديد',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
               // زر جلب بيانات العميل (اسم + رقم) من تطبيق جهات الاتصال.
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,

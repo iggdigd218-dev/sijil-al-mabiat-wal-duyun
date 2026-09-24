@@ -11,8 +11,10 @@ import '../core/icon_catalog.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
+import '../data/pos_cart.dart';
 import '../data/providers.dart';
 import 'barcode_scanner.dart';
+import 'hierarchy_filter.dart';
 import 'calculator.dart';
 import 'widgets.dart';
 
@@ -253,7 +255,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
             categoriesAsync.when(
               loading: () => const SizedBox(height: 54),
               error: (_, __) => const SizedBox.shrink(),
-              data: (roots) => _HierarchyChipBar(
+              data: (roots) => _HierarchyFilterBar(
                 sections: sections,
                 roots: roots,
                 sectionId: _sectionId,
@@ -438,74 +440,125 @@ class _InventoryToolbar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final q = ref.watch(itemQueryProvider);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: TextEditingController(text: q)
-                    ..selection = TextSelection.collapsed(offset: q.length),
-                  decoration: InputDecoration(
-                    hintText: 'ابحث بالاسم أو الباركود أو الفئة',
-                    prefixIcon: const Icon(Icons.search),
-                    isDense: true,
-                    suffixIcon: q.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: 'مسح البحث',
-                            icon: const Icon(Icons.clear),
-                            onPressed: () =>
-                                ref.read(itemQueryProvider.notifier).state = '',
-                          ),
-                  ),
-                  onChanged: (v) =>
-                      ref.read(itemQueryProvider.notifier).state = v,
-                ),
-              ),
-              const SizedBox(width: 8),
-              // زر الكاميرا: مسح الباركود فوراً (نفس ماسح التطبيق).
-              Container(
-                decoration: BoxDecoration(
-                  color: AppColors.primarySoftOf(context),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: IconButton(
-                  tooltip: 'مسح الباركود',
-                  onPressed: () => _scan(context, ref),
-                  icon: Icon(
-                    Icons.qr_code_scanner_rounded,
-                    color: AppColors.primaryOf(context),
-                  ),
-                ),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // (2026-09-24) ترويسة زرقاء أنيقة: بحث بيضاوي أبيض + ماسح باركود.
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topRight,
+              end: Alignment.bottomLeft,
+              colors: dark
+                  ? const [Color(0xFF0B2A5B), Color(0xFF14407E)]
+                  : [AppColors.primary2, AppColors.primary],
+            ),
+            borderRadius: const BorderRadius.vertical(
+              bottom: Radius.circular(AppRadius.sheet),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primary.withValues(alpha: .26),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          // (2026-09-22) صفٌّ قابل للالتفاف: على الشاشات الضيقة (360px)
-          // ينزل مبدّل العرض إلى سطر ثانٍ بدل فيض أفقي يقصف الشاشة.
-          LayoutBuilder(
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 46,
+                      child: TextField(
+                        controller: TextEditingController(text: q)
+                          ..selection = TextSelection.collapsed(offset: q.length),
+                        style: const TextStyle(
+                            fontSize: 14.5, color: Color(0xFF12223A)),
+                        textAlignVertical: TextAlignVertical.center,
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: Colors.white,
+                          hintText: 'ابحث بالاسم أو الباركود أو الفئة',
+                          hintStyle: const TextStyle(
+                              color: Color(0xFF9AA6B8), fontSize: 13.5),
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 14),
+                          prefixIcon: const Icon(Icons.search_rounded,
+                              size: 20, color: Color(0xFF9AA6B8)),
+                          prefixIconConstraints: const BoxConstraints(
+                              minWidth: 40, minHeight: 40),
+                          border: _pill(Colors.transparent),
+                          enabledBorder: _pill(Colors.transparent),
+                          focusedBorder: _pill(Colors.transparent),
+                          suffixIcon: q.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'مسح البحث',
+                                  icon: const Icon(Icons.clear,
+                                      size: 18, color: Color(0xFF9AA6B8)),
+                                  onPressed: () => ref
+                                      .read(itemQueryProvider.notifier)
+                                      .state = '',
+                                ),
+                        ),
+                        onChanged: (v) =>
+                            ref.read(itemQueryProvider.notifier).state = v,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 46,
+                    height: 46,
+                    child: Material(
+                      color: Colors.white.withValues(alpha: .18),
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: IconButton(
+                        tooltip: 'مسح الباركود',
+                        onPressed: () => _scan(context, ref),
+                        icon: const Icon(Icons.qr_code_scanner_rounded,
+                            color: Colors.white, size: 21),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // صفّ الفرز ونمط العرض يبقى على الخلفية الثلجية (قراءة أسهل).
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+          child: LayoutBuilder(
             builder: (context, box) {
               final wide = box.maxWidth >= 380;
-              return Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              return Row(
                 children: [
-                  _SortButton(sort: sort, wide: wide, onChanged: onSortChanged),
+                  Expanded(
+                    child: _SortButton(
+                        sort: sort, wide: wide, onChanged: onSortChanged),
+                  ),
+                  const SizedBox(width: 8),
                   _ViewModeToggle(
                       mode: mode, wide: wide, onChanged: onModeChanged),
                 ],
               );
             },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
+
+OutlineInputBorder _pill(Color c) => OutlineInputBorder(
+      borderRadius: BorderRadius.circular(999), borderSide: BorderSide(color: c));
 
 /// زر الفرز المنسدل [⇅ فرز حسب...].
 class _SortButton extends StatelessWidget {
@@ -631,7 +684,7 @@ Future<void> openCategoryManager(
 ///   الصف الأول: أقسام المتجر [الكل] [عام] [قسم…] + زر [+ قسم].
 ///   الصف الثاني: فئات القسم المختار + [كل الفئات].
 ///   الصف الثالث: الفئات الفرعية للفئة المختارة (إن وُجدت).
-class _HierarchyChipBar extends StatelessWidget {
+class _HierarchyFilterBar extends StatelessWidget {
   final List<Section> sections;
   final List<ItemCategory> roots;
   final int? sectionId;
@@ -644,7 +697,7 @@ class _HierarchyChipBar extends StatelessWidget {
   final VoidCallback onAddSection;
   final VoidCallback onManage;
 
-  const _HierarchyChipBar({
+  const _HierarchyFilterBar({
     required this.sections,
     required this.roots,
     required this.sectionId,
@@ -674,128 +727,246 @@ class _HierarchyChipBar extends StatelessWidget {
           orElse: () => null,
         );
     final subs = selectedRoot?.children ?? const <ItemCategory>[];
-    // (2026-09-24) شاشة صغيرة أو لوحة مفاتيح مفتوحة ⇒ شريط أنحف وهوامش
-    // أضيق: every pixel تذهب لعرض الأصناف بدل الشريط المزدوج.
-    final mq = MediaQuery.of(context);
-    final tight = mq.size.height < 700 || mq.viewInsets.bottom > 0;
-    final sectionHeight = tight ? 38.0 : 46.0;
-    final categoryHeight = tight ? 34.0 : 42.0;
-    final sidePadding = tight ? 8.0 : 12.0;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // ===== الصف الأول: الأقسام =====
-        SizedBox(
-          height: sectionHeight,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: sidePadding),
-            children: [
-              _Chip(
-                label: 'الكل',
-                icon: Icons.apps_rounded,
-                selected: sectionId == null,
-                onTap: () => onSection(null),
-              ),
-              _Chip(
-                label: 'عام',
-                icon: Icons.folder_shared_outlined,
-                selected: sectionId == kGeneralSectionId,
-                onTap: () => onSection(kGeneralSectionId),
-              ),
-              for (final sec in sections)
-                _Chip(
-                  label: sec.name,
-                  // (2026-09-24) أيقونة القسم من الكتالوج بدل أيقونة ثابتة.
-                  icon: IconCatalog.of(sec.effectiveIcon),
-                  selected: sectionId == sec.id,
-                  onTap: () => onSection(sec.id),
-                  onLongPress: onManage,
-                ),
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.add_business_outlined, size: 17),
-                  label: const Text('قسم'),
-                  onPressed: onAddSection,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.tune_rounded, size: 17),
-                  label: const Text('إدارة'),
-                  onPressed: onManage,
-                ),
-              ),
-            ],
-          ),
+    final sec = sections.cast<Section?>().firstWhere(
+          (x) => x?.id == sectionId,
+          orElse: () => null,
+        );
+    final sub = subs.cast<ItemCategory?>().firstWhere(
+          (c) => c?.id == subId,
+          orElse: () => null,
+        );
+
+    final sectionOptions = <HierarchyOption>[
+      HierarchyOption(
+        id: null,
+        label: 'كل الأقسام',
+        icon: IconCatalog.of('apps'),
+        tone: AppTone.blue,
+        badge: '${roots.length} فئة',
+      ),
+      HierarchyOption(
+        id: kGeneralSectionId,
+        label: 'عام',
+        icon: IconCatalog.of('category'),
+        tone: AppTone.sand,
+        badge: '${roots.where((c) => c.sectionId == null).length} فئة',
+      ),
+      for (final x in sections)
+        HierarchyOption(
+          id: x.id,
+          label: x.name,
+          icon: IconCatalog.of(x.effectiveIcon),
+          tone: toneOf(x.colorHex.isNotEmpty ? x.colorHex : ''),
+          badge: '${roots.where((c) => c.sectionId == x.id).length} فئة',
         ),
-        // ===== الصف الثاني: فئات القسم =====
-        SizedBox(
-          height: categoryHeight,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: sidePadding),
-            children: [
-              _Chip(
-                label: 'كل الفئات',
-                small: true,
-                selected: rootId == null,
-                onTap: () => onRoot(null),
-              ),
-              for (final c in visibleRoots)
-                _Chip(
-                  label: c.name,
-                  small: true,
-                  icon: c.hasChildren
-                      ? Icons.account_tree_outlined
-                      : Icons.folder_outlined,
-                  selected: rootId == c.id,
-                  badge: c.children.length,
-                  onTap: () => onRoot(c.id),
-                  onLongPress: onManage,
-                ),
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.add, size: 16),
-                  label: const Text('فئة', style: TextStyle(fontSize: 12)),
-                  onPressed: () => onAddCategory(
-                    sectionId == kGeneralSectionId ? null : sectionId,
-                  ),
-                ),
-              ),
-            ],
-          ),
+    ];
+    final rootOptions = <HierarchyOption>[
+      HierarchyOption(
+        id: null,
+        label: 'كل الفئات',
+        icon: IconCatalog.of('widgets'),
+        tone: AppTone.blue,
+        badge: '${visibleRoots.length} فئة',
+      ),
+      for (final c in visibleRoots)
+        HierarchyOption(
+          id: c.id,
+          label: c.name,
+          icon: IconCatalog.of(c.iconKey),
+          tone: toneOf(c.colorHex.isNotEmpty ? c.colorHex : ''),
+          badge: c.hasChildren ? '${c.children.length} فرع' : 'فئة',
         ),
-        // ===== الصف الثالث: الفئات الفرعية =====
-        if (subs.isNotEmpty)
-          SizedBox(
-            height: 40,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                _Chip(
-                  label: 'الكل',
-                  small: true,
-                  selected: subId == null,
-                  onTap: () => onSub(null),
-                ),
-                for (final sub in subs)
-                  _Chip(
-                    label: sub.name,
-                    small: true,
-                    selected: subId == sub.id,
-                    onTap: () => onSub(sub.id),
-                  ),
-              ],
+    ];
+    final subOptions = <HierarchyOption>[
+      const HierarchyOption(
+        id: null,
+        label: 'كل الفروع',
+        icon: Icons.account_tree_outlined,
+        tone: AppTone.blue,
+      ),
+      for (final c in subs)
+        HierarchyOption(
+          id: c.id,
+          label: c.name,
+          icon: IconCatalog.of(c.iconKey),
+          tone: toneOf(c.colorHex.isNotEmpty ? c.colorHex : ''),
+        ),
+    ];
+
+    Future<void> pickSection() async {
+      final pick = await showHierarchySheet(
+        context: context,
+        title: 'اختر القسم',
+        titleIcon: Icons.storefront_outlined,
+        selectedId: sectionId,
+        options: sectionOptions,
+        actions: <HierarchyAction>[
+          HierarchyAction(
+            label: 'قسم جديد',
+            icon: Icons.add_business_outlined,
+            onTap: onAddSection,
+          ),
+          HierarchyAction(
+            label: 'إدارة',
+            icon: Icons.tune_rounded,
+            onTap: onManage,
+          ),
+        ],
+      );
+      if (pick != null) onSection(pick.id);
+    }
+
+    Future<void> pickRoot() async {
+      final pick = await showHierarchySheet(
+        context: context,
+        title: 'اختر الفئة',
+        titleIcon: Icons.category_outlined,
+        selectedId: rootId,
+        options: rootOptions,
+        actions: <HierarchyAction>[
+          HierarchyAction(
+            label: 'فئة جديدة',
+            icon: Icons.add,
+            onTap: () => onAddCategory(
+              sectionId == kGeneralSectionId ? null : sectionId,
             ),
           ),
-        const SizedBox(height: 2),
-      ],
+          HierarchyAction(
+            label: 'إدارة',
+            icon: Icons.tune_rounded,
+            onTap: onManage,
+          ),
+        ],
+      );
+      if (pick != null) onRoot(pick.id);
+    }
+
+    Future<void> pickSub() async {
+      final pick = await showHierarchySheet(
+        context: context,
+        title: 'اختر الفرع',
+        titleIcon: Icons.account_tree_outlined,
+        selectedId: subId,
+        options: subOptions,
+        actions: <HierarchyAction>[
+          HierarchyAction(
+            label: 'فرع جديد',
+            icon: Icons.add,
+            onTap: () => onAddCategory(
+              sectionId == kGeneralSectionId ? null : sectionId,
+            ),
+          ),
+        ],
+      );
+      if (pick != null) onSub(pick.id);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      // قياس العرض: الأزرار الجانبية تُخفى على الشاشات الضيقة (360px) بدل
+      // أن تفيض — وتبقى متاحة دائماً داخل الورقة المنسدلة.
+      child: LayoutBuilder(builder: (context, box) {
+        final wide = box.maxWidth >= 400;
+        return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+          Row(
+            children: [
+              Expanded(
+                child: HierarchyDropdown(
+                label: sec?.name ??
+                    (sectionId == kGeneralSectionId ? 'عام' : 'كل الأقسام'),
+                icon: sec == null
+                    ? IconCatalog.of(
+                        sectionId == kGeneralSectionId ? 'category' : 'apps')
+                    : IconCatalog.of(sec.effectiveIcon),
+                tone: sec == null
+                    ? AppTone.blue
+                    : toneOf(sec.colorHex.isNotEmpty ? sec.colorHex : ''),
+                badge: '${visibleRoots.length} فئة',
+                active: sectionId != null,
+                onTap: pickSection,
+              )),
+              const SizedBox(width: 8),
+              Expanded(
+                child: HierarchyDropdown(
+                label: selectedRoot?.name ?? 'كل الفئات',
+                icon: selectedRoot == null
+                    ? IconCatalog.of('widgets')
+                    : IconCatalog.of(selectedRoot.iconKey),
+                tone: selectedRoot == null
+                    ? AppTone.blue
+                    : toneOf(selectedRoot.colorHex.isNotEmpty
+                        ? selectedRoot.colorHex
+                        : ''),
+                badge: selectedRoot == null
+                    ? '${visibleRoots.length}'
+                    : (selectedRoot.hasChildren
+                        ? '${selectedRoot.children.length} فرع'
+                        : 'فئة'),
+                active: rootId != null,
+                onTap: pickRoot,
+              )),
+              if (wide) ...[
+              const SizedBox(width: 8),
+              // إجراءات سريعة: قسم جديد · فئة جديدة · إدارة الهرمية.
+              SizedBox(
+                width: 46,
+                height: 46,
+                child: IconButton.outlined(
+                  tooltip: 'قسم جديد',
+                  style: IconButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                    ),
+                  ),
+                  onPressed: onAddSection,
+                  icon: const Icon(Icons.add_business_outlined, size: 20),
+                ),
+              ),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 46,
+                height: 46,
+                child: IconButton.outlined(
+                  tooltip: 'إدارة الأقسام والفئات',
+                  style: IconButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                    ),
+                  ),
+                  onPressed: onManage,
+                  icon: const Icon(Icons.tune_rounded, size: 20),
+                ),
+              ),
+              ],
+            ],
+          ),
+          // الفرع يظهر فقط للفئة المختارة التي تملك فروعاً — إفصاح تدريجي.
+          if (subs.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: HierarchyDropdown(
+                  label: sub?.name ?? 'كل الفروع',
+                  icon: sub == null
+                      ? Icons.account_tree_outlined
+                      : IconCatalog.of(sub.iconKey),
+                  tone: sub == null
+                      ? AppTone.blue
+                      : toneOf(sub.colorHex.isNotEmpty ? sub.colorHex : ''),
+                  badge: '${subs.length}',
+                  active: subId != null,
+                  onTap: pickSub,
+                  )),
+              ],
+            ),
+          ],
+        ],
+      );
+      }),
     );
   }
 }
@@ -1267,76 +1438,6 @@ class _SectionFormState extends ConsumerState<_SectionForm> {
       );
 }
 
-class _Chip extends StatelessWidget {
-  final String label;
-  final IconData? icon;
-  final bool selected;
-  final bool small;
-  final int badge;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.icon,
-    this.small = false,
-    this.badge = 0,
-    this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final primary = AppColors.primaryOf(context);
-    final chip = FilterChip(
-        selected: selected,
-        showCheckmark: false,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon,
-                  size: 15,
-                  color: selected ? primary : AppColors.text3Of(context)),
-              const SizedBox(width: 5),
-            ],
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: small ? 12 : 13,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-              ),
-            ),
-            if (badge > 0) ...[
-              const SizedBox(width: 5),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? primary.withValues(alpha: .18)
-                      : AppColors.primarySoftOf(context),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text('$badge',
-                    style: const TextStyle(
-                        fontSize: 10.5, fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ],
-        ),
-        onSelected: (_) => onTap(),
-      );
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 6),
-      child: onLongPress == null
-          ? chip
-          : GestureDetector(onLongPress: onLongPress, child: chip),
-    );
-  }
-}
 
 /// بطاقة الصنف في نمط القائمة التفصيلي.
 class _ItemTile extends ConsumerWidget {
@@ -1485,37 +1586,65 @@ class _ItemGridCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final warn = item.out
-        ? AppColors.danger
-        : (item.low ? AppColors.amber : AppColors.green);
-    return Card(
+    final isOut = item.quantity <= 0;
+    final isLow = item.minQuantity > 0 && item.quantity <= item.minQuantity;
+    final status = isOut
+        ? ('نفد', AppColors.red)
+        : (isLow ? ('قليل', AppColors.amber) : ('متوفر', AppColors.green));
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        boxShadow: AppShadows.card(scheme),
+      ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => openItemForm(context, ref, item: item),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // صورة الصنف في النصف العلوي + قائمة الخيارات السريعة.
             Expanded(
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  _Thumb(image: item.image, radius: 0, size: 46),
+                  _ItemThumb(image: item.image),
                   PositionedDirectional(
-                    top: 7,
-                    end: 7,
+                    top: 6,
+                    start: 6,
+                    child: Material(
+                      color: Colors.white.withValues(alpha: .92),
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: () => _itemQuickMenu(context, ref, item),
+                        child: const SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: Icon(Icons.more_vert,
+                              size: 17, color: Color(0xFF5B6B83)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  PositionedDirectional(
+                    top: 6,
+                    end: 6,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 7, vertical: 3),
                       decoration: BoxDecoration(
-                        color: warn,
-                        borderRadius: BorderRadius.circular(20),
+                        color: status.$2.withValues(alpha: .14),
+                        borderRadius: BorderRadius.circular(AppRadius.pill),
                       ),
                       child: Text(
-                        Fmt.money(item.quantity, 0),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w900,
+                        status.$1,
+                        style: TextStyle(
+                          color: status.$2,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ),
@@ -1524,38 +1653,63 @@ class _ItemGridCard extends ConsumerWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     item.name,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 13.5,
-                      fontWeight: FontWeight.w800,
+                      height: 1.25,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    Fmt.money(item.sellPrice, 0),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.teal,
+                    '${Fmt.money(item.quantity)} ${item.unit}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: AppColors.text3Of(context),
                     ),
                   ),
-                  if (badge.isNotEmpty)
-                    Text(
-                      badge,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        color: AppColors.text3Of(context),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FittedBox(
+                          alignment: AlignmentDirectional.centerStart,
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            Fmt.money(item.sellPrice, 0),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900,
+                              color: isOut
+                                  ? AppColors.dangerOf(context)
+                                  : AppColors.green,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      if (badge.isNotEmpty) ...[
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            badge,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: AppColors.text3Of(context),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -1566,47 +1720,85 @@ class _ItemGridCard extends ConsumerWidget {
   }
 }
 
-/// صورة الصنف المصغّرة (ملف محلي) مع بديل أيقوني آمن.
-class _Thumb extends StatelessWidget {
-  final String image;
-  final double radius;
-  final double size;
-
-  const _Thumb({required this.image, this.radius = 13, this.size = 26});
-
-  @override
-  Widget build(BuildContext context) {
-    final path = image.isEmpty ? '' : MediaPaths.toAbsolute(image);
-    final file = path.isEmpty ? null : File(path);
-    final hasImage = file != null && MediaPaths.exists(image);
-    return Container(
-      width: radius == 0 ? null : 52,
-      height: radius == 0 ? null : 52,
+/// قائمة الخيارات السريعة لبطاقة الصنف في المخزون.
+void _itemQuickMenu(BuildContext context, WidgetRef ref, Item item) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => Container(
       decoration: BoxDecoration(
-        color: AppColors.primarySoftOf(context),
-        borderRadius: BorderRadius.circular(radius),
+        color: AppColors.surfaceOf(ctx),
+        borderRadius: AppRadius.sheetTop,
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: hasImage
-            ? Image.file(
-                file,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _fallback(context),
-              )
-            : _fallback(context),
-      ),
-    );
-  }
-
-  Widget _fallback(BuildContext context) => Center(
-        child: Icon(
-          Icons.inventory_2_outlined,
-          size: size,
-          color: AppColors.primaryOf(context),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.borderOf(ctx),
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.edit_outlined,
+                  color: AppColors.primaryOf(ctx)),
+              title: const Text('تعديل الصنف'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openItemForm(context, ref, item: item);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.add_shopping_cart_outlined,
+                  color: AppColors.greenOf(ctx)),
+              title: const Text('إضافة إلى سلة البيع'),
+              onTap: () {
+                Navigator.pop(ctx);
+                // (قانون المخزون) منع السالب: تُمرَّر سياسة النفاد صراحةً.
+                final st = ref.read(settingsProvider).valueOrNull ?? const {};
+                final allowNegative = st['allowNegativeStock'] == '1';
+                final ok = ref
+                    .read(posDraftProvider.notifier)
+                    .addItem(item, allowNegative: allowNegative);
+                showSnack(
+                  context,
+                  ok ? 'أُضيف للسلة: ${item.name}' : 'الكمية المتاحة لا تكفي',
+                  error: !ok,
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }
+
 
 class _Meta extends StatelessWidget {
   final IconData icon;
@@ -1619,9 +1811,17 @@ class _Meta extends StatelessWidget {
         children: [
           Icon(icon, size: 12, color: AppColors.text3Of(context)),
           const SizedBox(width: 3),
-          Text(
-            text,
-            style: TextStyle(fontSize: 11.5, color: AppColors.text2Of(context)),
+          // (2026-09-24) سقف عرض + علامة حذف: بطاقات المخزون الضيقة
+          // (171px على هاتف 360) لم تعد تفيض بنصّ القسم/الوحدة الطويل.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 128),
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  TextStyle(fontSize: 11.5, color: AppColors.text2Of(context)),
+            ),
           ),
         ],
       );
@@ -2663,4 +2863,78 @@ class _BrandPickers extends StatelessWidget {
       ],
     );
   }
+}
+
+/// صورة الصنف أعلى بطاقة الشبكة (ملف محلي) مع بديل أيقوني آمن.
+class _ItemThumb extends StatelessWidget {
+  const _ItemThumb({required this.image});
+
+  final String image;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = image.isNotEmpty && MediaPaths.exists(image);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final placeholder = Container(
+      color: dark ? AppColors.dSurface2 : AppColors.surface2,
+      child: Center(
+        child: Icon(
+          Icons.inventory_2_outlined,
+          size: 30,
+          color:
+              (dark ? AppColors.dText3 : AppColors.text3).withValues(alpha: .55),
+        ),
+      ),
+    );
+    if (!hasImage) return placeholder;
+    return Image.file(
+      File(MediaPaths.toAbsolute(image)),
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => placeholder,
+    );
+  }
+}
+
+/// صورة الصنف المصغّرة (ملف محلي) مع بديل أيقوني آمن — تستخدمها بطاقة القائمة.
+class _Thumb extends StatelessWidget {
+  final String image;
+
+  /// نصف قطر الصورة وحجم بديلها — ثوابت (الاستدعاء الوحيد يستخدمها).
+  static const double radius = 13;
+  static const double size = 26;
+
+  const _Thumb({required this.image});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = image.isEmpty ? '' : MediaPaths.toAbsolute(image);
+    final file = path.isEmpty ? null : File(path);
+    final hasImage = file != null && MediaPaths.exists(image);
+    return Container(
+      width: radius == 0 ? null : 52,
+      height: radius == 0 ? null : 52,
+      decoration: BoxDecoration(
+        color: AppColors.primarySoftOf(context),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: hasImage
+            ? Image.file(
+                file,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _fallback(context),
+              )
+            : _fallback(context),
+      ),
+    );
+  }
+
+  Widget _fallback(BuildContext context) => Center(
+        child: Icon(
+          Icons.inventory_2_outlined,
+          size: size,
+          color: AppColors.primaryOf(context),
+        ),
+      );
 }
