@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'rtdb.dart';
 
@@ -59,6 +60,53 @@ Future<void> copyText(BuildContext context, String label, String value) async {
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(content: Text('نُسخ $label ✓'), behavior: SnackBarBehavior.floating),
   );
+}
+
+/// فتح تطبيق الهاتف للاتصال المباشر برقم العميل.
+Future<void> callPhone(BuildContext context, String phone) async {
+  final clean = phone.replaceAll(RegExp(r'[\s\-\(\)]'), '');
+  if (clean.isEmpty) return;
+  final uri = Uri.parse('tel:$clean');
+  try {
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر فتح تطبيق الهاتف: $e')),
+      );
+    }
+  }
+}
+
+/// فتح تطبيق واتساب لمراسلة العميل بنقرة واحدة.
+Future<void> openWhatsApp(BuildContext context, String phone,
+    {String? msg}) async {
+  final clean = phone.replaceAll(RegExp(r'[^0-9]'), '');
+  if (clean.isEmpty) return;
+  final text = msg != null ? Uri.encodeComponent(msg) : '';
+  final direct = Uri.parse('whatsapp://send?phone=$clean&text=$text');
+  final web = Uri.parse('https://wa.me/$clean?text=$text');
+  try {
+    if (await canLaunchUrl(direct)) {
+      if (await launchUrl(direct, mode: LaunchMode.externalApplication)) return;
+    }
+  } catch (_) {}
+  try {
+    if (await launchUrl(web, mode: LaunchMode.externalApplication)) return;
+  } catch (_) {}
+  try {
+    await launchUrl(web);
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر فتح تطبيق واتساب: $e')),
+      );
+    }
+  }
 }
 
 class HomeScreen extends StatefulWidget {
@@ -358,17 +406,90 @@ class ActivationScreen extends StatefulWidget {
 
 class _ActivationScreenState extends State<ActivationScreen> {
   final _id = TextEditingController();
+  final _storeName = TextEditingController();
+  final _clientName = TextEditingController();
+  final _phone = TextEditingController();
+  final _licenseKey = TextEditingController();
+
   String _plan = 'individual';
   PlanDuration _duration = PlanDuration.month;
   final _seats = TextEditingController(text: '5');
   bool _busy = false;
+  bool _lookingUp = false;
 
   @override
   void dispose() {
-    // (إصلاح) إفلات المتحكمات عند تدمير الشاشة.
     _id.dispose();
+    _storeName.dispose();
+    _clientName.dispose();
+    _phone.dispose();
+    _licenseKey.dispose();
     _seats.dispose();
     super.dispose();
+  }
+
+  Future<void> _lookupClientData() async {
+    final input = _id.text.trim();
+    if (input.isEmpty) return;
+    setState(() => _lookingUp = true);
+    try {
+      final rtdb = Rtdb.instance;
+      // 1) فحص /trials
+      final trials = await rtdb.getJson('trials');
+      if (trials is Map) {
+        for (final v in trials.values) {
+          if (v is! Map) continue;
+          final match = asStr(v['device_id']).toLowerCase() == input.toLowerCase() ||
+              asStr(v['deviceId']).toLowerCase() == input.toLowerCase() ||
+              asStr(v['licenseKey']).toLowerCase() == input.toLowerCase() ||
+              asStr(v['workspace_id']).toLowerCase() == input.toLowerCase();
+          if (match) {
+            if (_storeName.text.isEmpty) {
+              _storeName.text = asStr(v['storeName'] ?? v['store_name']);
+            }
+            if (_clientName.text.isEmpty) {
+              _clientName.text = asStr(v['clientName'] ?? v['client_name']);
+            }
+            if (_phone.text.isEmpty) {
+              _phone.text = asStr(v['phone'] ?? v['whatsapp']);
+            }
+            if (_licenseKey.text.isEmpty) {
+              _licenseKey.text = asStr(v['licenseKey'] ?? v['license_key']);
+            }
+            break;
+          }
+        }
+      }
+
+      // 2) فحص عقدة subscription إن عرفنا المساحة
+      try {
+        final ws = await rtdb.resolveWorkspaceId(input);
+        final enc = Uri.encodeComponent(ws);
+        final sub = await rtdb.getJson('workspaces/$enc/subscription');
+        if (sub is Map) {
+          if (_storeName.text.isEmpty) {
+            _storeName.text = asStr(sub['storeName'] ?? sub['store_name']);
+          }
+          if (_clientName.text.isEmpty) {
+            _clientName.text = asStr(sub['clientName'] ?? sub['client_name']);
+          }
+          if (_phone.text.isEmpty) {
+            _phone.text = asStr(sub['phone'] ?? sub['whatsapp']);
+          }
+          if (_licenseKey.text.isEmpty) {
+            _licenseKey.text = asStr(sub['licenseKey'] ?? sub['license_key']);
+          }
+        }
+      } catch (_) {}
+
+      if (_licenseKey.text.isEmpty && input.isNotEmpty) {
+        _licenseKey.text = generateLicenseKey(input);
+      }
+      if (mounted) setState(() {});
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _lookingUp = false);
+    }
   }
 
   Future<void> _activate() async {
@@ -394,6 +515,12 @@ class _ActivationScreenState extends State<ActivationScreen> {
         planType: _plan,
         duration: _duration,
         maxDevices: seats,
+        clientName: _clientName.text.trim(),
+        storeName: _storeName.text.trim(),
+        phone: _phone.text.trim(),
+        licenseKey: _licenseKey.text.trim().isNotEmpty
+            ? _licenseKey.text.trim()
+            : null,
       );
       if (!mounted) return;
       // السجل والإحصائيات يتجددان فوراً بعد التفعيل.
@@ -405,28 +532,39 @@ class _ActivationScreenState extends State<ActivationScreen> {
               color: Color(0xFF16A34A), size: 52),
           title: const Text('✅ تم التفعيل بنجاح',
               style: TextStyle(color: Color(0xFF16A34A))),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _row('مساحة العمل', r.workspaceId),
-              _row('الخطة',
-                  r.planType == 'enterprise' ? 'مؤسسة 🏢' : 'فردي 👤'),
-              if (r.planType == 'enterprise')
-                _row('سعة الأجهزة', '${r.maxDevices} أجهزة'),
-              _row('ينتهي في', fmtDate(r.expiresAtMs, lifetime: r.lifetime)),
-              const SizedBox(height: 8),
-              const Text(
-                'سيلمس العميل التفعيل فوراً عند ضغطه «تأكيد عملية الشراء» '
-                'أو خلال دقائق تلقائياً — دون مسح بيانات.',
-                style: TextStyle(fontSize: 12, height: 1.6),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (r.storeName.isNotEmpty) _row('اسم المنشأة', r.storeName),
+                if (r.clientName.isNotEmpty) _row('اسم المسؤول', r.clientName),
+                if (r.phone.isNotEmpty) _row('رقم الهاتف', r.phone),
+                _row('كود الترخيص', r.licenseKey),
+                if (r.deviceId.isNotEmpty) _row('معرف الجهاز', r.deviceId),
+                _row('مساحة العمل', r.workspaceId),
+                _row('الخطة',
+                    r.planType == 'enterprise' ? 'مؤسسة 🏢' : 'فردي 👤'),
+                if (r.planType == 'enterprise')
+                  _row('سعة الأجهزة', '${r.maxDevices} أجهزة'),
+                _row('ينتهي في', fmtDate(r.expiresAtMs, lifetime: r.lifetime)),
+                const SizedBox(height: 8),
+                const Text(
+                  'سيلمس العميل التفعيل فوراً عند ضغطه «تأكيد عملية الشراء» '
+                  'أو خلال دقائق تلقائياً — دون مسح بيانات.',
+                  style: TextStyle(fontSize: 12, height: 1.6),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
+              onPressed: () => copyText(context, 'كود الترخيص', r.licenseKey),
+              child: const Text('نسخ الترخيص'),
+            ),
+            TextButton(
               onPressed: () => copyText(context, 'معرف المساحة', r.workspaceId),
-              child: const Text('نسخ المعرف'),
+              child: const Text('نسخ المساحة'),
             ),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx), child: const Text('تم')),
@@ -435,6 +573,10 @@ class _ActivationScreenState extends State<ActivationScreen> {
       );
       if (!mounted) return;
       _id.clear();
+      _storeName.clear();
+      _clientName.clear();
+      _phone.clear();
+      _licenseKey.clear();
     } catch (e) {
       _snack('$e', error: true);
     } finally {
@@ -454,7 +596,8 @@ class _ActivationScreenState extends State<ActivationScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      backgroundColor: error ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
+      backgroundColor:
+          error ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
     ));
   }
 
@@ -476,22 +619,97 @@ class _ActivationScreenState extends State<ActivationScreen> {
             ),
           ),
         const SizedBox(height: 4),
-        const Text('1️⃣ معرف العميل',
+        const Text('1️⃣ هوية العميل والمنشأة',
             style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         TextField(
           controller: _id,
           textDirection: TextDirection.ltr,
+          onChanged: (_) {
+            if (_id.text.isNotEmpty && _licenseKey.text.isEmpty) {
+              _licenseKey.text = generateLicenseKey(_id.text);
+            }
+          },
           decoration: InputDecoration(
             labelText: 'معرف الجهاز / بصمة التفعيل / معرف مساحة العمل',
             hintText: 'ألصق ما وصلك في رسالة واتساب من العميل',
             prefixIcon: const Icon(Icons.fingerprint),
-            suffixIcon: IconButton(
-              tooltip: 'مسح',
-              icon: const Icon(Icons.close, size: 18),
-              onPressed: () => _id.clear(),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'جلب بيانات العميل المسجلة',
+                  icon: _lookingUp
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_outlined, size: 20),
+                  onPressed: _lookingUp ? null : _lookupClientData,
+                ),
+                IconButton(
+                  tooltip: 'مسح',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () => _id.clear(),
+                ),
+              ],
             ),
           ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _storeName,
+                decoration: const InputDecoration(
+                  labelText: 'اسم المنشأة / المحل',
+                  hintText: 'مثال: مركز الأمل التجاري',
+                  prefixIcon: Icon(Icons.storefront_outlined),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _clientName,
+                decoration: const InputDecoration(
+                  labelText: 'اسم العميل / المسؤول',
+                  hintText: 'مثال: أحمد علي',
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'رقم الهاتف / الواتساب',
+                  hintText: 'مثال: 771234567',
+                  prefixIcon: Icon(Icons.phone_outlined),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _licenseKey,
+                textDirection: TextDirection.ltr,
+                decoration: const InputDecoration(
+                  labelText: 'كود الترخيص',
+                  hintText: 'NX-XXXX-XXXX',
+                  prefixIcon: Icon(Icons.key_outlined),
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 18),
         const Text('2️⃣ نوع الخطة',
@@ -660,11 +878,15 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
     if (d == null || !mounted) return;
     try {
       final r = await Rtdb.instance.activate(
-        rawInput: s.workspaceId,
+        rawInput: s.workspaceId.isNotEmpty ? s.workspaceId : s.deviceId,
         planType: s.planType,
         duration: d,
         maxDevices: s.maxDevices,
         extend: true, // يبني فوق المتبقي الحالي.
+        clientName: s.clientName,
+        storeName: s.storeName,
+        phone: s.phone,
+        licenseKey: s.licenseKey,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -703,15 +925,34 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
           }
           final all = snap.data ?? const [];
           final q = _search.text.trim().toLowerCase();
+          final qPhone = q.replaceAll(RegExp(r'[\s\-\(\)\+]'), '');
+
+          // توسيع نطاق البحث: اسم المنشأة + اسم المستخدم + رقم الهاتف + Device ID + كود الترخيص
           final list = q.isEmpty
               ? all
-              : all
-                  .where((s) =>
-                      s.workspaceId.toLowerCase().contains(q) ||
-                      s.deviceRef.toLowerCase().contains(q))
-                  .toList();
-          final nowMs =
-              _serverNow > 0 ? _serverNow : DateTime.now().millisecondsSinceEpoch;
+              : all.where((s) {
+                  final matchStore = s.storeName.toLowerCase().contains(q);
+                  final matchUser = s.clientName.toLowerCase().contains(q);
+                  final cleanSPhone =
+                      s.phone.replaceAll(RegExp(r'[\s\-\(\)\+]'), '');
+                  final matchPhone =
+                      qPhone.isNotEmpty && cleanSPhone.contains(qPhone);
+                  final matchDevice = s.deviceId.toLowerCase().contains(q) ||
+                      s.deviceRef.toLowerCase().contains(q);
+                  final matchKey = s.licenseKey.toLowerCase().contains(q);
+                  final matchWs = s.workspaceId.toLowerCase().contains(q);
+
+                  return matchStore ||
+                      matchUser ||
+                      matchPhone ||
+                      matchDevice ||
+                      matchKey ||
+                      matchWs;
+                }).toList();
+
+          final nowMs = _serverNow > 0
+              ? _serverNow
+              : DateTime.now().millisecondsSinceEpoch;
           return Column(
             children: [
               Padding(
@@ -719,7 +960,9 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
                 child: TextField(
                   controller: _search,
                   decoration: InputDecoration(
-                    labelText: 'بحث بالمعرف أو الجهاز',
+                    labelText:
+                        'بحث بالمنشأة، العميل، الهاتف، المعرف، أو كود الترخيص',
+                    hintText: 'ابحث باسم المتجر، المسؤول، رقم الهاتف...',
                     prefixIcon: const Icon(Icons.search, size: 18),
                     suffixIcon: _search.text.isEmpty
                         ? null
@@ -764,107 +1007,346 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: list.length,
-      separatorBuilder: (_, i) => const SizedBox(height: 8),
+      separatorBuilder: (_, i) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final s = list[i];
-        final lifetime = s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch;
-        final expired = !lifetime && s.expiresAtMs <= nowMs;
-        final color = expired
-            ? const Color(0xFFDC2626)
-            : (lifetime ? const Color(0xFF7C3AED) : const Color(0xFF16A34A));
-        return Card(
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(color: color.withValues(alpha: .3)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            child: Column(
+        return SubscriberCard(
+          entry: s,
+          nowMs: nowMs,
+          onExtend: () => _extend(s),
+        );
+      },
+    );
+  }
+}
+
+/// بطاقة المشترك في لوحة إدارة التراخيص.
+class SubscriberCard extends StatelessWidget {
+  final SubscriberEntry entry;
+  final VoidCallback onExtend;
+  final int? nowMs;
+
+  const SubscriberCard({
+    super.key,
+    required this.entry,
+    required this.onExtend,
+    this.nowMs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final s = entry;
+    final currentMs = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    final lifetime = s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch;
+    final expired = !lifetime && s.expiresAtMs <= currentMs;
+    final color = expired
+        ? const Color(0xFFDC2626)
+        : (lifetime ? const Color(0xFF7C3AED) : const Color(0xFF16A34A));
+
+    final statusText = expired
+        ? 'منتهي'
+        : (lifetime
+            ? 'دائم ∞'
+            : (s.status == 'trial' ? 'تجريبي' : 'فعّال'));
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: color.withValues(alpha: .35), width: 1.2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ===== الترويسة العلوية للبطاقة =====
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Icon(
-                      s.planType == 'enterprise' ? Icons.business : Icons.person,
-                      size: 18,
-                      color: color),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      s.workspaceId,
-                      textDirection: TextDirection.ltr,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w800, fontSize: 13),
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  IconButton(
-                    tooltip: 'نسخ معرف المساحة',
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.copy_all_outlined, size: 16),
-                    onPressed: () =>
-                        copyText(context, 'المعرف', s.workspaceId),
-                  ),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      expired
-                          ? 'منتهٍ'
-                          : (lifetime ? 'دائم ∞' : 'فعّال'),
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: color),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 6),
-                Text(
-                  '${s.planType == 'enterprise' ? '🏢 مؤسسة — ${s.maxDevices} أجهزة' : '👤 فردي'}'
-                  '   •   ينتهي: ${fmtDate(s.expiresAtMs, lifetime: lifetime)}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  child: Icon(Icons.storefront_rounded,
+                      size: 24, color: color),
                 ),
-                if (s.deviceRef.isNotEmpty && s.deviceRef != s.workspaceId)
-                  Row(
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text('الجهاز: ${s.deviceRef}',
-                            textDirection: TextDirection.ltr,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 11, color: Colors.grey)),
+                      // اسم المنشأة بخط عريض وواضح بحجم بارز بجانب أيقونة المتجر
+                      Text(
+                        s.storeName.isNotEmpty
+                            ? s.storeName
+                            : (s.workspaceId.isNotEmpty
+                                ? s.workspaceId
+                                : 'منشأة غير مسمّاة'),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      IconButton(
-                        tooltip: 'نسخ معرف الجهاز',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.copy, size: 14),
-                        onPressed: () =>
-                            copyText(context, 'معرف الجهاز', s.deviceRef),
+                      const SizedBox(height: 3),
+                      // اسم المسؤول ورقم الهاتف مباشرة تحته
+                      Row(
+                        children: [
+                          const Icon(Icons.person_outline,
+                              size: 14, color: Colors.grey),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              s.clientName.isNotEmpty
+                                  ? s.clientName
+                                  : 'مسؤول غير محدد',
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (s.phone.isNotEmpty) ...[
+                            const Text('  •  ',
+                                style: TextStyle(color: Colors.grey)),
+                            Directionality(
+                              textDirection: TextDirection.ltr,
+                              child: Text(
+                                s.phone,
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF2563EB),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                        visualDensity: VisualDensity.compact),
-                    onPressed: () => _extend(s),
-                    icon: const Icon(Icons.more_time, size: 16),
-                    label: const Text('تمديد بنقرة',
-                        style: TextStyle(fontSize: 12)),
+                ),
+                // شارة حالة الاشتراك
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .14),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: color.withValues(alpha: .3)),
+                  ),
+                  child: Text(
+                    statusText,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
                   ),
                 ),
               ],
             ),
-          ),
-        );
-      },
+
+            // أزرار التواصل السريع بجانب رقم الهاتف (اتصال سريع + واتساب بنقرة)
+            if (s.phone.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.phone_in_talk,
+                          size: 14, color: Color(0xFF2563EB)),
+                      label: const Text('اتصال سريع',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF2563EB))),
+                      backgroundColor:
+                          const Color(0xFF2563EB).withValues(alpha: .08),
+                      side: BorderSide(
+                          color: const Color(0xFF2563EB)
+                              .withValues(alpha: .2)),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => callPhone(context, s.phone),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.chat_bubble_outline,
+                          size: 14, color: Color(0xFF16A34A)),
+                      label: const Text('واتساب بنقرة',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF16A34A))),
+                      backgroundColor:
+                          const Color(0xFF16A34A).withValues(alpha: .08),
+                      side: BorderSide(
+                          color: const Color(0xFF16A34A)
+                              .withValues(alpha: .2)),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => openWhatsApp(
+                        context,
+                        s.phone,
+                        msg:
+                            'مرحباً ${s.clientName.isNotEmpty ? s.clientName : ''}، بخصوص اشتراكك في تطبيق مدير الحسابات Nexora',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+
+            // كود الترخيص مع زر النسخ المباشر
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: .06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.key, size: 15, color: Color(0xFF7C3AED)),
+                  const SizedBox(width: 6),
+                  const Text('كود الترخيص: ',
+                      style: TextStyle(
+                          fontSize: 11.5, fontWeight: FontWeight.w700)),
+                  Expanded(
+                    child: Text(
+                      s.licenseKey,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'monospace',
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'نسخ كود الترخيص',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 28, minHeight: 28),
+                    icon: const Icon(Icons.copy, size: 14),
+                    onPressed: () =>
+                        copyText(context, 'كود الترخيص', s.licenseKey),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 5),
+
+            // معرف الجهاز مع زر النسخ المباشر
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: .06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.devices, size: 15, color: Colors.grey),
+                  const SizedBox(width: 6),
+                  const Text('معرف الجهاز: ',
+                      style: TextStyle(
+                          fontSize: 11.5, fontWeight: FontWeight.w700)),
+                  Expanded(
+                    child: Text(
+                      s.deviceId.isNotEmpty ? s.deviceId : s.deviceRef,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(
+                          fontSize: 11.5, color: Colors.black87),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'نسخ معرف الجهاز',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 28, minHeight: 28),
+                    icon: const Icon(Icons.copy, size: 14),
+                    onPressed: () => copyText(
+                        context,
+                        'معرف الجهاز',
+                        s.deviceId.isNotEmpty ? s.deviceId : s.deviceRef),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            // حالة الاشتراك وتاريخ الانتهاء وعدد الأجهزة المصرحة
+            Row(
+              children: [
+                Icon(
+                  s.planType == 'enterprise'
+                      ? Icons.business
+                      : Icons.person,
+                  size: 15,
+                  color: Colors.grey.shade700,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  s.planType == 'enterprise'
+                      ? 'باقة مؤسسة (${s.maxDevices} أجهزة مصرحة)'
+                      : 'باقة فردية (جهاز واحد مصرح)',
+                  style: const TextStyle(
+                      fontSize: 11.5, fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  'ينتهي: ${fmtDate(s.expiryDate, lifetime: lifetime)}',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color:
+                        expired ? const Color(0xFFDC2626) : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // زر تمديد بنقرة
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: onExtend,
+                icon: const Icon(Icons.more_time, size: 16),
+                label: const Text('تمديد بنقرة',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

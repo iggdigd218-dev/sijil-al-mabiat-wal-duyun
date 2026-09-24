@@ -3,10 +3,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/cloud_config.dart';
+import '../core/license_model.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -741,16 +743,13 @@ Future<void> showTrialExpiredSheet(BuildContext context,
               backgroundColor: const Color(0xFF16A34A),
               padding: const EdgeInsets.symmetric(vertical: 13),
             ),
-            onPressed: () async {
-              final msg = expired
-                  ? 'مرحباً، انتهت فترتي التجريبية في تطبيق مدير الحسابات '
-                      'وأرغب بتفعيل الاشتراك.'
-                  : 'مرحباً، أستخدم تطبيق مدير الحسابات وأرغب بترقية/تجديد '
-                      'اشتراكي.';
-              await launchActivationWhatsApp(msg);
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const PurchaseScreen()));
             },
-            icon: const Icon(Icons.chat),
-            label: const Text('تواصل مع المدير للتفعيل (واتساب)',
+            icon: const Icon(Icons.verified_outlined),
+            label: const Text('طلب الترخيص وتفعيل الحساب',
                 style: TextStyle(fontWeight: FontWeight.w700)),
           ),
           const SizedBox(height: 8),
@@ -866,37 +865,163 @@ class _FeatureRow extends StatelessWidget {
       );
 }
 
-/// شاشة «شراء التطبيق»: مزايا الاشتراك + [إرسال كود التفعيل] عبر واتساب
-/// برسالة مجهزة تحمل معرف الجهاز + [تأكيد عملية الشراء] بفحص التفعيل
-/// السحابي فوراً — الترقية تسري دون مسح بيانات أو إعادة تثبيت.
+/// شاشة «طلب الترخيص وتفعيل الحساب»: جمع بيانات المنشأة والمشترك (إلزامية)
+/// + [إرسال طلب الترخيص] عبر واتساب برسالة مجهزة مع معرف الجهاز وكود الترخيص
+/// + [تأكيد عملية الشراء] بفحص التفعيل السحابي فوراً دون مسح بيانات.
 class PurchaseScreen extends ConsumerStatefulWidget {
   /// اسم الميزة التي قادت المستخدم هنا (للعنوان التسويقي) — اختياري.
   final String? lockedFeature;
-  const PurchaseScreen({super.key, this.lockedFeature});
+  final String? initialDeviceId;
+  final String? initialLicenseKey;
+
+  const PurchaseScreen({
+    super.key,
+    this.lockedFeature,
+    this.initialDeviceId,
+    this.initialLicenseKey,
+  });
 
   @override
   ConsumerState<PurchaseScreen> createState() => _PurchaseScreenState();
 }
 
 class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
-  bool _verifying = false;
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _clientNameCtrl;
+  late final TextEditingController _storeNameCtrl;
+  late final TextEditingController _phoneCtrl;
 
-  Future<void> _sendActivationRequest() async {
-    Sfx.click();
+  String _deviceId = '';
+  String _licenseKey = '';
+  bool _verifying = false;
+  bool _submitted = false;
+  bool _loadingDev = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = ref.read(currentUserProvider).valueOrNull;
+    final devName = ref.read(ownDeviceNameProvider).valueOrNull?.trim() ?? '';
+    final st = ref.read(settingsProvider).valueOrNull ?? const {};
+
+    _clientNameCtrl = TextEditingController(
+      text: devName.isNotEmpty
+          ? devName
+          : (user?.name ?? (st['account.name'] ?? '')).trim(),
+    );
+    _storeNameCtrl = TextEditingController(
+      text: (st['businessName'] ?? '').trim(),
+    );
+    _phoneCtrl = TextEditingController(
+      text: (st['phone'] ?? st['whatsapp'] ?? '').trim(),
+    );
+
+    if (widget.initialDeviceId != null && widget.initialDeviceId!.isNotEmpty) {
+      _deviceId = widget.initialDeviceId!;
+      _licenseKey = widget.initialLicenseKey ?? generateLicenseKey(_deviceId);
+      _loadingDev = false;
+    } else {
+      _initIds();
+    }
+  }
+
+  Future<void> _initIds() async {
     try {
       final repo = ref.read(repoProvider);
-      final devId = await ensureDeviceId(repo);
+      final id = await ensureDeviceId(repo);
+      final key = generateLicenseKey(id);
+      if (mounted) {
+        setState(() {
+          _deviceId = id;
+          _licenseKey = key;
+          _loadingDev = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingDev = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _clientNameCtrl.dispose();
+    _storeNameCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
+  }
+
+  /// إرسال طلب الترخيص: التحقق الصارم من الحقول الإجبارية (الاسم، المنشأة، الهاتف)
+  /// ومنع المتابعة أو إرسال المعرف بدون ملئها، مع إظهار أخطاء واضحة باللون الأحمر.
+  Future<void> _sendActivationRequest() async {
+    setState(() => _submitted = true);
+    Sfx.click();
+
+    if (!_formKey.currentState!.validate()) {
+      Sfx.warning();
+      showSnack(
+        context,
+        'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة',
+        error: true,
+      );
+      return;
+    }
+
+    final clientName = _clientNameCtrl.text.trim();
+    final storeName = _storeNameCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+
+    try {
+      final repo = ref.read(repoProvider);
+      // حفظ بيانات المشترك محلياً في الإعدادات
+      await repo.setSetting('businessName', storeName);
+      await repo.setSetting('phone', phone);
+      await repo.setSetting('whatsapp', phone);
+      if (clientName.isNotEmpty) {
+        await repo.renameSelfDevice(clientName);
+      }
+      bump(ref);
+
+      final devId =
+          _deviceId.isNotEmpty ? _deviceId : await ensureDeviceId(repo);
+      final licenseKey = _licenseKey.isNotEmpty
+          ? _licenseKey
+          : generateLicenseKey(devId);
       final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
       final fp = SubscriptionGuard.fingerprintHash(raw);
-      final ok = await launchActivationWhatsApp(
-          'مرحباً، أرغب بشراء اشتراك تطبيق مدير الحسابات.\n'
-          'معرف الجهاز: $devId\n'
-          'بصمة التفعيل: $fp');
+
+      // تسجيل الطلب سحابياً إن وُجد اتصال
+      try {
+        final st = await repo.settings();
+        final url = effectiveBackendUrl(st['cloudBackendUrl']);
+        final ws = await SubscriptionGuard.workspaceIdFor(repo);
+        if (url.isNotEmpty && ws.isNotEmpty) {
+          await SubscriptionGuard.registerLicenseRequest(
+            repo,
+            backendUrl: url,
+            workspaceId: ws,
+            clientName: clientName,
+            storeName: storeName,
+            phone: phone,
+            deviceId: devId,
+            licenseKey: licenseKey,
+          );
+        }
+      } catch (_) {}
+
+      final msg =
+          'مرحباً، أود طلب ترخيص وتفعيل اشتراك تطبيق مدير الحسابات (Nexora):\n'
+          '🏢 اسم المنشأة: $storeName\n'
+          '👤 اسم العميل / المسؤول: $clientName\n'
+          '📱 رقم الهاتف: $phone\n'
+          '🔑 معرف الجهاز (Device ID): $devId\n'
+          '⚡ كود الترخيص: $licenseKey\n'
+          'بصمة التفعيل: $fp';
+
+      final ok = await launchActivationWhatsApp(msg);
       if (!ok) throw Exception('wa-launch-failed');
     } catch (_) {
       if (mounted) {
-        showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.',
-            error: true);
+        showSnack(context, 'تعذّر فتح واتساب — تأكد من تثبيته.', error: true);
       }
     }
   }
@@ -973,102 +1098,350 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('شراء التطبيق')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
-                begin: Alignment.topRight,
-                end: Alignment.bottomLeft,
+      appBar: AppBar(title: const Text('طلب الترخيص وتفعيل الحساب')),
+      body: Form(
+        key: _formKey,
+        autovalidateMode: _submitted
+            ? AutovalidateMode.onUserInteraction
+            : AutovalidateMode.disabled,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                  begin: Alignment.topRight,
+                  end: Alignment.bottomLeft,
+                ),
+                borderRadius: BorderRadius.circular(18),
               ),
-              borderRadius: BorderRadius.circular(18),
+              child: Column(
+                children: [
+                  const Icon(Icons.workspace_premium,
+                      color: Colors.white, size: 44),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.lockedFeature == null
+                        ? 'طلب ترخيص وتفعيل الاشتراك'
+                        : '«${widget.lockedFeature}» ميزة مدفوعة',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w800),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'أدخل بيانات المنشأة والمسؤول لإصدار رخصة التشغيل وتفعيل كافة القدرات فوراً.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
-            child: Column(
-              children: [
-                const Icon(Icons.workspace_premium,
-                    color: Colors.white, size: 44),
-                const SizedBox(height: 8),
-                Text(
-                  widget.lockedFeature == null
-                      ? 'افتح كل المزايا — اشتراك واحد'
-                      : '«${widget.lockedFeature}» ميزة مدفوعة',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800),
-                  textAlign: TextAlign.center,
+            const SizedBox(height: 16),
+
+            // كرت البيانات الإجبارية
+            Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(
+                  color: AppColors.primary.withValues(alpha: .25),
+                  width: 1.2,
                 ),
-                const SizedBox(height: 4),
-                const Text(
-                  'فعّل اشتراكك وافتح كل القدرات فوراً — بياناتك تبقى كما هي.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                  textAlign: TextAlign.center,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: .12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.badge_outlined,
+                              size: 18, color: AppColors.primary),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'بيانات المشترك والمنشأة (إلزامية)',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w800),
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDC2626)
+                                .withValues(alpha: .10),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Text(
+                            'مطلوب *',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFDC2626),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'يرجى ملء الحقول التالية لمتابعة طلب الترخيص وإرسال معرف الجهاز:',
+                      style: TextStyle(
+                          fontSize: 11.5, color: AppColors.text2Of(context)),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // 1. اسم العميل / المسؤول
+                    TextFormField(
+                      controller: _clientNameCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'اسم العميل / المسؤول *',
+                        hintText: 'مثال: محمد عبدالله',
+                        prefixIcon: const Icon(Icons.person_outline, size: 20),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.field),
+                        ),
+                        isDense: true,
+                      ),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 2. اسم المنشأة / المحل
+                    TextFormField(
+                      controller: _storeNameCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'اسم المنشأة / المحل *',
+                        hintText: 'مثال: سوبرماركت النور',
+                        prefixIcon:
+                            const Icon(Icons.storefront_outlined, size: 20),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.field),
+                        ),
+                        isDense: true,
+                      ),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 3. رقم الهاتف / الواتساب
+                    TextFormField(
+                      controller: _phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: InputDecoration(
+                        labelText: 'رقم الهاتف / الواتساب *',
+                        hintText: 'مثال: 771234567 أو +967771234567',
+                        prefixIcon: const Icon(Icons.phone_outlined, size: 20),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.field),
+                        ),
+                        isDense: true,
+                      ),
+                      validator: (val) {
+                        final text = val?.trim() ?? '';
+                        if (text.isEmpty) {
+                          return 'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة';
+                        }
+                        final digits =
+                            text.replaceAll(RegExp(r'[^0-9]'), '');
+                        if (digits.length < 7 || digits.length > 15) {
+                          return 'يرجى إدخال رقم هاتف صحيح للمتابعة';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          const _FeatureRow(Icons.category_outlined, 'التصنيفات',
-              'إنشاء واستخدام تصنيفات الحسابات والأصناف بلا حدود.'),
-          const _FeatureRow(Icons.notifications_active_outlined,
-              'الإشعارات والرسائل التلقائية',
-              'رسائل الرصيد للعملاء وتنبيهات تلقائية ذكية.'),
-          const _FeatureRow(Icons.cloud_upload_outlined,
-              'النسخ الاحتياطي السحابي',
-              'نسخة يومية آمنة ومزامنة بياناتك عبر السحابة.'),
-          const _FeatureRow(Icons.settings_backup_restore_outlined,
-              'نقاط الاسترجاع',
-              'استرجاع بياناتك لأي نقطة محددة أو دمج قواعد البيانات.'),
-          const _FeatureRow(Icons.manage_search_outlined,
-              'البحث الشامل المتقدم',
-              'بحث فوري عميق في الحسابات والعمليات والتصنيفات.'),
-          const _FeatureRow(Icons.devices_other_outlined,
-              'تعدد الأجهزة (باقة المؤسسات)',
-              'فريق كامل بأدوار وصلاحيات ومزامنة لحظية وسجل تدقيق.'),
-          const SizedBox(height: 18),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF16A34A),
-              padding: const EdgeInsets.symmetric(vertical: 14),
+            const SizedBox(height: 12),
+
+            // بطاقة معرف الجهاز وكود الترخيص
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.bgOf(context),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.borderOf(context),
+                  width: 1,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.devices,
+                          size: 16, color: AppColors.primary),
+                      const SizedBox(width: 6),
+                      const Text('معرف الجهاز (Device ID):',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      if (_deviceId.isNotEmpty)
+                        IconButton(
+                          tooltip: 'نسخ معرف الجهاز',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 26, minHeight: 26),
+                          icon: const Icon(Icons.copy, size: 14),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: _deviceId));
+                            showSnack(context, 'نُسخ معرف الجهاز ✓');
+                          },
+                        ),
+                    ],
+                  ),
+                  Text(
+                    _loadingDev
+                        ? 'جارٍ قراءة معرف الجهاز…'
+                        : (_deviceId.isNotEmpty
+                            ? _deviceId
+                            : 'تعذّر تحديد المعرف'),
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.key,
+                          size: 16, color: Color(0xFF7C3AED)),
+                      const SizedBox(width: 6),
+                      const Text('كود الترخيص:',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      if (_licenseKey.isNotEmpty)
+                        IconButton(
+                          tooltip: 'نسخ كود الترخيص',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 26, minHeight: 26),
+                          icon: const Icon(Icons.copy, size: 14),
+                          onPressed: () {
+                            Clipboard.setData(
+                                ClipboardData(text: _licenseKey));
+                            showSnack(context, 'نُسخ كود الترخيص ✓');
+                          },
+                        ),
+                    ],
+                  ),
+                  Text(
+                    _licenseKey.isNotEmpty ? _licenseKey : 'NX-PENDING',
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
             ),
-            onPressed: _sendActivationRequest,
-            icon: const Icon(Icons.send_rounded),
-            label: const Text('إرسال كود التفعيل (واتساب)',
-                style: TextStyle(fontWeight: FontWeight.w800)),
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
+            const SizedBox(height: 16),
+
+            // زر إرسال طلب الترخيص ومعرف الجهاز (واتساب)
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF16A34A),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.button),
+                ),
+              ),
+              onPressed: _sendActivationRequest,
+              icon: const Icon(Icons.send_rounded),
+              label: const Text('إرسال طلب الترخيص ومعرف الجهاز (واتساب)',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5)),
             ),
-            onPressed: _verifying ? null : _confirmPurchase,
-            icon: _verifying
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2.2))
-                : const Icon(Icons.verified_outlined),
-            label: Text(
-                _verifying
-                    ? 'جارٍ التحقق من التفعيل…'
-                    : 'اضغط هنا لتأكيد عملية الشراء',
-                style: const TextStyle(fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(height: 8),
-          Center(
-            child: Text(
-              'بعد الدفع يُفعَّل اشتراكك سحابياً خلال دقائق — اضغط زر '
-              'التأكيد ليسري فوراً.',
-              style:
-                  TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
-              textAlign: TextAlign.center,
+            const SizedBox(height: 10),
+
+            // زر تأكيد عملية الشراء والتحقق من التفعيل
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.button),
+                ),
+              ),
+              onPressed: _verifying ? null : _confirmPurchase,
+              icon: _verifying
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2.2))
+                  : const Icon(Icons.verified_outlined),
+              label: Text(
+                  _verifying
+                      ? 'جارٍ التحقق من التفعيل…'
+                      : 'اضغط هنا لتأكيد عملية الشراء والتحقق من التفعيل',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                'بعد إرسال الطلب واعتماده من المدير يُفعَّل اشتراكك سحابياً — '
+                'اضغط زر التأكيد ليسري فوراً دون مسح بيانات.',
+                style:
+                    TextStyle(fontSize: 11, color: AppColors.text3Of(context)),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Divider(height: 1),
+            const SizedBox(height: 16),
+
+            const Text('✨ المزايا المفتوحة بالاشتراك:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            const _FeatureRow(Icons.category_outlined, 'التصنيفات',
+                'إنشاء واستخدام تصنيفات الحسابات والأصناف بلا حدود.'),
+            const _FeatureRow(Icons.notifications_active_outlined,
+                'الإشعارات والرسائل التلقائية',
+                'رسائل الرصيد للعملاء وتنبيهات تلقائية ذكية.'),
+            const _FeatureRow(Icons.cloud_upload_outlined,
+                'النسخ الاحتياطي السحابي',
+                'نسخة يومية آمنة ومزامنة بياناتك عبر السحابة.'),
+            const _FeatureRow(Icons.settings_backup_restore_outlined,
+                'نقاط الاسترجاع',
+                'استرجاع بياناتك لأي نقطة محددة أو دمج قواعد البيانات.'),
+            const _FeatureRow(Icons.manage_search_outlined,
+                'البحث الشامل المتقدم',
+                'بحث فوري عميق في الحسابات والعمليات والتصنيفات.'),
+            const _FeatureRow(Icons.devices_other_outlined,
+                'تعدد الأجهزة (باقة المؤسسات)',
+                'فريق كامل بأدوار وصلاحيات ومزامنة لحظية وسجل تدقيق.'),
+          ],
+        ),
       ),
     );
   }

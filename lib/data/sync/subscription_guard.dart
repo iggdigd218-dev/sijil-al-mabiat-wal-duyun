@@ -18,6 +18,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import '../repository.dart';
+import '../../core/license_model.dart';
 import 'device_id.dart';
 
 /// مدة التجربة الحالية: شهر كامل (30 يوماً) — تُضبط
@@ -385,6 +386,13 @@ class SubscriptionGuard {
     final maxDevices =
         planType == 'enterprise' ? kDefaultEnterpriseSeats : 1;
 
+    final st = await repo.settings();
+    final clientName =
+        (st['sync.deviceName'] ?? st['account.name'] ?? '').trim();
+    final storeName = (st['businessName'] ?? '').trim();
+    final phone = (st['phone'] ?? st['whatsapp'] ?? '').trim();
+    final licenseKey = generateLicenseKey(devId);
+
     // (1) عقدة المساحة موجودة مسبقاً؟ لا إعادة تفعيل أبداً — نعيد قراءتها.
     //     (يشمل المستخدمين القدامى الذين هُيّئت عقدتهم في إقلاع سابق.)
     final existing = await _readJson(wsSub);
@@ -399,7 +407,17 @@ class SubscriptionGuard {
       final priorCreated = _asInt(existing['created_at']);
       if (priorCreated > 0) {
         final repaired = {
+          'clientName': clientName,
+          'storeName': storeName,
+          'phone': phone,
+          'deviceId': devId,
+          'licenseKey': licenseKey,
+          'expiryDate': priorCreated + kTrialDuration.inMilliseconds,
           'status': '${existing['status'] ?? 'trial'}',
+          'client_name': clientName,
+          'store_name': storeName,
+          'device_id': devId,
+          'license_key': licenseKey,
           'created_at': priorCreated,
           'expires_at': priorCreated + kTrialDuration.inMilliseconds,
           'is_active': existing['is_active'] != false,
@@ -431,6 +449,18 @@ class SubscriptionGuard {
     if (prior != null && (prior['expires_at'] is num) &&
         (prior['expires_at'] as num) > 0) {
       final resumed = {
+        'clientName': clientName.isNotEmpty
+            ? clientName
+            : '${prior['clientName'] ?? prior['client_name'] ?? ''}',
+        'storeName': storeName.isNotEmpty
+            ? storeName
+            : '${prior['storeName'] ?? prior['store_name'] ?? ''}',
+        'phone': phone.isNotEmpty
+            ? phone
+            : '${prior['phone'] ?? prior['whatsapp'] ?? ''}',
+        'deviceId': devId,
+        'licenseKey': licenseKey,
+        'expiryDate': prior['expires_at'],
         'status': '${prior['status'] ?? 'trial'}',
         'created_at': prior['created_at'],
         'expires_at': prior['expires_at'],
@@ -456,8 +486,18 @@ class SubscriptionGuard {
     // (3) تفعيل جديد: ختم خادم ثم تثبيت expires_at رقمياً من قيمة الخادم
     //     المكتوبة فعلاً (write-back) — الحساب خادمي بالكامل.
     await _putJson(wsSub, {
-      'plan_type': planType,
+      'clientName': clientName,
+      'storeName': storeName,
+      'phone': phone,
+      'deviceId': devId,
+      'licenseKey': licenseKey,
+      'expiryDate': 0,
       'status': 'trial',
+      'client_name': clientName,
+      'store_name': storeName,
+      'device_id': devId,
+      'license_key': licenseKey,
+      'plan_type': planType,
       'max_devices': maxDevices,
       'created_at': {'.sv': 'timestamp'},
       'expires_at': 0,
@@ -469,8 +509,18 @@ class SubscriptionGuard {
     final createdMs = _asInt(written['created_at']);
     final expiresMs = createdMs + kTrialDuration.inMilliseconds;
     final finalRec = {
-      'plan_type': planType,
+      'clientName': clientName,
+      'storeName': storeName,
+      'phone': phone,
+      'deviceId': devId,
+      'licenseKey': licenseKey,
+      'expiryDate': expiresMs,
       'status': 'trial',
+      'client_name': clientName,
+      'store_name': storeName,
+      'device_id': devId,
+      'license_key': licenseKey,
+      'plan_type': planType,
       'max_devices': maxDevices,
       'created_at': createdMs,
       'expires_at': expiresMs,
@@ -488,6 +538,56 @@ class SubscriptionGuard {
       'device_id': devId,
     });
     return _stateFrom(finalRec, createdMs);
+  }
+
+  /// تسجيل طلب تفعيل / ترخيص جديد مع إرفاق كافة بيانات المنشأة والمسؤول.
+  static Future<void> registerLicenseRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String workspaceId,
+    required String clientName,
+    required String storeName,
+    required String phone,
+    required String deviceId,
+    required String licenseKey,
+  }) async {
+    final devId = deviceId.isNotEmpty ? deviceId : await ensureDeviceId(repo);
+    final key = licenseKey.isNotEmpty ? licenseKey : generateLicenseKey(devId);
+    final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+    final hwFp = fingerprintHash(raw);
+    final trialIdx = '${_trialsRoot(backendUrl)}/$hwFp.json';
+    final reqPath = '${_wsRoot(backendUrl, workspaceId)}/license_request.json';
+
+    final data = {
+      'clientName': clientName,
+      'storeName': storeName,
+      'phone': phone,
+      'deviceId': devId,
+      'licenseKey': key,
+      'requested_at': {'.sv': 'timestamp'},
+      'workspace_id': workspaceId,
+      'client_name': clientName,
+      'store_name': storeName,
+      'device_id': devId,
+      'license_key': key,
+    };
+    try {
+      await _putJson(reqPath, data);
+    } catch (_) {}
+    try {
+      await _putJson(trialIdx, {
+        'clientName': clientName,
+        'storeName': storeName,
+        'phone': phone,
+        'deviceId': devId,
+        'licenseKey': key,
+        'client_name': clientName,
+        'store_name': storeName,
+        'device_id': devId,
+        'license_key': key,
+        'workspace_id': workspaceId,
+      });
+    } catch (_) {}
   }
 
   /// الفحص المرجعي: يقرأ العقدة ويقارن بوقت الخادم. يحدّث الكاش

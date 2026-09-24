@@ -162,6 +162,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
       await repo.setSetting('account.email', _emailCtrl.text.trim());
       await repo.setSetting('email', _emailCtrl.text.trim());
       await repo.setSetting('phone', _phoneCtrl.text.trim());
+      await repo.setSetting('whatsapp', _phoneCtrl.text.trim());
       await repo.setSetting('businessName', _bizNameCtrl.text.trim());
       await repo.setSetting('businessActivity', _bizActivityCtrl.text.trim());
       await repo.setSetting('address', _addressCtrl.text.trim());

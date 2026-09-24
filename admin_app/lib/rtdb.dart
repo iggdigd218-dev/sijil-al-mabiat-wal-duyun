@@ -5,6 +5,10 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'license_model.dart';
+
+export 'license_model.dart';
+
 /// مدة الخطة المتاحة للاختيار.
 enum PlanDuration {
   month('شهر واحد (30 يوماً)', Duration(days: 30)),
@@ -24,14 +28,34 @@ class ActivationResult {
   final int maxDevices;
   final int expiresAtMs;
   final bool lifetime;
+  final String clientName;
+  final String storeName;
+  final String phone;
+  final String licenseKey;
+  final String deviceId;
+
   const ActivationResult({
     required this.workspaceId,
     required this.planType,
     required this.maxDevices,
     required this.expiresAtMs,
     required this.lifetime,
+    this.clientName = '',
+    this.storeName = '',
+    this.phone = '',
+    this.licenseKey = '',
+    this.deviceId = '',
   });
 }
+
+int _asInt(Object? v, [int dflt = 0]) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v.trim()) ?? dflt;
+  return dflt;
+}
+
+String _asStr(Object? v) => v == null ? '' : '$v'.trim();
 
 /// سجل مشترك للعرض في القائمة.
 class SubscriberEntry {
@@ -42,6 +66,15 @@ class SubscriberEntry {
   final int expiresAtMs;
   final int activatedAtMs;
   final String deviceRef; // المعرف/البصمة التي أُدخلت وقت التفعيل.
+
+  // الحقول الإجبارية الجديدة (Requirement 2 & 3)
+  final String clientName;
+  final String storeName;
+  final String phone;
+  final String _deviceId;
+  final String _licenseKey;
+  final int _expiryDate;
+
   const SubscriberEntry({
     required this.workspaceId,
     required this.planType,
@@ -50,7 +83,64 @@ class SubscriberEntry {
     required this.expiresAtMs,
     required this.activatedAtMs,
     required this.deviceRef,
-  });
+    this.clientName = '',
+    this.storeName = '',
+    this.phone = '',
+    String deviceId = '',
+    String licenseKey = '',
+    int expiryDate = 0,
+  })  : _deviceId = deviceId,
+        _licenseKey = licenseKey,
+        _expiryDate = expiryDate;
+
+  String get deviceId => _deviceId.isNotEmpty ? _deviceId : deviceRef;
+
+  String get licenseKey => _licenseKey.isNotEmpty
+      ? _licenseKey
+      : (deviceRef.isNotEmpty
+          ? 'NX-$deviceRef'
+          : (workspaceId.isNotEmpty ? 'NX-$workspaceId' : 'NX-PENDING'));
+
+  int get expiryDate => _expiryDate > 0 ? _expiryDate : expiresAtMs;
+
+  factory SubscriberEntry.fromSubscriptionMap(String wsId, Map map) {
+    final devId = _asStr(map['deviceId'] ??
+        map['device_id'] ??
+        map['deviceRef'] ??
+        map['device_ref']);
+    final key = _asStr(map['licenseKey'] ?? map['license_key'] ?? map['key']);
+    final exp = _asInt(
+        map['expiryDate'] ?? map['expiry_date'] ?? map['expires_at']);
+    return SubscriberEntry(
+      workspaceId: wsId,
+      planType: _asStr(map['plan_type'] ?? map['planType'] ?? 'individual'),
+      status: _asStr(map['status'] ?? 'trial'),
+      maxDevices: _asInt(map['max_devices'] ?? map['maxDevices'], 1),
+      expiresAtMs: exp,
+      activatedAtMs: _asInt(map['activated_at'] ?? map['activatedAt']),
+      deviceRef: devId,
+      clientName: _asStr(map['clientName'] ?? map['client_name']),
+      storeName: _asStr(map['storeName'] ?? map['store_name']),
+      phone: _asStr(map['phone'] ?? map['whatsapp']),
+      deviceId: devId,
+      licenseKey: key,
+      expiryDate: exp,
+    );
+  }
+
+  LicenseModel toLicenseModel() => LicenseModel(
+        clientName: clientName,
+        storeName: storeName,
+        phone: phone,
+        deviceId: deviceId,
+        licenseKey: licenseKey,
+        expiryDate: expiryDate,
+        status: status,
+        workspaceId: workspaceId,
+        planType: planType,
+        maxDevices: maxDevices,
+        activatedAtMs: activatedAtMs,
+      );
 }
 
 /// الرابط الرسمي الإقليمي لقاعدة النظام — نفس المضمّن في تطبيق المستخدم
@@ -327,6 +417,9 @@ class Rtdb {
     return Exception('$verb $path فشل ($code): $body');
   }
 
+  /// قراءة عقدة من RTDB (متاحة للواجهات وللاستعلام المباشر).
+  Future<dynamic> getJson(String path, [Map<String, String>? q]) => _get(path, q);
+
   Future<dynamic> _get(String path, [Map<String, String>? q]) async {
     var r = await _http
         .get(await _u(path, q))
@@ -492,6 +585,20 @@ class Rtdb {
           'تأكد أن العميل فتح التطبيق مرة واحدة على الأقل بعد التثبيت.');
     }
 
+    // (1-ب) كود ترخيص NX-…
+    if (id.toUpperCase().startsWith('NX-')) {
+      final trials = await _get('trials');
+      if (trials is Map) {
+        for (final v in trials.values) {
+          if (v is! Map) continue;
+          final lk = asStr(v['licenseKey'] ?? v['license_key']).toUpperCase();
+          if (lk == id.toUpperCase() && asStr(v['workspace_id']).isNotEmpty) {
+            return asStr(v['workspace_id']);
+          }
+        }
+      }
+    }
+
     // (2) معرف جهاز DEVICE-… ⇒ بحث متعدد الطبقات + ربط تلقائي:
     //     (أ) فهرس /trials (device_id)، (ب) مسح متوازٍ محدود لسجلات
     //     التفعيل وroster كل مساحة، (ج) الربط التلقائي عند مرشح وحيد.
@@ -615,6 +722,10 @@ class Rtdb {
     required PlanDuration duration,
     required int maxDevices,
     bool extend = false, // تمديد: يضيف المدة فوق expires_at الحالي إن كان أبعد.
+    String clientName = '',
+    String storeName = '',
+    String phone = '',
+    String? licenseKey,
   }) async {
     final plan = planType == 'enterprise' ? 'enterprise' : 'individual';
     final seats = plan == 'enterprise' ? (maxDevices < 2 ? 2 : maxDevices) : 1;
@@ -624,17 +735,66 @@ class Rtdb {
     final enc = Uri.encodeComponent(ws);
 
     int base = now;
+    Map? existingSub;
     if (extend) {
       final cur = await _get('workspaces/$enc/subscription');
       if (cur is Map) {
-        final curExp = asMs(cur['expires_at']);
+        existingSub = cur;
+        final curExp = asMs(cur['expires_at'] ?? cur['expiryDate']);
         if (curExp > now) base = curExp; // التمديد يبني على المتبقي.
       }
+    } else {
+      try {
+        final cur = await _get('workspaces/$enc/subscription');
+        if (cur is Map) existingSub = cur;
+      } catch (_) {}
     }
     final expires = base + duration.span.inMilliseconds;
 
-    await _patch('workspaces/$enc/subscription', {
+    // استخراج أو إبقاء القيم الحالية إذا لم تُمرّر
+    final cName = clientName.trim().isNotEmpty
+        ? clientName.trim()
+        : asStr(existingSub?['clientName'] ??
+            existingSub?['client_name'] ??
+            existingSub?['userName'] ??
+            existingSub?['user_name'] ??
+            existingSub?['owner_name']);
+    final sName = storeName.trim().isNotEmpty
+        ? storeName.trim()
+        : asStr(existingSub?['storeName'] ??
+            existingSub?['store_name'] ??
+            existingSub?['businessName'] ??
+            existingSub?['business_name']);
+    final ph = phone.trim().isNotEmpty
+        ? phone.trim()
+        : asStr(existingSub?['phone'] ?? existingSub?['whatsapp']);
+    final devId = rawInput.trim().toUpperCase().startsWith('DEVICE-')
+        ? rawInput.trim().toUpperCase()
+        : asStr(existingSub?['deviceId'] ??
+            existingSub?['device_id'] ??
+            existingSub?['device_fingerprint']);
+    final key = (licenseKey != null && licenseKey.trim().isNotEmpty)
+        ? licenseKey.trim()
+        : asStr(existingSub?['licenseKey'] ?? existingSub?['license_key'])
+                .isNotEmpty
+            ? asStr(existingSub?['licenseKey'] ?? existingSub?['license_key'])
+            : generateLicenseKey(devId.isNotEmpty ? devId : ws);
+
+    final licenseObj = {
+      // الحقول الإجبارية بنموذج الترخيص (Requirement 2)
+      'clientName': cName,
+      'storeName': sName,
+      'phone': ph,
+      'deviceId': devId,
+      'licenseKey': key,
+      'expiryDate': expires,
       'status': 'active',
+
+      // أسماء التوافق الرجعي
+      'client_name': cName,
+      'store_name': sName,
+      'device_id': devId,
+      'license_key': key,
       'is_active': true,
       'plan_type': plan,
       'max_devices': seats,
@@ -642,6 +802,7 @@ class Rtdb {
       'activated_at': now,
       'updated_at': now,
       'activated_by': 'license_admin',
+      'workspace_id': ws,
       'features': {
         'can_use_categories': true,
         'can_send_notifications': true,
@@ -652,7 +813,12 @@ class Rtdb {
         'role_permissions': true,
         'audit_log': true,
       },
-    });
+    };
+
+    await _patch('workspaces/$enc/subscription', licenseObj);
+    try {
+      await _put('workspaces/$enc/license', licenseObj);
+    } catch (_) {}
 
     // مزامنة فهرس /trials (مصدر العدادات المجمعة): التفعيل يقلب حالة
     // المساحة فيه أيضاً حتى تعكس بطاقة «مشتركون مدفوعون» الحقيقة فوراً.
@@ -661,6 +827,12 @@ class Rtdb {
       final fp = cur is Map ? asStr(cur['device_fingerprint']) : '';
       if (fp.isNotEmpty) {
         await _patch('trials/${Uri.encodeComponent(fp)}', {
+          'clientName': cName,
+          'storeName': sName,
+          'phone': ph,
+          'deviceId': devId,
+          'licenseKey': key,
+          'expiryDate': expires,
           'status': 'active',
           'expires_at': expires,
           'workspace_id': ws,
@@ -674,13 +846,8 @@ class Rtdb {
     // مسموح بقاعدة workspaces القائمة — بلا تعديل يدوي للقواعد.
     try {
       await _put('workspaces/$enc/admin_log/$now', {
-        'workspace_id': ws,
+        ...licenseObj,
         'device_ref': rawInput.trim(),
-        'plan_type': plan,
-        'max_devices': seats,
-        'expires_at': expires,
-        'activated_at': now,
-        'updated_at': now,
         'lifetime': lifetime,
         if (extend) 'extended': true,
       });
@@ -694,6 +861,11 @@ class Rtdb {
       maxDevices: seats,
       expiresAtMs: expires,
       lifetime: lifetime,
+      clientName: cName,
+      storeName: sName,
+      phone: ph,
+      licenseKey: key,
+      deviceId: devId,
     );
   }
 
@@ -713,8 +885,30 @@ class Rtdb {
     final wsKeys =
         keys.keys.map((k) => '$k').take(kMaxSubscriberScan).toList();
 
+    // قراءة فهرس /trials لربط بيانات المتاجر والعملاء
+    Map? trialIdx;
+    try {
+      final t = await _get('trials');
+      if (t is Map) trialIdx = t;
+    } catch (_) {}
+
+    final trialByWs = <String, Map>{};
+    if (trialIdx != null) {
+      for (final v in trialIdx.values) {
+        if (v is Map) {
+          final ws = asStr(v['workspace_id']);
+          if (ws.isNotEmpty && !trialByWs.containsKey(ws)) {
+            trialByWs[ws] = v;
+          }
+        }
+      }
+    }
+
     final rows = await _gather<List<SubscriberEntry>>(
-      [for (final ws in wsKeys) () => _readWorkspaceEntries(ws)],
+      [
+        for (final ws in wsKeys)
+          () => _readWorkspaceEntries(ws, trialFallback: trialByWs[ws])
+      ],
     );
     final out = rows.expand((r) => r).toList();
     out.sort((a, b) => b.activatedAtMs.compareTo(a.activatedAtMs));
@@ -722,7 +916,8 @@ class Rtdb {
   }
 
   /// يقرأ مساحة واحدة: سجلها الإداري (إن وُجد) وإلا حالتها الحية.
-  Future<List<SubscriberEntry>> _readWorkspaceEntries(String ws) async {
+  Future<List<SubscriberEntry>> _readWorkspaceEntries(String ws,
+      {Map? trialFallback}) async {
     final enc = Uri.encodeComponent(ws);
     Map? live;
     try {
@@ -736,16 +931,81 @@ class Rtdb {
         for (final e in logs.entries) {
           final v = e.value;
           if (v is! Map) continue;
+
+          final devId = _pick(
+              live?['deviceId'],
+              v['deviceId'],
+              _pick(
+                  live?['device_id'],
+                  v['device_id'],
+                  _pick(
+                      trialFallback?['deviceId'],
+                      trialFallback?['device_id'],
+                      asStr(v['device_ref']))));
+
+          final lKey = _pick(
+              live?['licenseKey'],
+              v['licenseKey'],
+              _pick(
+                  live?['license_key'],
+                  v['license_key'],
+                  _pick(trialFallback?['licenseKey'],
+                      trialFallback?['license_key'], '')));
+
+          final cName = _pick(
+              live?['clientName'],
+              v['clientName'],
+              _pick(
+                  live?['client_name'],
+                  v['client_name'],
+                  _pick(
+                      live?['userName'],
+                      v['userName'],
+                      _pick(trialFallback?['clientName'],
+                          trialFallback?['client_name'], ''))));
+
+          final sName = _pick(
+              live?['storeName'],
+              v['storeName'],
+              _pick(
+                  live?['store_name'],
+                  v['store_name'],
+                  _pick(
+                      live?['businessName'],
+                      v['businessName'],
+                      _pick(trialFallback?['storeName'],
+                          trialFallback?['store_name'], ''))));
+
+          final ph = _pick(
+              live?['phone'],
+              v['phone'],
+              _pick(
+                  live?['whatsapp'],
+                  v['whatsapp'],
+                  _pick(trialFallback?['phone'],
+                      trialFallback?['whatsapp'], '')));
+
           out.add(SubscriberEntry(
             workspaceId: ws,
             planType: _pick(live?['plan_type'], v['plan_type'], 'individual'),
             status: _pick(live?['status'], null, 'active'),
-            maxDevices: asInt(_firstNum(live?['max_devices'], v['max_devices']), 1),
-            expiresAtMs: asMs(_firstNum(live?['expires_at'], v['expires_at'])),
+            maxDevices:
+                asInt(_firstNum(live?['max_devices'], v['max_devices']), 1),
+            expiresAtMs: asMs(_firstNum(
+                live?['expires_at'],
+                _firstNum(live?['expiryDate'],
+                    v['expires_at'] ?? v['expiryDate']))),
             activatedAtMs: asMs(v['activated_at']) > 0
                 ? asMs(v['activated_at'])
                 : asMs(e.key),
             deviceRef: asStr(v['device_ref']),
+            clientName: cName,
+            storeName: sName,
+            phone: ph,
+            deviceId: devId,
+            licenseKey: lKey.isNotEmpty
+                ? lKey
+                : generateLicenseKey(devId.isNotEmpty ? devId : ws),
           ));
         }
         return out; // هذه المساحة موثّقة — لا حاجة للفرع التالي.
@@ -753,6 +1013,41 @@ class Rtdb {
     } catch (_) {}
     // مساحة بلا سجل إداري لكن لها اشتراك: تُعرض بحالتها الحية.
     if (live != null) {
+      final devId = _pick(
+          live['deviceId'],
+          live['device_id'],
+          _pick(trialFallback?['deviceId'], trialFallback?['device_id'],
+              asStr(live['device_fingerprint'])));
+
+      final lKey = _pick(
+          live['licenseKey'],
+          live['license_key'],
+          _pick(trialFallback?['licenseKey'],
+              trialFallback?['license_key'], ''));
+
+      final cName = _pick(
+          live['clientName'],
+          live['client_name'],
+          _pick(
+              live['userName'],
+              live['owner_name'],
+              _pick(trialFallback?['clientName'],
+                  trialFallback?['client_name'], '')));
+
+      final sName = _pick(
+          live['storeName'],
+          live['store_name'],
+          _pick(
+              live['businessName'],
+              live['business_name'],
+              _pick(trialFallback?['storeName'],
+                  trialFallback?['store_name'], '')));
+
+      final ph = _pick(
+          live['phone'],
+          live['whatsapp'],
+          _pick(trialFallback?['phone'], trialFallback?['whatsapp'], ''));
+
       return [
         SubscriberEntry(
           workspaceId: ws,
@@ -761,9 +1056,16 @@ class Rtdb {
               : asStr(live['plan_type']),
           status: asStr(live['status']),
           maxDevices: asInt(live['max_devices'], 1),
-          expiresAtMs: asMs(live['expires_at']),
+          expiresAtMs: asMs(live['expiryDate'] ?? live['expires_at']),
           activatedAtMs: asMs(live['activated_at']),
-          deviceRef: asStr(live['device_fingerprint']),
+          deviceRef: devId,
+          clientName: cName,
+          storeName: sName,
+          phone: ph,
+          deviceId: devId,
+          licenseKey: lKey.isNotEmpty
+              ? lKey
+              : generateLicenseKey(devId.isNotEmpty ? devId : ws),
         ),
       ];
     }
