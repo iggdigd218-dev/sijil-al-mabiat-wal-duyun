@@ -249,6 +249,7 @@ void main() {
 
     // 3. محاولة إعادة إنشاء قسم جديد بنفس الاسم «الكترونيات» يجب ألا ترمي خطأ تكرار
     final id2 = await repo.saveSection(sec('الكترونيات'));
+    expect(id2 > 0, isTrue);
     final finalSections = await repo.sections();
     expect(finalSections.any((s) => s.name == 'الكترونيات'), isTrue);
     expect(finalSections.where((s) => s.name == 'الكترونيات').length, 1);

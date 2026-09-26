@@ -7,6 +7,7 @@ import '../data/providers.dart';
 import '../data/sync/cloud_control_service.dart';
 import 'app_notice.dart';
 import 'widgets.dart';
+import 'widgets/golden_bell_icon.dart';
 
 /// معالج فتح السجل المرتبط بإشعار: (نوع الكيان، معرّفه) → هل فُتحت وجهة؟
 typedef NotificationEntityOpener = Future<bool> Function(
@@ -22,7 +23,14 @@ Future<void> openNotifications(
 }) async {
   final repo = ref.read(repoProvider);
   await repo.markAllNotificationsSeen();
-  CloudControlService.instance.unreadAlertCountNotifier.value = 0;
+  try {
+    final settings = await repo.settings();
+    final backendUrl = (settings['backend_url'] ?? '').toString();
+    final wsId = repo.requireWorkspaceId;
+    await CloudControlService.instance.markAllAlertsRead(backendUrl, wsId);
+  } catch (_) {
+    await CloudControlService.instance.markAllAlertsRead();
+  }
   bump(ref);
   if (!context.mounted) return;
   await showModalBottomSheet<void>(
@@ -145,14 +153,13 @@ class _NotificationsSheet extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(99),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(18, 14, 18, 8),
                   child: Row(
                     children: [
-                      Icon(Icons.notifications_rounded,
-                          color: AppColors.primaryOf(context)),
-                      const SizedBox(width: 8),
-                      const Text(
+                      GoldenBellIcon(size: 24),
+                      SizedBox(width: 8),
+                      Text(
                         'الإشعارات',
                         style: TextStyle(
                             fontSize: 17, fontWeight: FontWeight.w800),
@@ -242,6 +249,15 @@ class _NotificationsSheet extends ConsumerWidget {
                                 child: Text(ca.body,
                                     style: const TextStyle(fontSize: 13)),
                               ),
+                              onTap: () {
+                                showAppNotice(
+                                  context,
+                                  title: ca.title,
+                                  message: ca.body,
+                                  kind: AppNoticeKind.info,
+                                  playSound: false,
+                                );
+                              },
                             );
                           }
                           final n = list[i - cloudAlerts.length];

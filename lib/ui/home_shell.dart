@@ -38,6 +38,7 @@ import 'tx_form.dart';
 import 'vouchers_screen.dart';
 import 'pos_screen.dart';
 import 'widgets/sync_arrows_indicator.dart';
+import 'widgets/golden_bell_icon.dart';
 import 'sync_ops_screen.dart';
 import '../data/sync/sync_service.dart';
 
@@ -1352,21 +1353,29 @@ class _HomeShellState extends ConsumerState<HomeShell>
     required VoidCallback onTap,
     required Color bg,
     required Color fg,
+    Border? border,
   }) =>
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
         child: Tooltip(
           message: tooltip,
-          child: Material(
-            color: bg,
-            borderRadius: BorderRadius.circular(12),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: onTap,
-              child: SizedBox(
-                width: 38,
-                height: 38,
-                child: Center(child: icon),
+          child: Container(
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(12),
+              border: border,
+            ),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: onTap,
+                child: SizedBox(
+                  width: 38,
+                  height: 38,
+                  child: Center(child: icon),
+                ),
               ),
             ),
           ),
@@ -1451,22 +1460,26 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     return _appBarSquircleAction(
                       tooltip: 'الإشعارات',
                       bg: isDark
-                          ? const Color(0xFF3B2706)
-                          : const Color(0xFFFEF3C7),
-                      fg: const Color(0xFFD97706),
+                          ? const Color(0xFF291E04)
+                          : const Color(0xFFFEF9C3),
+                      fg: const Color(0xFFB45309),
+                      border: Border.all(
+                        color: isDark
+                            ? const Color(0xFF854D0E)
+                            : const Color(0xFFFDE047),
+                        width: 1.1,
+                      ),
                       icon: Badge(
                         isLabelVisible: unread > 0,
                         label: Text(
                           '$unread',
                           style: const TextStyle(
-                              fontSize: 10, fontWeight: FontWeight.bold),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white),
                         ),
-                        backgroundColor: const Color(0xFFEA580C),
-                        child: const Icon(
-                          Icons.notifications_rounded,
-                          size: 20,
-                          color: Color(0xFFD97706),
-                        ),
+                        backgroundColor: const Color(0xFFDC2626),
+                        child: const GoldenBellIcon(size: 22),
                       ),
                       onTap: () => openNotifications(
                         context,

@@ -12,6 +12,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_version.dart';
 import '../../core/cloud_config.dart';
@@ -33,6 +34,21 @@ class CloudControlService {
   final ValueNotifier<List<CloudAlert>> cloudAlertsNotifier =
       ValueNotifier<List<CloudAlert>>([]);
   final ValueNotifier<int> unreadAlertCountNotifier = ValueNotifier<int>(0);
+
+  static const String _kReadAlertIdsPref = 'read_cloud_alert_ids';
+  Set<String>? _cachedReadAlertIds;
+
+  Future<Set<String>> _loadReadAlertIds() async {
+    if (_cachedReadAlertIds != null) return _cachedReadAlertIds!;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final list = sp.getStringList(_kReadAlertIdsPref) ?? const [];
+      _cachedReadAlertIds = list.toSet();
+    } catch (_) {
+      _cachedReadAlertIds ??= <String>{};
+    }
+    return _cachedReadAlertIds!;
+  }
 
   /// معالج عند وصول تنبيه سحابي جديد في الوقت الفعلي
   void Function(CloudAlert alert)? onNewAlertReceived;
@@ -258,9 +274,28 @@ class CloudControlService {
       }
     }
 
-    alerts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    cloudAlertsNotifier.value = alerts;
-    final unreadList = alerts.where((a) => !a.isRead).toList();
+    final readIds = await _loadReadAlertIds();
+    final resolvedAlerts = <CloudAlert>[];
+    for (final a in alerts) {
+      final isAlreadyRead = a.isRead || readIds.contains(a.id);
+      if (isAlreadyRead != a.isRead) {
+        resolvedAlerts.add(CloudAlert(
+          id: a.id,
+          title: a.title,
+          body: a.body,
+          isModal: a.isModal,
+          createdAt: a.createdAt,
+          isRead: isAlreadyRead,
+          targetWs: a.targetWs,
+        ));
+      } else {
+        resolvedAlerts.add(a);
+      }
+    }
+
+    resolvedAlerts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    cloudAlertsNotifier.value = resolvedAlerts;
+    final unreadList = resolvedAlerts.where((a) => !a.isRead).toList();
     unreadAlertCountNotifier.value = unreadList.length;
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -286,9 +321,74 @@ class CloudControlService {
     }
   }
 
-  /// تعليم إشعار كمقروء
+  /// تعليم كافة التنبيهات السحابية كمقروءة وحفظها محلياً في SharedPreferences لمنع عودتها
+  Future<void> markAllAlertsRead([String? backendUrl, String? wsId]) async {
+    final readIds = await _loadReadAlertIds();
+    final currentAlerts = cloudAlertsNotifier.value;
+    for (final a in currentAlerts) {
+      readIds.add(a.id);
+    }
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setStringList(_kReadAlertIdsPref, readIds.toList());
+    } catch (_) {}
+
+    final updated = currentAlerts.map((a) {
+      if (!a.isRead) {
+        return CloudAlert(
+          id: a.id,
+          title: a.title,
+          body: a.body,
+          isModal: a.isModal,
+          createdAt: a.createdAt,
+          isRead: true,
+          targetWs: a.targetWs,
+        );
+      }
+      return a;
+    }).toList();
+    cloudAlertsNotifier.value = updated;
+    unreadAlertCountNotifier.value = 0;
+
+    if (backendUrl != null &&
+        wsId != null &&
+        backendUrl.trim().isNotEmpty &&
+        wsId.trim().isNotEmpty) {
+      for (final a in currentAlerts) {
+        if (a.targetWs.isNotEmpty) {
+          markAlertAsRead(backendUrl, wsId, a.id);
+        }
+      }
+    }
+  }
+
+  /// تعليم إشعار كمقروء وحفظه محلياً في SharedPreferences وسحابياً
   Future<void> markAlertAsRead(
       String backendUrl, String wsId, String notifId) async {
+    try {
+      final readIds = await _loadReadAlertIds();
+      readIds.add(notifId);
+      final sp = await SharedPreferences.getInstance();
+      await sp.setStringList(_kReadAlertIdsPref, readIds.toList());
+    } catch (_) {}
+
+    final updated = cloudAlertsNotifier.value.map((a) {
+      if (a.id == notifId) {
+        return CloudAlert(
+          id: a.id,
+          title: a.title,
+          body: a.body,
+          isModal: a.isModal,
+          createdAt: a.createdAt,
+          isRead: true,
+          targetWs: a.targetWs,
+        );
+      }
+      return a;
+    }).toList();
+    cloudAlertsNotifier.value = updated;
+    unreadAlertCountNotifier.value = updated.where((a) => !a.isRead).length;
+
     try {
       final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
       final notifUrl =
