@@ -54,8 +54,8 @@ void main() {
     });
 
     test('CTL-03 تطابق إصدار وبناء التطبيق مع المزامنة السحابية', () {
-      expect(kAppBuild, 170);
-      expect(kAppVersion, '3.82.3');
+      expect(kAppBuild, 171);
+      expect(kAppVersion, '3.82.4');
     });
   });
 }

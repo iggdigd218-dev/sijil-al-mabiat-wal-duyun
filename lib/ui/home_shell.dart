@@ -237,8 +237,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 🌐 مركز التحكم السحابي والتنبيهات المباشرة والإدارة عن بعد
     CloudControlService.instance
         .startPeriodicHeartbeat(ref.read(repoProvider));
-    CloudControlService.instance.cloudAlertsNotifier
-        .addListener(_checkIncomingModalAlert);
   }
 
   /// (متطلب 5) سلوك الإقلاع وتوجيه البداية حسب المنصة والدور
@@ -452,6 +450,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
       case 'user':
         _go(AppScreen.group);
         return true;
+      case 'cloud_alert':
+        await showCloudAlertsSheet(context, ref);
+        return true;
       case 'update_download':
         // (2026-09-22) إشعار اكتمال تنزيل التحديث: نقرة تفتح مجلد
         // التنزيلات العام (Download/Nexora) ليصل المستخدم للملف مباشرة.
@@ -601,6 +602,44 @@ class _HomeShellState extends ConsumerState<HomeShell>
           '💬 رسالة جديدة من $senderName',
           short,
           entityType: 'message',
+        );
+      }
+    };
+    // وصول تنبيه سحابي أو إداري جديد (Broadcast / In-App Alert)
+    CloudControlService.instance.onNewAlertReceived = (alert) {
+      if (!mounted) return;
+      Sfx.systemNotify(
+        title: alert.title,
+        body: alert.body,
+        entityType: 'cloud_alert',
+        entityId: alert.id,
+      );
+      if (alert.isModal) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.campaign_rounded, color: Color(0xFF7C3AED)),
+                const SizedBox(width: 8),
+                Expanded(child: Text(alert.title)),
+              ],
+            ),
+            content: Text(alert.body),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('حسناً، فهمت'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        _showTappableNotice(
+          alert.title,
+          alert.body,
+          entityType: 'cloud_alert',
+          entityId: alert.id,
         );
       }
     };
@@ -913,59 +952,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     ChatHooks.onChatMessage = null;
     ChatHooks.onMemberNotice = null;
     ShellNav.request.removeListener(_onShellNavRequest);
-    CloudControlService.instance.cloudAlertsNotifier
-        .removeListener(_checkIncomingModalAlert);
     CloudControlService.instance.stop();
     super.dispose();
-  }
-
-  final Set<String> _shownModalAlertIds = <String>{};
-
-  void _checkIncomingModalAlert() {
-    if (!mounted) return;
-    final alerts = CloudControlService.instance.cloudAlertsNotifier.value;
-    final unread = alerts
-        .where((a) => !a.isRead && !_shownModalAlertIds.contains(a.id))
-        .toList();
-    if (unread.isNotEmpty) {
-      final alert = unread.first;
-      _shownModalAlertIds.add(alert.id);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        showDialog<void>(
-          context: context,
-          barrierDismissible: true,
-          builder: (ctx) => AlertDialog(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: [
-                const Icon(Icons.campaign_rounded,
-                    color: Color(0xFF7C3AED), size: 28),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    alert.title.isNotEmpty ? alert.title : '📢 تنبيه من إدارة النظام',
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            content: Text(
-              alert.body,
-              style: const TextStyle(fontSize: 14, height: 1.5),
-            ),
-            actions: [
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('حسناً، فهمت'),
-              ),
-            ],
-          ),
-        );
-      });
-    }
   }
 
   void _refreshSync() {
@@ -1403,11 +1391,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
             if (forceUpdate) {
               return const ForceUpdateBarrier();
             }
-            return PopScope(
-              canPop: false,
-              onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
-              child: Scaffold(
-                key: _scaffoldKey,
+            return ValueListenableBuilder<bool>(
+              valueListenable:
+                  CloudControlService.instance.maintenanceActiveNotifier,
+              builder: (ctx, inMaintenance, _) {
+                if (inMaintenance) {
+                  return const MaintenanceModeBarrier();
+                }
+                return PopScope(
+                  canPop: false,
+                  onPopInvokedWithResult: (didPop, _) => _handleRootPop(didPop),
+                  child: Scaffold(
+                    key: _scaffoldKey,
         appBar: AppBar(
           leading: Builder(
             builder: (ctx) {
@@ -1445,31 +1440,41 @@ class _HomeShellState extends ConsumerState<HomeShell>
             const SyncArrowsIndicator(),
             Consumer(
               builder: (ctx, rref, _) {
-                final unread =
+                final unreadLocal =
                     rref.watch(unreadCountProvider).valueOrNull ?? 0;
                 final isDark = Theme.of(ctx).brightness == Brightness.dark;
-                return _appBarSquircleAction(
-                  tooltip: 'الإشعارات',
-                  bg: isDark ? const Color(0xFF3B2706) : const Color(0xFFFEF3C7),
-                  fg: const Color(0xFFD97706),
-                  icon: Badge(
-                    isLabelVisible: unread > 0,
-                    label: Text(
-                      '$unread',
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                    ),
-                    backgroundColor: const Color(0xFFEA580C),
-                    child: const Icon(
-                      Icons.notifications_rounded,
-                      size: 20,
-                      color: Color(0xFFD97706),
-                    ),
-                  ),
-                  onTap: () => openNotifications(
-                    context,
-                    ref,
-                    onOpenEntity: openNotificationEntity,
-                  ),
+                return ValueListenableBuilder<int>(
+                  valueListenable:
+                      CloudControlService.instance.unreadAlertCountNotifier,
+                  builder: (ctx, unreadCloud, _) {
+                    final unread = unreadLocal + unreadCloud;
+                    return _appBarSquircleAction(
+                      tooltip: 'الإشعارات',
+                      bg: isDark
+                          ? const Color(0xFF3B2706)
+                          : const Color(0xFFFEF3C7),
+                      fg: const Color(0xFFD97706),
+                      icon: Badge(
+                        isLabelVisible: unread > 0,
+                        label: Text(
+                          '$unread',
+                          style: const TextStyle(
+                              fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                        backgroundColor: const Color(0xFFEA580C),
+                        child: const Icon(
+                          Icons.notifications_rounded,
+                          size: 20,
+                          color: Color(0xFFD97706),
+                        ),
+                      ),
+                      onTap: () => openNotifications(
+                        context,
+                        ref,
+                        onOpenEntity: openNotificationEntity,
+                      ),
+                    );
+                  },
                 );
               },
             ),
@@ -1583,8 +1588,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // 🔒 شريط الفترة التجريبية أعلى المحتوى (غير مزعج، يختفي ذاتياً).
         body: Column(
           children: [
-            const MaintenanceWarningBanner(),
-            const CloudBroadcastAlertBanner(),
             const TrialCountdownBanner(),
             Expanded(
               child: desktop
@@ -1607,10 +1610,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
               ),
       ),
     );
-        },
-      );
-    },
-  );
+              },
+            );
+          },
+        );
+      },
+    );
   }
 }
 
@@ -2994,158 +2999,4 @@ class _DrawerItems {
         }
         return true; // الدردشة (داخل مجموعة) والإعدادات للجميع.
       }).toList();
-}
-
-/// 🛑 شريط تحذيري بارز أعلى الشاشة عند تفعيل وضع الصيانة السحابي
-class MaintenanceWarningBanner extends StatelessWidget {
-  const MaintenanceWarningBanner({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: CloudControlService.instance.maintenanceActiveNotifier,
-      builder: (context, active, _) {
-        if (!active) return const SizedBox.shrink();
-        return ValueListenableBuilder<String>(
-          valueListenable:
-              CloudControlService.instance.maintenanceMessageNotifier,
-          builder: (context, message, _) {
-            final text = message.trim().isNotEmpty
-                ? message
-                : 'الخوادم قيد الصيانة السحابية المؤقتة لتحديث الخدمات';
-            const color = Color(0xFFD97706); // Amber-600
-            return Container(
-              margin: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-                border:
-                    Border.all(color: color.withValues(alpha: 0.45), width: 1.2),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.engineering_rounded, color: color, size: 22),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          'وضع الصيانة السحابي مفعّل',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w900,
-                            color: color,
-                          ),
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          text,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-/// 📢 شريط التنبيهات الجماعية العامة والبث السحابي
-class CloudBroadcastAlertBanner extends StatefulWidget {
-  const CloudBroadcastAlertBanner({super.key});
-
-  @override
-  State<CloudBroadcastAlertBanner> createState() =>
-      _CloudBroadcastAlertBannerState();
-}
-
-class _CloudBroadcastAlertBannerState
-    extends State<CloudBroadcastAlertBanner> {
-  final Set<String> _dismissedAlertIds = <String>{};
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<CloudAlert>>(
-      valueListenable: CloudControlService.instance.cloudAlertsNotifier,
-      builder: (context, alerts, _) {
-        if (alerts.isEmpty) return const SizedBox.shrink();
-        final unread = alerts
-            .where((a) => !a.isRead && !_dismissedAlertIds.contains(a.id))
-            .toList();
-        if (unread.isEmpty) return const SizedBox.shrink();
-
-        final alert = unread.first;
-        const color = Color(0xFF7C3AED); // Purple
-
-        return Container(
-          margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border:
-                Border.all(color: color.withValues(alpha: 0.45), width: 1.2),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 2),
-                child: Icon(Icons.campaign_rounded, color: color, size: 22),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      alert.title.isNotEmpty ? alert.title : '📢 تنبيه من الإدارة',
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w900,
-                        color: color,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      alert.body,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                icon: const Icon(Icons.close_rounded, size: 18),
-                onPressed: () {
-                  setState(() => _dismissedAlertIds.add(alert.id));
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 }

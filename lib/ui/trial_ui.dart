@@ -1949,6 +1949,122 @@ class ForceUpdateBarrier extends StatelessWidget {
   }
 }
 
+/// شاشة وضع الصيانة السحابي المؤقت (Maintenance Mode Barrier).
+class MaintenanceModeBarrier extends ConsumerStatefulWidget {
+  const MaintenanceModeBarrier({super.key});
+
+  @override
+  ConsumerState<MaintenanceModeBarrier> createState() =>
+      _MaintenanceModeBarrierState();
+}
+
+class _MaintenanceModeBarrierState
+    extends ConsumerState<MaintenanceModeBarrier> {
+  bool _checking = false;
+
+  Future<void> _recheck() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    try {
+      final repo = ref.read(repoProvider);
+      await CloudControlService.instance.checkControlCenter(repo);
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable:
+          CloudControlService.instance.maintenanceMessageNotifier,
+      builder: (ctx, msg, _) {
+        final displayMsg = msg.trim().isNotEmpty
+            ? msg.trim()
+            : 'الخوادم السحابية قيد الصيانة المؤقتة لتحديث الخدمات وترقية قواعد البيانات.\nنعتذر عن الإزعاج المؤقت، يرجى المحاولة بعد قليل.';
+
+        return Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 90,
+                    height: 90,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD97706).withValues(alpha: .12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.construction_rounded,
+                        size: 50, color: Color(0xFFD97706)),
+                  ),
+                  const SizedBox(height: 22),
+                  const Text(
+                    'النظام قيد الصيانة المؤقتة',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFFD97706),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    displayMsg,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 14, height: 1.6, color: Color(0xFF4B5563)),
+                  ),
+                  const SizedBox(height: 28),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD97706),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 28, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: _checking ? null : _recheck,
+                    icon: _checking
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.refresh_rounded),
+                    label: Text(
+                      _checking ? 'جارِ التحقق...' : 'إعادة الفحص الآن',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () => launchActivationWhatsApp(
+                        'السلام عليكم، بخصوص وضع صيانة النظام المؤقت.'),
+                    icon: const Icon(Icons.chat_outlined),
+                    label: const Text('تواصل مع الدعم الفني'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// نافذة التنبيهات السحابية الحية (In-App Cloud Alerts Sheet).
 Future<void> showCloudAlertsSheet(BuildContext context, WidgetRef ref) async {
   final alerts = CloudControlService.instance.cloudAlertsNotifier.value;

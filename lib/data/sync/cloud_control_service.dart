@@ -20,8 +20,6 @@ import '../repository.dart';
 import 'device_id.dart';
 import 'subscription_guard.dart';
 
-export '../../core/license_model.dart' show CloudAlert;
-
 class CloudControlService {
   CloudControlService._();
   static final CloudControlService instance = CloudControlService._();
@@ -35,6 +33,12 @@ class CloudControlService {
   final ValueNotifier<List<CloudAlert>> cloudAlertsNotifier =
       ValueNotifier<List<CloudAlert>>([]);
   final ValueNotifier<int> unreadAlertCountNotifier = ValueNotifier<int>(0);
+
+  /// معالج عند وصول تنبيه سحابي جديد في الوقت الفعلي
+  void Function(CloudAlert alert)? onNewAlertReceived;
+
+  bool _initializedAlertScan = false;
+  final Set<String> _notifiedAlertIds = <String>{};
 
   Timer? _heartbeatTimer;
   bool _isChecking = false;
@@ -88,10 +92,12 @@ class CloudControlService {
       }
 
       // 2) فحص سياسة التحديث الإجباري (Force Update)
-      final verPolicyUrl = '$base/system/version_policy.json';
-      final verPolicy = await _getJson(verPolicyUrl);
+      var verPolicy = await _getJson('$base/system/version_policy.json');
+      verPolicy ??= await _getJson('$base/system/force_update.json');
       if (verPolicy != null) {
-        final minBuild = _asInt(verPolicy['min_build'] ?? verPolicy['min_version']);
+        final minBuild = _asInt(verPolicy['min_build'] ??
+            verPolicy['min_version'] ??
+            verPolicy['minBuild']);
         if (minBuild > 0 && kAppBuild < minBuild) {
           forceUpdateNotifier.value = true;
         } else {
@@ -100,9 +106,10 @@ class CloudControlService {
       }
 
       // 3) فحص وضع الصيانة السحابي (Maintenance Mode)
-      final maintUrl = '$base/system/maintenance.json';
-      final maint = await _getJson(maintUrl);
-      if (maint != null && maint['is_active'] == true) {
+      var maint = await _getJson('$base/system/maintenance.json');
+      maint ??= await _getJson('$base/system/maintenance_mode.json');
+      if (maint != null &&
+          (maint['is_active'] == true || maint['isActive'] == true)) {
         maintenanceActiveNotifier.value = true;
         maintenanceMessageNotifier.value =
             '${maint['message'] ?? 'الخوادم قيد الصيانة المؤقتة لتحديث الخدمات'}';
@@ -111,12 +118,16 @@ class CloudControlService {
         maintenanceMessageNotifier.value = '';
       }
 
-      // 4) تسجيل نبض الجهاز والنشاط ورمز الإشعارات (Heartbeat & Multi-Device)
-      final devName = (st['sync.deviceName'] ?? st['account.name'] ?? 'جهاز').trim();
+      // 4) تسجيل نبض الجهاز والنشاط ورمز الإشعارات وبيانات المنشأة (Heartbeat & Metadata)
+      final devName =
+          (st['sync.deviceName'] ?? st['account.name'] ?? 'جهاز').trim();
       final storeName = (st['businessName'] ?? '').trim();
-      final clientName = (st['managerName'] ?? st['account.name'] ?? st['sync.deviceName'] ?? '').trim();
+      final clientName = (st['managerName'] ??
+              st['account.name'] ??
+              st['sync.deviceName'] ??
+              '')
+          .trim();
       final phone = (st['phone'] ?? st['whatsapp'] ?? '').trim();
-
       final devUrl =
           '$base/workspaces/${Uri.encodeComponent(wsId)}/devices/${Uri.encodeComponent(devId)}.json';
       final platformName = kIsWeb
@@ -129,47 +140,57 @@ class CloudControlService {
 
       final fcmToken = 'fcm_${devId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}';
 
-      await _patchJson(devUrl, {
+      final devPayload = <String, dynamic>{
         'deviceId': devId,
+        'device_id': devId,
         'deviceName': devName,
+        'device_name': devName,
         'model': platformName,
         'platform': platformName,
         'lastSeenAt': {'.sv': 'timestamp'},
-        'installed_version': '$kAppVersion+$kAppBuild',
-        'fcm_token': fcmToken,
-        if (storeName.isNotEmpty) ...{
-          'storeName': storeName,
-          'store_name': storeName,
-        },
-        if (clientName.isNotEmpty) ...{
-          'clientName': clientName,
-          'client_name': clientName,
-        },
-        if (phone.isNotEmpty) ...{
-          'phone': phone,
-        },
-      });
-
-      // حفظ رمز الإشعارات FCM وبيانات المنشأة مع عقدة الاشتراك
-      final fcmWsUrl =
-          '$base/workspaces/${Uri.encodeComponent(wsId)}/subscription.json';
-      await _patchJson(fcmWsUrl, {
-        'fcm_token': fcmToken,
         'last_seen_at': {'.sv': 'timestamp'},
         'installed_version': '$kAppVersion+$kAppBuild',
-        if (storeName.isNotEmpty) ...{
-          'storeName': storeName,
-          'store_name': storeName,
-          'businessName': storeName,
-        },
-        if (clientName.isNotEmpty) ...{
-          'clientName': clientName,
-          'client_name': clientName,
-        },
-        if (phone.isNotEmpty) ...{
-          'phone': phone,
-        },
-      });
+        'fcm_token': fcmToken,
+      };
+      if (storeName.isNotEmpty) {
+        devPayload['storeName'] = storeName;
+        devPayload['store_name'] = storeName;
+      }
+      if (clientName.isNotEmpty) {
+        devPayload['clientName'] = clientName;
+        devPayload['client_name'] = clientName;
+      }
+      if (phone.isNotEmpty) {
+        devPayload['phone'] = phone;
+      }
+      await _patchJson(devUrl, devPayload);
+
+      // حفظ رمز الإشعارات وبيانات المنشأة مع عقدة الاشتراك
+      final fcmWsUrl =
+          '$base/workspaces/${Uri.encodeComponent(wsId)}/subscription.json';
+      final subPatch = <String, dynamic>{
+        'fcm_token': fcmToken,
+        'last_seen_at': {'.sv': 'timestamp'},
+        'lastSeenAt': {'.sv': 'timestamp'},
+        'installed_version': '$kAppVersion+$kAppBuild',
+        'device_id': devId,
+        'deviceId': devId,
+        'device_name': devName,
+        'deviceName': devName,
+      };
+      if (storeName.isNotEmpty) {
+        subPatch['store_name'] = storeName;
+        subPatch['storeName'] = storeName;
+      }
+      if (clientName.isNotEmpty) {
+        subPatch['client_name'] = clientName;
+        subPatch['clientName'] = clientName;
+      }
+      if (phone.isNotEmpty) {
+        subPatch['phone'] = phone;
+        subPatch['phone_number'] = phone;
+      }
+      await _patchJson(fcmWsUrl, subPatch);
 
       // 5) فحص أمر النسخ الاحتياطي الفوري عن بعد (Remote Instant Backup)
       final ctlUrl =
@@ -214,24 +235,20 @@ class CloudControlService {
         }
       }
     }
-    // إشعارات البث العام - broadcast_notifications
-    final bcastUrl = '$base/system/broadcast_notifications.json';
-    final bcastNotifs = await _getJson(bcastUrl);
-    if (bcastNotifs is Map) {
-      for (final e in bcastNotifs.entries) {
+    // إشعارات البث العام — فحص كلا المسارين system/broadcast_notifications و system/broadcast_alerts
+    final bcastUrl1 = '$base/system/broadcast_notifications.json';
+    final bcastNotifs1 = await _getJson(bcastUrl1);
+    if (bcastNotifs1 is Map) {
+      for (final e in bcastNotifs1.entries) {
         if (e.value is Map) {
-          final id = e.key.toString();
-          if (!alerts.any((a) => a.id == id)) {
-            alerts.add(CloudAlert.fromJson(e.value as Map, id));
-          }
+          alerts.add(CloudAlert.fromJson(e.value as Map, e.key.toString()));
         }
       }
     }
-    // إشعارات البث العام - broadcast_alerts (مسار لوحة تحكم الإدارة)
-    final bcastAlertsUrl = '$base/system/broadcast_alerts.json';
-    final bcastAlerts = await _getJson(bcastAlertsUrl);
-    if (bcastAlerts is Map) {
-      for (final e in bcastAlerts.entries) {
+    final bcastUrl2 = '$base/system/broadcast_alerts.json';
+    final bcastNotifs2 = await _getJson(bcastUrl2);
+    if (bcastNotifs2 is Map) {
+      for (final e in bcastNotifs2.entries) {
         if (e.value is Map) {
           final id = e.key.toString();
           if (!alerts.any((a) => a.id == id)) {
@@ -243,7 +260,30 @@ class CloudControlService {
 
     alerts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     cloudAlertsNotifier.value = alerts;
-    unreadAlertCountNotifier.value = alerts.where((a) => !a.isRead).length;
+    final unreadList = alerts.where((a) => !a.isRead).toList();
+    unreadAlertCountNotifier.value = unreadList.length;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!_initializedAlertScan) {
+      _initializedAlertScan = true;
+      for (final a in unreadList) {
+        // عند فتح التطبيق، إذا وُجد تنبيه حديث خلال آخر 15 دقيقة لم يُقرأ، نطلقه فوراً
+        if (a.createdAt > (now - 15 * 60 * 1000)) {
+          _notifiedAlertIds.add(a.id);
+          onNewAlertReceived?.call(a);
+        } else {
+          _notifiedAlertIds.add(a.id);
+        }
+      }
+    } else {
+      // في الفحوصات الدورية اللاحقة: أي تنبيه لم يُشعر به الجهاز
+      for (final a in unreadList) {
+        if (!_notifiedAlertIds.contains(a.id)) {
+          _notifiedAlertIds.add(a.id);
+          onNewAlertReceived?.call(a);
+        }
+      }
+    }
   }
 
   /// تعليم إشعار كمقروء
@@ -351,59 +391,68 @@ class CloudControlService {
 
     final base = backendUrl.replaceAll(RegExp(r'/+$'), '');
     final st = await repo.settings();
-    final clientName =
-        (st['sync.deviceName'] ?? st['account.name'] ?? 'عميل').trim();
-    final storeName = (st['businessName'] ?? 'منشأة').trim();
-    final phone = (st['phone'] ?? st['whatsapp'] ?? '').trim();
-    final msgId =
-        'msg_${DateTime.now().millisecondsSinceEpoch}_${(cleanText.hashCode.abs() % 10000)}';
+    final clientName = (st['managerName'] ??
+            st['account.name'] ??
+            st['sync.deviceName'] ??
+            'مسؤول المنشأة')
+        .toString()
+        .trim();
+    final storeName = (st['businessName'] ?? 'منشأة').toString().trim();
+    final phone = (st['phone'] ?? st['whatsapp'] ?? '').toString().trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final msgId = 'msg_${now}_${(cleanText.hashCode.abs() % 10000)}';
 
     final msgUrl =
         '$base/support_chats/${Uri.encodeComponent(workspaceId)}/messages/${Uri.encodeComponent(msgId)}.json';
     final metaUrl =
         '$base/support_chats/${Uri.encodeComponent(workspaceId)}/meta.json';
+    final rootChatUrl =
+        '$base/support_chats/${Uri.encodeComponent(workspaceId)}.json';
 
     final msgPayload = {
       'id': msgId,
       'workspaceId': workspaceId,
+      'workspace_id': workspaceId,
       'storeName': storeName,
+      'store_name': storeName,
       'clientName': clientName,
+      'client_name': clientName,
       'phone': phone,
       'sender': 'client',
       'senderName': clientName,
+      'sender_name': clientName,
       'text': cleanText,
       'timestamp': {'.sv': 'timestamp'},
+      'created_at': now,
+      'createdAt': now,
       'isRead': false,
+      'is_read': false,
     };
 
     await _putJson(msgUrl, msgPayload);
-    await _patchJson(metaUrl, {
+
+    final chatMeta = {
       'workspaceId': workspaceId,
+      'workspace_id': workspaceId,
       'storeName': storeName,
       'store_name': storeName,
       'clientName': clientName,
       'client_name': clientName,
       'phone': phone,
       'lastMessage': cleanText,
+      'last_message': cleanText,
       'lastSender': 'client',
+      'last_sender': 'client',
       'updatedAt': {'.sv': 'timestamp'},
+      'updated_at': now,
       'unreadByAdmin': true,
       'unread_by_admin': true,
-    });
-
-    final rootChatUrl =
-        '$base/support_chats/${Uri.encodeComponent(workspaceId)}.json';
-    await _patchJson(rootChatUrl, {
-      'workspaceId': workspaceId,
-      'storeName': storeName,
-      'store_name': storeName,
-      'clientName': clientName,
-      'client_name': clientName,
-      'phone': phone,
-      'last_reply_at': {'.sv': 'timestamp'},
-      'unread_by_admin': true,
+      'unreadByClient': false,
       'unread_by_client': false,
-    });
+    };
+
+    await _patchJson(metaUrl, chatMeta);
+    await _patchJson(rootChatUrl, chatMeta);
   }
 
   /// استرجاع رسائل الدعم الفني

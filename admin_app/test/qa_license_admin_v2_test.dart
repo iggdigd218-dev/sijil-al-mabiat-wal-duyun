@@ -238,85 +238,117 @@ void main() {
       expect(entries.where((e) => filter(e, 'NX-FAJR')).first.licenseKey, 'NX-FAJR-0002-2026');
     });
 
-    test('LIC-ADM06 دقة فلترة النشطين والتجريبيين والمنتهين', () {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final list = [
+    test('LIC-ADM06 فلترة الكبسولات تستبعد التجريبي من النشط وتعزل المنتهي وخلال 7 أيام', () {
+      final now = 1700000000000;
+      final entries = [
         SubscriberEntry(
-          workspaceId: 'WS-ACTIVE-01',
-          planType: 'individual',
-          status: 'active',
-          maxDevices: 1,
-          expiresAtMs: now + 86400000 * 20,
-          activatedAtMs: now,
+          workspaceId: 'WS-ACTIVE',
+          clientName: 'عميل نشط',
+          storeName: 'متجر نشط',
+          phone: '777111222',
+          deviceId: 'DEV-1',
+          licenseKey: 'KEY-1',
           deviceRef: 'DEV-1',
-        ),
-        SubscriberEntry(
-          workspaceId: 'WS-TRIAL-01',
           planType: 'individual',
-          status: 'trial',
           maxDevices: 1,
-          expiresAtMs: now + 86400000 * 5,
-          activatedAtMs: now,
-          deviceRef: 'DEV-2',
+          expiresAtMs: now + 30 * 86400000,
+          status: 'active',
+          activatedAtMs: now - 86400000,
         ),
         SubscriberEntry(
-          workspaceId: 'WS-EXPIRED-01',
+          workspaceId: 'WS-TRIAL',
+          clientName: 'عميل تجريبي',
+          storeName: 'متجر تجريبي',
+          phone: '777222333',
+          deviceId: 'DEV-2',
+          licenseKey: 'KEY-2',
+          deviceRef: 'DEV-2',
           planType: 'individual',
-          status: 'active',
+          maxDevices: 1,
+          expiresAtMs: now + 3 * 86400000,
+          status: 'trial',
+          activatedAtMs: now - 86400000,
+        ),
+        SubscriberEntry(
+          workspaceId: 'WS-EXPIRED',
+          clientName: 'عميل منتهي',
+          storeName: 'متجر منتهي',
+          phone: '777333444',
+          deviceId: 'DEV-3',
+          licenseKey: 'KEY-3',
+          deviceRef: 'DEV-3',
+          planType: 'individual',
           maxDevices: 1,
           expiresAtMs: now - 86400000,
-          activatedAtMs: now - 86400000 * 30,
-          deviceRef: 'DEV-3',
+          status: 'active',
+          activatedAtMs: now - 40 * 86400000,
+        ),
+        SubscriberEntry(
+          workspaceId: 'WS-EXPIRING-7D',
+          clientName: 'عميل وشيك الانتهاء',
+          storeName: 'متجر وشيك',
+          phone: '777444555',
+          deviceId: 'DEV-4',
+          licenseKey: 'KEY-4',
+          deviceRef: 'DEV-4',
+          planType: 'individual',
+          maxDevices: 1,
+          expiresAtMs: now + 4 * 86400000,
+          status: 'active',
+          activatedAtMs: now - 26 * 86400000,
         ),
       ];
 
-      // فلتر النشطين يستثني التجريبيين بدقة
-      final active = list.where((s) =>
+      // فلتر النشطين: يستبعد التجريبي والمجمد والمنتهي
+      final activeList = entries.where((s) =>
+          !s.isFrozen &&
+          s.status == 'active' &&
+          (s.expiresAtMs > now || s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch)).toList();
+      expect(activeList.map((e) => e.workspaceId), containsAll(['WS-ACTIVE', 'WS-EXPIRING-7D']));
+      expect(activeList.any((e) => e.workspaceId == 'WS-TRIAL'), isFalse);
+      expect(activeList.any((e) => e.workspaceId == 'WS-EXPIRED'), isFalse);
+
+      // فلتر التجريبيين: يعزل التجريبي بدقة
+      final trialList = entries.where((s) => s.status == 'trial' || s.planType == 'trial').toList();
+      expect(trialList.length, 1);
+      expect(trialList.first.workspaceId, 'WS-TRIAL');
+
+      // فلتر المنتهين: يعزل من انتهى ترخيصه
+      final expiredList = entries.where((s) =>
           !s.isFrozen &&
           s.status != 'trial' &&
-          s.status != 'suspended' &&
-          (s.expiresAtMs > now || s.isLifetime)).toList();
-      expect(active.length, 1);
-      expect(active.first.workspaceId, 'WS-ACTIVE-01');
+          s.expiresAtMs <= now &&
+          s.expiresAtMs < DateTime(2090).millisecondsSinceEpoch).toList();
+      expect(expiredList.length, 1);
+      expect(expiredList.first.workspaceId, 'WS-EXPIRED');
 
-      // فلتر التجريبيين
-      final trials = list.where((s) =>
-          !s.isFrozen &&
-          s.status == 'trial' &&
-          (s.expiresAtMs > now || s.isLifetime)).toList();
-      expect(trials.length, 1);
-      expect(trials.first.workspaceId, 'WS-TRIAL-01');
-
-      // فلتر المنتهين
-      final expired = list.where((s) =>
-          !s.isFrozen &&
-          !s.isLifetime &&
-          s.expiresAtMs <= now).toList();
-      expect(expired.length, 1);
-      expect(expired.first.workspaceId, 'WS-EXPIRED-01');
+      // فلتر خلال 7 أيام
+      final sevenDays = now + 7 * 86400000;
+      final expiring7dList = entries.where((s) =>
+          !s.isFrozen && s.expiresAtMs > now && s.expiresAtMs <= sevenDays).toList();
+      expect(expiring7dList.map((e) => e.workspaceId), containsAll(['WS-TRIAL', 'WS-EXPIRING-7D']));
     });
 
-    test('LIC-ADM07 عرض قائمة الأجهزة وعدد الأعضاء في SubscriberEntry', () {
-      const entry = SubscriberEntry(
-        workspaceId: 'WS-DEVICES-01',
-        storeName: 'مركز عثمان الوصابي',
-        clientName: 'فخامة المدير',
-        phone: '774190040',
-        planType: 'enterprise',
-        status: 'active',
-        maxDevices: 5,
-        expiresAtMs: 1800000000000,
-        activatedAtMs: 1700000000000,
-        deviceRef: 'DEVICE-01',
-        devicesList: ['فخامة المدير', 'ايمن', 'مستخدم جديد', 'حموود'],
-        memberCount: 4,
+    testWidgets('LIC-ADM07 شاشة التفعيل الفردي تحتوي على حقول المبلغ المدفوع والعملة وطريقة الدفع', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ActivationScreen(),
+          ),
+        ),
       );
+      await tester.pumpAndSettle();
 
-      expect(entry.devicesList.length, 4);
-      expect(entry.memberCount, 4);
-      expect(entry.devicesList.contains('فخامة المدير'), isTrue);
-      expect(entry.storeName, 'مركز عثمان الوصابي');
-      expect(entry.clientName, 'فخامة المدير');
+      // التحقق من وجود حقول الدفع
+      expect(find.text('💰 بيانات الدفع والإيرادات:'), findsOneWidget);
+      expect(find.text('المبلغ المدفوع / المحصل'), findsOneWidget);
+      expect(find.text('العملة'), findsOneWidget);
+      expect(find.text('طريقة الدفع'), findsOneWidget);
+      expect(find.text('ملاحظات الدفع (اختياري)'), findsOneWidget);
+
+      // التحقق من وجود خيارات العملات وطرق الدفع
+      expect(find.text('YER'), findsOneWidget);
+      expect(find.text('نقداً'), findsOneWidget);
     });
   });
 }

@@ -62,15 +62,8 @@ class SubscriberEntry {
   final String licenseKey;
   final bool isFrozen;
   final Map<String, bool> featureFlags;
-  final List<String> devicesList;
-  final int memberCount;
 
   int get expiryDate => expiresAtMs;
-
-  bool get isLifetime =>
-      planType.trim().toLowerCase() == 'lifetime' ||
-      expiresAtMs >= 1700000000000 + 36500 * 86400000 ||
-      expiresAtMs >= 4000000000000;
 
   const SubscriberEntry({
     required this.workspaceId,
@@ -87,8 +80,6 @@ class SubscriberEntry {
     this.licenseKey = '',
     this.isFrozen = false,
     this.featureFlags = const {},
-    this.devicesList = const [],
-    this.memberCount = 1,
   });
 
   factory SubscriberEntry.fromSubscriptionMap(
@@ -119,16 +110,6 @@ class SubscriberEntry {
       flagsRaw.forEach((k, v) => flags['$k'] = v == true);
     }
 
-    final devs = <String>[];
-    if (map['devices'] is Map) {
-      for (final d in (map['devices'] as Map).values) {
-        if (d is Map) {
-          final n = asStr(d['deviceName'] ?? d['name'] ?? d['model']);
-          if (n.isNotEmpty && !devs.contains(n)) devs.add(n);
-        }
-      }
-    }
-
     return SubscriberEntry(
       workspaceId: wsId,
       planType: asStr(map['plan_type'] ?? map['planType'] ?? 'individual'),
@@ -139,7 +120,7 @@ class SubscriberEntry {
       activatedAtMs: asMs(map['activated_at'] ?? map['activatedAt']),
       deviceRef: devId,
       clientName: asStr(
-          map['clientName'] ?? map['client_name'] ?? map['account.name'] ?? map['userName']),
+          map['clientName'] ?? map['client_name'] ?? map['userName']),
       storeName: asStr(
           map['storeName'] ?? map['store_name'] ?? map['businessName']),
       phone: asStr(
@@ -148,8 +129,6 @@ class SubscriberEntry {
       licenseKey: key,
       isFrozen: map['is_frozen'] == true || map['frozen'] == true,
       featureFlags: flags,
-      devicesList: devs,
-      memberCount: devs.isNotEmpty ? devs.length : 1,
     );
   }
 }
@@ -178,8 +157,14 @@ class ConnectedDevice {
       deviceName: asStr(map['device_name'] ?? map['deviceName'] ?? id),
       model: asStr(map['model'] ?? map['device_model']),
       platform: asStr(map['platform'] ?? map['os']),
-      linkedAt: asMs(map['linked_at'] ?? map['created_at']),
-      lastSeenAt: asMs(map['last_seen_at'] ?? map['updated_at']),
+      linkedAt: asMs(map['linked_at'] ??
+          map['linkedAt'] ??
+          map['created_at'] ??
+          map['createdAt']),
+      lastSeenAt: asMs(map['last_seen_at'] ??
+          map['lastSeenAt'] ??
+          map['updated_at'] ??
+          map['updatedAt']),
     );
   }
 }
@@ -973,11 +958,8 @@ class Rtdb {
   Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) return const [];
-    final wsKeys = keys.keys
-        .map((k) => '$k')
-        .where((k) => !k.startsWith('_'))
-        .take(kMaxSubscriberScan)
-        .toList();
+    final wsKeys =
+        keys.keys.map((k) => '$k').take(kMaxSubscriberScan).toList();
 
     final rows = await _gather<List<SubscriberEntry>>(
       [for (final ws in wsKeys) () => _readWorkspaceEntries(ws)],
@@ -995,85 +977,68 @@ class Rtdb {
       if (sub is Map) live = sub;
     } catch (_) {}
 
-    final devicesList = <String>[];
-    int memberCount = 1;
-    String extraStore = '';
-    String extraClient = '';
-    String extraPhone = '';
+    String storeFallback = asStr(live?['storeName'] ??
+        live?['store_name'] ??
+        live?['businessName']);
+    String clientFallback = asStr(live?['clientName'] ??
+        live?['client_name'] ??
+        live?['userName']);
+    String phoneFallback = asStr(live?['phone'] ??
+        live?['phone_number'] ??
+        live?['whatsapp']);
+    String devIdFallback = asStr(live?['deviceId'] ??
+        live?['device_id'] ??
+        live?['deviceRef'] ??
+        live?['device_ref']);
 
-    // 1) قراءة جدول roster للحصول على الأجهزة والمدير
-    try {
-      final roster = await _get('workspaces/$enc/roster');
-      if (roster is Map && roster.isNotEmpty) {
-        memberCount = roster.length;
-        for (final entry in roster.entries) {
-          final r = entry.value;
-          if (r is Map) {
-            final rName = asStr(r['name'] ?? r['deviceName'] ?? entry.key);
-            if (rName.isNotEmpty && !devicesList.contains(rName)) {
-              devicesList.add(rName);
-            }
-            if (r['is_owner'] == 1 || r['user_role'] == 'admin') {
-              if (extraClient.isEmpty) extraClient = rName;
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 2) قراءة devices إن وجدت
-    try {
-      final devs = await _get('workspaces/$enc/devices');
-      if (devs is Map && devs.isNotEmpty) {
-        for (final entry in devs.entries) {
-          final d = entry.value;
-          if (d is Map) {
-            final dName = asStr(d['deviceName'] ?? d['name'] ?? d['model'] ?? entry.key);
-            if (dName.isNotEmpty && !devicesList.contains(dName)) {
-              devicesList.add(dName);
-            }
-            if (extraStore.isEmpty) {
-              extraStore = asStr(d['storeName'] ?? d['store_name'] ?? d['businessName']);
-            }
-            if (extraClient.isEmpty) {
-              extraClient = asStr(d['clientName'] ?? d['client_name'] ?? d['userName']);
-            }
-            if (extraPhone.isEmpty) {
-              extraPhone = asStr(d['phone'] ?? d['whatsapp']);
-            }
-          }
-        }
-        if (memberCount < devicesList.length) {
-          memberCount = devicesList.length;
-        }
-      }
-    } catch (_) {}
-
-    // 3) فحص محادثات الدعم الفني للحصول على اسم المنشأة أو العميل إذا كان ناقصاً
-    if (extraStore.isEmpty || extraClient.isEmpty || extraPhone.isEmpty) {
+    // استخراج تكميلي من الأجهزة المتصلة إن كانت بيانات المنشأة فارغة
+    if (storeFallback.isEmpty || clientFallback.isEmpty || phoneFallback.isEmpty || devIdFallback.isEmpty) {
       try {
-        final chatMeta = await _get('support_chats/$enc/meta');
-        if (chatMeta is Map) {
-          if (extraStore.isEmpty) extraStore = asStr(chatMeta['storeName'] ?? chatMeta['store_name']);
-          if (extraClient.isEmpty) extraClient = asStr(chatMeta['clientName'] ?? chatMeta['client_name']);
-          if (extraPhone.isEmpty) extraPhone = asStr(chatMeta['phone'] ?? chatMeta['phoneNumber']);
+        final devs = await _get('workspaces/$enc/devices');
+        if (devs is Map && devs.isNotEmpty) {
+          for (final dv in devs.values) {
+            if (dv is Map) {
+              if (storeFallback.isEmpty) {
+                storeFallback = asStr(dv['storeName'] ?? dv['store_name']);
+              }
+              if (clientFallback.isEmpty) {
+                clientFallback = asStr(dv['clientName'] ??
+                    dv['client_name'] ??
+                    dv['deviceName'] ??
+                    dv['device_name']);
+              }
+              if (phoneFallback.isEmpty) {
+                phoneFallback = asStr(dv['phone'] ?? dv['phone_number']);
+              }
+              if (devIdFallback.isEmpty) {
+                devIdFallback = asStr(dv['deviceId'] ?? dv['device_id']);
+              }
+            }
+          }
         }
       } catch (_) {}
     }
 
-    final resolvedStore = asStr(live?['storeName'] ??
-        live?['store_name'] ??
-        live?['businessName'] ??
-        extraStore);
-    final resolvedClient = asStr(live?['clientName'] ??
-        live?['client_name'] ??
-        live?['account.name'] ??
-        live?['userName'] ??
-        extraClient);
-    final resolvedPhone = asStr(live?['phone'] ??
-        live?['phone_number'] ??
-        live?['whatsapp'] ??
-        extraPhone);
+    // استخراج تكميلي من طلبات التفعيل إن كانت ما زالت فارغة
+    if (storeFallback.isEmpty || clientFallback.isEmpty || phoneFallback.isEmpty || devIdFallback.isEmpty) {
+      try {
+        final req = await _get('workspaces/$enc/license_request');
+        if (req is Map) {
+          if (storeFallback.isEmpty) {
+            storeFallback = asStr(req['storeName'] ?? req['store_name']);
+          }
+          if (clientFallback.isEmpty) {
+            clientFallback = asStr(req['clientName'] ?? req['client_name']);
+          }
+          if (phoneFallback.isEmpty) {
+            phoneFallback = asStr(req['phone']);
+          }
+          if (devIdFallback.isEmpty) {
+            devIdFallback = asStr(req['deviceId'] ?? req['device_id']);
+          }
+        }
+      } catch (_) {}
+    }
 
     try {
       final logs = await _get('workspaces/$enc/admin_log');
@@ -1084,7 +1049,25 @@ class Rtdb {
           if (v is! Map) continue;
           final devRef = asStr(v['device_ref'] ??
               live?['device_id'] ??
-              live?['deviceId']);
+              live?['deviceId'] ??
+              devIdFallback);
+
+          final resolvedStore = asStr(live?['storeName'] ??
+              live?['store_name'] ??
+              v['store_name'] ??
+              v['storeName'] ??
+              storeFallback);
+          final resolvedClient = asStr(live?['clientName'] ??
+              live?['client_name'] ??
+              v['client_name'] ??
+              v['clientName'] ??
+              clientFallback);
+          final resolvedPhone = asStr(live?['phone'] ??
+              live?['phone_number'] ??
+              v['phone'] ??
+              v['phone_number'] ??
+              phoneFallback);
+
           out.add(SubscriberEntry(
             workspaceId: ws,
             planType: _pick(live?['plan_type'], v['plan_type'], 'individual'),
@@ -1097,15 +1080,9 @@ class Rtdb {
                 ? asMs(v['activated_at'])
                 : asMs(e.key),
             deviceRef: devRef,
-            clientName: resolvedClient.isNotEmpty
-                ? resolvedClient
-                : asStr(v['client_name'] ?? v['clientName']),
-            storeName: resolvedStore.isNotEmpty
-                ? resolvedStore
-                : asStr(v['store_name'] ?? v['storeName']),
-            phone: resolvedPhone.isNotEmpty
-                ? resolvedPhone
-                : asStr(v['phone'] ?? v['phone_number']),
+            clientName: resolvedClient,
+            storeName: resolvedStore,
+            phone: resolvedPhone,
             deviceId: devRef,
             licenseKey: asStr(live?['licenseKey'] ??
                 live?['license_key'] ??
@@ -1116,34 +1093,30 @@ class Rtdb {
                 ? (live!['features'] as Map)
                     .map((k, val) => MapEntry('$k', val == true))
                 : const {},
-            devicesList: devicesList,
-            memberCount: memberCount,
           ));
         }
         return out;
       }
     } catch (_) {}
     if (live != null) {
-      final entry = SubscriberEntry.fromSubscriptionMap(ws, live);
+      final baseEntry = SubscriberEntry.fromSubscriptionMap(ws, live);
       return [
         SubscriberEntry(
-          workspaceId: entry.workspaceId,
-          planType: entry.planType,
-          status: entry.status,
-          maxDevices: entry.maxDevices,
-          expiresAtMs: entry.expiresAtMs,
-          activatedAtMs: entry.activatedAtMs,
-          deviceRef: entry.deviceRef,
-          clientName: resolvedClient.isNotEmpty ? resolvedClient : entry.clientName,
-          storeName: resolvedStore.isNotEmpty ? resolvedStore : entry.storeName,
-          phone: resolvedPhone.isNotEmpty ? resolvedPhone : entry.phone,
-          deviceId: entry.deviceId,
-          licenseKey: entry.licenseKey,
-          isFrozen: entry.isFrozen,
-          featureFlags: entry.featureFlags,
-          devicesList: devicesList.isNotEmpty ? devicesList : entry.devicesList,
-          memberCount: memberCount > 1 ? memberCount : entry.memberCount,
-        )
+          workspaceId: baseEntry.workspaceId,
+          planType: baseEntry.planType,
+          status: baseEntry.status,
+          maxDevices: baseEntry.maxDevices,
+          expiresAtMs: baseEntry.expiresAtMs,
+          activatedAtMs: baseEntry.activatedAtMs,
+          deviceRef: baseEntry.deviceRef.isNotEmpty ? baseEntry.deviceRef : devIdFallback,
+          clientName: baseEntry.clientName.isNotEmpty ? baseEntry.clientName : clientFallback,
+          storeName: baseEntry.storeName.isNotEmpty ? baseEntry.storeName : storeFallback,
+          phone: baseEntry.phone.isNotEmpty ? baseEntry.phone : phoneFallback,
+          deviceId: baseEntry.deviceId.isNotEmpty ? baseEntry.deviceId : devIdFallback,
+          licenseKey: baseEntry.licenseKey,
+          isFrozen: baseEntry.isFrozen,
+          featureFlags: baseEntry.featureFlags,
+        ),
       ];
     }
     return const [];
@@ -1299,58 +1272,80 @@ class Rtdb {
       final ws = '${e.key}';
       final val = e.value;
       if (val is! Map) continue;
-      final meta = val['meta'] is Map ? (val['meta'] as Map) : null;
+      final meta = (val['meta'] is Map) ? val['meta'] as Map : null;
       final msgs = val['messages'];
-      String lastMsg = asStr(val['lastMessage'] ??
-          val['last_message'] ??
-          meta?['lastMessage'] ??
-          meta?['last_message']);
-      int lastTs = asMs(val['updatedAt'] ??
-          val['updated_at'] ??
-          val['last_reply_at'] ??
-          meta?['updatedAt'] ??
-          meta?['updated_at']);
 
+      String lastMsg = '';
+      int lastTs = 0;
       if (msgs is Map && msgs.isNotEmpty) {
         final sorted = msgs.entries.toList()
-          ..sort((a, b) => asMs((a.value as Map)['timestamp'])
-              .compareTo(asMs((b.value as Map)['timestamp'])));
-        lastMsg = asStr((sorted.last.value as Map)['text']);
-        lastTs = asMs((sorted.last.value as Map)['timestamp']);
+          ..sort((a, b) => asMs((a.value as Map)['timestamp'] ??
+                  (a.value as Map)['created_at'])
+              .compareTo(asMs((b.value as Map)['timestamp'] ??
+                  (b.value as Map)['created_at'])));
+        final lastEntry = sorted.last.value as Map;
+        lastMsg = asStr(lastEntry['text']);
+        lastTs = asMs(lastEntry['timestamp'] ??
+            lastEntry['created_at'] ??
+            lastEntry['createdAt']);
+      } else {
+        lastMsg = asStr(meta?['lastMessage'] ??
+            meta?['last_message'] ??
+            val['lastMessage'] ??
+            val['last_message']);
+        lastTs = asMs(meta?['updatedAt'] ??
+            meta?['updated_at'] ??
+            val['updatedAt'] ??
+            val['updated_at']);
       }
 
-      var store = asStr(val['storeName'] ??
-          val['store_name'] ??
-          meta?['storeName'] ??
-          meta?['store_name']);
-      var client = asStr(val['clientName'] ??
-          val['client_name'] ??
-          meta?['clientName'] ??
-          meta?['client_name']);
-      var phone = asStr(val['phone'] ??
-          val['phone_number'] ??
-          meta?['phone'] ??
-          meta?['phone_number']);
+      String storeName = asStr(meta?['storeName'] ??
+          meta?['store_name'] ??
+          val['storeName'] ??
+          val['store_name']);
+      String clientName = asStr(meta?['clientName'] ??
+          meta?['client_name'] ??
+          val['clientName'] ??
+          val['client_name']);
+      String phone = asStr(meta?['phone'] ?? val['phone']);
 
-      // محاولة استكمال البيانات من اشتراك المنشأة أو الأجهزة إذا لم تكن موجودة بالدردشة
-      if (store.isEmpty || client.isEmpty || phone.isEmpty) {
+      // إذا لم تكن موجودة في meta أو الجذر، نستخرجها من رسائل العميل
+      if ((storeName.isEmpty || clientName.isEmpty || phone.isEmpty) &&
+          msgs is Map) {
+        for (final m in msgs.values) {
+          if (m is Map) {
+            if (storeName.isEmpty) {
+              storeName = asStr(m['storeName'] ?? m['store_name']);
+            }
+            if (clientName.isEmpty) {
+              clientName = asStr(m['clientName'] ??
+                  m['client_name'] ??
+                  m['senderName'] ??
+                  m['sender_name']);
+            }
+            if (phone.isEmpty) phone = asStr(m['phone']);
+          }
+        }
+      }
+
+      // إذا ما زالت فارغة، نحاول قراءة اشتراك المنشأة
+      if (storeName.isEmpty || clientName.isEmpty || phone.isEmpty) {
         try {
-          final enc = Uri.encodeComponent(ws);
-          final sub = await _get('workspaces/$enc/subscription');
+          final sub = await _get(
+              'workspaces/${Uri.encodeComponent(ws)}/subscription');
           if (sub is Map) {
-            if (store.isEmpty) {
-              store = asStr(sub['storeName'] ??
+            if (storeName.isEmpty) {
+              storeName = asStr(sub['storeName'] ??
                   sub['store_name'] ??
                   sub['businessName']);
             }
-            if (client.isEmpty) {
-              client = asStr(sub['clientName'] ??
+            if (clientName.isEmpty) {
+              clientName = asStr(sub['clientName'] ??
                   sub['client_name'] ??
-                  sub['account.name'] ??
                   sub['userName']);
             }
             if (phone.isEmpty) {
-              phone = asStr(sub['phone'] ?? sub['whatsapp']);
+              phone = asStr(sub['phone'] ?? sub['phone_number']);
             }
           }
         } catch (_) {}
@@ -1358,12 +1353,13 @@ class Rtdb {
 
       final unread = val['unread_by_admin'] == true ||
           val['unreadByAdmin'] == true ||
+          meta?['unread_by_admin'] == true ||
           meta?['unreadByAdmin'] == true;
 
       out.add({
         'workspaceId': ws,
-        'storeName': store.isNotEmpty ? store : ws,
-        'clientName': client.isNotEmpty ? client : 'عميل',
+        'storeName': storeName.isNotEmpty ? storeName : ws,
+        'clientName': clientName,
         'phone': phone,
         'unreadByAdmin': unread,
         'lastMessage': lastMsg,
@@ -1389,21 +1385,48 @@ class Rtdb {
   Future<void> sendSupportReply(String wsId, String text) async {
     final enc = Uri.encodeComponent(wsId);
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _put('support_chats/$enc/messages/$now', {
-      'id': '$now',
+    final msgId = 'admin_$now';
+    final payload = {
+      'id': msgId,
       'sender': 'admin',
+      'senderName': 'فريق الدعم الفني',
+      'sender_name': 'فريق الدعم الفني',
       'text': text,
       'timestamp': now,
-    });
-    await _patch('support_chats/$enc', {
+      'created_at': now,
+      'createdAt': now,
+      'isRead': false,
+      'is_read': false,
+    };
+    await _put('support_chats/$enc/messages/$msgId', payload);
+    final patch = {
       'unread_by_client': true,
+      'unreadByClient': true,
       'unread_by_admin': false,
+      'unreadByAdmin': false,
       'last_reply_at': now,
-    });
+      'last_message': text,
+      'lastMessage': text,
+      'last_sender': 'admin',
+      'lastSender': 'admin',
+      'updated_at': now,
+      'updatedAt': now,
+    };
+    await _patch('support_chats/$enc', patch);
+    await _patch('support_chats/$enc/meta', patch);
+  }
+
+  Future<void> markSupportChatRead(String wsId) async {
+    final enc = Uri.encodeComponent(wsId);
+    final patch = {
+      'unread_by_admin': false,
+      'unreadByAdmin': false,
+    };
+    await _patch('support_chats/$enc', patch);
+    await _patch('support_chats/$enc/meta', patch);
   }
 
   /// 1. إرسال تنبيه جماعي شامل (Broadcast Alert)
-  /// يكتب إلى مساري البث لضمان وصول التنبيه لكافة إصدارات التطبيق
   Future<void> sendBroadcastNotification({
     required String title,
     required String body,
@@ -1413,13 +1436,14 @@ class Rtdb {
       'id': '$now',
       'title': title,
       'body': body,
-      'is_modal': true,
-      'isModal': true,
+      'is_modal': false,
+      'isModal': false,
       'created_at': now,
-      'timestamp': now,
+      'createdAt': now,
+      'timestamp': {'.sv': 'timestamp'},
     };
-    await _put('system/broadcast_alerts/$now', payload);
     await _put('system/broadcast_notifications/$now', payload);
+    await _put('system/broadcast_alerts/$now', payload);
   }
 
   /// 2. وضع الصيانة السحابي (Cloud Maintenance Mode)
@@ -1427,31 +1451,46 @@ class Rtdb {
     required bool active,
     required String message,
   }) async {
-    await _patch('system/maintenance', {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final payload = {
       'is_active': active,
+      'isActive': active,
       'message': message,
-      'updated_at': DateTime.now().millisecondsSinceEpoch,
-    });
+      'updated_at': now,
+      'updatedAt': now,
+    };
+    await _patch('system/maintenance', payload);
+    await _patch('system/maintenance_mode', payload);
   }
 
   Future<Map<String, dynamic>?> getMaintenanceMode() async {
     final res = await _get('system/maintenance');
     if (res is Map) return Map<String, dynamic>.from(res);
+    final res2 = await _get('system/maintenance_mode');
+    if (res2 is Map) return Map<String, dynamic>.from(res2);
     return null;
   }
 
   /// 2. فرض التحديث الإجباري (Force Update Policy)
   Future<void> setForceUpdateMinVersion(int minBuild, String minVersion) async {
-    await _patch('system/force_update', {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final payload = {
       'min_build': minBuild,
       'min_version': minVersion,
-      'updated_at': DateTime.now().millisecondsSinceEpoch,
-    });
+      'minBuild': minBuild,
+      'minVersion': minVersion,
+      'updated_at': now,
+      'updatedAt': now,
+    };
+    await _patch('system/force_update', payload);
+    await _patch('system/version_policy', payload);
   }
 
   Future<Map<String, dynamic>?> getForceUpdatePolicy() async {
     final res = await _get('system/force_update');
     if (res is Map) return Map<String, dynamic>.from(res);
+    final res2 = await _get('system/version_policy');
+    if (res2 is Map) return Map<String, dynamic>.from(res2);
     return null;
   }
 

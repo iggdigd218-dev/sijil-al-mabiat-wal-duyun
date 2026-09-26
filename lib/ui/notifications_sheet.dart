@@ -22,6 +22,7 @@ Future<void> openNotifications(
 }) async {
   final repo = ref.read(repoProvider);
   await repo.markAllNotificationsSeen();
+  CloudControlService.instance.unreadAlertCountNotifier.value = 0;
   bump(ref);
   if (!context.mounted) return;
   await showModalBottomSheet<void>(
