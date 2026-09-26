@@ -47,26 +47,17 @@ class SyncArrowsIndicator extends ConsumerWidget {
         return Tooltip(
           message: 'مؤشر المزامنة اللحظية — اضغط للتشخيص',
           child: InkWell(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             onTap: () => showSyncDiagnosticsSheet(context),
-            child: SizedBox(
-              width: 36,
-              height: 32,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _SyncArrow(
-                    icon: Icons.north_rounded,
-                    color: upColor,
-                    active: s.pushing && !s.uploadFaulted,
-                  ),
-                  const SizedBox(width: 2),
-                  _SyncArrow(
-                    icon: Icons.south_rounded,
-                    color: downColor,
-                    active: s.pulling && !s.downloadFaulted,
-                  ),
-                ],
+            child: Container(
+              width: 38,
+              height: 38,
+              padding: const EdgeInsets.all(4),
+              child: _BoldAnimatedSyncArrows(
+                upColor: upColor,
+                downColor: downColor,
+                upActive: s.pushing && !s.uploadFaulted,
+                downActive: s.pulling && !s.downloadFaulted,
               ),
             ),
           ),
@@ -76,22 +67,25 @@ class SyncArrowsIndicator extends ConsumerWidget {
   }
 }
 
-/// سهم واحد بوميض خفيف أثناء النقل النشط (شفافية نابضة 1.0 ↔ 0.35).
-class _SyncArrow extends StatefulWidget {
-  final IconData icon;
-  final Color color;
-  final bool active;
-  const _SyncArrow({
-    required this.icon,
-    required this.color,
-    required this.active,
+/// أسهم مزامنة بارزة ومصمتة بخط عريض وبلا تباعد مفرط
+class _BoldAnimatedSyncArrows extends StatefulWidget {
+  final Color upColor;
+  final Color downColor;
+  final bool upActive;
+  final bool downActive;
+
+  const _BoldAnimatedSyncArrows({
+    required this.upColor,
+    required this.downColor,
+    required this.upActive,
+    required this.downActive,
   });
 
   @override
-  State<_SyncArrow> createState() => _SyncArrowState();
+  State<_BoldAnimatedSyncArrows> createState() => _BoldAnimatedSyncArrowsState();
 }
 
-class _SyncArrowState extends State<_SyncArrow>
+class _BoldAnimatedSyncArrowsState extends State<_BoldAnimatedSyncArrows>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulse = AnimationController(
     vsync: this,
@@ -101,17 +95,20 @@ class _SyncArrowState extends State<_SyncArrow>
   @override
   void initState() {
     super.initState();
-    _sync();
+    _checkPulse();
   }
 
   @override
-  void didUpdateWidget(covariant _SyncArrow oldWidget) {
+  void didUpdateWidget(covariant _BoldAnimatedSyncArrows oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.active != widget.active) _sync();
+    if (oldWidget.upActive != widget.upActive ||
+        oldWidget.downActive != widget.downActive) {
+      _checkPulse();
+    }
   }
 
-  void _sync() {
-    if (widget.active) {
+  void _checkPulse() {
+    if (widget.upActive || widget.downActive) {
       if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
     } else {
       _pulse.stop();
@@ -127,13 +124,83 @@ class _SyncArrowState extends State<_SyncArrow>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: Tween<double>(begin: 1.0, end: 0.35).animate(
-        CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-      ),
-      child: Icon(widget.icon, size: 15, color: widget.color),
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (context, _) {
+        final op = widget.upActive || widget.downActive
+            ? 0.35 + 0.65 * _pulse.value
+            : 1.0;
+        return CustomPaint(
+          size: const Size(26, 26),
+          painter: _BoldSyncArrowsPainter(
+            upColor: widget.upColor,
+            downColor: widget.downColor,
+            upOpacity: widget.upActive ? op : 1.0,
+            downOpacity: widget.downActive ? op : 1.0,
+          ),
+        );
+      },
     );
   }
+}
+
+class _BoldSyncArrowsPainter extends CustomPainter {
+  final Color upColor;
+  final Color downColor;
+  final double upOpacity;
+  final double downOpacity;
+
+  _BoldSyncArrowsPainter({
+    required this.upColor,
+    required this.downColor,
+    this.upOpacity = 1.0,
+    this.downOpacity = 1.0,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+
+    // سهم صاعد عريض ومصمت
+    final upPaint = Paint()
+      ..color = upColor.withValues(alpha: upOpacity)
+      ..strokeWidth = 2.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    final upX = cx - 4.0;
+    canvas.drawLine(Offset(upX, cy + 7), Offset(upX, cy - 6), upPaint);
+    final upHead = Path()
+      ..moveTo(upX - 4.0, cy - 2.0)
+      ..lineTo(upX, cy - 6.5)
+      ..lineTo(upX + 4.0, cy - 2.0);
+    canvas.drawPath(upHead, upPaint);
+
+    // سهم هابط عريض ومصمت مقترب تماماً
+    final downPaint = Paint()
+      ..color = downColor.withValues(alpha: downOpacity)
+      ..strokeWidth = 2.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    final downX = cx + 4.0;
+    canvas.drawLine(Offset(downX, cy - 7), Offset(downX, cy + 6), downPaint);
+    final downHead = Path()
+      ..moveTo(downX - 4.0, cy + 2.0)
+      ..lineTo(downX, cy + 6.5)
+      ..lineTo(downX + 4.0, cy + 2.0);
+    canvas.drawPath(downHead, downPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BoldSyncArrowsPainter old) =>
+      old.upColor != upColor ||
+      old.downColor != downColor ||
+      old.upOpacity != upOpacity ||
+      old.downOpacity != downOpacity;
 }
 
 /// فتح ورقة التشخيص المنبثقة.

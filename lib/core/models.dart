@@ -179,6 +179,8 @@ class Tx {
   ///  - 'failed': فشلت المزامنة.
   ///  - 'local': محلي فقط (جهاز مستقل / غير مُرسل بعد).
   final String syncState;
+  final int? createdByUserId;
+  final String cashierName;
   final DateTime date;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -203,6 +205,8 @@ class Tx {
     this.image = '',
     this.status = 'done',
     this.syncState = 'synced',
+    this.createdByUserId,
+    this.cashierName = '',
     required this.date,
     required this.createdAt,
     required this.updatedAt,
@@ -245,6 +249,8 @@ class Tx {
     String? image,
     String? status,
     String? syncState,
+    int? createdByUserId,
+    String? cashierName,
     DateTime? date,
     bool clearAccountId = false,
     bool clearFromId = false,
@@ -270,6 +276,8 @@ class Tx {
         image: image ?? this.image,
         status: status ?? this.status,
         syncState: syncState ?? this.syncState,
+        createdByUserId: createdByUserId ?? this.createdByUserId,
+        cashierName: cashierName ?? this.cashierName,
         date: date ?? this.date,
         createdAt: createdAt,
         updatedAt: DateTime.now(),
@@ -295,6 +303,8 @@ class Tx {
         'image': image,
         'status': status,
         'sync_state': syncState,
+        if (createdByUserId != null) 'created_by_user_id': createdByUserId,
+        if (cashierName.isNotEmpty) 'cashier_name': cashierName,
         'date': date.toIso8601String(),
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
@@ -322,6 +332,8 @@ class Tx {
         image: (m['image'] ?? '') as String,
         status: (m['status'] ?? 'done') as String,
         syncState: (m['sync_state'] ?? 'synced') as String,
+        createdByUserId: m['created_by_user_id'] as int?,
+        cashierName: (m['cashier_name'] ?? '') as String,
         date: DateTime.parse(m['date'] as String),
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt: DateTime.parse(m['updated_at'] as String),
@@ -428,6 +440,8 @@ class Voucher {
 
   /// draft / approved / cancelled
   final String status;
+  final int? createdByUserId;
+  final String cashierName;
 
   final DateTime date;
   final DateTime createdAt;
@@ -444,6 +458,8 @@ class Voucher {
     this.statement = '',
     this.notes = '',
     this.status = 'draft',
+    this.createdByUserId,
+    this.cashierName = '',
     required this.date,
     required this.createdAt,
     required this.updatedAt,
@@ -466,6 +482,8 @@ class Voucher {
     String? statement,
     String? notes,
     String? status,
+    int? createdByUserId,
+    String? cashierName,
     DateTime? date,
     DateTime? updatedAt,
   }) =>
@@ -480,6 +498,8 @@ class Voucher {
         statement: statement ?? this.statement,
         notes: notes ?? this.notes,
         status: status ?? this.status,
+        createdByUserId: createdByUserId ?? this.createdByUserId,
+        cashierName: cashierName ?? this.cashierName,
         date: date ?? this.date,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
@@ -496,6 +516,8 @@ class Voucher {
         'statement': statement,
         'notes': notes,
         'status': status,
+        if (createdByUserId != null) 'created_by_user_id': createdByUserId,
+        if (cashierName.isNotEmpty) 'cashier_name': cashierName,
         'date': date.toIso8601String(),
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
@@ -512,6 +534,8 @@ class Voucher {
         statement: (m['statement'] ?? '') as String,
         notes: (m['notes'] ?? '') as String,
         status: (m['status'] ?? 'draft') as String,
+        createdByUserId: m['created_by_user_id'] as int?,
+        cashierName: (m['cashier_name'] ?? '') as String,
         date: DateTime.parse(m['date'] as String),
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt: DateTime.parse(m['updated_at'] as String),
@@ -619,6 +643,7 @@ class AppUser {
   final Map<String, bool> permissions;
   final bool isMe;
   final bool active;
+  final bool canApplyDiscount;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -632,6 +657,7 @@ class AppUser {
     this.permissions = const {},
     this.isMe = false,
     this.active = true,
+    this.canApplyDiscount = true,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -662,6 +688,7 @@ class AppUser {
     Map<String, bool>? permissions,
     bool? isMe,
     bool? active,
+    bool? canApplyDiscount,
     DateTime? updatedAt,
   }) =>
       AppUser(
@@ -673,6 +700,7 @@ class AppUser {
         permissions: permissions ?? this.permissions,
         isMe: isMe ?? this.isMe,
         active: active ?? this.active,
+        canApplyDiscount: canApplyDiscount ?? this.canApplyDiscount,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
       );
@@ -689,6 +717,7 @@ class AppUser {
             .join(','),
         'is_me': isMe ? 1 : 0,
         'active': active ? 1 : 0,
+        'can_apply_discount': canApplyDiscount ? 1 : 0,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
@@ -698,20 +727,85 @@ class AppUser {
         .split(',')
         .where((s) => s.trim().isNotEmpty)
         .toSet();
+    final role = UserRole.fromCode((m['role'] ?? 'viewer') as String);
+    final discountDefault = role == UserRole.admin || role == UserRole.accountant;
     return AppUser(
       id: m['id'] as int?,
       name: (m['name'] ?? '') as String,
       email: '${m['email'] ?? ''}',
-      role: UserRole.fromCode((m['role'] ?? 'viewer') as String),
+      role: role,
       pin: (m['pin'] ?? '') as String,
       password: (m['password'] ?? '') as String,
       permissions: {for (final p in kPerms) p.key: raw.contains(p.key)},
       isMe: ((m['is_me'] ?? 0) as int) == 1,
       active: ((m['active'] ?? 1) as int) == 1,
+      canApplyDiscount: ((m['can_apply_discount'] ?? (discountDefault ? 1 : 0)) as int) == 1,
       createdAt: DateTime.parse(m['created_at'] as String),
       updatedAt: DateTime.parse(m['updated_at'] as String),
     );
   }
+}
+
+// ==================== موظفو الورديات (الحساب الفردي) ====================
+
+class LocalStaff {
+  final int? id;
+  final String name;
+  final String pinCodeHash;
+  final String role; // cashier, inventory, accountant, admin
+  final bool canApplyDiscount;
+  final bool isActive;
+  final DateTime createdAt;
+
+  const LocalStaff({
+    this.id,
+    required this.name,
+    required this.pinCodeHash,
+    this.role = 'cashier',
+    this.canApplyDiscount = false,
+    this.isActive = true,
+    required this.createdAt,
+  });
+
+  LocalStaff copyWith({
+    int? id,
+    String? name,
+    String? pinCodeHash,
+    String? role,
+    bool? canApplyDiscount,
+    bool? isActive,
+    DateTime? createdAt,
+  }) =>
+      LocalStaff(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        pinCodeHash: pinCodeHash ?? this.pinCodeHash,
+        role: role ?? this.role,
+        canApplyDiscount: canApplyDiscount ?? this.canApplyDiscount,
+        isActive: isActive ?? this.isActive,
+        createdAt: createdAt ?? this.createdAt,
+      );
+
+  Map<String, Object?> toMap() => {
+        if (id != null) 'id': id,
+        'name': name,
+        'pin_code_hash': pinCodeHash,
+        'role': role,
+        'can_apply_discount': canApplyDiscount ? 1 : 0,
+        'is_active': isActive ? 1 : 0,
+        'created_at': createdAt.toIso8601String(),
+      };
+
+  factory LocalStaff.fromMap(Map<String, Object?> m) => LocalStaff(
+        id: m['id'] as int?,
+        name: (m['name'] ?? '') as String,
+        pinCodeHash: (m['pin_code_hash'] ?? '') as String,
+        role: (m['role'] ?? 'cashier') as String,
+        canApplyDiscount: ((m['can_apply_discount'] ?? 0) as int) == 1,
+        isActive: ((m['is_active'] ?? 1) as int) == 1,
+        createdAt: DateTime.tryParse((m['created_at'] ?? '') as String) ??
+            DateTime.now(),
+      );
 }
 
 // ==================== الدردشة ====================

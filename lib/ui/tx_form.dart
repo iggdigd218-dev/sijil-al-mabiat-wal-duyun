@@ -227,6 +227,7 @@ class _TxFormState extends ConsumerState<TxForm> {
       final now = DateTime.now();
       final old = widget.existing;
       final keepId = old != null && !widget.isCopy ? old.id : null;
+      final staff = ref.read(activeStaffProvider);
       final tx = Tx(
         id: keepId,
         accountId: _isTransfer ? null : _accountId,
@@ -244,6 +245,8 @@ class _TxFormState extends ConsumerState<TxForm> {
         image: _image,
         status: _status,
         date: _date,
+        createdByUserId: old?.createdByUserId ?? staff?.id,
+        cashierName: old?.cashierName ?? staff?.name ?? '',
         createdAt: keepId != null ? old!.createdAt : now,
         updatedAt: now,
       );

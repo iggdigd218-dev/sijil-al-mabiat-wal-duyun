@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/accounting.dart';
 import '../core/shell_nav.dart';
@@ -54,6 +55,7 @@ import '../data/sync/workspace_service.dart';
 import '../data/sync/chat_hooks.dart';
 import '../data/sync/cloud_control_service.dart';
 import 'trial_ui.dart';
+import 'shift_management_dialog.dart';
 import 'widgets.dart' show showSnack;
 import '../core/cloud_config.dart';
 
@@ -200,8 +202,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
       const Duration(minutes: 20),
       (_) => _scheduleGreeting(),
     );
-    // فُتح التطبيق بالضغط على إشعار خارجي؟ انتقل للسجل المقصود.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeNotifyTap());
+    // فُتح التطبيق بالضغط على إشعار خارجي أو بدء مسار الإقلاع التلقائي
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _applyStartupRouting();
+      _consumeNotifyTap();
+    });
     // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
     _startGlobalJoinWatcher();
     // 🔒 الفترة التجريبية: ترحيب أول مرة + رصد الانتهاء.
@@ -232,6 +237,46 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 🌐 مركز التحكم السحابي والتنبيهات المباشرة والإدارة عن بعد
     CloudControlService.instance
         .startPeriodicHeartbeat(ref.read(repoProvider));
+  }
+
+  /// (متطلب 5) سلوك الإقلاع وتوجيه البداية حسب المنصة والدور
+  Future<void> _applyStartupRouting() async {
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return;
+
+    final isDesktopPlatform = Platform.isWindows;
+    if (isDesktopPlatform) {
+      ref.read(navAppModeProvider.notifier).setMode(NavAppMode.pos);
+      if (mounted) setState(() => _screen = AppScreen.pos);
+      // استدعاء فوري للأقسام والأصناف
+      ref.read(itemsProvider);
+      ref.read(itemCategoriesProvider);
+      ref.read(sectionsProvider);
+      return;
+    }
+
+    try {
+      final roleAsync = await ref.read(deviceRoleProvider.future);
+      final user = await ref.read(repoProvider).currentUser();
+      final effectiveRole = roleAsync?.role ?? user?.role;
+
+      if (effectiveRole == UserRole.viewer) {
+        ref.read(navAppModeProvider.notifier).setMode(NavAppMode.pos);
+        if (mounted) setState(() => _screen = AppScreen.pos);
+        ref.read(itemsProvider);
+        ref.read(itemCategoriesProvider);
+      } else if (effectiveRole == UserRole.dataentry) {
+        ref.read(navAppModeProvider.notifier).setMode(NavAppMode.pos);
+        if (mounted) setState(() => _screen = AppScreen.inventory);
+      } else {
+        final sp = await SharedPreferences.getInstance();
+        final saved = sp.getString('app_nav_mode');
+        if (saved == 'pos') {
+          if (mounted) setState(() => _screen = AppScreen.pos);
+        } else {
+          if (mounted) setState(() => _screen = AppScreen.dashboard);
+        }
+      }
+    } catch (_) {}
   }
 
   /// داخل مجموعة: يشغّل خدمة اليقظة (foreground service) ليستقبل الجهاز
@@ -1290,7 +1335,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
-    final hidden = ref.watch(hideBalancesProvider);
+    ref.watch(hideBalancesProvider);
     final desktop = isDesktopLayout(context);
 
     return ValueListenableBuilder<bool>(
@@ -1344,107 +1389,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             },
           ),
           actions: [
-            Consumer(
-              builder: (ctx, rref, _) {
-                final modeAsync = rref.watch(workspaceModeProvider);
-                final roleAsync = rref.watch(deviceRoleProvider);
-                final mode = modeAsync.valueOrNull ?? 'standalone';
-                if (mode == 'standalone') return const SizedBox.shrink();
-                final role = roleAsync.valueOrNull;
-                final (label, color, icon) = switch (role?.role) {
-                  UserRole.admin => (
-                      'مدير',
-                      Colors.amber.shade700,
-                      Icons.security,
-                    ),
-                  UserRole.agent => (
-                      'وكيل المدير',
-                      Colors.green.shade700,
-                      Icons.verified_user,
-                    ),
-                  UserRole.accountant => (
-                      'محاسب',
-                      Colors.blue,
-                      Icons.calculate,
-                    ),
-                  UserRole.dataentry => ('إدخال', Colors.teal, Icons.edit_note),
-                  UserRole.viewer => (
-                      'عرض فقط',
-                      Colors.grey,
-                      Icons.visibility_outlined,
-                    ),
-                  _ => ('بلا صلاحية', Colors.red, Icons.block),
-                };
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Tooltip(
-                    message: mode == 'host'
-                        ? 'أنت مدير هذه المجموعة'
-                        : 'دورك في المجموعة: $label',
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: .12),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: color.withValues(alpha: .3)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(icon, size: 13, color: color),
-                          const SizedBox(width: 4),
-                          Text(
-                            label,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: color,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
             const SyncArrowsIndicator(),
-            Consumer(
-              builder: (ctx, rref, _) {
-                final current = rref.watch(themeModeProvider);
-                final darkActive = current == ThemeMode.dark ||
-                    (current == ThemeMode.system &&
-                        Theme.of(ctx).brightness == Brightness.dark);
-                return _appBarSquircleAction(
-                  tooltip: darkActive
-                      ? 'التبديل إلى الوضع النهاري'
-                      : 'التبديل إلى الوضع الليلي',
-                  bg: darkActive
-                      ? const Color(0xFF332A15)
-                      : const Color(0xFFFEF3C7),
-                  fg: darkActive
-                      ? const Color(0xFFFBBF24)
-                      : const Color(0xFFD97706),
-                  icon: Icon(
-                    darkActive
-                        ? Icons.light_mode_rounded
-                        : Icons.dark_mode_rounded,
-                    size: 20,
-                    color: darkActive
-                        ? const Color(0xFFFBBF24)
-                        : const Color(0xFFD97706),
-                  ),
-                  onTap: () {
-                    Sfx.tap();
-                    rref.read(themeModeProvider.notifier).state =
-                        darkActive ? ThemeMode.light : ThemeMode.dark;
-                  },
-                );
-              },
-            ),
             Consumer(
               builder: (ctx, rref, _) {
                 final unread =
@@ -1475,50 +1420,108 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
-            Builder(
-              builder: (ctx) {
+            // قائمة الخيارات الإضافية (⋮) — نقل الوضع الليلي، إخفاء الأرصدة، وتبديل الوردية
+            Consumer(
+              builder: (ctx, rref, _) {
                 final isDark = Theme.of(ctx).brightness == Brightness.dark;
-                return _appBarSquircleAction(
-                  tooltip: hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة',
-                  bg: isDark ? const Color(0xFF281E40) : const Color(0xFFEDE9FE),
-                  fg: const Color(0xFF7C3AED),
-                  icon: Icon(
-                    hidden
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
-                    size: 20,
-                    color: const Color(0xFF7C3AED),
+                final currentTheme = rref.watch(themeModeProvider);
+                final darkActive = currentTheme == ThemeMode.dark ||
+                    (currentTheme == ThemeMode.system && isDark);
+                final hidden = rref.watch(hideBalancesProvider);
+
+                return Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 8),
+                  child: PopupMenuButton<String>(
+                    tooltip: 'خيارات إضافية',
+                    icon: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        Icons.more_vert_rounded,
+                        size: 20,
+                        color: AppColors.textOf(ctx),
+                      ),
+                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    onSelected: (val) {
+                      if (val == 'theme') {
+                        Sfx.tap();
+                        rref.read(themeModeProvider.notifier).state =
+                            darkActive ? ThemeMode.light : ThemeMode.dark;
+                      } else if (val == 'balances') {
+                        Sfx.tap();
+                        rref.read(hideBalancesProvider.notifier).state = !hidden;
+                      } else if (val == 'switch_user') {
+                        showSwitchUserDialog(context, ref);
+                      } else if (val == 'refresh') {
+                        bump(ref);
+                        _refreshSync();
+                        try {
+                          ref.read(syncEngineProvider).forceSyncNow();
+                        } catch (_) {}
+                        _checkForAppUpdate();
+                      }
+                    },
+                    itemBuilder: (c) => [
+                      PopupMenuItem(
+                        value: 'theme',
+                        child: Row(
+                          children: [
+                            Icon(
+                              darkActive ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                              size: 19,
+                              color: darkActive ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(darkActive ? 'التبديل إلى الوضع النهاري' : 'التبديل إلى الوضع الليلي'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'balances',
+                        child: Row(
+                          children: [
+                            Icon(
+                              hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                              size: 19,
+                              color: const Color(0xFF7C3AED),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
+                        value: 'switch_user',
+                        child: Row(
+                          children: [
+                            Icon(Icons.switch_account_rounded, size: 19, color: AppColors.primary),
+                            SizedBox(width: 10),
+                            Text('تبديل المستخدم / الوردية'),
+                          ],
+                        ),
+                      ),
+                      if (desktop)
+                        const PopupMenuItem(
+                          value: 'refresh',
+                          child: Row(
+                            children: [
+                              Icon(Icons.refresh_rounded, size: 19, color: Color(0xFF16A34A)),
+                              SizedBox(width: 10),
+                              Text('تحديث والتحقق من الإصدار'),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
-                  onTap: () => ref
-                      .read(hideBalancesProvider.notifier)
-                      .state = !hidden,
                 );
               },
             ),
-            if (desktop)
-              Builder(
-                builder: (ctx) {
-                  final isDark = Theme.of(ctx).brightness == Brightness.dark;
-                  return _appBarSquircleAction(
-                    tooltip: 'تحديث البيانات والتحقق من الإصدارات',
-                    bg: isDark ? const Color(0xFF133828) : const Color(0xFFDCFCE7),
-                    fg: const Color(0xFF16A34A),
-                    icon: const Icon(
-                      Icons.refresh_rounded,
-                      size: 20,
-                      color: Color(0xFF16A34A),
-                    ),
-                    onTap: () {
-                      bump(ref);
-                      _refreshSync();
-                      try {
-                        ref.read(syncEngineProvider).forceSyncNow();
-                      } catch (_) {}
-                      _checkForAppUpdate();
-                    },
-                  );
-                },
-              ),
           ],
         ),
         drawer: _Drawer(current: _screen, onSelect: _go),
@@ -2173,6 +2176,11 @@ class _Drawer extends ConsumerWidget {
     final user = ref.watch(currentUserProvider).valueOrNull;
     final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? true;
     final wsMode = ref.watch(workspaceModeProvider).valueOrNull ?? 'standalone';
+    final roleAsync = ref.watch(deviceRoleProvider);
+    final role = roleAsync.valueOrNull;
+    final isMasterAdmin = isOwner || user?.role == UserRole.admin;
+    final navMode = ref.watch(navAppModeProvider);
+
     final items = _DrawerItems.of(
       user: user,
       isOwner: isOwner,
@@ -2182,18 +2190,28 @@ class _Drawer extends ConsumerWidget {
     final googleLinked = ref.watch(googleLinkedProvider).valueOrNull ?? false;
     final dark = Theme.of(context).brightness == Brightness.dark;
 
+    final effectiveRole = role?.role ?? user?.role;
+    final (roleLabel, roleColor, roleIcon) = switch (effectiveRole) {
+      UserRole.admin => ('مدير النظام', Colors.amber.shade300, Icons.security),
+      UserRole.agent => ('وكيل المدير', Colors.greenAccent.shade200, Icons.verified_user),
+      UserRole.accountant => ('محاسب', Colors.lightBlueAccent, Icons.calculate),
+      UserRole.dataentry => ('إدخال وجرد', Colors.tealAccent, Icons.edit_note),
+      UserRole.viewer => ('كاشير / عرض', Colors.orangeAccent.shade100, Icons.visibility_outlined),
+      _ => ('متجر مستقل', Colors.white, Icons.storefront_rounded),
+    };
+
     return Drawer(
       backgroundColor: AppColors.surfaceOf(context),
       child: SafeArea(
         child: Column(
           children: [
-            // ---------- ترويسة الملف الشخصي ----------
+            // ---------- ترويسة الملف الشخصي والمنشأة ----------
             InkWell(
               borderRadius: const BorderRadius.only(
                 bottomLeft: Radius.circular(22),
                 bottomRight: Radius.circular(22),
               ),
-              onTap: () => showAccountProfileDialog(context, ref),
+              onTap: isMasterAdmin ? () => showAccountProfileDialog(context, ref) : null,
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
@@ -2214,7 +2232,7 @@ class _Drawer extends ConsumerWidget {
                   Row(
                     children: [
                       // (2026-09-22) أيقونة المؤسسة: المدير يغيّرها/يحذفها،
-                      // والعضو يراها فقط — نقرة العضو توضّح له القاعدة.
+                      // والعضو يراها فقط للقراءة بلا إمكانية للتعديل.
                       Consumer(
                         builder: (ctx, rref, _) {
                           final photo =
@@ -2241,22 +2259,24 @@ class _Drawer extends ConsumerWidget {
                                       errorBuilder: (_, __, ___) => fallback,
                                     )
                                   : fallback);
+                          final avatarContainer = Container(
+                            width: 54,
+                            height: 54,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white38,
+                                width: 2,
+                              ),
+                            ),
+                            child: ClipOval(child: face),
+                          );
+                          if (!isMasterAdmin) return avatarContainer;
                           return InkWell(
                             customBorder: const CircleBorder(),
                             onTap: () => _manageOrgIcon(ctx, rref, isOwner),
-                            child: Container(
-                              width: 54,
-                              height: 54,
-                              decoration: BoxDecoration(
-                                color: Colors.white24,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white38,
-                                  width: 2,
-                                ),
-                              ),
-                              child: ClipOval(child: face),
-                            ),
+                            child: avatarContainer,
                           );
                         },
                       ),
@@ -2265,8 +2285,7 @@ class _Drawer extends ConsumerWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // اسم الجهاز المحدد من المستخدم/المدير — نفس
-                            // الاسم الظاهر أعلى الرئيسية (حذف الاسم السابق).
+                            // اسم المستخدم / الجهاز المحدد
                             Consumer(
                               builder: (ctx, rref, _) {
                                 final devName = rref
@@ -2277,7 +2296,6 @@ class _Drawer extends ConsumerWidget {
                                     (devName != null && devName.isNotEmpty)
                                         ? devName
                                         : (user?.name ?? 'مدير الحسابات');
-                                // نقرة على القلم = المستخدم يحدد اسمه بنفسه.
                                 return Row(
                                   children: [
                                     Flexible(
@@ -2292,79 +2310,60 @@ class _Drawer extends ConsumerWidget {
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                    const SizedBox(width: 6),
-                                    InkWell(
-                                      borderRadius: BorderRadius.circular(12),
-                                      onTap: () =>
-                                          _renameSelf(ctx, rref, label),
-                                      child: const Padding(
-                                        padding: EdgeInsets.all(3),
-                                        child: Icon(
-                                          Icons.edit_outlined,
-                                          size: 15,
-                                          color: Colors.white70,
+                                    if (isMasterAdmin) ...[
+                                      const SizedBox(width: 6),
+                                      InkWell(
+                                        borderRadius: BorderRadius.circular(12),
+                                        onTap: () =>
+                                            _renameSelf(ctx, rref, label),
+                                        child: const Padding(
+                                          padding: EdgeInsets.all(3),
+                                          child: Icon(
+                                            Icons.edit_outlined,
+                                            size: 15,
+                                            color: Colors.white70,
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                    ],
                                   ],
                                 );
                               },
                             ),
-                            const SizedBox(height: 2),
-                            // (3.70.0) الشارة الرسمية: «المدير العام» للمنشأة
-                            // و«متجر مستقل» للحساب الفردي.
-                            Consumer(
-                              builder: (ctx, rref, _) {
-                                final st =
-                                    rref.watch(settingsProvider).valueOrNull ??
-                                        const <String, String>{};
-                                final acctType =
-                                    (st['account.type'] ?? '').trim();
-                                final individual = acctType == 'individual' ||
-                                    (acctType.isEmpty &&
-                                        wsMode == 'standalone');
-                                final badge = individual
-                                    ? 'متجر مستقل'
-                                    : ((isOwner ||
-                                            user?.role == UserRole.admin ||
-                                            user?.role == UserRole.agent)
-                                        ? 'المدير العام'
-                                        : 'عضو في منشأة');
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: .18),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    badge,
-                                    style: const TextStyle(
-                                      color: Colors.white,
+                            const SizedBox(height: 4),
+                            // شارة الدور المنقولة حصرياً لرأس القائمة الجانبية بجوار الاسم
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: roleColor.withValues(alpha: .22),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: roleColor.withValues(alpha: .4)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(roleIcon, size: 12, color: roleColor),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    roleLabel,
+                                    style: TextStyle(
+                                      color: roleColor,
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                );
-                              },
+                                ],
+                              ),
                             ),
-                            // (3.70 — المرحلة 6) البريد وبيانات المنشأة داخل
-                            // الترويسة العلوية — للمدير والحساب الفردي فقط.
+                            // بيانات المنشأة — محمية وغير قابلة للتعديل لغير المدير العام
                             Consumer(
                               builder: (ctx, rref, _) {
                                 final st =
                                     rref.watch(settingsProvider).valueOrNull ??
                                         const <String, String>{};
-                                final acctType =
-                                    (st['account.type'] ?? '').trim();
-                                final individual = acctType == 'individual' ||
-                                    (acctType.isEmpty &&
-                                        wsMode == 'standalone');
-                                if (!isOwner && !individual) {
-                                  return const SizedBox.shrink();
-                                }
                                 final email =
                                     (st['account.email'] ?? user?.email ?? '')
                                         .trim();
@@ -2373,21 +2372,34 @@ class _Drawer extends ConsumerWidget {
                                   return const SizedBox.shrink();
                                 }
                                 return Padding(
-                                  padding: const EdgeInsets.only(top: 7),
+                                  padding: const EdgeInsets.only(top: 6),
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       if (biz.isNotEmpty)
-                                        Text(
-                                          biz,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                biz,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ),
+                                            if (isMasterAdmin) ...[
+                                              const SizedBox(width: 4),
+                                              InkWell(
+                                                onTap: () => showAccountProfileDialog(context, ref),
+                                                child: const Icon(Icons.edit_outlined, size: 13, color: Colors.white70),
+                                              ),
+                                            ],
+                                          ],
                                         ),
                                       if (email.isNotEmpty)
                                         Text(
@@ -2413,8 +2425,137 @@ class _Drawer extends ConsumerWidget {
               ),
             ),
             ),
-            const SizedBox(height: 8),
-            // ---------- عناصر القائمة ----------
+
+            // ---------- مفتاح كبسولي للتبديل بين وضع المبيعات ووضع المحاسبة ----------
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: dark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () {
+                          ref.read(navAppModeProvider.notifier).setMode(NavAppMode.pos);
+                          if (current != AppScreen.pos &&
+                              current != AppScreen.inventory &&
+                              current != AppScreen.transactions) {
+                            scheduleMicrotask(() => onSelect(AppScreen.pos));
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: navMode == NavAppMode.pos
+                                ? const Color(0xFF0284C7)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: navMode == NavAppMode.pos
+                                ? [
+                                    BoxShadow(
+                                      color: const Color(0xFF0284C7).withValues(alpha: .3),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.point_of_sale_rounded,
+                                size: 16,
+                                color: navMode == NavAppMode.pos
+                                    ? Colors.white
+                                    : AppColors.text2Of(context),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'وضع المبيعات (POS)',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: navMode == NavAppMode.pos
+                                      ? Colors.white
+                                      : AppColors.text2Of(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () {
+                          ref.read(navAppModeProvider.notifier).setMode(NavAppMode.ledger);
+                          if (current != AppScreen.accounts &&
+                              current != AppScreen.vouchers &&
+                              current != AppScreen.currencies &&
+                              current != AppScreen.reports) {
+                            scheduleMicrotask(() => onSelect(AppScreen.accounts));
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: navMode == NavAppMode.ledger
+                                ? const Color(0xFF0F766E)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: navMode == NavAppMode.ledger
+                                ? [
+                                    BoxShadow(
+                                      color: const Color(0xFF0F766E).withValues(alpha: .3),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.account_balance_wallet_rounded,
+                                size: 16,
+                                color: navMode == NavAppMode.ledger
+                                    ? Colors.white
+                                    : AppColors.text2Of(context),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'وضع المحاسبة',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: navMode == NavAppMode.ledger
+                                      ? Colors.white
+                                      : AppColors.text2Of(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // ---------- عناصر القائمة حسب الوضع النشط ----------
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(
@@ -2422,38 +2563,46 @@ class _Drawer extends ConsumerWidget {
                   vertical: 4,
                 ),
                 children: [
-                  // (3.70.0) أقسام مصنّفة — بلا لوحة تحكم (رئيسية ثابتة).
-                  ..._drawerSection(
-                    context,
-                    'العمليات اليومية',
-                    const [AppScreen.pos, AppScreen.transactions],
-                    items,
-                    googleLinked,
-                    current,
-                    dark,
-                    onSelect,
-                  ),
-                  ..._drawerSection(
-                    context,
-                    'السجلات والمالية',
-                    const [
-                      AppScreen.accounts,
-                      AppScreen.vouchers,
-                      AppScreen.inventory,
-                      AppScreen.reports,
-                    ],
-                    items,
-                    googleLinked,
-                    current,
-                    dark,
-                    onSelect,
-                  ),
+                  if (navMode == NavAppMode.pos) ...[
+                    // وضع المبيعات: نقطة البيع، إدارة المنتجات، وسجل العمليات/الفواتير فقط
+                    ..._drawerSection(
+                      context,
+                      'المبيعات والمنتجات',
+                      const [
+                        AppScreen.pos,
+                        AppScreen.inventory,
+                        AppScreen.transactions,
+                      ],
+                      items,
+                      googleLinked,
+                      current,
+                      dark,
+                      onSelect,
+                    ),
+                  ] else ...[
+                    // وضع المحاسبة: الحسابات، السندات، العملات، والتقارير فقط
+                    ..._drawerSection(
+                      context,
+                      'الدفاتر والمحاسبة',
+                      const [
+                        AppScreen.accounts,
+                        AppScreen.vouchers,
+                        AppScreen.currencies,
+                        AppScreen.reports,
+                      ],
+                      items,
+                      googleLinked,
+                      current,
+                      dark,
+                      onSelect,
+                    ),
+                  ],
+                  // العناصر الثابتة في كلا الوضعين
                   ..._drawerSection(
                     context,
                     'المنشأة والنظام',
                     const [
                       AppScreen.group,
-                      AppScreen.currencies,
                       AppScreen.backup,
                       AppScreen.trash,
                       AppScreen.activity,
@@ -2467,6 +2616,55 @@ class _Drawer extends ConsumerWidget {
                   ),
                 ],
               ),
+            ),
+            // ---------- شريط الوردية الحالية والتبديل السريع ----------
+            Consumer(
+              builder: (ctx, rref, _) {
+                final staff = rref.watch(activeStaffProvider);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      Navigator.pop(context);
+                      showSwitchUserDialog(context, ref);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryOf(context).withValues(alpha: .08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.primaryOf(context).withValues(alpha: .2),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.switch_account_rounded,
+                            size: 18,
+                            color: AppColors.primaryOf(context),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              staff != null
+                                  ? 'الوردية: ${staff.name}'
+                                  : 'تبديل المستخدم / الوردية',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primaryOf(context),
+                              ),
+                            ),
+                          ),
+                          const Icon(Icons.chevron_left, size: 16),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
             const Divider(height: 1),
             // ---------- التحديثات (الإصدار وسجل التغييرات 3 أسطر) ----------

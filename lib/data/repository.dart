@@ -15,6 +15,7 @@ import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/rbac.dart';
+import '../core/security.dart';
 import '../core/workspace_mode.dart';
 import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
@@ -5296,5 +5297,83 @@ class Repo {
       'items': await c('items', 'archived = 0'),
       'trash': await c('trash'),
     };
+  }
+
+  // ==================== موظفو الورديات (الحساب الفردي) ====================
+
+  Future<List<LocalStaff>> localStaffList({bool onlyActive = true}) async {
+    final db = await _db;
+    final where = onlyActive ? 'is_active = 1' : null;
+    final rows = await db.query(
+      'local_staff',
+      where: where,
+      orderBy: 'id ASC',
+    );
+    return rows.map(LocalStaff.fromMap).toList();
+  }
+
+  Future<int> saveLocalStaff(LocalStaff staff) async {
+    final db = await _db;
+    if (staff.id == null) {
+      return await db.insert('local_staff', staff.toMap());
+    } else {
+      await db.update(
+        'local_staff',
+        staff.toMap(),
+        where: 'id = ?',
+        whereArgs: [staff.id],
+      );
+      return staff.id!;
+    }
+  }
+
+  Future<bool> deleteLocalStaff(int id) async {
+    final db = await _db;
+    final rows = await db.update(
+      'local_staff',
+      {'is_active': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return rows > 0;
+  }
+
+  Future<LocalStaff?> authenticateStaffByPin(String pin, {int? staffId}) async {
+    if (pin.trim().isEmpty) return null;
+    final staff = await localStaffList(onlyActive: true);
+    for (final s in staff) {
+      if (staffId != null && s.id != staffId) continue;
+      if (Security.verify(pin.trim(), s.pinCodeHash)) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  Future<bool> changeStaffPin({
+    required int staffId,
+    required String oldPin,
+    required String newPin,
+  }) async {
+    final db = await _db;
+    final rows = await db.query(
+      'local_staff',
+      where: 'id = ?',
+      whereArgs: [staffId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final s = LocalStaff.fromMap(rows.first);
+    if (!Security.verify(oldPin.trim(), s.pinCodeHash)) {
+      return false;
+    }
+    final newHash = Security.hash(newPin.trim());
+    await db.update(
+      'local_staff',
+      {'pin_code_hash': newHash},
+      where: 'id = ?',
+      whereArgs: [staffId],
+    );
+    return true;
   }
 }

@@ -520,6 +520,7 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
       final repo = ref.read(repoProvider);
       final number = await repo.nextVoucherNumber(_kind);
       final now = DateTime.now();
+      final staff = ref.read(activeStaffProvider);
       final v = Voucher(
         number: number,
         kind: _kind,
@@ -530,6 +531,8 @@ class _VoucherFormState extends ConsumerState<_VoucherForm> {
         notes: _notes.text.trim(),
         status: 'draft',
         date: _date,
+        createdByUserId: staff?.id,
+        cashierName: staff?.name ?? '',
         createdAt: now,
         updatedAt: now,
       );

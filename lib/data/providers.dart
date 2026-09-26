@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
@@ -61,6 +62,54 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
 /// إخفاء الأرصدة.
 final hideBalancesProvider = StateProvider<bool>((ref) => false);
+
+/// وضع واجهة التطبيق والقائمة الجانبية (المبيعات / المحاسبة).
+enum NavAppMode {
+  pos, // وضع المبيعات
+  ledger, // وضع المحاسبة
+}
+
+class NavAppModeNotifier extends StateNotifier<NavAppMode> {
+  NavAppModeNotifier() : super(NavAppMode.ledger) {
+    _load();
+  }
+
+  static const _prefKey = 'app_nav_mode';
+
+  Future<void> _load() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final val = sp.getString(_prefKey);
+      if (val == 'ledger') {
+        state = NavAppMode.ledger;
+      } else if (val == 'pos') {
+        state = NavAppMode.pos;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setMode(NavAppMode mode) async {
+    state = mode;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(_prefKey, mode == NavAppMode.ledger ? 'ledger' : 'pos');
+    } catch (_) {}
+  }
+}
+
+final navAppModeProvider =
+    StateNotifierProvider<NavAppModeNotifier, NavAppMode>((ref) {
+  return NavAppModeNotifier();
+});
+
+/// الموظف / الكاشير النشط في وردية الحساب الفردي
+final activeStaffProvider = StateProvider<LocalStaff?>((ref) => null);
+
+/// قائمة موظفي الورديات المحليين
+final localStaffListProvider = FutureProvider<List<LocalStaff>>((ref) async {
+  ref.watch(refreshProvider);
+  return ref.watch(repoProvider).localStaffList();
+});
 
 /// العملات المعرَّفة.
 final currenciesProvider = FutureProvider<List<CurrencyDef>>((ref) async {
@@ -510,12 +559,14 @@ class ReportScope {
   final DateTime to;
   final String? currency;
   final int? accountId;
+  final String? cashier;
 
   const ReportScope({
     required this.from,
     required this.to,
     this.currency,
     this.accountId,
+    this.cashier,
   });
 
   ReportScope copyWith({
@@ -523,13 +574,16 @@ class ReportScope {
     DateTime? to,
     String? currency,
     int? accountId,
+    String? cashier,
     bool clearCurrency = false,
     bool clearAccount = false,
+    bool clearCashier = false,
   }) => ReportScope(
     from: from ?? this.from,
     to: to ?? this.to,
     currency: clearCurrency ? null : (currency ?? this.currency),
     accountId: clearAccount ? null : (accountId ?? this.accountId),
+    cashier: clearCashier ? null : (cashier ?? this.cashier),
   );
 }
 
@@ -561,11 +615,19 @@ final reportDataProvider = FutureProvider<ReportData>((ref) async {
   final s = ref.watch(reportScopeProvider);
   final repo = ref.watch(repoProvider);
 
-  final txs = (await repo.transactions(
+  var txs = (await repo.transactions(
     from: s.from,
     to: s.to,
     accountId: s.accountId,
   )).where((t) => s.currency == null || t.currency == s.currency).toList();
+
+  if (s.cashier != null && s.cashier!.isNotEmpty) {
+    txs = txs.where((t) {
+      final name = t.cashierName.trim();
+      final uid = t.createdByUserId?.toString() ?? '';
+      return name == s.cashier || uid == s.cashier;
+    }).toList();
+  }
 
   final accounts = await repo.accounts(includeArchived: true);
 

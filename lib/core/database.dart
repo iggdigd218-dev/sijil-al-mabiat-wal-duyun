@@ -107,6 +107,8 @@ class AppDatabase {
         image        TEXT DEFAULT '',
         status       TEXT NOT NULL DEFAULT 'done',
         sync_state   TEXT NOT NULL DEFAULT 'synced',
+        created_by_user_id INTEGER,
+        cashier_name TEXT DEFAULT '',
         date         TEXT NOT NULL,
         deleted_at   TEXT DEFAULT '',
         deleted_by   INTEGER,
@@ -144,6 +146,8 @@ class AppDatabase {
         statement   TEXT DEFAULT '',
         notes       TEXT DEFAULT '',
         status      TEXT NOT NULL DEFAULT 'draft',
+        created_by_user_id INTEGER,
+        cashier_name TEXT DEFAULT '',
         date        TEXT NOT NULL,
         deleted_at  TEXT DEFAULT '',
         deleted_by   INTEGER,
@@ -205,11 +209,24 @@ class AppDatabase {
         permissions TEXT DEFAULT '',
         is_me       INTEGER NOT NULL DEFAULT 0,
         active      INTEGER NOT NULL DEFAULT 1,
+        can_apply_discount INTEGER NOT NULL DEFAULT 1,
         deleted_at  TEXT DEFAULT '',
         deleted_by   INTEGER,
         restore_op_id TEXT DEFAULT '',
         created_at  TEXT NOT NULL,
         updated_at  TEXT NOT NULL
+      )''');
+
+    // ---------- موظفو الورديات (الحساب الفردي) ----------
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS local_staff (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        name              TEXT NOT NULL,
+        pin_code_hash     TEXT NOT NULL,
+        role              TEXT NOT NULL DEFAULT 'cashier',
+        can_apply_discount INTEGER NOT NULL DEFAULT 0,
+        is_active         INTEGER NOT NULL DEFAULT 1,
+        created_at        TEXT NOT NULL
       )''');
 
     // ---------- الدردشة ----------
@@ -390,6 +407,22 @@ class AppDatabase {
       // (2026-09-26) أعمدة حالة الحذف والنشاط للأصناف (is_deleted, is_active)
       await _addColumn(db, 'items', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
       await _addColumn(db, 'items', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+      // أعمدة الورديات وربط العمليات بالكاشير وصلاحية الخصم
+      await _addColumn(db, 'transactions', 'created_by_user_id', 'INTEGER');
+      await _addColumn(db, 'transactions', 'cashier_name', "TEXT DEFAULT ''");
+      await _addColumn(db, 'vouchers', 'created_by_user_id', 'INTEGER');
+      await _addColumn(db, 'vouchers', 'cashier_name', "TEXT DEFAULT ''");
+      await _addColumn(db, 'users', 'can_apply_discount', 'INTEGER NOT NULL DEFAULT 1');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS local_staff (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          name              TEXT NOT NULL,
+          pin_code_hash     TEXT NOT NULL,
+          role              TEXT NOT NULL DEFAULT 'cashier',
+          can_apply_discount INTEGER NOT NULL DEFAULT 0,
+          is_active         INTEGER NOT NULL DEFAULT 1,
+          created_at        TEXT NOT NULL
+        )''');
     } catch (_) {}
   }
 

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/models.dart';
 import '../core/pdf_fonts.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -18,6 +19,7 @@ import '../data/sync/subscription_guard.dart' show Feature, kWatermarkText;
 /// أنواع التقارير — نقل حرفي لـ `REPORT_TABS` في نسخة الويب.
 enum ReportTab {
   summary('📋 ملخص إجمالي المبالغ'),
+  shift('⏱️ تقرير الورديات والكاشير'),
   detail('🧾 تفصيل العمليات'),
   categories('🗂️ التصنيفات'),
   period('🗓️ يومي/أسبوعي/شهري/سنوي'),
@@ -269,6 +271,45 @@ class _ScopeBar extends ConsumerWidget {
                 );
               },
             ),
+            _pill(
+              context,
+              s.cashier == null ? 'كل الكاشيرات' : 'الكاشير: ${s.cashier}',
+              Icons.badge_outlined,
+              () async {
+                final staffList =
+                    ref.read(localStaffListProvider).valueOrNull ?? [];
+                final v = await showModalBottomSheet<String>(
+                  context: context,
+                  builder: (_) => SafeArea(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.people_outline),
+                          title: const Text('كل الكاشيرات والموظفين'),
+                          onTap: () => Navigator.pop(context, ''),
+                        ),
+                        for (final st in staffList)
+                          ListTile(
+                            leading: const Icon(Icons.person_pin_outlined),
+                            title: Text(st.name),
+                            subtitle: Text(
+                              '${st.role == "cashier" ? "كاشير" : st.role} • ${st.isActive ? "نشط" : "معطل"}',
+                            ),
+                            onTap: () => Navigator.pop(context, st.name),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+                if (v == null) return;
+                set(
+                  v.isEmpty
+                      ? s.copyWith(clearCashier: true)
+                      : s.copyWith(cashier: v),
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -344,6 +385,63 @@ ReportTable buildReport(
           ('إجمالي المستحق علينا', Fmt.money(tPay)),
           ('صافي الرصيد', Fmt.money(tNet)),
           ('عدد العمليات', '${d.txs.length}'),
+        ],
+      );
+
+    case ReportTab.shift:
+      final byStaff = <String, _StaffShiftStat>{};
+      for (final t in d.txs) {
+        final name = t.cashierName.trim().isNotEmpty
+            ? t.cashierName.trim()
+            : 'غير محدد';
+        final stat =
+            byStaff.putIfAbsent(name, () => _StaffShiftStat(cashier: name));
+        stat.record(t);
+      }
+      var totalCashSales = 0.0;
+      var totalCreditSales = 0.0;
+      var totalCollections = 0.0;
+      var totalOutflows = 0.0;
+      var totalOps = 0;
+
+      final rows = byStaff.values.map((s) {
+        totalCashSales += s.cashSales;
+        totalCreditSales += s.creditSales;
+        totalCollections += s.inflows;
+        totalOutflows += s.outflows;
+        totalOps += s.txCount;
+        return [
+          s.cashier,
+          '${s.txCount}',
+          Fmt.money(s.cashSales),
+          Fmt.money(s.creditSales),
+          Fmt.money(s.inflows),
+          Fmt.money(s.outflows),
+          Fmt.money(s.netCash),
+        ];
+      }).toList();
+
+      return ReportTable(
+        headers: const [
+          'الكاشير / الموظف',
+          'عدد العمليات',
+          'مبيعات نقداً',
+          'مبيعات آجل',
+          'مقبوضات نقدية',
+          'مدفوعات ومصاريف',
+          'صافي الصندوق النقدي',
+        ],
+        rows: rows,
+        summary: [
+          ('إجمالي المبيعات النقدية', Fmt.money(totalCashSales)),
+          ('إجمالي المقبوضات النقدية', Fmt.money(totalCollections)),
+          ('إجمالي المصاريف والمدفوعات', Fmt.money(totalOutflows)),
+          (
+            'صافي النقد بالصندوق',
+            Fmt.money(totalCashSales + totalCollections - totalOutflows)
+          ),
+          ('إجمالي المبيعات الآجلة', Fmt.money(totalCreditSales)),
+          ('إجمالي العمليات', '$totalOps'),
         ],
       );
 
@@ -827,4 +925,30 @@ class _ReportView extends ConsumerWidget {
       name: 'report-${tab.name}.pdf',
     );
   }
+}
+
+class _StaffShiftStat {
+  final String cashier;
+  int txCount = 0;
+  double cashSales = 0;
+  double creditSales = 0;
+  double inflows = 0;
+  double outflows = 0;
+
+  _StaffShiftStat({required this.cashier});
+
+  void record(Tx t) {
+    txCount++;
+    if (t.type == OpType.revenue) {
+      cashSales += t.amount;
+    } else if (t.type == OpType.debit) {
+      creditSales += t.amount;
+    } else if (t.type == OpType.inflow) {
+      inflows += t.amount;
+    } else if (t.type == OpType.expense || t.type == OpType.outflow) {
+      outflows += t.amount;
+    }
+  }
+
+  double get netCash => cashSales + inflows - outflows;
 }

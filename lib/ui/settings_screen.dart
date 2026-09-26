@@ -28,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'logout_flow.dart' show showLogoutRequestsSheet;
 import 'group_management_screen.dart';
 import 'support_chat_screen.dart';
+import 'shift_management_dialog.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
 import '../core/platform_info.dart';
@@ -444,7 +445,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         // (3.70.0 — إعادة التصميم) تبويبات وبطاقات نقر مستقلة مصنّفة —
         // بلا قوائم منسدلة متداخلة (ExpansionTile) إطلاقاً.
         return DefaultTabController(
-          length: 5,
+          length: 4,
           child: Stack(
             children: [
               Column(
@@ -466,9 +467,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             fontWeight: FontWeight.w600, fontSize: 12.5),
                         tabs: const [
                           Tab(
-                              icon: Icon(Icons.business_outlined, size: 19),
-                              text: 'المنشأة'),
-                          Tab(
                               icon: Icon(Icons.palette_outlined, size: 19),
                               text: 'المظهر'),
                           Tab(
@@ -487,60 +485,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   Expanded(
                     child: TabBarView(
                       children: [
-                        // [بطاقة بيانات المنشأة — مطوية داخل زر مخصص]
+                        // [بطاقة المظهر]
                         _tabPage([
-                          if (canEditOrg)
-                            _Collapsible(
-                              title: 'بيانات المؤسسة',
-                              icon: Icons.business_outlined,
-                              color: const Color(0xFF2563EB),
-                              initiallyExpanded: false,
-                              children: [
-                                Card(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(14),
-                                    child: Column(
-                                      children: [
-                                        for (final f in _orgFields)
-                                          _Field(
-                                            controller: _ctrls[f.$1]!,
-                                            label: f.$2,
-                                            icon: f.$3,
-                                            keyboard: f.$4,
-                                            maxLines: f.$5,
-                                          ),
-                                        const SizedBox(height: 12),
-                                        SizedBox(
-                                          width: double.infinity,
-                                          child: FilledButton.icon(
-                                            onPressed:
-                                                _saving ? null : _saveAll,
-                                            icon: _saving
-                                                ? const SizedBox(
-                                                    width: 16,
-                                                    height: 16,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
-                                                  )
-                                                : const Icon(
-                                                    Icons.save_outlined),
-                                            label: Text(
-                                              _saving
-                                                  ? 'جارٍ الحفظ…'
-                                                  : 'حفظ البيانات',
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
+                          Card(
+                            child: ListTile(
+                              leading: const Icon(Icons.palette_outlined),
+                              title: const Text('المظهر والأصوات'),
+                              subtitle: const Text(
+                                  'حجم الخط، الأصوات والاهتزاز والتنبيهات'),
+                              trailing: const Icon(Icons.chevron_left),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                    builder: (_) => const AppearanceScreen()),
+                              ),
                             ),
+                          ),
                           const SizedBox(height: 18),
+                        ]),
+                        // [بطاقة الفواتير ونقطة البيع]
+                        _tabPage([
                           _Collapsible(
                             title: 'العملة والترقيم',
                             icon: Icons.currency_exchange,
@@ -581,26 +544,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             ],
                           ),
                           const SizedBox(height: 18),
-                        ]),
-                        // [بطاقة المظهر]
-                        _tabPage([
-                          Card(
-                            child: ListTile(
-                              leading: const Icon(Icons.palette_outlined),
-                              title: const Text('المظهر والأصوات'),
-                              subtitle: const Text(
-                                  'حجم الخط، الأصوات والاهتزاز والتنبيهات'),
-                              trailing: const Icon(Icons.chevron_left),
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
-                                    builder: (_) => const AppearanceScreen()),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                        ]),
-                        // [بطاقة الفواتير ونقطة البيع]
-                        _tabPage([
                           _Collapsible(
                             title: 'المبيعات والسندات',
                             icon: Icons.receipt_long_outlined,
@@ -726,7 +669,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             icon: Icons.lock_outline,
                             color: const Color(0xFFE11D48),
                             children: [
-                              SwitchListTile(
+                                SwitchListTile(
                                 contentPadding: EdgeInsets.zero,
                                 secondary: const Icon(Icons.fingerprint),
                                 title: const Text('فتح التطبيق بالبصمة'),
@@ -757,6 +700,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                             'biometric', v ? '1' : '0');
                                         bump(ref);
                                       },
+                              ),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.badge_outlined),
+                                title: const Text('إدارة موظفي الورديات والكاشير'),
+                                subtitle: const Text('إعداد الموظفين، رموز PIN، وصلاحيات الخصم'),
+                                trailing: const Icon(Icons.chevron_left),
+                                onTap: () => showManageStaffDialog(context, ref),
                               ),
                               const Divider(height: 1),
                               SwitchListTile(
@@ -1296,40 +1247,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           : children,
     );
   }
-}
-
-/// حقل نصي بسيط مربوط بمتحكّم يملكه الأب.
-class _Field extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  final IconData icon;
-  final String? hint;
-  final int maxLines;
-  final TextInputType? keyboard;
-
-  const _Field({
-    required this.controller,
-    required this.label,
-    required this.icon,
-    this.maxLines = 1,
-    this.keyboard,
-  }) : hint = null;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 7),
-        child: TextField(
-          controller: controller,
-          maxLines: maxLines,
-          keyboardType: keyboard,
-          decoration: InputDecoration(
-            labelText: label,
-            helperText: hint,
-            prefixIcon: Icon(icon),
-            isDense: true,
-          ),
-        ),
-      );
 }
 
 /// قسم إعدادات قابل للطيّ برمز يميّزه — يقابل «الطي في أيقونات حسب النوع».

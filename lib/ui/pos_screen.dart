@@ -21,6 +21,7 @@ import 'trial_ui.dart' show featureNeedsStamp;
 import 'tx_share.dart';
 import 'widgets.dart';
 import '../core/data_change.dart';
+import 'shift_management_dialog.dart';
 
 enum _PosPayment {
   cash('نقداً 💵', 'cash'),
@@ -90,6 +91,34 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
   /// (3.70) صلاحية الخصم المحلية — تُحجب عن الكاشير فوراً (بلا شبكة).
   bool _canDiscount = true;
+  /// معرّف واسم المشرف المعتمد لتخطي حجب الخصم في الفاتورة الحالية فقط (Supervisor Override)
+  int? _supervisorOverrideId;
+  String? _supervisorOverrideName;
+
+  bool get _hasDiscountPermission {
+    if (_supervisorOverrideId != null) return true;
+    final staff = ref.read(activeStaffProvider);
+    if (staff != null) {
+      return staff.canApplyDiscount;
+    }
+    return _canDiscount;
+  }
+
+  Future<void> _promptSupervisorOverride(StateSetter setSheetState) async {
+    final supervisor = await showSupervisorPinDialog(
+      context,
+      ref,
+      reason: 'الموافقة على منح صلاحية الخصم لهذه الفاتورة فقط',
+    );
+    if (supervisor != null && mounted) {
+      setState(() {
+        _supervisorOverrideId = supervisor.id;
+        _supervisorOverrideName = supervisor.name;
+      });
+      setSheetState(() {});
+      showSnack(context, 'تمت الموافقة على الخصم من المشرف: ${supervisor.name}');
+    }
+  }
 
   @override
   void initState() {
@@ -199,6 +228,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.clear();
     _discountCtrl.clear();
     _notesCtrl.clear();
+    _supervisorOverrideId = null;
+    _supervisorOverrideName = null;
     setState(() {});
   }
 
@@ -1553,51 +1584,100 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
                     const SizedBox(height: 12),
 
-                    // الخصم المزدوج: نسبة % أو مبلغ مقطوع — (3.70) محجوب
-                    // عن الكاشير بلا صلاحية خصم (فحص RBAC محلي فوري).
-                    if (_canDiscount)
-                      Row(
+                    // الخصم المزدوج: نسبة % أو مبلغ مقطوع — صلاحية الخصم مع تخطي المشرف (Supervisor Override)
+                    Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: TextField(
-                            controller: _discountCtrl,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                                    decimal: true),
-                            inputFormatters: _draft.discountIsPercent
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _hasDiscountPermission
                                 ? null
-                                : const [ThousandsFormatter()],
-                            decoration: InputDecoration(
-                              labelText: _draft.discountIsPercent
-                                  ? 'نسبة الخصم %'
-                                  : 'مبلغ الخصم',
-                              prefixIcon:
-                                  const Icon(Icons.discount_outlined),
-                              isDense: true,
+                                : () => _promptSupervisorOverride(setSheetState),
+                            child: IgnorePointer(
+                              ignoring: !_hasDiscountPermission,
+                              child: TextField(
+                                controller: _discountCtrl,
+                                enabled: _hasDiscountPermission,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                        decimal: true),
+                                inputFormatters: _draft.discountIsPercent
+                                    ? null
+                                    : const [ThousandsFormatter()],
+                                decoration: InputDecoration(
+                                  labelText: _draft.discountIsPercent
+                                      ? 'نسبة الخصم %'
+                                      : 'مبلغ الخصم',
+                                  prefixIcon:
+                                      const Icon(Icons.discount_outlined),
+                                  suffixIcon: !_hasDiscountPermission
+                                      ? Tooltip(
+                                          message:
+                                              'طلب إذن المشرف لتطبيق الخصم',
+                                          child: IconButton(
+                                            icon: const Icon(
+                                              Icons.lock_outline_rounded,
+                                              color: Colors.amber,
+                                            ),
+                                            onPressed: () =>
+                                                _promptSupervisorOverride(
+                                                    setSheetState),
+                                          ),
+                                        )
+                                      : (_supervisorOverrideId != null
+                                          ? const Icon(Icons.verified,
+                                              color: Colors.green)
+                                          : null),
+                                  helperText: !_hasDiscountPermission
+                                      ? 'الخصم مقفل — انقر لطلب إذن المشرف برمز PIN'
+                                      : (_supervisorOverrideName != null
+                                          ? 'معتمد من: $_supervisorOverrideName'
+                                          : null),
+                                  helperStyle: !_hasDiscountPermission
+                                      ? const TextStyle(
+                                          color: Colors.amber, fontSize: 11)
+                                      : const TextStyle(
+                                          color: Colors.green, fontSize: 11),
+                                  isDense: true,
+                                  filled: !_hasDiscountPermission,
+                                  fillColor: !_hasDiscountPermission
+                                      ? (Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? Colors.white10
+                                          : Colors.black.withValues(alpha: .04))
+                                      : null,
+                                ),
+                                onChanged: (v) {
+                                  _cartCtl.setDiscount(v);
+                                  setSheetState(() {});
+                                  setState(() {});
+                                },
+                              ),
                             ),
-                            onChanged: (v) {
-                              _cartCtl.setDiscount(v);
-                              setSheetState(() {});
-                              setState(() {});
-                            },
                           ),
                         ),
                         const SizedBox(width: 8),
-                        SegmentedButton<bool>(
-                          style: const ButtonStyle(
-                            visualDensity: VisualDensity.compact,
+                        Opacity(
+                          opacity: _hasDiscountPermission ? 1.0 : 0.5,
+                          child: IgnorePointer(
+                            ignoring: !_hasDiscountPermission,
+                            child: SegmentedButton<bool>(
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              segments: const [
+                                ButtonSegment(value: false, label: Text('مبلغ')),
+                                ButtonSegment(value: true, label: Text('٪')),
+                              ],
+                              selected: {_draft.discountIsPercent},
+                              onSelectionChanged: (set) {
+                                _cartCtl.setDiscountIsPercent(set.first);
+                                setSheetState(() {});
+                                setState(() {});
+                              },
+                            ),
                           ),
-                          segments: const [
-                            ButtonSegment(value: false, label: Text('مبلغ')),
-                            ButtonSegment(value: true, label: Text('٪')),
-                          ],
-                          selected: {_draft.discountIsPercent},
-                          onSelectionChanged: (set) {
-                            _cartCtl.setDiscountIsPercent(set.first);
-                            setSheetState(() {});
-                            setState(() {});
-                          },
                         ),
                       ],
                     ),
@@ -1809,6 +1889,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
       // 2. تحديد نوع وسجل العملية المالية
       late final int txId;
       final now = DateTime.now();
+      final activeStaff = ref.read(activeStaffProvider);
+      final int? creatorId = activeStaff?.id;
+      final cashierName = activeStaff?.name ?? 'الكاشير';
+      final supNote = _supervisorOverrideName != null
+          ? '\n[تم اعتماد الخصم بواسطة المشرف: $_supervisorOverrideName (#$_supervisorOverrideId)]'
+          : '';
 
       if (_payment == _PosPayment.cash) {
         // مبيعات نقدية: إيراد
@@ -1820,7 +1906,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات نقدية رقم #$refNum',
           reference: refNum,
-          notes: 'طريقة الدفع: نقداً',
+          notes: 'طريقة الدفع: نقداً$supNote',
+          createdByUserId: creatorId,
+          cashierName: cashierName,
           createdAt: now,
           updatedAt: now,
         );
@@ -1835,7 +1923,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
           date: now,
           description: 'فاتورة مبيعات آجلة رقم #$refNum',
           reference: refNum,
-          notes: 'طريقة الدفع: آجل (على الحساب)',
+          notes: 'طريقة الدفع: آجل (على الحساب)$supNote',
+          createdByUserId: creatorId,
+          cashierName: cashierName,
           createdAt: now,
           updatedAt: now,
         );
@@ -1857,7 +1947,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
               'فاتورة مبيعات جزئية رقم #$refNum (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
           reference: refNum,
           notes:
-              'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}',
+              'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}$supNote',
+          createdByUserId: creatorId,
+          cashierName: cashierName,
           createdAt: now,
           updatedAt: now,
         );
@@ -1874,6 +1966,8 @@ class _PosScreenState extends ConsumerState<PosScreen>
             description:
                 'دفعة مقدمة من فاتورة #$refNum (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
             reference: '',
+            createdByUserId: creatorId,
+            cashierName: cashierName,
             createdAt: now,
             updatedAt: now,
           );

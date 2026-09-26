@@ -159,13 +159,18 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
         } catch (_) {}
       }
 
+      final staff = ref.read(activeStaffProvider);
+      final isMasterAdmin = staff == null || staff.role == 'admin';
+
       await repo.setSetting('account.email', _emailCtrl.text.trim());
       await repo.setSetting('email', _emailCtrl.text.trim());
       await repo.setSetting('phone', _phoneCtrl.text.trim());
       await repo.setSetting('whatsapp', _phoneCtrl.text.trim());
-      await repo.setSetting('businessName', _bizNameCtrl.text.trim());
-      await repo.setSetting('businessActivity', _bizActivityCtrl.text.trim());
-      await repo.setSetting('address', _addressCtrl.text.trim());
+      if (isMasterAdmin) {
+        await repo.setSetting('businessName', _bizNameCtrl.text.trim());
+        await repo.setSetting('businessActivity', _bizActivityCtrl.text.trim());
+        await repo.setSetting('address', _addressCtrl.text.trim());
+      }
 
       bump(ref);
       Sfx.success();
@@ -184,6 +189,8 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
   @override
   Widget build(BuildContext context) {
     final photo = ref.watch(drawerPhotoProvider).valueOrNull ?? '';
+    final staff = ref.watch(activeStaffProvider);
+    final isMasterAdmin = staff == null || staff.role == 'admin';
     const fallback = Icon(Icons.person, color: Colors.white, size: 34);
     final Widget face = photo.startsWith('http')
         ? Image.network(
@@ -264,26 +271,36 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  TextButton.icon(
-                    onPressed: _logoBusy ? null : _pickAndSetLogo,
-                    icon: const Icon(Icons.photo_camera_outlined, size: 17),
-                    label: Text(photo.isNotEmpty ? 'تغيير الشعار' : 'رفع الشعار'),
-                  ),
-                  if (photo.isNotEmpty) ...[
-                    const SizedBox(width: 8),
+              if (isMasterAdmin)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
                     TextButton.icon(
-                      onPressed: _logoBusy ? null : _removeLogo,
-                      icon: const Icon(Icons.delete_outline,
-                          size: 17, color: Colors.red),
-                      label: const Text('حذف',
-                          style: TextStyle(color: Colors.red)),
+                      onPressed: _logoBusy ? null : _pickAndSetLogo,
+                      icon: const Icon(Icons.photo_camera_outlined, size: 17),
+                      label: Text(photo.isNotEmpty ? 'تغيير الشعار' : 'رفع الشعار'),
                     ),
+                    if (photo.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        onPressed: _logoBusy ? null : _removeLogo,
+                        icon: const Icon(Icons.delete_outline,
+                            size: 17, color: Colors.red),
+                        label: const Text('حذف',
+                            style: TextStyle(color: Colors.red)),
+                      ),
+                    ],
                   ],
-                ],
-              ),
+                )
+              else
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    'شعار المنشأة (للعرض فقط للموظفين)',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               const SizedBox(height: 12),
               // الحقول
               _field(
@@ -310,12 +327,14 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                 controller: _bizNameCtrl,
                 label: 'اسم المنشأة / المتجر',
                 icon: Icons.business_outlined,
+                enabled: isMasterAdmin,
               ),
               const SizedBox(height: 10),
               _field(
                 controller: _bizActivityCtrl,
                 label: 'نشاط المنشأة',
                 icon: Icons.storefront_outlined,
+                enabled: isMasterAdmin,
               ),
               const SizedBox(height: 10),
               _field(
@@ -323,6 +342,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                 label: 'العنوان الجغرافي',
                 icon: Icons.location_on_outlined,
                 maxLines: 2,
+                enabled: isMasterAdmin,
               ),
               const SizedBox(height: 16),
             ],
@@ -373,15 +393,18 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
     required IconData icon,
     TextInputType? keyboard,
     int maxLines = 1,
+    bool enabled = true,
   }) {
     return TextField(
       controller: controller,
       keyboardType: keyboard,
       maxLines: maxLines,
+      enabled: enabled,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon, size: 20),
         isDense: true,
+        filled: !enabled,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.field),
         ),

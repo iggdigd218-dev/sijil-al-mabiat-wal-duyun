@@ -52,13 +52,94 @@ void main() {
         reference: '123',
         syncState: 'pending',
         description: 'فاتورة تجريبية',
+        createdByUserId: 10,
+        cashierName: 'خالد الكاشير',
       );
       final m = tx.toMap();
       expect(m['sync_state'], 'pending');
+      expect(m['created_by_user_id'], 10);
+      expect(m['cashier_name'], 'خالد الكاشير');
       final back = Tx.fromMap({...m, 'id': 1});
       expect(back.syncState, 'pending');
       expect(back.amount, 15000);
       expect(back.reference, '123');
+      expect(back.createdByUserId, 10);
+      expect(back.cashierName, 'خالد الكاشير');
+    });
+  });
+
+  group('LocalStaff & Granular Permissions', () {
+    test('LocalStaff toMap and fromMap preserve permissions and PIN hash', () {
+      final now = DateTime.now();
+      final staff = LocalStaff(
+        id: 7,
+        name: 'سالم الكاشير',
+        pinCodeHash: 'hash_abc_123',
+        role: 'cashier',
+        canApplyDiscount: false,
+        isActive: true,
+        createdAt: now,
+      );
+
+      final map = staff.toMap();
+      expect(map['name'], 'سالم الكاشير');
+      expect(map['role'], 'cashier');
+      expect(map['can_apply_discount'], 0);
+      expect(map['is_active'], 1);
+      expect(map['pin_code_hash'], 'hash_abc_123');
+
+      final restored = LocalStaff.fromMap(map);
+      expect(restored.id, 7);
+      expect(restored.name, 'سالم الكاشير');
+      expect(restored.canApplyDiscount, isFalse);
+      expect(restored.isActive, isTrue);
+
+      final withDiscount = staff.copyWith(canApplyDiscount: true);
+      expect(withDiscount.canApplyDiscount, isTrue);
+      expect(withDiscount.toMap()['can_apply_discount'], 1);
+    });
+
+    test('AppUser has canApplyDiscount permission field', () {
+      final user = AppUser(
+        id: 1,
+        name: 'مدير المتجر',
+        email: 'admin@nexora.ye',
+        role: UserRole.admin,
+        pin: '1234',
+        password: '',
+        permissions: const {'can_discount': true},
+        isMe: true,
+        active: true,
+        canApplyDiscount: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      expect(user.canApplyDiscount, isTrue);
+      expect(user.role, UserRole.admin);
+    });
+
+    test('Voucher attribution preserves createdByUserId and cashierName', () {
+      final now = DateTime.now();
+      final v = Voucher(
+        number: 'V-101',
+        kind: VoucherKind.receipt,
+        amount: 25000,
+        currency: 'YER',
+        statement: 'قبض مبيعات',
+        createdByUserId: 15,
+        cashierName: 'عمر المحاسب',
+        date: now,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final m = v.toMap();
+      expect(m['created_by_user_id'], 15);
+      expect(m['cashier_name'], 'عمر المحاسب');
+
+      final restored = Voucher.fromMap({...m, 'id': 5});
+      expect(restored.id, 5);
+      expect(restored.createdByUserId, 15);
+      expect(restored.cashierName, 'عمر المحاسب');
     });
   });
 }
