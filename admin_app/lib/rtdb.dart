@@ -62,8 +62,15 @@ class SubscriberEntry {
   final String licenseKey;
   final bool isFrozen;
   final Map<String, bool> featureFlags;
+  final List<String> devicesList;
+  final int memberCount;
 
   int get expiryDate => expiresAtMs;
+
+  bool get isLifetime =>
+      planType.trim().toLowerCase() == 'lifetime' ||
+      expiresAtMs >= 1700000000000 + 36500 * 86400000 ||
+      expiresAtMs >= 4000000000000;
 
   const SubscriberEntry({
     required this.workspaceId,
@@ -80,6 +87,8 @@ class SubscriberEntry {
     this.licenseKey = '',
     this.isFrozen = false,
     this.featureFlags = const {},
+    this.devicesList = const [],
+    this.memberCount = 1,
   });
 
   factory SubscriberEntry.fromSubscriptionMap(
@@ -110,6 +119,16 @@ class SubscriberEntry {
       flagsRaw.forEach((k, v) => flags['$k'] = v == true);
     }
 
+    final devs = <String>[];
+    if (map['devices'] is Map) {
+      for (final d in (map['devices'] as Map).values) {
+        if (d is Map) {
+          final n = asStr(d['deviceName'] ?? d['name'] ?? d['model']);
+          if (n.isNotEmpty && !devs.contains(n)) devs.add(n);
+        }
+      }
+    }
+
     return SubscriberEntry(
       workspaceId: wsId,
       planType: asStr(map['plan_type'] ?? map['planType'] ?? 'individual'),
@@ -120,7 +139,7 @@ class SubscriberEntry {
       activatedAtMs: asMs(map['activated_at'] ?? map['activatedAt']),
       deviceRef: devId,
       clientName: asStr(
-          map['clientName'] ?? map['client_name'] ?? map['userName']),
+          map['clientName'] ?? map['client_name'] ?? map['account.name'] ?? map['userName']),
       storeName: asStr(
           map['storeName'] ?? map['store_name'] ?? map['businessName']),
       phone: asStr(
@@ -129,6 +148,8 @@ class SubscriberEntry {
       licenseKey: key,
       isFrozen: map['is_frozen'] == true || map['frozen'] == true,
       featureFlags: flags,
+      devicesList: devs,
+      memberCount: devs.isNotEmpty ? devs.length : 1,
     );
   }
 }
@@ -952,8 +973,11 @@ class Rtdb {
   Future<List<SubscriberEntry>> recentSubscribers({int limit = 30}) async {
     final keys = await _get('workspaces', {'shallow': 'true'});
     if (keys is! Map || keys.isEmpty) return const [];
-    final wsKeys =
-        keys.keys.map((k) => '$k').take(kMaxSubscriberScan).toList();
+    final wsKeys = keys.keys
+        .map((k) => '$k')
+        .where((k) => !k.startsWith('_'))
+        .take(kMaxSubscriberScan)
+        .toList();
 
     final rows = await _gather<List<SubscriberEntry>>(
       [for (final ws in wsKeys) () => _readWorkspaceEntries(ws)],
@@ -970,6 +994,87 @@ class Rtdb {
       final sub = await _get('workspaces/$enc/subscription');
       if (sub is Map) live = sub;
     } catch (_) {}
+
+    final devicesList = <String>[];
+    int memberCount = 1;
+    String extraStore = '';
+    String extraClient = '';
+    String extraPhone = '';
+
+    // 1) قراءة جدول roster للحصول على الأجهزة والمدير
+    try {
+      final roster = await _get('workspaces/$enc/roster');
+      if (roster is Map && roster.isNotEmpty) {
+        memberCount = roster.length;
+        for (final entry in roster.entries) {
+          final r = entry.value;
+          if (r is Map) {
+            final rName = asStr(r['name'] ?? r['deviceName'] ?? entry.key);
+            if (rName.isNotEmpty && !devicesList.contains(rName)) {
+              devicesList.add(rName);
+            }
+            if (r['is_owner'] == 1 || r['user_role'] == 'admin') {
+              if (extraClient.isEmpty) extraClient = rName;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2) قراءة devices إن وجدت
+    try {
+      final devs = await _get('workspaces/$enc/devices');
+      if (devs is Map && devs.isNotEmpty) {
+        for (final entry in devs.entries) {
+          final d = entry.value;
+          if (d is Map) {
+            final dName = asStr(d['deviceName'] ?? d['name'] ?? d['model'] ?? entry.key);
+            if (dName.isNotEmpty && !devicesList.contains(dName)) {
+              devicesList.add(dName);
+            }
+            if (extraStore.isEmpty) {
+              extraStore = asStr(d['storeName'] ?? d['store_name'] ?? d['businessName']);
+            }
+            if (extraClient.isEmpty) {
+              extraClient = asStr(d['clientName'] ?? d['client_name'] ?? d['userName']);
+            }
+            if (extraPhone.isEmpty) {
+              extraPhone = asStr(d['phone'] ?? d['whatsapp']);
+            }
+          }
+        }
+        if (memberCount < devicesList.length) {
+          memberCount = devicesList.length;
+        }
+      }
+    } catch (_) {}
+
+    // 3) فحص محادثات الدعم الفني للحصول على اسم المنشأة أو العميل إذا كان ناقصاً
+    if (extraStore.isEmpty || extraClient.isEmpty || extraPhone.isEmpty) {
+      try {
+        final chatMeta = await _get('support_chats/$enc/meta');
+        if (chatMeta is Map) {
+          if (extraStore.isEmpty) extraStore = asStr(chatMeta['storeName'] ?? chatMeta['store_name']);
+          if (extraClient.isEmpty) extraClient = asStr(chatMeta['clientName'] ?? chatMeta['client_name']);
+          if (extraPhone.isEmpty) extraPhone = asStr(chatMeta['phone'] ?? chatMeta['phoneNumber']);
+        }
+      } catch (_) {}
+    }
+
+    final resolvedStore = asStr(live?['storeName'] ??
+        live?['store_name'] ??
+        live?['businessName'] ??
+        extraStore);
+    final resolvedClient = asStr(live?['clientName'] ??
+        live?['client_name'] ??
+        live?['account.name'] ??
+        live?['userName'] ??
+        extraClient);
+    final resolvedPhone = asStr(live?['phone'] ??
+        live?['phone_number'] ??
+        live?['whatsapp'] ??
+        extraPhone);
+
     try {
       final logs = await _get('workspaces/$enc/admin_log');
       if (logs is Map) {
@@ -992,18 +1097,15 @@ class Rtdb {
                 ? asMs(v['activated_at'])
                 : asMs(e.key),
             deviceRef: devRef,
-            clientName: asStr(live?['clientName'] ??
-                live?['client_name'] ??
-                v['client_name'] ??
-                v['clientName']),
-            storeName: asStr(live?['storeName'] ??
-                live?['store_name'] ??
-                v['store_name'] ??
-                v['storeName']),
-            phone: asStr(live?['phone'] ??
-                live?['phone_number'] ??
-                v['phone'] ??
-                v['phone_number']),
+            clientName: resolvedClient.isNotEmpty
+                ? resolvedClient
+                : asStr(v['client_name'] ?? v['clientName']),
+            storeName: resolvedStore.isNotEmpty
+                ? resolvedStore
+                : asStr(v['store_name'] ?? v['storeName']),
+            phone: resolvedPhone.isNotEmpty
+                ? resolvedPhone
+                : asStr(v['phone'] ?? v['phone_number']),
             deviceId: devRef,
             licenseKey: asStr(live?['licenseKey'] ??
                 live?['license_key'] ??
@@ -1014,14 +1116,34 @@ class Rtdb {
                 ? (live!['features'] as Map)
                     .map((k, val) => MapEntry('$k', val == true))
                 : const {},
+            devicesList: devicesList,
+            memberCount: memberCount,
           ));
         }
         return out;
       }
     } catch (_) {}
     if (live != null) {
+      final entry = SubscriberEntry.fromSubscriptionMap(ws, live);
       return [
-        SubscriberEntry.fromSubscriptionMap(ws, live),
+        SubscriberEntry(
+          workspaceId: entry.workspaceId,
+          planType: entry.planType,
+          status: entry.status,
+          maxDevices: entry.maxDevices,
+          expiresAtMs: entry.expiresAtMs,
+          activatedAtMs: entry.activatedAtMs,
+          deviceRef: entry.deviceRef,
+          clientName: resolvedClient.isNotEmpty ? resolvedClient : entry.clientName,
+          storeName: resolvedStore.isNotEmpty ? resolvedStore : entry.storeName,
+          phone: resolvedPhone.isNotEmpty ? resolvedPhone : entry.phone,
+          deviceId: entry.deviceId,
+          licenseKey: entry.licenseKey,
+          isFrozen: entry.isFrozen,
+          featureFlags: entry.featureFlags,
+          devicesList: devicesList.isNotEmpty ? devicesList : entry.devicesList,
+          memberCount: memberCount > 1 ? memberCount : entry.memberCount,
+        )
       ];
     }
     return const [];
@@ -1177,9 +1299,18 @@ class Rtdb {
       final ws = '${e.key}';
       final val = e.value;
       if (val is! Map) continue;
+      final meta = val['meta'] is Map ? (val['meta'] as Map) : null;
       final msgs = val['messages'];
-      String lastMsg = '';
-      int lastTs = 0;
+      String lastMsg = asStr(val['lastMessage'] ??
+          val['last_message'] ??
+          meta?['lastMessage'] ??
+          meta?['last_message']);
+      int lastTs = asMs(val['updatedAt'] ??
+          val['updated_at'] ??
+          val['last_reply_at'] ??
+          meta?['updatedAt'] ??
+          meta?['updated_at']);
+
       if (msgs is Map && msgs.isNotEmpty) {
         final sorted = msgs.entries.toList()
           ..sort((a, b) => asMs((a.value as Map)['timestamp'])
@@ -1187,14 +1318,54 @@ class Rtdb {
         lastMsg = asStr((sorted.last.value as Map)['text']);
         lastTs = asMs((sorted.last.value as Map)['timestamp']);
       }
+
+      var store = asStr(val['storeName'] ??
+          val['store_name'] ??
+          meta?['storeName'] ??
+          meta?['store_name']);
+      var client = asStr(val['clientName'] ??
+          val['client_name'] ??
+          meta?['clientName'] ??
+          meta?['client_name']);
+      var phone = asStr(val['phone'] ??
+          val['phone_number'] ??
+          meta?['phone'] ??
+          meta?['phone_number']);
+
+      // محاولة استكمال البيانات من اشتراك المنشأة أو الأجهزة إذا لم تكن موجودة بالدردشة
+      if (store.isEmpty || client.isEmpty || phone.isEmpty) {
+        try {
+          final enc = Uri.encodeComponent(ws);
+          final sub = await _get('workspaces/$enc/subscription');
+          if (sub is Map) {
+            if (store.isEmpty) {
+              store = asStr(sub['storeName'] ??
+                  sub['store_name'] ??
+                  sub['businessName']);
+            }
+            if (client.isEmpty) {
+              client = asStr(sub['clientName'] ??
+                  sub['client_name'] ??
+                  sub['account.name'] ??
+                  sub['userName']);
+            }
+            if (phone.isEmpty) {
+              phone = asStr(sub['phone'] ?? sub['whatsapp']);
+            }
+          }
+        } catch (_) {}
+      }
+
+      final unread = val['unread_by_admin'] == true ||
+          val['unreadByAdmin'] == true ||
+          meta?['unreadByAdmin'] == true;
+
       out.add({
         'workspaceId': ws,
-        'storeName': asStr(val['store_name']).isNotEmpty
-            ? asStr(val['store_name'])
-            : ws,
-        'clientName': asStr(val['client_name']),
-        'phone': asStr(val['phone']),
-        'unreadByAdmin': val['unread_by_admin'] == true,
+        'storeName': store.isNotEmpty ? store : ws,
+        'clientName': client.isNotEmpty ? client : 'عميل',
+        'phone': phone,
+        'unreadByAdmin': unread,
         'lastMessage': lastMsg,
         'lastTimestamp': lastTs,
       });
@@ -1232,17 +1403,23 @@ class Rtdb {
   }
 
   /// 1. إرسال تنبيه جماعي شامل (Broadcast Alert)
+  /// يكتب إلى مساري البث لضمان وصول التنبيه لكافة إصدارات التطبيق
   Future<void> sendBroadcastNotification({
     required String title,
     required String body,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _put('system/broadcast_alerts/$now', {
+    final payload = {
       'id': '$now',
       'title': title,
       'body': body,
+      'is_modal': true,
+      'isModal': true,
       'created_at': now,
-    });
+      'timestamp': now,
+    };
+    await _put('system/broadcast_alerts/$now', payload);
+    await _put('system/broadcast_notifications/$now', payload);
   }
 
   /// 2. وضع الصيانة السحابي (Cloud Maintenance Mode)

@@ -237,5 +237,86 @@ void main() {
       expect(entries.where((e) => filter(e, 'NX-FAJR')).length, 1);
       expect(entries.where((e) => filter(e, 'NX-FAJR')).first.licenseKey, 'NX-FAJR-0002-2026');
     });
+
+    test('LIC-ADM06 دقة فلترة النشطين والتجريبيين والمنتهين', () {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final list = [
+        SubscriberEntry(
+          workspaceId: 'WS-ACTIVE-01',
+          planType: 'individual',
+          status: 'active',
+          maxDevices: 1,
+          expiresAtMs: now + 86400000 * 20,
+          activatedAtMs: now,
+          deviceRef: 'DEV-1',
+        ),
+        SubscriberEntry(
+          workspaceId: 'WS-TRIAL-01',
+          planType: 'individual',
+          status: 'trial',
+          maxDevices: 1,
+          expiresAtMs: now + 86400000 * 5,
+          activatedAtMs: now,
+          deviceRef: 'DEV-2',
+        ),
+        SubscriberEntry(
+          workspaceId: 'WS-EXPIRED-01',
+          planType: 'individual',
+          status: 'active',
+          maxDevices: 1,
+          expiresAtMs: now - 86400000,
+          activatedAtMs: now - 86400000 * 30,
+          deviceRef: 'DEV-3',
+        ),
+      ];
+
+      // فلتر النشطين يستثني التجريبيين بدقة
+      final active = list.where((s) =>
+          !s.isFrozen &&
+          s.status != 'trial' &&
+          s.status != 'suspended' &&
+          (s.expiresAtMs > now || s.isLifetime)).toList();
+      expect(active.length, 1);
+      expect(active.first.workspaceId, 'WS-ACTIVE-01');
+
+      // فلتر التجريبيين
+      final trials = list.where((s) =>
+          !s.isFrozen &&
+          s.status == 'trial' &&
+          (s.expiresAtMs > now || s.isLifetime)).toList();
+      expect(trials.length, 1);
+      expect(trials.first.workspaceId, 'WS-TRIAL-01');
+
+      // فلتر المنتهين
+      final expired = list.where((s) =>
+          !s.isFrozen &&
+          !s.isLifetime &&
+          s.expiresAtMs <= now).toList();
+      expect(expired.length, 1);
+      expect(expired.first.workspaceId, 'WS-EXPIRED-01');
+    });
+
+    test('LIC-ADM07 عرض قائمة الأجهزة وعدد الأعضاء في SubscriberEntry', () {
+      const entry = SubscriberEntry(
+        workspaceId: 'WS-DEVICES-01',
+        storeName: 'مركز عثمان الوصابي',
+        clientName: 'فخامة المدير',
+        phone: '774190040',
+        planType: 'enterprise',
+        status: 'active',
+        maxDevices: 5,
+        expiresAtMs: 1800000000000,
+        activatedAtMs: 1700000000000,
+        deviceRef: 'DEVICE-01',
+        devicesList: ['فخامة المدير', 'ايمن', 'مستخدم جديد', 'حموود'],
+        memberCount: 4,
+      );
+
+      expect(entry.devicesList.length, 4);
+      expect(entry.memberCount, 4);
+      expect(entry.devicesList.contains('فخامة المدير'), isTrue);
+      expect(entry.storeName, 'مركز عثمان الوصابي');
+      expect(entry.clientName, 'فخامة المدير');
+    });
   });
 }

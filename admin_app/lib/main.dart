@@ -831,16 +831,39 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
 
           if (_filter == 'active') {
             filtered = filtered
-                .where((s) => !s.isFrozen && (s.expiresAtMs > nowMs || s.expiresAtMs > DateTime(2090).millisecondsSinceEpoch))
+                .where((s) =>
+                    !s.isFrozen &&
+                    s.status != 'trial' &&
+                    s.status != 'suspended' &&
+                    (s.expiresAtMs > nowMs || s.isLifetime))
                 .toList();
           } else if (_filter == 'expired') {
             filtered = filtered
-                .where((s) => !s.isFrozen && s.expiresAtMs <= nowMs && s.expiresAtMs < DateTime(2090).millisecondsSinceEpoch)
+                .where((s) =>
+                    !s.isFrozen &&
+                    !s.isLifetime &&
+                    s.expiresAtMs <= nowMs)
                 .toList();
           } else if (_filter == 'trial') {
-            filtered = filtered.where((s) => s.status == 'trial').toList();
+            filtered = filtered
+                .where((s) =>
+                    !s.isFrozen &&
+                    s.status == 'trial' &&
+                    (s.expiresAtMs > nowMs || s.isLifetime))
+                .toList();
           } else if (_filter == 'suspended') {
-            filtered = filtered.where((s) => s.isFrozen).toList();
+            filtered = filtered
+                .where((s) => s.isFrozen || s.status == 'suspended')
+                .toList();
+          } else if (_filter == 'expiring7') {
+            final in7Days = nowMs + 7 * 86400000;
+            filtered = filtered
+                .where((s) =>
+                    !s.isFrozen &&
+                    !s.isLifetime &&
+                    s.expiresAtMs > nowMs &&
+                    s.expiresAtMs <= in7Days)
+                .toList();
           }
 
           return Column(
@@ -863,13 +886,41 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          _MetricChip('النشطون', '${m.activePaid}', const Color(0xFF16A34A)),
+                          _MetricChip(
+                            'النشطون',
+                            '${m.activePaid}',
+                            const Color(0xFF16A34A),
+                            selected: _filter == 'active',
+                            onTap: () => setState(() =>
+                                _filter = _filter == 'active' ? 'all' : 'active'),
+                          ),
                           const SizedBox(width: 8),
-                          _MetricChip('المنتهون', '${m.expired}', const Color(0xFFDC2626)),
+                          _MetricChip(
+                            'المنتهون',
+                            '${m.expired}',
+                            const Color(0xFFDC2626),
+                            selected: _filter == 'expired',
+                            onTap: () => setState(() =>
+                                _filter = _filter == 'expired' ? 'all' : 'expired'),
+                          ),
                           const SizedBox(width: 8),
-                          _MetricChip('التجريبيون', '${m.activeTrials}', const Color(0xFF7C3AED)),
+                          _MetricChip(
+                            'التجريبيون',
+                            '${m.activeTrials}',
+                            const Color(0xFF7C3AED),
+                            selected: _filter == 'trial',
+                            onTap: () => setState(() =>
+                                _filter = _filter == 'trial' ? 'all' : 'trial'),
+                          ),
                           const SizedBox(width: 8),
-                          _MetricChip('خلال 7 أيام', '${m.expiringIn7Days}', const Color(0xFFEA580C)),
+                          _MetricChip(
+                            'خلال 7 أيام',
+                            '${m.expiringIn7Days}',
+                            const Color(0xFFEA580C),
+                            selected: _filter == 'expiring7',
+                            onTap: () => setState(() => _filter =
+                                _filter == 'expiring7' ? 'all' : 'expiring7'),
+                          ),
                           const SizedBox(width: 8),
                           _MetricChip('الإيراد الشهري', '${m.monthlyRevenue.toInt()}', const Color(0xFF2563EB)),
                         ],
@@ -933,6 +984,12 @@ class _SubscribersScreenState extends State<SubscribersScreen> {
                       selected: _filter == 'suspended',
                       onSelected: (_) => setState(() => _filter = 'suspended'),
                     ),
+                    const SizedBox(width: 6),
+                    FilterChip(
+                      label: const Text('خلال 7 أيام ⏳'),
+                      selected: _filter == 'expiring7',
+                      onSelected: (_) => setState(() => _filter = 'expiring7'),
+                    ),
                   ],
                 ),
               ),
@@ -980,23 +1037,59 @@ class _MetricChip extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-  const _MetricChip(this.label, this.value, this.color);
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _MetricChip(
+    this.label,
+    this.value,
+    this.color, {
+    this.selected = false,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: .3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('$label: ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-          Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: color)),
-        ],
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? color : color.withValues(alpha: .1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color, width: selected ? 1.8 : 1.0),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: .3),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  )
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$label: ',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : color,
+              ),
+            ),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: selected ? Colors.white : color,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1224,6 +1317,41 @@ class SubscriberCard extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 8),
 
+            if (s.storeName.isNotEmpty && s.workspaceId.isNotEmpty) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: .06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.tag_rounded,
+                        size: 14, color: Colors.blueGrey),
+                    const SizedBox(width: 6),
+                    const Text('المساحة: ',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.w700)),
+                    Expanded(
+                      child: Text(
+                        s.workspaceId,
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: 'monospace',
+                          color: Colors.blueGrey,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 5),
+            ],
+
             Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1301,6 +1429,42 @@ class SubscriberCard extends StatelessWidget {
                 ],
               ),
             ),
+
+            if (s.devicesList.isNotEmpty || s.memberCount > 1) ...[
+              const SizedBox(height: 5),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withValues(alpha: .05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: const Color(0xFF0F172A).withValues(alpha: .1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.devices_other_rounded,
+                        size: 15, color: Color(0xFF334155)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        s.devicesList.isNotEmpty
+                            ? 'الأجهزة (${s.devicesList.length}): ${s.devicesList.join('، ')}'
+                            : 'عدد أجهزة وأعضاء المنشأة: ${s.memberCount}',
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1E293B),
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
 
             const SizedBox(height: 8),
 
@@ -2055,11 +2219,57 @@ class _SupportInboxScreenState extends State<SupportInboxScreen> {
                           ),
                       ],
                     ),
-                    subtitle: Text(
-                      '${c['clientName']} • ${c['phone']}\n${c['lastMessage']}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Text(
+                              c['clientName']?.toString().isNotEmpty == true
+                                  ? '${c['clientName']}'
+                                  : 'عميل',
+                              style: const TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                            if (c['phone']?.toString().isNotEmpty == true) ...[
+                              const Text(' • ',
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.grey)),
+                              Text(
+                                '${c['phone']}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF2563EB),
+                                ),
+                              ),
+                            ],
+                            const Spacer(),
+                            Text(
+                              '${c['workspaceId']}',
+                              style: const TextStyle(
+                                  fontSize: 10.5,
+                                  color: Colors.grey,
+                                  fontFamily: 'monospace'),
+                            ),
+                          ],
+                        ),
+                        if (c['lastMessage']?.toString().isNotEmpty == true) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            '${c['lastMessage']}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: unread ? Colors.black87 : Colors.black54,
+                              fontWeight:
+                                  unread ? FontWeight.w700 : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     trailing: const Icon(Icons.chevron_left),
                     onTap: () async {
@@ -2069,6 +2279,7 @@ class _SupportInboxScreenState extends State<SupportInboxScreen> {
                           builder: (_) => AdminSupportChatDetailScreen(
                             workspaceId: c['workspaceId'] as String,
                             storeName: c['storeName'] as String,
+                            clientName: c['clientName'] as String? ?? '',
                             phone: c['phone'] as String,
                           ),
                         ),
@@ -2089,12 +2300,14 @@ class _SupportInboxScreenState extends State<SupportInboxScreen> {
 class AdminSupportChatDetailScreen extends StatefulWidget {
   final String workspaceId;
   final String storeName;
+  final String clientName;
   final String phone;
 
   const AdminSupportChatDetailScreen({
     super.key,
     required this.workspaceId,
     required this.storeName,
+    this.clientName = '',
     required this.phone,
   });
 
@@ -2162,15 +2375,35 @@ class _AdminSupportChatDetailScreenState
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.storeName,
-                style:
-                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-            Text(widget.phone, style: const TextStyle(fontSize: 12)),
+            Text(
+              widget.storeName.isNotEmpty
+                  ? widget.storeName
+                  : widget.workspaceId,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+            ),
+            Row(
+              children: [
+                if (widget.clientName.isNotEmpty) ...[
+                  Text(widget.clientName,
+                      style: const TextStyle(fontSize: 12)),
+                  if (widget.phone.isNotEmpty)
+                    const Text(' • ', style: TextStyle(fontSize: 12)),
+                ],
+                if (widget.phone.isNotEmpty)
+                  Text(widget.phone, style: const TextStyle(fontSize: 12)),
+                const SizedBox(width: 6),
+                Text(
+                  '(${widget.workspaceId})',
+                  style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                ),
+              ],
+            ),
           ],
         ),
         actions: [
           if (widget.phone.isNotEmpty)
             IconButton(
+              tooltip: 'واتساب مباشر',
               icon: const Icon(Icons.chat_bubble_outline),
               onPressed: () => openWhatsApp(context, widget.phone),
             ),

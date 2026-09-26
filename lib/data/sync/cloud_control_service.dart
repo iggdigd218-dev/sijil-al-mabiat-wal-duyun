@@ -20,6 +20,8 @@ import '../repository.dart';
 import 'device_id.dart';
 import 'subscription_guard.dart';
 
+export '../../core/license_model.dart' show CloudAlert;
+
 class CloudControlService {
   CloudControlService._();
   static final CloudControlService instance = CloudControlService._();
@@ -111,6 +113,10 @@ class CloudControlService {
 
       // 4) تسجيل نبض الجهاز والنشاط ورمز الإشعارات (Heartbeat & Multi-Device)
       final devName = (st['sync.deviceName'] ?? st['account.name'] ?? 'جهاز').trim();
+      final storeName = (st['businessName'] ?? '').trim();
+      final clientName = (st['managerName'] ?? st['account.name'] ?? st['sync.deviceName'] ?? '').trim();
+      final phone = (st['phone'] ?? st['whatsapp'] ?? '').trim();
+
       final devUrl =
           '$base/workspaces/${Uri.encodeComponent(wsId)}/devices/${Uri.encodeComponent(devId)}.json';
       final platformName = kIsWeb
@@ -131,15 +137,38 @@ class CloudControlService {
         'lastSeenAt': {'.sv': 'timestamp'},
         'installed_version': '$kAppVersion+$kAppBuild',
         'fcm_token': fcmToken,
+        if (storeName.isNotEmpty) ...{
+          'storeName': storeName,
+          'store_name': storeName,
+        },
+        if (clientName.isNotEmpty) ...{
+          'clientName': clientName,
+          'client_name': clientName,
+        },
+        if (phone.isNotEmpty) ...{
+          'phone': phone,
+        },
       });
 
-      // حفظ رمز الإشعارات FCM مع عقدة الاشتراك
+      // حفظ رمز الإشعارات FCM وبيانات المنشأة مع عقدة الاشتراك
       final fcmWsUrl =
           '$base/workspaces/${Uri.encodeComponent(wsId)}/subscription.json';
       await _patchJson(fcmWsUrl, {
         'fcm_token': fcmToken,
         'last_seen_at': {'.sv': 'timestamp'},
         'installed_version': '$kAppVersion+$kAppBuild',
+        if (storeName.isNotEmpty) ...{
+          'storeName': storeName,
+          'store_name': storeName,
+          'businessName': storeName,
+        },
+        if (clientName.isNotEmpty) ...{
+          'clientName': clientName,
+          'client_name': clientName,
+        },
+        if (phone.isNotEmpty) ...{
+          'phone': phone,
+        },
       });
 
       // 5) فحص أمر النسخ الاحتياطي الفوري عن بعد (Remote Instant Backup)
@@ -185,13 +214,29 @@ class CloudControlService {
         }
       }
     }
-    // إشعارات البث العام
+    // إشعارات البث العام - broadcast_notifications
     final bcastUrl = '$base/system/broadcast_notifications.json';
     final bcastNotifs = await _getJson(bcastUrl);
     if (bcastNotifs is Map) {
       for (final e in bcastNotifs.entries) {
         if (e.value is Map) {
-          alerts.add(CloudAlert.fromJson(e.value as Map, e.key.toString()));
+          final id = e.key.toString();
+          if (!alerts.any((a) => a.id == id)) {
+            alerts.add(CloudAlert.fromJson(e.value as Map, id));
+          }
+        }
+      }
+    }
+    // إشعارات البث العام - broadcast_alerts (مسار لوحة تحكم الإدارة)
+    final bcastAlertsUrl = '$base/system/broadcast_alerts.json';
+    final bcastAlerts = await _getJson(bcastAlertsUrl);
+    if (bcastAlerts is Map) {
+      for (final e in bcastAlerts.entries) {
+        if (e.value is Map) {
+          final id = e.key.toString();
+          if (!alerts.any((a) => a.id == id)) {
+            alerts.add(CloudAlert.fromJson(e.value as Map, id));
+          }
         }
       }
     }
@@ -335,12 +380,29 @@ class CloudControlService {
     await _patchJson(metaUrl, {
       'workspaceId': workspaceId,
       'storeName': storeName,
+      'store_name': storeName,
       'clientName': clientName,
+      'client_name': clientName,
       'phone': phone,
       'lastMessage': cleanText,
       'lastSender': 'client',
       'updatedAt': {'.sv': 'timestamp'},
       'unreadByAdmin': true,
+      'unread_by_admin': true,
+    });
+
+    final rootChatUrl =
+        '$base/support_chats/${Uri.encodeComponent(workspaceId)}.json';
+    await _patchJson(rootChatUrl, {
+      'workspaceId': workspaceId,
+      'storeName': storeName,
+      'store_name': storeName,
+      'clientName': clientName,
+      'client_name': clientName,
+      'phone': phone,
+      'last_reply_at': {'.sv': 'timestamp'},
+      'unread_by_admin': true,
+      'unread_by_client': false,
     });
   }
 
