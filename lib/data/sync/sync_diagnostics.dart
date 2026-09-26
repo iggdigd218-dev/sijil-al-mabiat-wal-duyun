@@ -21,6 +21,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart' show Database, DatabaseException;
 
+import 'error_localization_mapper.dart';
+
 /// مصدر الخلل المصنَّف — يُعرض كوسم صريح في ورقة التشخيص.
 enum SyncFaultSource { none, appCode, cloud, network }
 
@@ -65,6 +67,7 @@ class SyncDiagnosticsSnapshot {
   final String? lastPullError;
   final SyncFaultSource lastPullFault;
   final String lastPullCtx;
+  final LocalizedSyncError? lastLocalizedError;
 
   const SyncDiagnosticsSnapshot({
     this.pushing = false,
@@ -82,6 +85,7 @@ class SyncDiagnosticsSnapshot {
     this.lastPullError,
     this.lastPullFault = SyncFaultSource.none,
     this.lastPullCtx = '',
+    this.lastLocalizedError,
   });
 
   /// إرسال معتل: عمليات فشلت فعلاً أو آخر دفعة انتهت بخطأ.
@@ -124,6 +128,12 @@ class SyncDiagnostics {
   String? _lastPullError;
   SyncFaultSource _lastPullFault = SyncFaultSource.none;
   String _lastPullCtx = '';
+  LocalizedSyncError? _lastLocalizedError;
+
+  void recordLocalizedError(LocalizedSyncError err) {
+    _lastLocalizedError = err;
+    _emit();
+  }
 
   void _emit() {
     notifier.value = SyncDiagnosticsSnapshot(
@@ -142,6 +152,7 @@ class SyncDiagnostics {
       lastPullError: _lastPullError,
       lastPullFault: _lastPullFault,
       lastPullCtx: _lastPullCtx,
+      lastLocalizedError: _lastLocalizedError,
     );
   }
 
@@ -204,7 +215,8 @@ class SyncDiagnostics {
 
   /// استثناء دفع واحد — يُسجَّل فوراً بمصدره المصنَّف وسياقه (الدالة
   /// والجدول المتأثر).
-  void recordPushError(Object error, {String context = ''}) {
+  void recordPushError(Object error,
+      {String context = '', String? sqlQuery, List<Object?>? sqlArgs}) {
     final msg = error.toString();
     final fault = classify(error);
     final detail = extractDbDetail(msg);
@@ -217,6 +229,11 @@ class SyncDiagnostics {
       if (context.isNotEmpty) context,
       if (detail.isNotEmpty) detail,
     ].join(' · ');
+    _lastLocalizedError = ErrorLocalizationMapper.map(
+      error,
+      sqlQuery: sqlQuery,
+      sqlArgs: sqlArgs,
+    );
     _emit();
   }
 
@@ -229,6 +246,7 @@ class SyncDiagnostics {
       _lastPushError = null;
       _lastPushFault = SyncFaultSource.none;
       _lastPushCtx = '';
+      _lastLocalizedError = null;
     }
     _emit();
   }
@@ -248,6 +266,8 @@ class SyncDiagnostics {
     int applied = 0,
     Object? error,
     String context = '',
+    String? sqlQuery,
+    List<Object?>? sqlArgs,
   }) {
     _pulling = false;
     _lastPullAt = DateTime.now();
@@ -257,6 +277,7 @@ class SyncDiagnostics {
       _lastPullError = null;
       _lastPullFault = SyncFaultSource.none;
       _lastPullCtx = '';
+      _lastLocalizedError = null;
     } else {
       final msg = error?.toString() ?? 'فشل سحب غير معروف';
       _lastPullOk = false;
@@ -267,6 +288,13 @@ class SyncDiagnostics {
         if (context.isNotEmpty) context,
         if (detail.isNotEmpty) detail,
       ].join(' · ');
+      if (error != null) {
+        _lastLocalizedError = ErrorLocalizationMapper.map(
+          error,
+          sqlQuery: sqlQuery,
+          sqlArgs: sqlArgs,
+        );
+      }
     }
     _emit();
   }

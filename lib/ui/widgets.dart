@@ -418,6 +418,34 @@ String friendlyErrorText(String raw) {
       .replaceAll('Bad state:', '')
       .trim();
   final low = r.toLowerCase();
+
+  // تعارض القيود الفريدة
+  if (low.contains('unique constraint failed') ||
+      low.contains('unique constraint violation') ||
+      low.contains('code 2067')) {
+    return 'تعذر الحفظ لوجود سجل مسبق مسجل بنفس القيمة (الاسم أو المعرّف مستخدم بالفعل في النظام).\n\n(تفاصيل تقنية: $r)';
+  }
+  // تعارض العلاقات والربط
+  if (low.contains('foreign key constraint failed') ||
+      low.contains('foreign key violation') ||
+      low.contains('code 787')) {
+    return 'تعذر الحذف أو التعديل لارتباط هذا السجل بعمليات أو فواتير أخرى داخل قاعدة البيانات.\n\n(تفاصيل تقنية: $r)';
+  }
+  // الحقول الإلزامية
+  if (low.contains('not null constraint failed') ||
+      low.contains('not null constraint') ||
+      low.contains('code 1299')) {
+    return 'تعذر إتمام العملية لوجود بيانات أساسية مطلوبة تركت فارغة.\n\n(تفاصيل تقنية: $r)';
+  }
+  // قفل قاعدة البيانات
+  if (low.contains('database is locked') ||
+      low.contains('database_locked') ||
+      low.contains('database table is locked') ||
+      low.contains('database busy') ||
+      low.contains('code 5')) {
+    return 'قاعدة البيانات مشغولة حالياً بعملية مزامنة أو حفظ أخرى، يرجى الانتظار ثوانٍ والمحاولة مجدداً.';
+  }
+
   if (low.contains('awaiting-offline-peers')) {
     return 'بعض أجهزة المجموعة غير متصلة الآن — ستصلها التغييرات تلقائياً فور اتصالها.';
   }
@@ -425,8 +453,11 @@ String friendlyErrorText(String raw) {
       low.contains('connection refused') ||
       low.contains('connection timed out') ||
       low.contains('network is unreachable') ||
-      low.contains('timeoutexception')) {
-    return 'تعذّر الاتصال بالشبكة.\nتأكد أن الجهازين على نفس شبكة Wi-Fi وأن الجهاز الآخر يعمل، ثم أعد المحاولة.\n\n(تفاصيل تقنية: $r)';
+      low.contains('timeoutexception') ||
+      low.contains('failed host lookup') ||
+      low.contains('network error') ||
+      low.contains('clientexception')) {
+    return 'فشل الاتصال بخادم المزامنة؛ يرجى التحقق من اتصال الإنترنت والمحاولة لاحقاً.\n\n(تفاصيل تقنية: $r)';
   }
   if (low.contains('user-not-authorized') || low.contains('not-authorized')) {
     return 'ليست لديك صلاحية لتنفيذ هذا الإجراء.\nاطلب من المدير منحك الصلاحية المناسبة من شاشة إدارة المجموعة.';
@@ -439,9 +470,6 @@ String friendlyErrorText(String raw) {
   }
   if (low.contains('token') && (low.contains('expired') || low.contains('invalid'))) {
     return 'رمز الاقتران غير صالح أو انتهت مدته.\nاطلب من المدير توليد رمز جديد وأعد المحاولة خلال 5 دقائق.';
-  }
-  if (low.contains('foreign key') || low.contains('constraint')) {
-    return 'تعذّر الحفظ بسبب ارتباط البيانات ببعضها.\nأعد المحاولة، وإن تكرر الخطأ أبلغ الدعم.\n\n(تفاصيل تقنية: $r)';
   }
   if (low.contains('permission') && low.contains('denied')) {
     return 'رفض النظام منح الإذن المطلوب.\nفعّل الإذن من إعدادات النظام ثم أعد المحاولة.';

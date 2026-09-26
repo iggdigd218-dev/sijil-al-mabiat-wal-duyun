@@ -9,7 +9,9 @@ import '../../core/media_paths.dart';
 import '../../core/models.dart';
 import '../repository.dart';
 import 'conflict_resolver.dart';
+import 'error_localization_mapper.dart';
 import 'operation.dart';
+import 'sync_diagnostics.dart';
 
 
 /// ══════════════════════════════════════════════════════════════════════════
@@ -182,6 +184,83 @@ Future<void> ensureForeignParents(
   }
 }
 
+/// (2026-09-26) معالجة ذكية وذاتية لتعارضات الأقسام والفئات (Auto-Healing on Sync):
+/// 1. فحص وجود سجل محلي بنفس الاسم بمعرف مختلف.
+/// 2. إعادة ربط الأصناف التابعة للسجل المحلي بالمعرف السحابي الجديد.
+/// 3. حذف أو تحديث السجل المحلي المتعارض بأمان لتفريغ الاسم.
+/// 4. إذا كان السجل القديم موسوماً بالحذف (deleted_at != NULL)،
+///    يتم تحرير قيد الفرادة محلياً بإضافة لاحقة زمنية للاسم القديم لمنع كسر قيد UNIQUE constraint.
+Future<void> _healCategoryNameConflict(
+  DatabaseExecutor txn,
+  String catName,
+  Object newEntityId,
+) async {
+  final cleanName = catName.trim();
+  if (cleanName.isEmpty) return;
+
+  final dups = await txn.query(
+    'item_categories',
+    columns: ['id', 'deleted_at', 'name'],
+    where: 'name = ? COLLATE NOCASE AND id != ?',
+    whereArgs: [cleanName, newEntityId],
+  );
+  if (dups.isEmpty) return;
+
+  for (final d in dups) {
+    final dupId = d['id'];
+    if (dupId == null) continue;
+    final deletedAt = d['deleted_at']?.toString() ?? '';
+
+    // 3. تحرير قيد الفرادة محلياً للسجل المحذوف بإضافة لاحقة زمنية
+    if (deletedAt.isNotEmpty) {
+      final suffix = DateTime.now().millisecondsSinceEpoch;
+      await txn.update(
+        'item_categories',
+        {'name': '$cleanName (محذوف $suffix)'},
+        where: 'id = ?',
+        whereArgs: [dupId],
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      continue;
+    }
+
+    // 1. إعادة ربط الأصناف التابعة للسجل المحلي بالمعرف السحابي الجديد
+    try {
+      await txn.update(
+        'items',
+        {'category_id': newEntityId},
+        where: 'category_id = ?',
+        whereArgs: [dupId],
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {}
+
+    // إعادة ربط الفئات الفرعية التابعة
+    try {
+      await txn.update(
+        'item_categories',
+        {'parent_id': newEntityId},
+        where: 'parent_id = ?',
+        whereArgs: [dupId],
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {}
+
+    // 2. حذف أو تحديث السجل المحلي المتعارض بأمان لتفريغ الاسم
+    try {
+      await txn.delete('item_categories', where: 'id = ?', whereArgs: [dupId]);
+    } catch (_) {
+      await txn.update(
+        'item_categories',
+        {'name': '$cleanName (محلي $dupId)'},
+        where: 'id = ?',
+        whereArgs: [dupId],
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+  }
+}
+
 extension ApplyRemoteOp on Repo {
   /// Returns false for replay/ignored/conflicting operations. The caller owns
   /// the transaction, so entity data and the operation receipt commit together.
@@ -323,20 +402,24 @@ extension ApplyRemoteOp on Repo {
             if (table == 'item_categories' && row.containsKey('name')) {
               final catName = row['name']?.toString().trim() ?? '';
               if (catName.isNotEmpty) {
-                final dup = await txn.query(
-                  'item_categories',
-                  columns: ['id'],
-                  where:
-                      "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
-                  whereArgs: [catName, op.entityId],
-                );
-                if (dup.isNotEmpty) {
-                  row['name'] = '$catName (${op.entityId})';
-                }
+                await _healCategoryNameConflict(txn, catName, op.entityId);
               }
             }
-            await txn.update(table, row,
-                where: '$primaryKey = ?', whereArgs: [op.entityId]);
+            try {
+              await txn.update(table, row,
+                  where: '$primaryKey = ?',
+                  whereArgs: [op.entityId],
+                  conflictAlgorithm: ConflictAlgorithm.replace);
+            } catch (e) {
+              final sql =
+                  'UPDATE $table SET ${row.keys.map((k) => '$k = ?').join(', ')} WHERE $primaryKey = ?';
+              final sqlArgs = [...row.values, op.entityId];
+              SyncDiagnostics.instance.recordLocalizedError(
+                ErrorLocalizationMapper.map(e,
+                    sqlQuery: sql, sqlArgs: sqlArgs),
+              );
+              rethrow;
+            }
           }
         } else {
           // إدراج كيان غير موجود محليًا: حمولة "تعديل" جزئية (مثل تعديل كمية
@@ -358,16 +441,7 @@ extension ApplyRemoteOp on Repo {
           if (table == 'item_categories' && insertRow.containsKey('name')) {
             final catName = insertRow['name']?.toString().trim() ?? '';
             if (catName.isNotEmpty) {
-              final dup = await txn.query(
-                'item_categories',
-                columns: ['id'],
-                where:
-                    "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
-                whereArgs: [catName, op.entityId],
-              );
-              if (dup.isNotEmpty) {
-                insertRow['name'] = '$catName (${op.entityId})';
-              }
+              await _healCategoryNameConflict(txn, catName, op.entityId);
             }
           }
           for (final col in tableInfo) {
@@ -387,11 +461,22 @@ extension ApplyRemoteOp on Repo {
                   : '',
             };
           }
-          await txn.insert(
-            table,
-            insertRow,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
+          try {
+            await txn.insert(
+              table,
+              insertRow,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          } catch (e) {
+            final sql =
+                'INSERT OR REPLACE INTO $table (${insertRow.keys.join(', ')}) VALUES (${insertRow.keys.map((_) => '?').join(', ')})';
+            final sqlArgs = insertRow.values.toList();
+            SyncDiagnostics.instance.recordLocalizedError(
+              ErrorLocalizationMapper.map(e,
+                  sqlQuery: sql, sqlArgs: sqlArgs),
+            );
+            rethrow;
+          }
         }
         if (op.entityType == EntityKind.tx && lines != null) {
           await _replaceInvoiceLines(txn, op, lines);

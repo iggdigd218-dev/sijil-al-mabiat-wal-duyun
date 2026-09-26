@@ -11,7 +11,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/sfx.dart';
 import '../../data/providers.dart';
+import '../../data/sync/error_localization_mapper.dart';
 import '../../data/sync/sync_diagnostics.dart';
+import '../dialogs/sync_diagnostic_dialog.dart';
 import '../widgets.dart' show showSnack;
 
 /// مؤشرا السهمين — يُثبَّت في الشريط العلوي بجوار الجرس.
@@ -52,33 +54,24 @@ class SyncArrowsIndicator extends ConsumerWidget {
               final diag = SyncDiagnostics.instance.snapshot;
               if (diag.uploadFaulted ||
                   diag.downloadFaulted ||
-                  diag.failedCount > 0) {
+                  diag.failedCount > 0 ||
+                  diag.lastLocalizedError != null) {
                 final err = (diag.lastPushError?.isNotEmpty == true)
                     ? diag.lastPushError!
                     : (diag.lastPullError?.isNotEmpty == true)
                         ? diag.lastPullError!
                         : '';
-                final String msg;
-                if (err.contains('SocketException') ||
-                    err.contains('Failed host lookup') ||
-                    err.contains('Network') ||
-                    err.contains('connect') ||
-                    err.contains('ClientException')) {
-                  msg = 'تعذّر الاتصال بالسحابة: يرجى التحقق من توفر الإنترنت';
-                } else if (err.contains('401') ||
-                    err.contains('permission') ||
-                    err.contains('auth')) {
-                  msg = 'تنبيه: خطأ في تصريح الجهاز أو صلاحيات المزامنة';
-                } else if (diag.failedCount > 0) {
-                  msg =
-                      'توجد ${diag.failedCount} عملية معلقة لم تكتمل — جاري إعادة الإرسال';
-                } else if (err.isNotEmpty) {
-                  msg = 'عطل في المزامنة: $err';
+                final localized = diag.lastLocalizedError ??
+                    (err.isNotEmpty ? ErrorLocalizationMapper.map(err) : null);
+
+                if (localized != null) {
+                  SyncDiagnosticErrorDialog.show(context, localized);
                 } else {
-                  msg =
-                      'تعذّرت المزامنة: يرجى التأكد من اتصال الإنترنت وإعادة المحاولة';
+                  final String msg = diag.failedCount > 0
+                      ? 'توجد ${diag.failedCount} عملية معلقة لم تكتمل — جاري إعادة الإرسال'
+                      : 'تعذّرت المزامنة: يرجى التأكد من اتصال الإنترنت وإعادة المحاولة';
+                  showSnack(context, msg, error: true);
                 }
-                showSnack(context, msg, error: true);
               } else if (diag.pushing || diag.pulling) {
                 showSnack(context, 'المزامنة السحابية جارية الآن...');
               } else {
@@ -247,15 +240,17 @@ class _BoldSyncArrowsPainter extends CustomPainter {
       old.downOpacity != downOpacity;
 }
 
-/// فتح إشعار حالة المزامنة اللحظية (تم الاستغناء عن النافذة المنبثقة بطلب صريح).
+/// فتح نافذة تشخيص أخطاء المزامنة المترجمة إلى العربية.
 Future<void> showSyncDiagnosticsSheet(BuildContext context) async {
   final diag = SyncDiagnostics.instance.snapshot;
-  if (diag.uploadFaulted || diag.downloadFaulted || diag.failedCount > 0) {
-    showSnack(
-      context,
-      'توجد مشكلة في المزامنة — يرجى التحقق من الاتصال بالإنترنت',
-      error: true,
-    );
+  final loc = diag.lastLocalizedError ??
+      (diag.lastPushError != null && diag.lastPushError!.isNotEmpty
+          ? ErrorLocalizationMapper.map(diag.lastPushError!)
+          : diag.lastPullError != null && diag.lastPullError!.isNotEmpty
+              ? ErrorLocalizationMapper.map(diag.lastPullError!)
+              : null);
+  if (loc != null) {
+    await SyncDiagnosticErrorDialog.show(context, loc);
   } else {
     showSnack(context, 'المزامنة السحابية متصلة ومستقرة ✅');
   }

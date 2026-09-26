@@ -484,6 +484,22 @@ class AppDatabase {
       await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_cat_section ON item_categories(section_id)');
     } catch (_) {}
+
+    // (2026-09-26) فك تعارضات قيد الفرادة مع الفئات المحذوفة:
+    // إذا كان هناك فئة محذوفة سابقة بنفس اسم فئة أخرى، نضيف لاحقة لاسم المحذوفة
+    // لتحرير قيد الفرادة `idx_item_categories_name` تلقائياً دون كسر التاريخ.
+    try {
+      await db.execute('''
+        UPDATE item_categories
+        SET name = name || ' (محذوف ' || id || ')'
+        WHERE (deleted_at IS NOT NULL AND deleted_at != '')
+          AND name IN (
+            SELECT name FROM item_categories
+            GROUP BY name COLLATE NOCASE
+            HAVING COUNT(*) > 1
+          )
+      ''');
+    } catch (_) {}
   }
 
   /// (2026-09-24) ترميم ذاتي لأعمدة هوية الأقسام في `sections`
