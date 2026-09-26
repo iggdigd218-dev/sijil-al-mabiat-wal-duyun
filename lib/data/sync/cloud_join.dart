@@ -763,6 +763,7 @@ class CloudJoin {
     // لقطة بنفس بنية لقطة الاقتران المحلي (تُطبَّق بنفس الدالة عند العضو).
     final snapshot = <String, Object?>{};
     const tables = [
+      'sections',
       'accounts',
       'transactions',
       'transaction_items',

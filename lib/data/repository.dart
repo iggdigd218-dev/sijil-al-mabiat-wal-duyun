@@ -4512,12 +4512,13 @@ class Repo {
     final name = section.name.trim();
     if (name.isEmpty) throw ArgumentError('اسم القسم مطلوب');
     final db = await _db;
-    // (2026-09-24) الفرادة مقيدة بمساحة العمل: نفس الاسم مسموح في مساحة
-    // أخرى وممنوع داخل المساحة نفسها (كان الفحص عالمياً).
+    // (2026-09-24) الفرادة مقيدة بمساحة العمل وبالأقسام النشطة (غير المحذوفة):
+    // نفس الاسم مسموح في مساحة أخرى وممنوع تكراره بين الأقسام النشطة الحالية.
     final duplicate = await db.query(
       'sections',
       columns: ['id'],
-      where: 'name = ? COLLATE NOCASE AND id != ? AND workspace_id = ?',
+      where:
+          "name = ? COLLATE NOCASE AND id != ? AND workspace_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
       whereArgs: [name, section.id ?? -1, requireWorkspaceId],
       limit: 1,
     );
@@ -4525,38 +4526,101 @@ class Repo {
 
     final now = DateTime.now();
     late final int id;
+
+    // فحص ما إذا كان هناك قسم محذوف سابقاً بنفس الاسم لإعادة استخدامه وتنشيطه
+    final deletedMatch = await db.query(
+      'sections',
+      columns: ['id'],
+      where:
+          "name = ? COLLATE NOCASE AND workspace_id = ? AND deleted_at IS NOT NULL AND deleted_at != ''",
+      whereArgs: [name, requireWorkspaceId],
+      limit: 1,
+    );
+
     if (section.id == null) {
-      id = await db.insert('sections', {
-        'id': newGlobalId(),
-        // (2026-09-24) مساحة العمل تُحفظ صراحةً: بلاها يبقى الصف على
-        // القيمة الافتراضية 'default' فلا يطابقه فحص الفرادة المقيد بالمساحة.
-        'workspace_id': requireWorkspaceId,
-        'name': name,
-        'icon': section.icon,
-        'icon_key': section.iconKey,
-        'color_hex': section.colorHex,
-        'image_path': section.imagePath,
-        'sort_order': section.sortOrder,
-        'deleted_at': '',
-        'created_at': now.toIso8601String(),
-        'updated_at': now.toIso8601String(),
-      });
-      await queueOperation(
-        entityType: EntityKind.section,
-        entityId: '$id',
-        opType: OpKind.create,
-        payload: {
-          'id': id,
+      if (deletedMatch.isNotEmpty) {
+        // إعادة تنشيط السجل المحذوف وتحديث بياناته بالكامل
+        id = deletedMatch.first['id'] as int;
+        await db.update(
+          'sections',
+          {
+            'name': name,
+            'icon': section.icon,
+            'icon_key': section.iconKey,
+            'color_hex': section.colorHex,
+            'image_path': section.imagePath,
+            'sort_order': section.sortOrder,
+            'deleted_at': '',
+            'updated_at': now.toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        // تنظيف أي سجلات محذوفة مكررة أخرى بنفس الاسم إن وُجدت
+        await db.delete(
+          'sections',
+          where:
+              "name = ? COLLATE NOCASE AND workspace_id = ? AND id != ? AND deleted_at IS NOT NULL AND deleted_at != ''",
+          whereArgs: [name, requireWorkspaceId, id],
+        );
+        await queueOperation(
+          entityType: EntityKind.section,
+          entityId: '$id',
+          opType: OpKind.create,
+          payload: {
+            'id': id,
+            'name': name,
+            'icon': section.icon,
+            'icon_key': section.iconKey,
+            'color_hex': section.colorHex,
+            'image_path': section.imagePath,
+            'sort_order': section.sortOrder,
+            'deleted_at': '',
+          },
+        );
+      } else {
+        id = await db.insert('sections', {
+          'id': newGlobalId(),
+          // (2026-09-24) مساحة العمل تُحفظ صراحةً: بلاها يبقى الصف على
+          // القيمة الافتراضية 'default' فلا يطابقه فحص الفرادة المقيد بالمساحة.
+          'workspace_id': requireWorkspaceId,
           'name': name,
           'icon': section.icon,
           'icon_key': section.iconKey,
           'color_hex': section.colorHex,
           'image_path': section.imagePath,
           'sort_order': section.sortOrder,
-        },
-      );
+          'deleted_at': '',
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        });
+        await queueOperation(
+          entityType: EntityKind.section,
+          entityId: '$id',
+          opType: OpKind.create,
+          payload: {
+            'id': id,
+            'name': name,
+            'icon': section.icon,
+            'icon_key': section.iconKey,
+            'color_hex': section.colorHex,
+            'image_path': section.imagePath,
+            'sort_order': section.sortOrder,
+            'deleted_at': '',
+          },
+        );
+      }
     } else {
       id = section.id!;
+      // عند تعديل اسم قسم قائم، نحذف أي سجلات محذوفة سابقة بنفس الاسم الجديد
+      if (deletedMatch.isNotEmpty) {
+        await db.delete(
+          'sections',
+          where:
+              "name = ? COLLATE NOCASE AND workspace_id = ? AND id != ? AND deleted_at IS NOT NULL AND deleted_at != ''",
+          whereArgs: [name, requireWorkspaceId, id],
+        );
+      }
       await db.update(
         'sections',
         {
@@ -4566,6 +4630,7 @@ class Repo {
           'color_hex': section.colorHex,
           'image_path': section.imagePath,
           'sort_order': section.sortOrder,
+          'deleted_at': '',
           'updated_at': now.toIso8601String(),
         },
         where: 'id = ?',
@@ -4583,6 +4648,7 @@ class Repo {
           'color_hex': section.colorHex,
           'image_path': section.imagePath,
           'sort_order': section.sortOrder,
+          'deleted_at': '',
         },
       );
     }
@@ -4725,13 +4791,22 @@ class Repo {
     final duplicate = await db.query(
       'item_categories',
       columns: ['id'],
-      where: 'name = ? COLLATE NOCASE AND id != ?',
+      where:
+          "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
       whereArgs: [name, category.id ?? -1],
       limit: 1,
     );
     if (duplicate.isNotEmpty) {
       throw StateError('توجد فئة بهذا الاسم مسبقًا');
     }
+
+    // تنظيف أي فئات محذوفة سابقة بنفس الاسم
+    await db.delete(
+      'item_categories',
+      where:
+          "name = ? COLLATE NOCASE AND id != ? AND deleted_at IS NOT NULL AND deleted_at != ''",
+      whereArgs: [name, category.id ?? -1],
+    );
 
     late final int id;
     if (category.id == null) {

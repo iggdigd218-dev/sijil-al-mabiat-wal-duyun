@@ -235,4 +235,22 @@ void main() {
     expect(EntityKind.from('كيان_مستقبلي'), EntityKind.unknown,
         reason: 'أمان الإصدارات المختلطة');
   });
+
+  test('SECT-06 إعادة إنشاء قسم تم حذفه سابقاً بنفس الاسم تنجح وتنشطه دون خطأ تكرار', () async {
+    // 1. إنشاء قسم «الكترونيات»
+    final id1 = await repo.saveSection(sec('الكترونيات'));
+    final initialList = await repo.sections();
+    expect(initialList.any((s) => s.name == 'الكترونيات'), isTrue);
+
+    // 2. حذف القسم (حذف ناعم)
+    await repo.deleteSection(id1);
+    final afterDelete = await repo.sections();
+    expect(afterDelete.any((s) => s.name == 'الكترونيات'), isFalse);
+
+    // 3. محاولة إعادة إنشاء قسم جديد بنفس الاسم «الكترونيات» يجب ألا ترمي خطأ تكرار
+    final id2 = await repo.saveSection(sec('الكترونيات'));
+    final finalSections = await repo.sections();
+    expect(finalSections.any((s) => s.name == 'الكترونيات'), isTrue);
+    expect(finalSections.where((s) => s.name == 'الكترونيات').length, 1);
+  });
 }

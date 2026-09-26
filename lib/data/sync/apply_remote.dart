@@ -316,13 +316,18 @@ extension ApplyRemoteOp on Repo {
               row['is_deleted'] = 0;
               row['is_active'] = 1;
             }
+            if ((table == 'sections' || table == 'item_categories') &&
+                op.opType != OpKind.delete_) {
+              row['deleted_at'] = '';
+            }
             if (table == 'item_categories' && row.containsKey('name')) {
               final catName = row['name']?.toString().trim() ?? '';
               if (catName.isNotEmpty) {
                 final dup = await txn.query(
                   'item_categories',
                   columns: ['id'],
-                  where: 'name = ? COLLATE NOCASE AND id != ?',
+                  where:
+                      "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
                   whereArgs: [catName, op.entityId],
                 );
                 if (dup.isNotEmpty) {
@@ -347,13 +352,17 @@ extension ApplyRemoteOp on Repo {
             insertRow['archived'] = 0;
             insertRow['deleted_at'] = '';
           }
+          if (table == 'sections' || table == 'item_categories') {
+            insertRow['deleted_at'] = '';
+          }
           if (table == 'item_categories' && insertRow.containsKey('name')) {
             final catName = insertRow['name']?.toString().trim() ?? '';
             if (catName.isNotEmpty) {
               final dup = await txn.query(
                 'item_categories',
                 columns: ['id'],
-                where: 'name = ? COLLATE NOCASE AND id != ?',
+                where:
+                    "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
                 whereArgs: [catName, op.entityId],
               );
               if (dup.isNotEmpty) {
