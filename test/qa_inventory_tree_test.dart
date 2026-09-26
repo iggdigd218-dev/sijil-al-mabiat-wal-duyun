@@ -188,17 +188,15 @@ void main() {
         reason: 'الفئة المقيّدة بقسم لا تظهر في «عام»');
   });
 
-  test('SECT-02 حذف قسم يُعيد فئاته إلى «عام» بلا فقدان', () async {
+  test('SECT-02 حذف قسم يحذف كافة فئاته التابعة تلقائياً', () async {
     final id = await repo.saveSection(sec('قسم مؤقت'));
     final catId = await repo.saveItemCategory(catOf('فئة تتبع القسم', sectionId: id));
     await repo.deleteSection(id);
 
-    final c = (await repo.itemCategories()).firstWhere((e) => e.id == catId);
-    expect(c.sectionId, isNotNull, reason: 'الفئة انتقلت إلى قسم «عام»');
+    final cats = await repo.itemCategories();
+    expect(cats.any((e) => e.id == catId), isFalse,
+        reason: 'الفئة التابعة للقسم حُذفت تلقائياً');
     expect((await repo.sections()).any((s) => s.id == id), isFalse);
-    // قسم «عام» أُنشئ تلقائياً لاستقبال الفئات.
-    final general = await repo.sections();
-    expect(general.any((s) => s.name == Repo.generalSectionName), isTrue);
   });
 
   test('SECT-03 الصنف يرث قسم فئته تلقائياً', () async {

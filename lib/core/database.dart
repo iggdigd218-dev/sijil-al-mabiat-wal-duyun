@@ -423,6 +423,16 @@ class AppDatabase {
           is_active         INTEGER NOT NULL DEFAULT 1,
           created_at        TEXT NOT NULL
         )''');
+      // (2026-09-26) فك تعليق أي فئات تشير لأقسام محذوفة أو غير موجودة لتعود تحت «عام»
+      await db.execute('''
+        UPDATE item_categories
+        SET section_id = NULL
+        WHERE section_id IS NOT NULL
+          AND section_id NOT IN (
+            SELECT id FROM sections
+            WHERE deleted_at IS NULL OR deleted_at = ''
+          )
+      ''');
     } catch (_) {}
   }
 

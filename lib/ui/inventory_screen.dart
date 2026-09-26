@@ -736,14 +736,19 @@ class _HierarchyFilterBar extends StatelessWidget {
 
   List<ItemCategory> _rootsOfSection() {
     if (sectionId == null) return roots;
+    final activeSectionIds = sections.map((s) => s.id).toSet();
     if (sectionId == kGeneralSectionId) {
-      return roots.where((c) => c.sectionId == null).toList();
+      return roots
+          .where((c) =>
+              c.sectionId == null || !activeSectionIds.contains(c.sectionId))
+          .toList();
     }
     return roots.where((c) => c.sectionId == sectionId).toList();
   }
 
   @override
   Widget build(BuildContext context) {
+    final activeSectionIds = sections.map((s) => s.id).toSet();
     final visibleRoots = _rootsOfSection();
     final selectedRoot = visibleRoots.cast<ItemCategory?>().firstWhere(
           (c) => c?.id == rootId,
@@ -773,7 +778,8 @@ class _HierarchyFilterBar extends StatelessWidget {
         label: 'عام',
         icon: IconCatalog.of('category'),
         tone: AppTone.sand,
-        badge: '${roots.where((c) => c.sectionId == null).length} فئة',
+        badge:
+            '${roots.where((c) => c.sectionId == null || !activeSectionIds.contains(c.sectionId)).length} فئة',
       ),
       for (final x in sections)
         HierarchyOption(
@@ -1028,9 +1034,11 @@ class _CategoryManager extends ConsumerWidget {
     final ok = await confirmDialog(
       context,
       title: 'حذف القسم',
-      message: 'سيتم حذف القسم «${sec.name}» وإعادة $owned فئة إلى قسم «عام». '
-          'لا تُحذف الفئات ولا الأصناف.',
-      confirmText: 'حذف القسم',
+      message: owned > 0
+          ? 'سيتم حذف القسم «${sec.name}» وجميع الفئات التابعة له ($owned فئة) نهائياً.\n'
+              'لن تُحذف المنتجات وسيتم فك ارتباطها.'
+          : 'سيتم حذف القسم «${sec.name}».',
+      confirmText: 'حذف القسم وفئاته',
       danger: true,
     );
     if (ok != true || sec.id == null) return;
@@ -1038,7 +1046,7 @@ class _CategoryManager extends ConsumerWidget {
     bump(ref);
     if (context.mounted) {
       Navigator.pop(context);
-      showSnack(context, 'حُذف القسم وأُعيدت فئاته إلى «عام»');
+      showSnack(context, 'حُذف القسم وكافة فئاته التابعة');
     }
   }
 
@@ -1051,10 +1059,15 @@ class _CategoryManager extends ConsumerWidget {
         message: 'أضف قسماً رئيسياً، ثم فئاته، ثم أصنافه.',
       );
     }
-    // تجميع الفئات حسب القسم (الفئات بلا قسم ⇒ مجموعة «عام»).
+    final activeSectionIds = sections.map((s) => s.id).toSet();
+    // تجميع الفئات حسب القسم (الفئات بلا قسم أو تابعة لقسم محذوف ⇒ مجموعة «عام»).
     final bySection = <int?, List<ItemCategory>>{};
     for (final c in roots) {
-      bySection.putIfAbsent(c.sectionId, () => <ItemCategory>[]).add(c);
+      final secId =
+          (c.sectionId != null && activeSectionIds.contains(c.sectionId))
+              ? c.sectionId
+              : null;
+      bySection.putIfAbsent(secId, () => <ItemCategory>[]).add(c);
     }
     // (2026-09-24) أيقونة القسم تُرافق اسمه في ترويسة المجموعة.
     final groups = <({int? id, String name, IconData icon})>[

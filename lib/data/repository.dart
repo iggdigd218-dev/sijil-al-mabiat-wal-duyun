@@ -4590,32 +4590,67 @@ class Repo {
     return id;
   }
 
-  /// حذف قسم: فئاته تُعاد إلى «عام» (تُنشأ إن لم تكن موجودة) بدل محوها.
+  /// حذف قسم: يحذف القسم وكافة الفئات التابعة له تلقائياً (حذف تتابعي)
+  /// مع فك ربط الأصناف من القسم والفئات التابعة لتبقى بيانات المنتجات محفوظة.
   Future<void> deleteSection(int id) async {
     await _ensureCan('delete_tx');
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    final general = await ensureGeneralSection();
+
+    // جلب كافة الفئات التابعة لهذا القسم لحذفها وتصعيد حركات الحذف
+    final catRows = await db.query(
+      'item_categories',
+      where: 'section_id = ?',
+      whereArgs: [id],
+    );
+    final catIds = catRows.map((r) => r['id'] as int).toList();
+
     await db.transaction((txn) async {
-      await txn.update(
-        'item_categories',
-        {'section_id': general, 'updated_at': now},
-        where: 'section_id = ?',
-        whereArgs: [id],
-      );
+      // 1) فك ربط أصناف هذا القسم
       await txn.update(
         'items',
-        {'section_id': general, 'updated_at': now},
+        {'section_id': null, 'updated_at': now},
         where: 'section_id = ?',
         whereArgs: [id],
       );
+
+      // 2) فك ربط أصناف الفئات التابعة للقسم ومسح اسم الفئة
+      for (final catId in catIds) {
+        await txn.update(
+          'items',
+          {'category_id': null, 'category': '', 'updated_at': now},
+          where: 'category_id = ?',
+          whereArgs: [catId],
+        );
+      }
+
+      // 3) حذف الفئات التابعة للقسم من جدول الفئات
+      if (catIds.isNotEmpty) {
+        await txn.delete(
+          'item_categories',
+          where: 'section_id = ?',
+          whereArgs: [id],
+        );
+      }
+
+      // 4) تعليم القسم كمحذوف
       await txn.update(
         'sections',
         {'deleted_at': now, 'updated_at': now},
         where: 'id = ?',
         whereArgs: [id],
       );
+
+      // 5) تسجيل عمليات الحذف في طابور المزامنة
       final rec = await newRecorder(txn);
+      for (final catId in catIds) {
+        await rec.record(
+          entityType: EntityKind.itemCategory,
+          entityId: '$catId',
+          opType: OpKind.delete_,
+          payload: {'id': catId},
+        );
+      }
       await rec.record(
         entityType: EntityKind.section,
         entityId: '$id',
@@ -4623,7 +4658,7 @@ class Repo {
         payload: {'id': id},
       );
     });
-    await logActivity('حذف قسم', 'section', '$id');
+    await logActivity('حذف قسم وحذف فئاته التابعة (${catIds.length} فئة)', 'section', '$id');
   }
 
   /// (2026-09-22) فئات الأصناف.
