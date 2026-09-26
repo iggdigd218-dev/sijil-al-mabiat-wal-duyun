@@ -177,6 +177,8 @@ void main() {
       for (var i = 0;
           i < 40 && find.byType(TxForm).evaluate().isNotEmpty;
           i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 60)));
         await tester.pump(const Duration(milliseconds: 100));
       }
       expect(find.byType(TxForm), findsNothing);
