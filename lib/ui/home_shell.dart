@@ -65,7 +65,7 @@ enum AppScreen {
   transactions('العمليات', Icons.receipt_long_outlined, Icons.receipt_long),
   vouchers('السندات', Icons.receipt_outlined, Icons.receipt),
   reports('التقارير', Icons.bar_chart_outlined, Icons.bar_chart),
-  inventory('المخزون والأصناف', Icons.inventory_2_outlined, Icons.inventory_2),
+  inventory('إدارة المنتجات', Icons.inventory_2_outlined, Icons.inventory_2),
   currencies(
     'العملات',
     Icons.currency_exchange_outlined,
@@ -219,6 +219,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ref.invalidate(deviceRoleProvider);
         ref.invalidate(workspaceModeProvider);
         ref.invalidate(devicesProvider);
+        // (إصلاح مزامنة الكتالوج وإدارة المنتجات) تحديث فوري للأقسام والفئات والأصناف
+        ref.invalidate(itemsProvider);
+        ref.invalidate(itemCategoriesProvider);
+        ref.invalidate(itemCategoryTreeProvider);
+        ref.invalidate(sectionsProvider);
+        ref.invalidate(inventorySummaryProvider);
       });
     });
     // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
@@ -1180,7 +1186,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         Icons.receipt_long_outlined,
         'سجل الفواتير اليومية',
       ),
-      (AppScreen.inventory, Icons.inventory_2_outlined, 'المخزون والأصناف'),
+      (AppScreen.inventory, Icons.inventory_2_outlined, 'إدارة المنتجات'),
       if (!standalone)
         (
           AppScreen.syncOps,

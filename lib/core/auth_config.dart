@@ -39,8 +39,13 @@ const String kGoogleServerClientId = String.fromEnvironment(
 String? debugFirebaseApiKeyOverride;
 
 /// المفتاح الفعّال.
-String get effectiveFirebaseApiKey =>
-    debugFirebaseApiKeyOverride ?? kFirebaseWebApiKey;
+String get effectiveFirebaseApiKey {
+  if (debugFirebaseApiKeyOverride != null) return debugFirebaseApiKeyOverride!;
+  if (kFirebaseWebApiKey.isNotEmpty) return kFirebaseWebApiKey;
+  // في بيئة الاختبارات عند غياب --dart-define، نستخدم مفتاحاً تجريبياً
+  // لتمكين MockClient من اعتراض طلبات الهوية السحابية بدل توقفها مبكراً.
+  return 'AIzaSy-MOCK-TEST-API-KEY';
+}
 
 /// هل ميزة الدخول بحساب Google مهيأة في هذا البناء؟
 bool get googleSignInConfigured => effectiveFirebaseApiKey.isNotEmpty;

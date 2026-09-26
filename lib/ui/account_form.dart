@@ -465,39 +465,22 @@ class _State extends ConsumerState<AccountFormScreen> {
                 decoration: const InputDecoration(labelText: 'ملاحظات'),
                 maxLines: 3,
               ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: widget.embedded
-                  ? AppColors.surfaceOf(context)
-                  : Theme.of(context).scaffoldBackgroundColor,
-              border: Border(
-                top: BorderSide(
-                  color: AppColors.borderOf(context),
-                  width: 0.5,
-                ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check),
+                label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
               ),
-            ),
-            child: FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.check),
-              label: Text(_isEdit ? 'حفظ التعديلات' : 'إضافة الحساب'),
-            ),
+            ],
           ),
         ),
       ),

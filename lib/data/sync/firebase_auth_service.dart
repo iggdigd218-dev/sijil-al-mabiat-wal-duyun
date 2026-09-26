@@ -237,6 +237,24 @@ class FirebaseAuthRest {
       _anonIdToken!.isNotEmpty &&
       DateTime.now().millisecondsSinceEpoch < _anonExpiryMs;
 
+  /// (للاختبارات) حقن توكن وهمي لتفادي حظر الشبكة والـ 401.
+  static void setMockTokenForTest({String? token, String? uid}) {
+    _anonIdToken = token ?? 'TOK-QA';
+    _anonUid = uid ?? 'UID-QA';
+    _anonExpiryMs = DateTime.now().millisecondsSinceEpoch + 86400000;
+  }
+
+  /// (للاختبارات) تنظيف التوكنات المحقونة.
+  static void clearMockForTest() {
+    _anonIdToken = null;
+    _anonUid = null;
+    _anonExpiryMs = 0;
+    _accountIdToken = null;
+    _accountUid = null;
+    _accountExpiryMs = 0;
+    _anonStarted = false;
+  }
+
   /// التوكن الصالح لإرفاقه بطلبات RTDB (`?auth=`) — يجدّده عند الحاجة.
   /// يعيد null فقط إن تعذّرت الشبكة نهائياً ولا يوجد توكن محفوظ.
   static Future<String?> cloudIdToken() async {

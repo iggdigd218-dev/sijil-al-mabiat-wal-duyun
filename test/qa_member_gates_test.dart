@@ -161,10 +161,10 @@ void main() {
         await tester.tap(find.byIcon(Icons.menu).first);
         await _waitDrawer(tester);
         await _settle(tester);
-        // بلا صلاحية عمليات: لا «العمليات» ولا «المخزون والأصناف» ولا
+        // بلا صلاحية عمليات: لا «العمليات» ولا «إدارة المنتجات» ولا
         // «السندات» ولا «نقطة البيع» ولا «العملاء» ولا «إدارة المجموعة».
         expect(inDrawer('العمليات'), findsNothing);
-        expect(inDrawer('المخزون والأصناف'), findsNothing);
+        expect(inDrawer('إدارة المنتجات'), findsNothing);
         expect(inDrawer('السندات'), findsNothing);
         expect(inDrawer('نقطة البيع (POS)'), findsNothing);
         expect(inDrawer('الحسابات'), findsNothing);

@@ -15,6 +15,7 @@ import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/device_registry.dart';
+import 'package:nexora_app/data/sync/firebase_auth_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية: تخزّن PUT حسب المسار وتعيد GET من المخزن (مع تجميع
@@ -97,9 +98,11 @@ void main() {
     });
     await repo.setSetting('sync.workspaceId', _ws);
     await repo.refreshWorkspaceId();
+    FirebaseAuthRest.setMockTokenForTest();
   });
 
   tearDown(() async {
+    FirebaseAuthRest.clearMockForTest();
     await db.close();
     await tmp.delete(recursive: true);
   });

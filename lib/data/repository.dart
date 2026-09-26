@@ -3666,9 +3666,18 @@ class Repo {
           limit: 1,
         );
         if (exists.isNotEmpty) {
+          final upd = <String, Object?>{
+            'deleted_at': '',
+            'restore_op_id': '',
+            'updated_at': now,
+          };
+          if (store == 'items') {
+            upd['is_deleted'] = 0;
+            upd['is_active'] = 1;
+          }
           await txn.update(
             store,
-            {'deleted_at': '', 'restore_op_id': '', 'updated_at': now},
+            upd,
             where: 'id = ?',
             whereArgs: [id],
           );
@@ -3688,6 +3697,10 @@ class Repo {
         } else {
           payload.remove('deleted_at');
           payload['updated_at'] = now;
+          if (store == 'items') {
+            payload['is_deleted'] = 0;
+            payload['is_active'] = 1;
+          }
           await txn.insert(
             store,
             payload,
@@ -4845,19 +4858,24 @@ class Repo {
     final db = await _db;
     final where = <String>[];
     final args = <Object?>[];
-    if (!includeArchived) where.add('archived = 0');
-    if (!includeDeleted) where.add("COALESCE(deleted_at,'') = ''");
-    if (q.trim().isNotEmpty) {
-      where.add('(name LIKE ? OR sku LIKE ? OR category LIKE ?)');
-      final like = '%${q.trim()}%';
-      args.addAll([like, like, like]);
+    if (!includeArchived) where.add('i.archived = 0');
+    if (!includeDeleted) {
+      where.add("(COALESCE(i.deleted_at, '') = '' AND (i.is_deleted = 0 OR i.is_deleted IS NULL))");
     }
-    final rows = await db.query(
-      'items',
-      where: where.isEmpty ? null : where.join(' AND '),
-      whereArgs: args.isEmpty ? null : args,
-      orderBy: 'name COLLATE NOCASE',
-    );
+    if (q.trim().isNotEmpty) {
+      where.add('(i.name LIKE ? OR i.sku LIKE ? OR COALESCE(c.name, i.category) LIKE ? OR i.notes LIKE ?)');
+      final like = '%${q.trim()}%';
+      args.addAll([like, like, like, like]);
+    }
+    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final sql = '''
+      SELECT i.*, COALESCE(c.name, i.category, '') AS category_name
+      FROM items i
+      LEFT JOIN item_categories c ON i.category_id = c.id
+      $whereClause
+      ORDER BY i.name COLLATE NOCASE
+    ''';
+    final rows = await db.rawQuery(sql, args.isEmpty ? null : args);
     return rows.map(Item.fromMap).toList();
   }
 
@@ -4963,7 +4981,13 @@ class Repo {
     await db.transaction((txn) async {
       await txn.update(
         'items',
-        {'deleted_at': now, 'deleted_by': _currentUserId, 'updated_at': now},
+        {
+          'deleted_at': now,
+          'is_deleted': 1,
+          'is_active': 0,
+          'deleted_by': _currentUserId,
+          'updated_at': now,
+        },
         where: 'id = ?',
         whereArgs: [id],
       );

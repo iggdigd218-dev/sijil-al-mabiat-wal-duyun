@@ -44,7 +44,7 @@ class DashboardScreen extends ConsumerWidget {
       AppScreen.vouchers,
     ),
     _Tile(
-      'المخزون',
+      'إدارة المنتجات',
       Icons.inventory_2_rounded,
       Color(0xFFA78BFA),
       Color(0xFF8B5CF6),

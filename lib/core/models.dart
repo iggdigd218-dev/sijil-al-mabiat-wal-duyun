@@ -1015,6 +1015,8 @@ class Item {
   final String notes;
   final String image;
   final bool archived;
+  final bool isDeleted;
+  final bool isActive;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -1035,6 +1037,8 @@ class Item {
     this.notes = '',
     this.image = '',
     this.archived = false,
+    this.isDeleted = false,
+    this.isActive = true,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -1076,6 +1080,8 @@ class Item {
     String? notes,
     String? image,
     bool? archived,
+    bool? isDeleted,
+    bool? isActive,
   }) =>
       Item(
         id: id ?? this.id,
@@ -1094,6 +1100,8 @@ class Item {
         notes: notes ?? this.notes,
         image: image ?? this.image,
         archived: archived ?? this.archived,
+        isDeleted: isDeleted ?? this.isDeleted,
+        isActive: isActive ?? this.isActive,
         createdAt: createdAt,
         updatedAt: DateTime.now(),
       );
@@ -1115,6 +1123,8 @@ class Item {
         'notes': notes,
         'image': image,
         'archived': archived ? 1 : 0,
+        'is_deleted': isDeleted ? 1 : 0,
+        'is_active': isActive ? 1 : 0,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
       };
@@ -1132,10 +1142,12 @@ class Item {
         quantity: ((m['quantity'] ?? 0) as num).toDouble(),
         minQuantity: ((m['min_quantity'] ?? 0) as num).toDouble(),
         currency: (m['currency'] ?? 'YER') as String,
-        category: (m['category'] ?? '') as String,
+        category: (m['category_name'] ?? m['category'] ?? '') as String,
         notes: (m['notes'] ?? '') as String,
         image: (m['image'] ?? '') as String,
         archived: ((m['archived'] ?? 0) as int) == 1,
+        isDeleted: ((m['is_deleted'] ?? 0) as int) == 1,
+        isActive: (m['is_active'] ?? 1) == 1,
         createdAt: DateTime.parse(m['created_at'] as String),
         updatedAt: DateTime.parse(m['updated_at'] as String),
       );

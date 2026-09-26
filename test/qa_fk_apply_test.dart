@@ -233,4 +233,44 @@ void main() {
     final p = EffectivePermissions.owner('a@b.test');
     expect(p.isAdmin && p.isActive && p.canViewReports, isTrue);
   });
+
+  test('ORDER-02 تسلسل الاستيعاب الصارم: أقسام ← فئات ← أصناف', () {
+    final ops = [
+      op(kind: EntityKind.item, type: OpKind.create, id: 'item-1', payload: {}),
+      op(kind: EntityKind.itemCategory, type: OpKind.create, id: 'cat-1', payload: {}),
+      op(kind: EntityKind.section, type: OpKind.create, id: 'sec-1', payload: {}),
+    ];
+    final sorted = sortOperationsByDependency(ops);
+    expect(
+      sorted.map((o) => o.entityId).toList(),
+      ['sec-1', 'cat-1', 'item-1'],
+      reason: 'القسم أولاً ثم الفئة ثم الصنف/المنتج',
+    );
+  });
+
+  test('CATALOG-SYNC-01 استيعاب صنف بفرز بدون قسم وافتراضات نشط وغير محذوف', () async {
+    final db = await repo.database;
+    final itemOp = op(
+      kind: EntityKind.item,
+      type: OpKind.create,
+      id: '999',
+      payload: {
+        'id': 999,
+        'name': 'منتج سحابي جديد',
+        'buy_price': 100,
+        'sell_price': 150,
+      },
+    );
+    final ok = await db.transaction(
+        (txn) => repo.applyRemoteOperation(txn, itemOp, ConflictResolver()));
+    expect(ok, isTrue);
+
+    final items = await repo.items();
+    final item = items.firstWhere((i) => i.id == 999);
+    expect(item.name, 'منتج سحابي جديد');
+    expect(item.isDeleted, isFalse);
+    expect(item.isActive, isTrue);
+    expect(item.category, isEmpty);
+    expect(item.categoryId, isNull);
+  });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../core/models.dart';
 import '../core/theme.dart';
 import '../data/pos_cart.dart';
 import '../data/providers.dart';
+import '../data/sync/sync_activity.dart';
 import 'barcode_scanner.dart';
 import 'hierarchy_filter.dart';
 import 'calculator.dart';
@@ -102,11 +104,27 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
   int? _sectionId; // القسم المختار (null = الكل، -1 = «عام/بدون قسم»)
   int? _rootId; // الفئة الرئيسية المختارة (null = الكل)
   int? _subId; // الفئة الفرعية المختارة (null = كل ما تحت الرئيسية)
+  StreamSubscription<int>? _syncBusSub;
 
   @override
   void initState() {
     super.initState();
     _loadPreferredMode();
+    _syncBusSub = SyncActivityBus.instance.stream.listen((_) {
+      if (!mounted) return;
+      ref.invalidate(itemsProvider);
+      ref.invalidate(itemCategoriesProvider);
+      ref.invalidate(itemCategoryTreeProvider);
+      ref.invalidate(sectionsProvider);
+      ref.invalidate(inventorySummaryProvider);
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncBusSub?.cancel();
+    super.dispose();
   }
 
   /// نمط العرض المفضل محفوظ في التفضيلات المحلية (settings).
@@ -181,9 +199,13 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     final ids = _selectedIds(roots);
     final q = ref.read(itemQueryProvider).trim().toLowerCase();
     final out = items.where((it) {
-      if (ids != null &&
-          (it.categoryId == null || !ids.contains(it.categoryId))) {
-        return false;
+      if (ids != null) {
+        if (_sectionId == kGeneralSectionId &&
+            (it.categoryId == null || it.categoryId == 0)) {
+          // الصنف غير المصنف يُعرض فوراً تحت القسم العام (بدون قسم)
+        } else if (it.categoryId == null || !ids.contains(it.categoryId)) {
+          return false;
+        }
       }
       if (q.isEmpty) return true;
       return it.name.toLowerCase().contains(q) ||
@@ -195,7 +217,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     return out;
   }
 
-  /// شارة التصنيف: «اسم القسم • اسم الفئة» (القسم يُحذف إن لم يوجد).
+  /// شارة التصنيف: «اسم القسم • اسم الفئة» (القسم يُحذف إن لم يوجد، وبديل «بدون قسم» عند غيابه).
   String _badgeOf(
     Item item,
     List<ItemCategory> roots,
@@ -231,7 +253,8 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     if (secName != null && secName.isNotEmpty) {
       return catName.isEmpty ? secName : '$secName • $catName';
     }
-    return catName;
+    if (catName.isNotEmpty) return catName;
+    return 'بدون قسم';
   }
 
   @override
@@ -288,7 +311,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                       const Center(child: CircularProgressIndicator()),
                   error: (e, _) => EmptyState(
                     icon: Icons.error_outline,
-                    title: 'تعذّر تحميل الأصناف',
+                    title: 'تعذّر تحميل المنتجات',
                     message: '$e',
                   ),
                   data: (items) => _buildBody(context, roots, items, sections),
@@ -1766,7 +1789,7 @@ void _itemQuickMenu(BuildContext context, WidgetRef ref, Item item) {
             ListTile(
               leading: Icon(Icons.edit_outlined,
                   color: AppColors.primaryOf(ctx)),
-              title: const Text('تعديل الصنف'),
+              title: const Text('تعديل المنتج'),
               onTap: () {
                 Navigator.pop(ctx);
                 openItemForm(context, ref, item: item);
@@ -2361,7 +2384,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       if (mounted) {
         showSnack(
           context,
-          e is StateError ? e.message : 'تعذّر حفظ الصنف: $e',
+          e is StateError ? e.message : 'تعذّر حفظ المنتج: $e',
           error: true,
         );
       }
@@ -2406,7 +2429,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    widget.item == null ? 'صنف جديد' : 'تعديل الصنف',
+                    widget.item == null ? 'إضافة منتج جديد' : 'تعديل المنتج',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const Spacer(),
@@ -2665,7 +2688,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('حفظ الصنف'),
+                      : const Text('حفظ المنتج'),
                 ),
               ),
             ],

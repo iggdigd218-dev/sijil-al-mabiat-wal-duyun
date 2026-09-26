@@ -31,23 +31,24 @@ const Map<String, String> kForeignParentTable = {
   'item_id': 'items',
   'tx_id': 'transactions',
   'category_id': 'item_categories',
+  'section_id': 'sections',
   'conversation_id': 'conversations',
 };
 
-/// رتبة التبعية: الأصغر يُطبَّق أولاً (حسابات ← أصناف ← فواتير ← بنود).
+/// رتبة التبعية: الأصغر يُطبَّق أولاً (أقسام ← فئات ← أصناف ← فواتير).
 int dependencyRank(SyncOperation op) {
   final base = switch (op.entityType) {
-    EntityKind.account || EntityKind.category => 0,
-    EntityKind.itemCategory => 1,
-    EntityKind.item => 2,
-    EntityKind.tx => 3,
-    EntityKind.voucher || EntityKind.stockMove => 4,
+    EntityKind.section => 0,
+    EntityKind.account || EntityKind.category => 1,
+    EntityKind.itemCategory => 2,
+    EntityKind.item => 3,
+    EntityKind.tx => 4,
+    EntityKind.voucher || EntityKind.stockMove => 5,
     EntityKind.user || EntityKind.userPermission ||
     EntityKind.currency ||
-    EntityKind.setting ||
-    EntityKind.section =>
-      5,
-    _ => 6,
+    EntityKind.setting =>
+      6,
+    _ => 7,
   };
   // الحذف أخيراً دائماً: حذفُ أب قبل وصول أبنائه يمحوهم (ON DELETE CASCADE).
   return op.opType == OpKind.delete_ ? base + 100 : base;
@@ -58,13 +59,14 @@ int dependencyRank(SyncOperation op) {
 int dependencyRankOfMap(Object? v) {
   if (v is! Map) return 99;
   final base = switch ('${v['entity_type'] ?? ''}') {
-    'account' || 'category' => 0,
-    'itemCategory' => 1,
-    'item' => 2,
-    'tx' => 3,
-    'voucher' || 'stockMove' => 4,
-    'user' || 'userPermission' || 'currency' || 'setting' => 5,
-    _ => 6,
+    'section' => 0,
+    'account' || 'category' => 1,
+    'itemCategory' => 2,
+    'item' => 3,
+    'tx' => 4,
+    'voucher' || 'stockMove' => 5,
+    'user' || 'userPermission' || 'currency' || 'setting' => 6,
+    _ => 7,
   };
   return '${v['op_type'] ?? ''}' == 'delete_' ? base + 100 : base;
 }
@@ -102,6 +104,7 @@ Future<void> insertStubRow(
     if (table == 'accounts') 'name': 'حساب مؤقت (قيد المزامنة) $id',
     if (table == 'items') 'name': 'صنف مؤقت (قيد المزامنة) $id',
     if (table == 'item_categories') 'name': 'تصنيف مؤقت $id',
+    if (table == 'sections') 'name': 'قسم مؤقت $id',
     if (table == 'conversations') 'title': 'محادثة',
     if (table == 'transactions') ...{
         'type': 'sale',
@@ -135,8 +138,8 @@ Future<void> insertStubRow(
 ///
 /// وصول فئة (أو صنف) قبل قسمها — أو بقسم محذوف على هذا الجهاز — كان يكسر
 /// قيد `sections(id)` فيفشل تطبيق العملية كلها (FOREIGN KEY 787) وتعلق
-/// المزامنة. نُفرغ العلاقة مؤقتاً: يُعرض الكيان تحت «عام»، ويُصحَّح تلقائياً
-/// عند وصول القسم أو باختيار المستخدم.
+/// المزامنة. نُفرغ العلاقة مؤقتاً: يُعرض الكيان تحت «عام/بدون قسم»، ويُصحَّح
+/// تلقائياً عند وصول القسم أو باختيار المستخدم.
 Future<void> nullDanglingSection(
   DatabaseExecutor txn,
   String table,
@@ -309,6 +312,10 @@ extension ApplyRemoteOp on Repo {
         await nullDanglingSection(txn, table, row);
         if (existing.isNotEmpty) {
           if (row.isNotEmpty) {
+            if (table == 'items' && op.opType != OpKind.delete_) {
+              row['is_deleted'] = 0;
+              row['is_active'] = 1;
+            }
             if (table == 'item_categories' && row.containsKey('name')) {
               final catName = row['name']?.toString().trim() ?? '';
               if (catName.isNotEmpty) {
@@ -334,6 +341,12 @@ extension ApplyRemoteOp on Repo {
           // (النصوص فارغة، الأرقام صفر، التواريخ الآن) بدل الانفجار.
           final insertRow = {...row, primaryKey: op.entityId};
           await nullDanglingSection(txn, table, insertRow);
+          if (table == 'items') {
+            insertRow['is_deleted'] = 0;
+            insertRow['is_active'] = 1;
+            insertRow['archived'] = 0;
+            insertRow['deleted_at'] = '';
+          }
           if (table == 'item_categories' && insertRow.containsKey('name')) {
             final catName = insertRow['name']?.toString().trim() ?? '';
             if (catName.isNotEmpty) {
